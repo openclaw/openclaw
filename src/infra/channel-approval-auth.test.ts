@@ -69,6 +69,25 @@ describe("resolveApprovalCommandAuthorization", () => {
     ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
   });
 
+  it("rejects commands through an older channel capability with scoped plugin reviewers", () => {
+    const authorizeActorAction = vi.fn(() => ({ authorized: true }));
+    getChannelPluginMock.mockReturnValue({ approvalCapability: { authorizeActorAction } });
+    const cfg = {
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    } as never;
+
+    expect(
+      resolveApprovalCommandAuthorization({
+        cfg,
+        channel: "slack",
+        accountId: "default",
+        senderId: "U22222222",
+        kind: "plugin",
+      }),
+    ).toMatchObject({ authorized: false, explicit: true });
+    expect(authorizeActorAction).not.toHaveBeenCalled();
+  });
+
   it("uses approvalCapability as the canonical approval auth contract", () => {
     const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
     getChannelPluginMock.mockReturnValue({

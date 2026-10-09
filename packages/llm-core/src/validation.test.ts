@@ -1,113 +1,107 @@
-// LLM Core tests cover validation behavior.
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { Tool } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
-const decimalTool = {
-  name: "decimal-tool",
-  description: "test tool",
-  parameters: {
-    type: "object",
-    properties: {
-      amount: { type: "number" },
-      count: { type: "integer" },
-    },
-    required: ["amount", "count"],
-    additionalProperties: false,
-  },
-} as Tool;
+function validator(name: string, parameters: Tool["parameters"]) {
+  const tool: Tool = { name, description: "", parameters };
+  return (args: Record<string, unknown>) =>
+    validateToolArguments(tool, { type: "toolCall", id: "call", name, arguments: args });
+}
 
-const decimalTools = [
-  { label: "JSON Schema", tool: decimalTool },
-  {
-    label: "TypeBox",
-    tool: {
-      ...decimalTool,
-      parameters: Type.Object({ amount: Type.Number(), count: Type.Integer() }),
-    },
-  },
-];
+const validateDecimal = validator("decimal-tool", {
+  type: "object",
+  properties: { amount: { type: "number" }, count: { type: "integer" } },
+  required: ["amount", "count"],
+  additionalProperties: false,
+});
 
 describe("validateToolArguments", () => {
-  it.each(["anyOf", "oneOf", "TypeBox", "type-array integer/null", "type-array null/integer"])(
-    "keeps invalid non-null values out of a nullable integer %s",
-    (union) => {
-      const tool: Tool = {
-        name: "nullable-limit",
-        description: "Search with an optional result limit",
-        parameters:
-          union === "TypeBox"
-            ? Type.Object({
-                limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
-              })
-            : {
-                type: "object",
-                properties: {
-                  limit:
-                    union === "type-array integer/null"
-                      ? { type: ["integer", "null"], minimum: 1 }
-                      : union === "type-array null/integer"
-                        ? { type: ["null", "integer"], minimum: 1 }
-                        : { [union]: [{ type: "integer", minimum: 1 }, { type: "null" }] },
-                },
+  it.each([
+    { label: "a missing required field", value: {} },
+    { label: "an invalid field type", value: { leaf: "invalid" } },
+  ])("formats escaped container names for $label", ({ value }) => {
+    const tool: Tool = {
+      name: "diagnostic-path",
+      description: "test tool",
+      parameters: Type.Object({
+        "room/~1%2F": Type.Object({ leaf: Type.Number() }),
+      }),
+    };
+
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "diagnostic-path-call",
+        name: tool.name,
+        arguments: { "room/~1%2F": value },
+      }),
+    ).toThrow("  - room.~1%2F.leaf:");
+  });
+
+  it("keeps invalid non-null values out of nullable integer schemas", () => {
+    for (const union of [
+      "anyOf",
+      "oneOf",
+      "TypeBox",
+      "type-array integer/null",
+      "type-array null/integer",
+    ]) {
+      const validateArgs = validator(
+        "nullable-limit",
+        union === "TypeBox"
+          ? Type.Object({
+              limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+            })
+          : {
+              type: "object",
+              properties: {
+                limit:
+                  union === "type-array integer/null"
+                    ? { type: ["integer", "null"], minimum: 1 }
+                    : union === "type-array null/integer"
+                      ? { type: ["null", "integer"], minimum: 1 }
+                      : { [union]: [{ type: "integer", minimum: 1 }, { type: "null" }] },
               },
-      };
-      const validate = (limit: unknown) =>
-        validateToolArguments(tool, {
-          type: "toolCall",
-          id: "nullable-limit-call",
-          name: tool.name,
-          arguments: { limit },
-        });
+            },
+      );
+      const validate = (limit: unknown) => validateArgs({ limit });
       expect(validate(null)).toEqual({ limit: null });
       expect(validate(1)).toEqual({ limit: 1 });
       expect(validate("2")).toEqual({ limit: 2 });
       for (const limit of [0, false, "", -1, "invalid"]) {
         expect(() => validate(limit)).toThrow(/Validation failed for tool "nullable-limit"/);
       }
-      // TypeBox's existing integer recovery truncates numbers; plain JSON-schema
-      // coercion does not. Neither behavior should be replaced by null fallback.
+      // TypeBox recovers fractional integers by truncating; JSON Schema rejects them.
       if (union === "TypeBox") {
         expect(validate(1.5)).toEqual({ limit: 1 });
       } else {
         expect(() => validate(1.5)).toThrow(/Validation failed for tool "nullable-limit"/);
       }
-    },
-  );
+    }
+  });
 
   it.each([
     { name: "object/null", types: ["object", "null"] },
     { name: "null/object", types: ["null", "object"] },
   ])("keeps invalid non-null values out of a $name type array", ({ types }) => {
-    const tool: Tool = {
-      name: "nullable-parent",
-      description: "Accept an object or null without replacing rejected scalar input",
-      parameters: {
-        type: "object",
-        properties: {
-          parent: {
-            type: types,
-            properties: {
-              kind: { type: "string", enum: ["page"] },
-              count: { type: "integer", minimum: 1 },
-            },
-            required: ["kind", "count"],
-            additionalProperties: false,
+    const validateArgs = validator("nullable-parent", {
+      type: "object",
+      properties: {
+        parent: {
+          type: types,
+          properties: {
+            kind: { type: "string", enum: ["page"] },
+            count: { type: "integer", minimum: 1 },
           },
+          required: ["kind", "count"],
+          additionalProperties: false,
         },
-        required: ["parent"],
-        additionalProperties: false,
       },
-    };
-    const validate = (parent: unknown) =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "nullable-parent-call",
-        name: tool.name,
-        arguments: { parent },
-      });
-
+      required: ["parent"],
+      additionalProperties: false,
+    });
+    const validate = (parent: unknown) => validateArgs({ parent });
     expect(validate(null)).toEqual({ parent: null });
     const parent = { kind: "page", count: "2" };
     for (const input of [parent, JSON.stringify(parent)]) {
@@ -118,310 +112,110 @@ describe("validateToolArguments", () => {
     }
   });
 
-  const numericConversions = [
-    { input: "2.5", output: 2.5 },
-    { input: false, output: 0 },
-    { input: 0, output: 0 },
-  ];
-  const stringConversions = [
-    { input: false, output: "false" },
-    { input: 0, output: "0" },
-    { input: "", output: "" },
-    { input: "existing", output: "existing" },
-  ];
-
-  it.each([
-    { name: "number/null", types: ["number", "null"], conversions: numericConversions },
-    { name: "null/number", types: ["null", "number"], conversions: numericConversions },
-    { name: "string/null", types: ["string", "null"], conversions: stringConversions },
-    { name: "null/string", types: ["null", "string"], conversions: stringConversions },
-  ])("retains valid non-null coercions in a $name type array", ({ types, conversions }) => {
-    const tool: Tool = {
-      name: "nullable-value",
-      description: "Keep conversions into a supported non-null alternative",
-      parameters: {
+  it("preserves nullable scalar values and null-only coercions", () => {
+    const numbers = [
+      ["2.5", 2.5],
+      [false, 0],
+      [0, 0],
+    ] as const;
+    const strings = [
+      [false, "false"],
+      [0, "0"],
+      ["", ""],
+      ["existing", "existing"],
+    ] as const;
+    const nulls = [
+      [false, null],
+      [0, null],
+      ["", null],
+    ] as const;
+    const cases: [Tool["parameters"], readonly (readonly [unknown, unknown])[]][] = [
+      [{ type: ["number", "null"] }, numbers],
+      [{ type: ["null", "number"] }, numbers],
+      [{ type: ["string", "null"] }, strings],
+      [{ type: ["null", "string"] }, strings],
+      [{ type: "null" }, nulls],
+      [{ type: ["null"] }, nulls],
+    ];
+    for (const [schema, conversions] of cases) {
+      const validate = validator("nullable-value", {
         type: "object",
-        properties: { value: { type: types } },
+        properties: { value: schema },
         required: ["value"],
-      },
-    };
-    const validate = (value: unknown) =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "nullable-value-call",
-        name: tool.name,
-        arguments: { value },
       });
-
-    expect(validate(null)).toEqual({ value: null });
-    for (const { input, output } of conversions) {
-      expect(validate(input)).toEqual({ value: output });
+      expect(validate({ value: null })).toEqual({ value: null });
+      for (const [input, output] of conversions) {
+        expect(validate({ value: input })).toEqual({ value: output });
+      }
     }
   });
 
-  it.each([
-    { name: "a null type", type: "null" },
-    { name: "a single-member null type array", type: ["null"] },
-  ])("preserves existing coercion for $name", ({ type }) => {
-    const tool: Tool = {
-      name: "null-only",
-      description: "Retain the existing null-only conversion contract",
-      parameters: {
-        type: "object",
-        properties: { value: { type } },
-        required: ["value"],
-      },
-    };
-
-    for (const value of [null, false, 0, ""]) {
-      expect(
-        validateToolArguments(tool, {
-          type: "toolCall",
-          id: "null-only-call",
-          name: tool.name,
-          arguments: { value },
-        }),
-      ).toEqual({ value: null });
+  it("coerces strict decimal strings and rejects non-decimal JSON-schema numbers", () => {
+    for (const validate of [
+      validateDecimal,
+      validator("decimal-tool", Type.Object({ amount: Type.Number(), count: Type.Integer() })),
+    ]) {
+      expect(validate({ amount: "1e3", count: "+3" })).toEqual({ amount: 1000, count: 3 });
     }
-  });
-
-  it.each(decimalTools)("coerces strict decimal numeric strings for $label", ({ tool }) => {
-    expect(
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "call-1",
-        name: "decimal-tool",
-        arguments: { amount: "1e3", count: "+3" },
-      }),
-    ).toEqual({ amount: 1000, count: 3 });
-  });
-
-  it("rejects non-decimal numeric strings for plain JSON schemas", () => {
     for (const input of [
       { amount: "0x10", count: 3 },
       { amount: 16, count: "0b10" },
     ]) {
-      expect(() =>
-        validateToolArguments(decimalTool, {
-          type: "toolCall",
-          id: "call-1",
-          name: "decimal-tool",
-          arguments: input,
-        }),
-      ).toThrow(/Validation failed for tool "decimal-tool"/);
+      expect(() => validateDecimal(input)).toThrow(/Validation failed for tool "decimal-tool"/);
     }
   });
 
   it("coerces additional properties without changing declared string fields", () => {
-    const tool: Tool = {
-      name: "additional-integers",
-      description: "Keep declared fields separate from additional properties",
-      parameters: {
-        type: "object",
-        properties: {
-          label: { type: "string" },
-          count: { type: "integer" },
-        },
-        required: ["label", "count"],
-        additionalProperties: { type: "integer" },
-      },
-    };
+    const validate = validator("additional-integers", {
+      type: "object",
+      properties: { label: { type: "string" }, count: { type: "integer" } },
+      required: ["label", "count"],
+      additionalProperties: { type: "integer" },
+    });
     const input = { label: "1e2", count: "1", extra: "2" };
-
-    expect(
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "additional-integers-call",
-        name: tool.name,
-        arguments: input,
-      }),
-    ).toEqual({ label: "1e2", count: 1, extra: 2 });
+    expect(validate(input)).toEqual({ label: "1e2", count: 1, extra: 2 });
     expect(input).toEqual({ label: "1e2", count: "1", extra: "2" });
   });
 
   it("retains TypeBox-specific record and numeric enum coercion", () => {
-    const tool: Tool = {
-      name: "typed-record",
-      description: "Typed record and enum tool",
-      parameters: Type.Object({
+    const validate = validator(
+      "typed-record",
+      Type.Object({
         counts: Type.Record(Type.String(), Type.Integer()),
         choice: Type.Enum([1, 2]),
         limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
       }),
-    };
-    expect(
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "typed-record-call",
-        name: tool.name,
-        arguments: { counts: { first: "1" }, choice: "2", limit: null },
-      }),
-    ).toEqual({ counts: { first: 1 }, choice: 2, limit: null });
-    expect(() =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "typed-record-invalid-call",
-        name: tool.name,
-        arguments: { counts: { first: "1" }, choice: "2", limit: 0 },
-      }),
-    ).toThrow(/Validation failed for tool "typed-record"/);
+    );
+    expect(validate({ counts: { first: "1" }, choice: "2", limit: null })).toEqual({
+      counts: { first: 1 },
+      choice: 2,
+      limit: null,
+    });
+    expect(() => validate({ counts: { first: "1" }, choice: "2", limit: 0 })).toThrow(
+      /Validation failed for tool "typed-record"/,
+    );
   });
 
   it("preserves null in anyOf [{type: string}, {type: null}] without coercing to empty string (#96716)", () => {
-    const tool = {
-      name: "nullable-tool",
-      description: "test tool",
-      parameters: {
-        type: "object",
-        properties: {
-          insight_id: { anyOf: [{ type: "string" }, { type: "null" }] },
-          cluster_name: { type: "string" },
-        },
-        required: ["cluster_name"],
-        additionalProperties: false,
+    const validate = validator("nullable-tool", {
+      type: "object",
+      properties: {
+        insight_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+        cluster_name: { type: "string" },
       },
-    } as Tool;
-
-    expect(
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "call-1",
-        name: "nullable-tool",
-        arguments: { insight_id: null, cluster_name: "testenv" },
-      }),
-    ).toEqual({ insight_id: null, cluster_name: "testenv" });
-  });
-});
-
-const arrayTool = {
-  name: "array-tool",
-  description: "test tool with array param",
-  parameters: {
-    type: "object",
-    properties: {
-      tags: { type: "array", items: { type: "string" } },
-    },
-    required: ["tags"],
-    additionalProperties: false,
-  },
-} as Tool;
-
-const objectTool = {
-  name: "object-tool",
-  description: "test tool with object param",
-  parameters: {
-    type: "object",
-    properties: {
-      config: {
-        type: "object",
-        properties: {
-          enabled: { type: "boolean" },
-          retries: { type: "number" },
-        },
-      },
-    },
-    required: ["config"],
-    additionalProperties: false,
-  },
-} as Tool;
-
-describe("validateToolArguments — stringified JSON coercion", () => {
-  it.each([
-    { label: "serialized", input: '["test","debug"]', expected: ["test", "debug"] },
-    { label: "native", input: ["already", "array"], expected: ["already", "array"] },
-  ])("validates $label array arguments for plain JSON schemas", ({ input, expected }) => {
-    expect(
-      validateToolArguments(arrayTool, {
-        type: "toolCall",
-        id: "call-2",
-        name: "array-tool",
-        arguments: { tags: input },
-      }),
-    ).toEqual({ tags: expected });
-  });
-
-  it.each([
-    {
-      label: "serialized",
-      input: '{"enabled":true,"retries":3}',
-      expected: { enabled: true, retries: 3 },
-    },
-    {
-      label: "native",
-      input: { enabled: false, retries: 1 },
-      expected: { enabled: false, retries: 1 },
-    },
-  ])("validates $label object arguments for plain JSON schemas", ({ input, expected }) => {
-    expect(
-      validateToolArguments(objectTool, {
-        type: "toolCall",
-        id: "call-3",
-        name: "object-tool",
-        arguments: { config: input },
-      }),
-    ).toEqual({ config: expected });
-  });
-
-  it("rejects invalid JSON string for array param", () => {
-    expect(() =>
-      validateToolArguments(arrayTool, {
-        type: "toolCall",
-        id: "call-6",
-        name: "array-tool",
-        arguments: { tags: "not-json" },
-      }),
-    ).toThrow(/Validation failed for tool "array-tool"/);
-  });
-
-  it("rejects JSON string that is wrong type for array param", () => {
-    expect(() =>
-      validateToolArguments(arrayTool, {
-        type: "toolCall",
-        id: "call-7",
-        name: "array-tool",
-        arguments: { tags: '{"not":"array"}' },
-      }),
-    ).toThrow(/Validation failed for tool "array-tool"/);
-  });
-
-  it("skips JSON coercion for oversized array string", () => {
-    const hugeArray = JSON.stringify(Array.from({ length: 100_000 }, (_, i) => i));
-    expect(hugeArray.length).toBeGreaterThan(64 * 1024);
-    expect(() =>
-      validateToolArguments(arrayTool, {
-        type: "toolCall",
-        id: "call-8",
-        name: "array-tool",
-        arguments: { tags: hugeArray },
-      }),
-    ).toThrow(/Validation failed for tool "array-tool"/);
-  });
-
-  it("skips JSON coercion for oversized object string", () => {
-    const hugeObj = JSON.stringify({ data: "x".repeat(70_000) });
-    expect(hugeObj.length).toBeGreaterThan(64 * 1024);
-    expect(() =>
-      validateToolArguments(objectTool, {
-        type: "toolCall",
-        id: "call-9",
-        name: "object-tool",
-        arguments: { config: hugeObj },
-      }),
-    ).toThrow(/Validation failed for tool "object-tool"/);
+      required: ["cluster_name"],
+      additionalProperties: false,
+    });
+    expect(validate({ insight_id: null, cluster_name: "testenv" })).toEqual({
+      insight_id: null,
+      cluster_name: "testenv",
+    });
   });
 });
 
 describe("validateToolArguments — root references", () => {
   function validate(parameters: Tool["parameters"], value: unknown) {
-    return validateToolArguments(
-      { name: "refs", description: "", parameters },
-      {
-        type: "toolCall",
-        id: "refs-call",
-        name: "refs",
-        arguments: { value },
-      },
-    );
+    return validator("refs", parameters)({ value });
   }
 
   it.each(["anyOf", "oneOf"])("checks %s alternatives in their root context", (keyword) => {
@@ -448,6 +242,26 @@ describe("validateToolArguments — root references", () => {
     for (const options of [{}, { $defs: { unused: { type: "string" } } }]) {
       const parameters = Type.Object({ value }, options);
       expect(validate(parameters, "02")).toEqual({ value: "02" });
+    }
+  });
+
+  it("coerces URI-fragment and JSON-pointer encoded definitions", () => {
+    for (const [name, ref] of [
+      ["Partial<Filter>", "#/definitions/Partial<Filter>"],
+      ["Partial<Filter>", "#/definitions/Partial%3CFilter%3E"],
+      ["Partial<Filter>", "#%2Fdefinitions%2FPartial%3CFilter%3E"],
+      ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
+      ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
+    ] as const) {
+      const parameters = {
+        type: "object",
+        properties: { value: { $ref: ref } },
+        definitions: {
+          [name]: { type: "object", properties: { limit: { type: "number" } } },
+        },
+      };
+      expect(validate(parameters, { limit: "5" }), ref).toEqual({ value: { limit: 5 } });
+      expect(() => validate(parameters, { limit: "invalid" })).toThrow(/Validation failed/);
     }
   });
 
@@ -574,6 +388,7 @@ describe("validateToolArguments — root references", () => {
         "not-json",
         "false",
         "null",
+        definition.type === "array" ? '{"not":"array"}' : "[]",
         " ".repeat(64 * 1024) + (definition.type === "array" ? "[1]" : '{"count":1}'),
       ]) {
         expect(() => validate(parameters, invalid)).toThrow(/Validation failed/);

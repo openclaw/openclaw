@@ -193,11 +193,18 @@ export class ChatPageRetainedSessions {
   }
 
   discardPane(paneId: string): void {
-    this.unbound.delete(paneId);
+    // Retire every mounted presentation before clearing its handoff so a delayed
+    // disconnect cannot restage attachments under a later reused logical pane id.
+    for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+      if (pane.paneId === paneId) {
+        pane.discardStagedAttachments?.();
+      }
+    }
     const context = this.bindings.context();
+    context?.chatAttachmentHandoff.clearPane(paneId);
+    this.unbound.delete(paneId);
     if (context) {
       clearPaneSessionHandoffs(context, paneId);
-      context.chatAttachmentHandoff.clearPane(paneId);
     }
     this.sessionsByPane.delete(paneId);
   }
@@ -342,7 +349,9 @@ export class ChatPageRetainedSessions {
     }
   }
 
-  private clearPreviewWork(): void {
+  private readonly cancelPreview = () => {
+    const layout = this.bindings.layout();
+    const paneId = this.preview?.paneId ?? layout.activePaneId;
     if (this.previewFrame !== undefined) {
       cancelAnimationFrame(this.previewFrame);
       this.previewFrame = undefined;
@@ -351,12 +360,6 @@ export class ChatPageRetainedSessions {
       window.clearTimeout(this.previewTimer);
       this.previewTimer = undefined;
     }
-  }
-
-  private readonly cancelPreview = () => {
-    const layout = this.bindings.layout();
-    const paneId = this.preview?.paneId ?? layout.activePaneId;
-    this.clearPreviewWork();
     this.preview = null;
     // A commit can focus another split. Restore the pane whose presentation
     // this preview changed using its current authoritative selection.

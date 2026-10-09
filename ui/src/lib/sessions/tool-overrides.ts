@@ -2,15 +2,6 @@ import type { SessionToolOverrides } from "./patch.ts";
 
 type BooleanOverrideGroup = "mcpServers" | "skills";
 
-function copyDynamicKeyRecord<T>(
-  values: Record<string, T> | undefined,
-  copyValue: (value: T) => T = (value) => value,
-): Record<string, T> {
-  return Object.fromEntries(
-    Object.entries(values ?? {}).map(([name, value]) => [name, copyValue(value)]),
-  );
-}
-
 export function readOwnEntry<T>(
   values: Readonly<Record<string, T>> | null | undefined,
   name: string,
@@ -29,13 +20,15 @@ function setOwnValue<T>(values: Record<string, T>, name: string, value: T): void
 
 function copyOverrides(overrides: SessionToolOverrides | null | undefined): SessionToolOverrides {
   return {
-    ...(overrides?.mcpServers ? { mcpServers: copyDynamicKeyRecord(overrides.mcpServers) } : {}),
+    ...(overrides?.mcpServers ? { mcpServers: { ...overrides.mcpServers } } : {}),
     ...(overrides?.mcpToolsDeny
       ? {
-          mcpToolsDeny: copyDynamicKeyRecord(overrides.mcpToolsDeny, (tools) => [...tools]),
+          mcpToolsDeny: Object.fromEntries(
+            Object.entries(overrides.mcpToolsDeny).map(([name, tools]) => [name, [...tools]]),
+          ),
         }
       : {}),
-    ...(overrides?.skills ? { skills: copyDynamicKeyRecord(overrides.skills) } : {}),
+    ...(overrides?.skills ? { skills: { ...overrides.skills } } : {}),
     ...(overrides?.webSearch !== undefined ? { webSearch: overrides.webSearch } : {}),
   };
 }
@@ -53,10 +46,7 @@ export function resolveWebSearchToolOverrideState(
   baseEnabled: boolean,
   override: boolean | undefined,
 ) {
-  if (!baseEnabled) {
-    return false;
-  }
-  return override ?? baseEnabled;
+  return baseEnabled && (override ?? baseEnabled);
 }
 
 export function nextBooleanToolOverrides(

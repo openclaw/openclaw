@@ -29,28 +29,6 @@ function buildExpectedSlackEditText(params: {
   return " ";
 }
 
-function buildAcceptedSlackEditTexts(params: {
-  text: string;
-  blocks?: (Block | KnownBlock)[];
-}): Set<string> {
-  const expected = buildExpectedSlackEditText(params);
-  const texts = new Set([
-    expected,
-    normalizeSlackOutboundText(truncateSlackTextByUtf8Bytes(expected, SLACK_EDIT_TEXT_MAX_BYTES)),
-    normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks)),
-  ]);
-  if (params.blocks?.length && hasSlackNativeDataBlock(params.blocks)) {
-    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
-      baseText: params.text,
-      blocks: params.blocks,
-    });
-    for (const message of fallbackPlan.fallbackMessages) {
-      texts.add(normalizeSlackOutboundText(message.text));
-    }
-  }
-  return texts;
-}
-
 function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boolean {
   if (!expected?.length) {
     return !actual?.length;
@@ -130,10 +108,22 @@ async function didSlackPreviewEditApplyAfterError(params: {
     text: params.text,
     blocks: params.blocks,
   });
-  const acceptedTexts = buildAcceptedSlackEditTexts({
-    text: params.text,
-    blocks: params.blocks,
-  });
+  const acceptedTexts = new Set([
+    expectedText,
+    normalizeSlackOutboundText(
+      truncateSlackTextByUtf8Bytes(expectedText, SLACK_EDIT_TEXT_MAX_BYTES),
+    ),
+    normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks)),
+  ]);
+  if (params.blocks?.length && hasSlackNativeDataBlock(params.blocks)) {
+    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+      baseText: params.text,
+      blocks: params.blocks,
+    });
+    for (const message of fallbackPlan.fallbackMessages) {
+      acceptedTexts.add(normalizeSlackOutboundText(message.text));
+    }
+  }
   const actualText = normalizeSlackOutboundText((readback.text ?? "").trim());
   if (params.blocks?.length) {
     return acceptedTexts.has(actualText) && blocksMatch(params.blocks, readback.blocks);

@@ -5,12 +5,8 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND } from "../boards/board-website.js";
-// Projects plugin "tab" Control UI descriptors into the hello payload so the
-// dashboard renders plugin tabs without hardcoding plugin ids in core.
-// Descriptors follow the current Gateway's registry, including request-local snapshots.
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { ControlUiLinkReaderDescriptor } from "../shared/control-ui-link-reader.js";
@@ -60,14 +56,8 @@ function findControlUiTabGatewayRoute(
   return route.pluginId === tab.pluginId ? route : null;
 }
 
-type ControlUiDescriptorEntry = {
-  pluginId: string;
-  pluginName?: string;
-  descriptor: PluginControlUiDescriptor;
-};
-
 function visibleDescriptors(
-  entries: readonly ControlUiDescriptorEntry[],
+  entries: Readonly<PluginRegistry["controlUiDescriptors"]>,
   scopes: readonly string[],
 ) {
   return entries.filter(({ descriptor }) =>
@@ -112,9 +102,8 @@ export type ControlUiPluginTabAuthGrant = {
   profileId?: string;
 };
 
-/** Pure projection of tab descriptors visible to the presented scopes. */
 function projectControlUiPluginTabs(
-  entries: readonly ControlUiDescriptorEntry[],
+  entries: Readonly<PluginRegistry["controlUiDescriptors"]>,
   scopes: readonly string[],
 ): ControlUiPluginTab[] {
   const tabs: ControlUiPluginTab[] = [];
@@ -145,7 +134,6 @@ function projectControlUiPluginTabs(
   );
 }
 
-/** Lists active plugins' tab descriptors visible to the presented scopes. */
 export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
@@ -180,7 +168,6 @@ export function listControlUiPluginTabs(
   });
 }
 
-/** Lists active plugins' trusted widget kinds visible to the presented scopes. */
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {

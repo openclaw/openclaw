@@ -2,6 +2,7 @@ import type { BundledStaticCatalogState } from "../agents/embedded-agent-runner/
 import type { BundledChannelCatalogEntry } from "../channels/bundled-channel-catalog.types.js";
 import type { ManifestChannelPlugin } from "../channels/plugins/manifest-channel-plugin.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EnabledBundleMcpConfigResult } from "./bundle-mcp.types.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import type {
   InstalledPluginIndex,
@@ -11,6 +12,11 @@ import type { ManifestModelSuppressionResolver } from "./manifest-model-suppress
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { BundledProviderPolicySurface } from "./provider-policy-surface.types.js";
+
+export type PluginMcpAuthDeclarations = {
+  byPluginId: ReadonlyMap<string, readonly { serverName: string; url: string }[]>;
+  bundled: EnabledBundleMcpConfigResult;
+};
 
 export type ProviderPolicyOwnerIndex = {
   bundled: Map<string, PluginManifestRecord>;
@@ -45,13 +51,11 @@ export type PluginCacheMetadata = {
     bundledProviderPolicySurfaces: Map<
       string,
       {
-        registry: object | null;
         version: number | undefined;
         selection: PluginCacheMetadata["metadata"]["bundledPluginsDir"];
         read: () => BundledProviderPolicySurface | null;
       }
     >;
-    bundledDiscoveryMode?: { value: "compat" | "allowlist" | undefined };
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;
     discovery: Map<string, PluginDiscoveryResult>;
@@ -77,6 +81,10 @@ export type PluginCacheMetadata = {
         unconfigured?: ManifestModelSuppressionResolver;
         byConfig: WeakMap<OpenClawConfig, ManifestModelSuppressionResolver>;
       }
+    >;
+    mcpAuthDeclarations: WeakMap<
+      PluginMetadataSnapshot,
+      WeakMap<OpenClawConfig, { configKey: string; declarations: PluginMcpAuthDeclarations }>
     >;
   };
 };

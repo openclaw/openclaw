@@ -19,13 +19,11 @@ const mocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn<() => { sessionId: string } | undefined>(() => ({
     sessionId: "facetime-consult-session",
   })),
-  resolveBootstrapContext: vi.fn(),
-  resolveDefaultAgentId: vi.fn(
-    (config: { agents?: { list?: Array<{ id: string; default?: boolean }> } }) => {
-      const agents = config.agents?.list ?? [];
-      return agents.find((agent) => agent.default)?.id ?? agents[0]?.id ?? "main";
-    },
-  ),
+  resolveAgentContext: vi.fn(),
+  resolveDefaultAgentId: vi.fn((config: { agents?: { entries?: Record<string, unknown> } }) => {
+    const agentIds = Object.keys(config.agents?.entries ?? {});
+    return agentIds[0] ?? "main";
+  }),
   resolveProvider: vi.fn(() => ({ provider: { id: "openai" }, providerConfig: {} })),
   hangupRequested: vi.fn(async () => {}),
   senderAuthVersion: 1 as number | undefined,
@@ -134,7 +132,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
-  resolveRealtimeBootstrapContextInstructions: mocks.resolveBootstrapContext,
+  resolveRealtimeVoiceAgentContextInstructions: mocks.resolveAgentContext,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
@@ -186,7 +184,7 @@ export function resetTalkDriverMocks() {
   vi.clearAllMocks();
   mocks.getSessionEntry.mockReturnValue({ sessionId: "facetime-consult-session" });
   mocks.senderAuthVersion = 1;
-  mocks.resolveBootstrapContext.mockResolvedValue(undefined);
+  mocks.resolveAgentContext.mockResolvedValue("Agent context: shared voice agent context.");
   mocks.bridge.connect.mockResolvedValue();
   mocks.pump.suppressionReady.mockResolvedValue();
   mocks.pump.routeReady.mockResolvedValue();

@@ -59,7 +59,7 @@ activation and verification. See [Keep operations recoverable](/gateway/team-ser
 A Gateway is one trust boundary. Roles and session ownership support
 collaboration; they do not isolate hostile users from each other. Keep untrusted
 code in sandboxes or remote workers. Use separate Gateways, OS users, or hosts
-for mutually untrusted teams. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+for mutually untrusted teams. See [Security trust model](/gateway/security/trust-model).
 
 ## 1. Install under one service account
 
@@ -329,7 +329,9 @@ write permission to every repository. See
 [GitHub identity for agent tools](/gateway/config-tools/github-identity).
 
 An optional `gateway.controlUi.github.token` serves GitHub lookups and project
-discovery. Keep it in a dedicated SecretRef instead of accidentally selecting a
+discovery. For Enterprise, set `gateway.controlUi.github.host` to the selected
+`gateway.github.host` so the service credential is used only for that host.
+Keep it in a dedicated SecretRef instead of accidentally selecting a
 publisher through a process-wide `GH_TOKEN` or `GITHUB_TOKEN`. Read credentials,
 publication credentials, and each person's sign-in identity have different jobs.
 
@@ -403,19 +405,21 @@ an explicit group:
 }
 ```
 
-On the receiver, advertise the reachable node endpoint before creating a join
-code. For the Access service-token topology above, use the same HTTPS hostname;
-if you operate a separate authenticated machine endpoint, use that URL instead:
+On the receiver, the `gateway.publicOrigin` configured above supplies the join
+endpoint when the loopback Gateway has no other advertised route. For the Access
+service-token topology above, use that same HTTPS hostname. If you operate a
+separate authenticated machine endpoint, set
+`plugins.entries.device-pair.config.publicUrl` to its URL instead:
 
 ```bash
-openclaw config set plugins.entries.device-pair.config.publicUrl https://team.example.com
 openclaw plugins enable session-share
 openclaw devices join-code
 ```
 
-The join-code command needs this advertised pairing endpoint on a loopback-only
-Gateway; `publicOrigin` alone is not its endpoint-discovery setting. The
-`device-pair` plugin does not need to be enabled for core join-code creation.
+Join codes retain existing Tailscale, remote, and bind-derived routes before
+falling back to `publicOrigin`. The pairing-specific `publicUrl` override takes
+precedence over discovery. The `device-pair` plugin does not need to be enabled
+for core join-code creation.
 See [Node onboarding](/nodes/node-host).
 
 On the source, run the node under the source Gateway's account, state directory,

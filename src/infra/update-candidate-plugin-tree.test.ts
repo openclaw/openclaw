@@ -3,14 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
+import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -40,24 +43,34 @@ async function fixture(hardlink = false, beforePlan?: (source: string) => Promis
     file,
     destination,
     plan,
+    retain: () =>
+      linkUpdateCandidatePluginTrees(plan, {
+        targetStateDir,
+        candidateRoot,
+        assertCurrent: () => {},
+      }),
     copy: () => copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
   };
 }
 
-function atCopyMutation(mutate: () => void) {
+function atCopyBoundary(mutate: () => void, phase: "admission" | "mutation" = "mutation") {
   const openRoot = fsSafe.root;
   vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
     const root = await openRoot(...args);
     const copyIn = root.copyIn.bind(root);
-    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) =>
-      copyIn(relative, source, {
+    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
+      if (phase === "admission") {
+        mutate();
+        return copyIn(relative, source, options);
+      }
+      return copyIn(relative, source, {
         ...options,
         assertBeforeMutation: () => {
           mutate();
           options?.assertBeforeMutation?.();
         },
-      }),
-    );
+      });
+    });
     return root;
   });
 }
@@ -101,71 +114,81 @@ it.each(["directory", "invalid YAML"])("rejects a listed .modules.yaml %s", asyn
   ).rejects.toThrow();
 });
 
-it("copies a plugin portably without repeated recursive parent creation or shared inodes", async () => {
-  const metadataStat = vi.spyOn(fsSync, "lstatSync");
-  const metadataRead = vi.spyOn(fs, "readFile");
-  const f = await fixture(true, async (source) => {
-    await fs.mkdir(path.join(source, "nested"));
-    for (let index = 0; index < 8; index++) {
-      await fs.writeFile(path.join(source, "nested", `${index}.txt`), `payload ${index}`);
+it.each(["auto", "off"] as const)(
+  "isolates plugin bytes and modes with native copying %s",
+  async (nativeMode) => {
+    const metadataStat = vi.spyOn(fsSync, "lstatSync");
+    const metadataRead = vi.spyOn(fs, "readFile");
+    const f = await fixture(true, async (source) => {
+      await fs.mkdir(path.join(source, "nested"));
+      for (let index = 0; index < 8; index++) {
+        await fs.writeFile(path.join(source, "nested", `${index}.txt`), `payload ${index}`);
+      }
+    });
+    const source = path.dirname(f.file);
+    expect(
+      metadataStat.mock.calls.filter(([file]) => file === path.join(source, "package.json")),
+    ).toHaveLength(0);
+    expect(
+      metadataRead.mock.calls.filter(([file]) => file === path.join(source, ".modules.yaml")),
+    ).toHaveLength(0);
+    const linked = `${f.file}.linked`;
+    const before = await fs.stat(f.file, { bigint: true });
+    const mkdir = vi.spyOn(fs, "mkdir");
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
+    try {
+      // FreeBSD has no native binding; "off" exercises the real portable fallback.
+      expect(getFsSafeNativeConfig().mode).toBe(nativeMode);
+      await f.copy();
+    } finally {
+      vi.unstubAllEnvs();
     }
-  });
-  const source = path.dirname(f.file);
-  expect(
-    metadataStat.mock.calls.filter(([file]) => file === path.join(source, "package.json")),
-  ).toHaveLength(0);
-  expect(
-    metadataRead.mock.calls.filter(([file]) => file === path.join(source, ".modules.yaml")),
-  ).toHaveLength(0);
-  const linked = `${f.file}.linked`;
-  const before = await fs.stat(f.file, { bigint: true });
-  const mkdir = vi.spyOn(fs, "mkdir");
-  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
-  try {
-    // FreeBSD has no fs-safe native binding. Exercise its real portable backend.
-    expect(getFsSafeNativeConfig().mode).toBe("off");
-    await f.copy();
-  } finally {
-    vi.unstubAllEnvs();
-  }
-  const recursiveMkdirCalls = mkdir.mock.calls.filter(
-    ([, options]) => typeof options === "object" && options?.recursive,
-  );
-  expect(recursiveMkdirCalls.length).toBeLessThanOrEqual(
-    f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
-  );
-  for (let index = 0; index < 8; index++) {
-    expect(await fs.readFile(path.join(f.destination, "nested", `${index}.txt`), "utf8")).toBe(
-      `payload ${index}`,
+    expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
+      f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
     );
-  }
-  const copied = path.join(f.destination, "payload.txt");
-  const after = await fs.stat(f.file, { bigint: true });
-  const snapshot = await fs.stat(copied, { bigint: true });
-  expect(await fs.readFile(copied, "utf8")).toBe("inventoried plugin bytes");
-  expect(await fs.readFile(linked, "utf8")).toBe("inventoried plugin bytes");
-  expect(after).toMatchObject({
-    ino: before.ino,
-    mode: before.mode,
-    size: before.size,
-    mtimeNs: before.mtimeNs,
-    ctimeNs: before.ctimeNs,
-  });
-  expect(snapshot.ino).not.toBe(before.ino);
-  expect(snapshot.nlink).toBe(1n);
-  if (process.platform !== "win32") {
-    expect(snapshot.mode & 0o777n).toBe(0o444n);
-  }
-  expect(await fs.readdir(f.destination)).toEqual(["nested", "payload.txt", "payload.txt.linked"]);
-});
+    for (let index = 0; index < 8; index++) {
+      expect(await fs.readFile(path.join(f.destination, "nested", `${index}.txt`), "utf8")).toBe(
+        `payload ${index}`,
+      );
+    }
+    const copied = path.join(f.destination, "payload.txt");
+    const after = await fs.stat(f.file, { bigint: true });
+    const snapshot = await fs.stat(copied, { bigint: true });
+    expect(await fs.readFile(copied, "utf8")).toBe("inventoried plugin bytes");
+    expect(await fs.readFile(linked, "utf8")).toBe("inventoried plugin bytes");
+    expect(after).toMatchObject({
+      ino: before.ino,
+      mode: before.mode,
+      size: before.size,
+      mtimeNs: before.mtimeNs,
+      ctimeNs: before.ctimeNs,
+    });
+    expect(snapshot.ino).not.toBe(before.ino);
+    expect(snapshot.nlink).toBe(1n);
+    if (process.platform !== "win32") {
+      expect(snapshot.mode & 0o777n).toBe(0o444n);
+    }
+    expect((await fs.readdir(f.destination)).toSorted()).toEqual([
+      "nested",
+      "payload.txt",
+      "payload.txt.linked",
+    ]);
+    await fs.chmod(copied, 0o600);
+    await fs.writeFile(copied, "private candidate changes");
+    expect(await fs.readFile(f.file, "utf8")).toBe("inventoried plugin bytes");
+    expect(await fs.readFile(linked, "utf8")).toBe("inventoried plugin bytes");
+    expect((await fs.stat(f.file, { bigint: true })).mode).toBe(before.mode);
+    expect((await fs.stat(linked, { bigint: true })).mode).toBe(before.mode);
+  },
+);
 
 it.each(["file", "symlink"] as const)(
-  "preserves a %s that appears after missing-entry planning and cleans copy staging",
+  "preserves a %s that appears after planning before copy admission",
   async (kind) => {
     const f = await fixture();
     const target = path.join(f.destination, "payload.txt");
     let inserted = false;
-    atCopyMutation(() => {
+    atCopyBoundary(() => {
       if (inserted) {
         return;
       }
@@ -175,7 +198,7 @@ it.each(["file", "symlink"] as const)(
       } else {
         fsSync.symlinkSync(f.file, target);
       }
-    });
+    }, "admission");
     await expect(f.copy()).rejects.toThrow();
     expect(inserted).toBe(true);
     expect(await fs.readdir(f.destination)).toEqual(["payload.txt"]);
@@ -188,12 +211,21 @@ it.each(["file", "symlink"] as const)(
   },
 );
 
-it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
+it.each([
+  "mode",
+  "same-size content with changed mtime",
+  "same-size content with restored mtime",
+  "identity",
+] as const)(
   "refuses %s changes at the copy mutation boundary before exposing plugin bytes",
   async (change) => {
-    const f = await fixture();
+    const advanceCtime = createFileMutationClock();
+    const f = await fixture(false, async (source) => {
+      // Use a representable time so restored-mtime coverage cannot pass on rounding.
+      await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
+    });
     let mutated = false;
-    atCopyMutation(() => {
+    atCopyBoundary(() => {
       if (mutated) {
         return;
       }
@@ -209,20 +241,166 @@ it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
         fsSync.writeFileSync(f.file, "altered but equal bytes!");
         fsSync.chmodSync(f.file, 0o444);
         // A same-tick rewrite can retain its timestamps; force a real fingerprint change.
-        fsSync.utimesSync(f.file, before.atime, new Date(before.mtime.getTime() + 60_000));
+        fsSync.utimesSync(
+          f.file,
+          before.atime,
+          change === "same-size content with restored mtime"
+            ? before.mtime
+            : new Date(before.mtime.getTime() + 60_000),
+        );
+        advanceCtime(before);
         const changed = fsSync.lstatSync(f.file, { bigint: true });
+        expect(changed.ctimeNs).not.toBe(before.ctimeNs);
         expect(changed).toMatchObject({
           dev: before.dev,
           ino: before.ino,
           size: before.size,
           mode: before.mode,
         });
-        expect(changed.mtimeNs).not.toBe(before.mtimeNs);
+        expect(changed.mtimeNs === before.mtimeNs).toBe(
+          change === "same-size content with restored mtime",
+        );
       }
     });
     await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
     expect(mutated).toBe(true);
     expect(await fs.readdir(f.destination)).toEqual([]);
+  },
+);
+
+it.each(["copy", "retain"] as const)(
+  "allows hard-link add, remove, and round-trip churn after inventory during %s",
+  async (materialize) => {
+    const advanceCtime = createFileMutationClock();
+    for (const change of ["add", "remove", "round-trip"]) {
+      let capture = "";
+      const f = await fixture(false, async (source) => {
+        capture = path.join(path.dirname(source), "native-capture");
+        if (change === "remove") {
+          await fs.link(path.join(source, "payload.txt"), capture);
+        }
+      });
+      const before = await fs.lstat(f.file, { bigint: true });
+      if (change !== "remove") {
+        await fs.link(f.file, capture);
+      }
+      if (change !== "add") {
+        await fs.unlink(capture);
+      }
+      advanceCtime(before);
+      const after = await fs.lstat(f.file, { bigint: true });
+      expect(after.ctimeNs).not.toBe(before.ctimeNs);
+      for (const field of [
+        "dev",
+        "ino",
+        "mode",
+        "uid",
+        "gid",
+        "size",
+        "birthtimeNs",
+        "mtimeNs",
+      ] as const) {
+        expect(after[field]).toBe(before[field]);
+      }
+      await f[materialize]();
+      expect(await fs.readFile(path.join(f.destination, "payload.txt"), "utf8")).toBe(
+        "inventoried plugin bytes",
+      );
+    }
+  },
+);
+
+it.each(["auto", "off"] as const)(
+  "accepts a concurrent native hard-link capture at copy publication with native copying %s",
+  async (nativeMode) => {
+    const f = await fixture();
+    let linked = false;
+    atCopyBoundary(() => {
+      if (!linked) {
+        fsSync.linkSync(f.file, path.join(path.dirname(path.dirname(f.file)), "native-capture"));
+        linked = true;
+      }
+    });
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
+    try {
+      await f.copy();
+      expect(linked).toBe(true);
+      const copied = path.join(f.destination, "payload.txt");
+      expect(await fs.readFile(copied, "utf8")).toBe("inventoried plugin bytes");
+      expect((await fs.lstat(copied, { bigint: true })).ino).not.toBe(
+        (await fs.lstat(f.file, { bigint: true })).ino,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.each(["uid", "gid"] as const)("refuses changed inventoried ownership (%s)", async (field) => {
+  const f = await fixture();
+  const entry = f.plan.entries.find((item) => item.kind === "file");
+  expect(entry?.kind).toBe("file");
+  if (entry?.kind !== "file") {
+    throw new Error("Missing inventoried file");
+  }
+  entry[field] = (BigInt(entry[field]) + 1n).toString();
+  await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
+});
+
+it.skipIf(process.platform !== "linux")(
+  "verifies bytes when Linux reports ctime as birthtime without statx",
+  async () => {
+    const advanceCtime = createFileMutationClock();
+    // Compose with the clock implementations; the spies themselves are replaced below.
+    const lstat = vi.mocked(fs.lstat).getMockImplementation()!;
+    const lstatSync = vi.mocked(fsSync.lstatSync).getMockImplementation()!;
+    const fstatSync = vi.mocked(fsSync.fstatSync).getMockImplementation()!;
+    const fallbackBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats | undefined>(
+      stat: T,
+    ): T => {
+      if (stat && "birthtimeNs" in stat) {
+        stat.birthtimeNs = stat.ctimeNs;
+      }
+      return stat;
+    };
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) =>
+      fallbackBirthtime(await lstat(...args)),
+    );
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
+      fallbackBirthtime(lstatSync(...args)),
+    );
+    vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
+      fallbackBirthtime(fstatSync(...args)),
+    );
+    for (const change of ["link", "content", "birthtime"] as const) {
+      const f = await fixture(false, async (source) => {
+        await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
+      });
+      const before = await fs.lstat(f.file, { bigint: true });
+      await fs.link(f.file, path.join(path.dirname(path.dirname(f.file)), "native-capture"));
+      if (change === "content") {
+        await fs.chmod(f.file, 0o600);
+        await fs.writeFile(f.file, "altered but equal bytes!");
+        await fs.chmod(f.file, 0o444);
+        await fs.utimes(f.file, before.atime, before.mtime);
+      } else if (change === "birthtime") {
+        const entry = f.plan.entries.find((item) => item.kind === "file");
+        if (entry?.kind !== "file") {
+          throw new Error("Missing inventoried file");
+        }
+        entry.birthtimeNs = (BigInt(entry.birthtimeNs) - 1n).toString();
+      }
+      advanceCtime(before);
+      expect((await fs.lstat(f.file, { bigint: true })).ctimeNs).not.toBe(before.ctimeNs);
+      if (change === "link") {
+        await f.copy();
+        expect(await fs.readFile(path.join(f.destination, "payload.txt"), "utf8")).toBe(
+          "inventoried plugin bytes",
+        );
+      } else {
+        await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
+      }
+    }
   },
 );
 
@@ -308,11 +486,126 @@ it("drains concurrent file copies before reporting a failure or publishing links
   }
 });
 
+it.each(["inventory", "bindings", "admission", "completion", "verification"] as const)(
+  "settles bounded %s reads before a metadata failure reaches cleanup",
+  async (phase) => {
+    const peerEntered = createDeferredCore();
+    const releasePeers = createDeferredCore();
+    const failure = new Error("plugin metadata unavailable");
+    const started: string[] = [];
+    let active = 0;
+    let maximum = 0;
+    let activeAtRejection: number | undefined;
+    let selectedDirectory = "";
+    let enabled = phase === "inventory" || phase === "bindings" || phase === "admission";
+    const intercept = async <T>(file: unknown, read: () => Promise<T>): Promise<T> => {
+      if (
+        !enabled ||
+        typeof file !== "string" ||
+        path.dirname(file) !== selectedDirectory ||
+        !path.basename(file).startsWith("read-")
+      ) {
+        return await read();
+      }
+      started.push(file);
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        if (started.length === 1) {
+          await read();
+          throw failure;
+        }
+        peerEntered.resolve();
+        await releasePeers.promise;
+        return await read();
+      } finally {
+        active -= 1;
+      }
+    };
+    const installReadSpy = () => {
+      if (phase === "bindings") {
+        const realpath = fs.realpath;
+        vi.spyOn(fs, "realpath").mockImplementation((...args) =>
+          intercept(args[0], () => realpath(...args)),
+        );
+      } else {
+        const lstat = fs.lstat;
+        vi.spyOn(fs, "lstat").mockImplementation((...args) =>
+          intercept(args[0], () => lstat(...args)),
+        );
+      }
+    };
+    const preparing = fixture(false, async (source) => {
+      selectedDirectory = source;
+      for (let index = 0; index < 9; index += 1) {
+        const file = path.join(source, `read-${index}.txt`);
+        if (phase === "bindings") {
+          await fs.symlink("payload.txt", file);
+        } else {
+          await fs.writeFile(file, `plugin payload ${index}`);
+        }
+      }
+      if (phase === "completion") {
+        await fs.symlink("payload.txt", path.join(source, "copy-complete"));
+      }
+      if (phase === "inventory") {
+        installReadSpy();
+      }
+    });
+    const operation = (async () => {
+      const f = await preparing;
+      if (phase !== "inventory") {
+        installReadSpy();
+      }
+      if (phase === "completion") {
+        const symlink = fs.symlink;
+        vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
+          const result = await symlink(...args);
+          if (args[1] === path.join(f.destination, "copy-complete")) {
+            enabled = true;
+          }
+          return result;
+        });
+      } else if (phase === "verification") {
+        selectedDirectory = f.destination;
+        const readdir = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+          if (args[0] === f.destination) {
+            enabled = true;
+          }
+          return readdir(...args);
+        });
+      }
+      await f.copy();
+    })().catch((error: unknown) => {
+      activeAtRejection = active;
+      return error;
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        peerEntered.promise,
+        operation,
+        "metadata reads did not overlap before rejection",
+      );
+      expect(activeAtRejection).toBeUndefined();
+      releasePeers.resolve();
+      expect(await operation).toBe(failure);
+      expect(activeAtRejection).toBe(0);
+      expect(started.length).toBeGreaterThan(1);
+      expect(maximum).toBeLessThanOrEqual(4);
+    } finally {
+      releasePeers.resolve();
+      await operation;
+    }
+  },
+);
+
 it("copies a linked workspace dependency without reading or changing Git update transactions", async () => {
   let dependency = "";
   let abandoned = "";
   let rollback = "";
   const sdkLink = "../../../../packages/plugin-sdk";
+  const required = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
   const f = await fixture(false, async (source) => {
     const workspace = path.join(path.dirname(source), "workspace");
     dependency = path.join(workspace, "extensions", "a2a");
@@ -346,8 +639,14 @@ it("copies a linked workspace dependency without reading or changing Git update 
     await fs.writeFile(path.join(rollback, "previous", "keep.txt"), "rollback bytes");
     await fs.mkdir(path.join(dependency, "ordinary.tmp"));
     await fs.writeFile(path.join(dependency, "ordinary.tmp", "asset.txt"), "plugin asset");
+    await fs.mkdir(path.join(source, required));
+    await fs.writeFile(path.join(source, required, "required.txt"), "explicit dependency");
+    await fs.symlink(path.join(required, "required.txt"), path.join(source, "required.txt"));
   });
   await f.copy();
+  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
+    "explicit dependency",
+  );
   const copied = path.join(f.destination, "node_modules", "workspace-dependency");
   expect(await fs.readFile(path.join(copied, "data.txt"), "utf8")).toBe("live dependency");
   expect(await fs.readFile(path.join(copied, "ordinary.tmp", "asset.txt"), "utf8")).toBe(
@@ -380,16 +679,3 @@ it.each(["ordinary.tmp", "node_modules.openclaw-update-operator.tmp"])(
     ).rejects.toThrow("Cannot privately copy plugin dependency");
   },
 );
-
-it("retains explicitly linked inputs inside a Git transaction namespace", async () => {
-  const name = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
-  const f = await fixture(false, async (source) => {
-    await fs.mkdir(path.join(source, name));
-    await fs.writeFile(path.join(source, name, "required.txt"), "explicit dependency");
-    await fs.symlink(path.join(name, "required.txt"), path.join(source, "required.txt"));
-  });
-  await f.copy();
-  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
-    "explicit dependency",
-  );
-});

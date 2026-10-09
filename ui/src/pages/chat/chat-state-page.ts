@@ -22,7 +22,10 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import {
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+} from "./chat-history-events.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -43,9 +46,10 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   openSessionWorkspacePreview,
+  getSessionWorkspace,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -103,6 +107,7 @@ function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean 
     sessionKey: view.sessionKey,
     agentId: view.agentId,
     runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
   }).then(async (result) => {
     if (!current()) {
       return;
@@ -168,7 +173,6 @@ async function loadPageAssistantIdentity(state: ChatPageHost) {
     }
     state.assistantName = identity.name;
     state.assistantAvatar = identity.avatar;
-    state.assistantAvatarSource = identity.avatarSource ?? null;
     state.assistantAvatarStatus = identity.avatarStatus ?? null;
     state.assistantAvatarReason = identity.avatarReason ?? null;
     state.assistantAgentId = identity.agentId ?? null;
@@ -184,6 +188,7 @@ export function createPageState(
   page: ChatPageElement,
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
+  const invalidate = () => renderLifecycle.invalidate();
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
@@ -193,6 +198,7 @@ export function createPageState(
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
+    uploadConfig: context.config,
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
@@ -202,13 +208,10 @@ export function createPageState(
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
     settings,
-    password: "",
-    onboarding: false,
     assistantName: appConfig.assistantIdentity.name,
     assistantAvatar: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,
-    assistantAvatarSource: null,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -261,7 +264,6 @@ export function createPageState(
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
-    chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatModelSwitchPromises: {},
@@ -327,21 +329,23 @@ export function createPageState(
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,
-    requestUpdate: () => renderLifecycle.invalidate(),
+    requestUpdate: invalidate,
     // Background warming gates on these edges. Session-event reloads never
     // re-render the page, so no update can carry the fact to it.
     transcriptLoadingChanged: () =>
       page.dispatchEvent(
         new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
       ),
+    historyRecoveryChanged: () =>
+      page.dispatchEvent(
+        new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT, { bubbles: true, composed: true }),
+      ),
     sessionWorkspaceState: undefined,
-    backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
-  state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
     resetChatScroll(state);
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
@@ -380,12 +384,15 @@ export function createPageState(
     ) {
       autoPromptNotificationsOnSend(context);
     }
-    return handleSendChat(state, messageOverride, options as never, submissionAction);
+    return handleSendChat(state, messageOverride, options, submissionAction);
   };
-  state.handleAbortChat = async (options) => {
-    await handleAbortChat(state, options as never);
-    renderLifecycle.invalidate();
-  };
+  const runAndInvalidate =
+    <Arg>(action: (host: ChatPageHost, argument: Arg) => Promise<unknown>) =>
+    async (argument: Arg) => {
+      await action(state, argument);
+      renderLifecycle.invalidate();
+    };
+  state.handleAbortChat = runAndInvalidate(handleAbortChat);
   state.removeQueuedMessage = (id) => {
     if (cancelPendingQueuedChatInput(state, id)) {
       return;
@@ -404,14 +411,8 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.retryQueuedChatMessage = async (id) => {
-    await retryQueuedChatMessage(state, id);
-    renderLifecycle.invalidate();
-  };
-  state.steerQueuedChatMessage = async (id) => {
-    await steerQueuedChatMessage(state, id);
-    renderLifecycle.invalidate();
-  };
+  state.retryQueuedChatMessage = runAndInvalidate(retryQueuedChatMessage);
+  state.steerQueuedChatMessage = runAndInvalidate(steerQueuedChatMessage);
   state.moveQueuedChatMessage = (id, targetId) => {
     moveQueuedChatMessage(state, id, targetId);
     renderLifecycle.invalidate();
@@ -443,10 +444,7 @@ export function createPageState(
         mentionsOverride: edit.mentions,
         resumeQueuedMessageEditId: edit.id,
       })
-      .then(
-        () => renderLifecycle.invalidate(),
-        () => renderLifecycle.invalidate(),
-      );
+      .then(invalidate, invalidate);
   };
   state.cancelQueuedChatMessageEdit = () => {
     if (cancelQueuedMessageEdit(state)) {
@@ -492,15 +490,6 @@ export function createPageState(
           (includesResource(previous, "browser") && !includesResource(normalized, "browser"))))
     ) {
       normalized.resourceAutoOpenDismissed = true;
-    }
-    if (
-      state.sidebarLayout.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "tasks")?.taskId !==
-      normalized.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "tasks")
-        ?.taskId
-    ) {
-      resetTaskDetail(state);
     }
     const presentation =
       options?.dashboardPresentation === "personal"
@@ -595,7 +584,14 @@ export function createPageState(
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
     if (fileTab && content) {
-      openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+      }
     } else {
       state.sidebarContent = content;
     }

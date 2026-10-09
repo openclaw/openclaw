@@ -2,15 +2,22 @@ import {
   compactChannelProgressDraftLine,
   formatChannelProgressDraftDiffStat,
   isChannelProgressAttentionLine,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingPreviewToolProgress,
   selectPlanChecklistSteps,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTelegramAccount } from "./accounts.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { escapeTelegramHtml, renderTelegramHtmlText } from "./format.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 import type { InputRichBlock, RichText } from "./rich-block-model.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichBlocksPlan } from "./rich-message.js";
+import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 
 function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine): boolean {
   if (typeof line === "string") {
@@ -28,14 +35,15 @@ function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine
 // Each row has one content decision; both Telegram transports use that row.
 type ProgressText = { html: string; rich: RichText };
 
-function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
-  const escaped = escapeTelegramHtml(text);
-  if (!style) {
-    return { html: escaped, rich: text };
-  }
+function styleProgressText(text: ProgressText, style: "bold" | "italic" | "code"): ProgressText {
   // Code entities keep prepared notes inert, including bare URLs.
   const tag = { bold: "b", italic: "i", code: "code" }[style];
-  return { html: `<${tag}>${escaped}</${tag}>`, rich: { type: style, text } };
+  return { html: `<${tag}>${text.html}</${tag}>`, rich: { type: style, text: text.rich } };
+}
+
+function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
+  const literal = { html: escapeTelegramHtml(text), rich: text };
+  return style ? styleProgressText(literal, style) : literal;
 }
 
 function joinProgressText(parts: ProgressText[], separator: string): ProgressText {
@@ -82,6 +90,7 @@ export function renderTelegramProgressDraftPreview(
   options: { richMessages: boolean; maxLines: number; maxLineChars: number; toolProgress: boolean },
 ): TelegramDraftPreview {
   const { maxLines, maxLineChars } = options;
+  const compact = (text: string) => compactChannelProgressDraftLine(text, maxLineChars);
   const activity =
     snapshot.statusHeadline || snapshot.plan?.length
       ? snapshot.lines.filter(
@@ -115,20 +124,13 @@ export function renderTelegramProgressDraftPreview(
     html.push(text.html);
   };
   if (label) {
-    addParagraph(literalProgressText(compactChannelProgressDraftLine(label, maxLineChars), "bold"));
+    addParagraph(literalProgressText(compact(label), "bold"));
   }
   if (snapshot.statusHeadline) {
-    const text = compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars);
+    const text = compact(snapshot.statusHeadline);
     const plain = snapshot.statusHeadlineFormat === "plain";
     const status = plain ? literalProgressText(text, "code") : markdownProgressText(text);
-    addParagraph(
-      label || plain
-        ? status
-        : {
-            html: `<b>${status.html}</b>`,
-            rich: { type: "bold", text: status.rich },
-          },
-    );
+    addParagraph(label || plain ? status : styleProgressText(status, "bold"));
   }
   if (visibleLines.length) {
     addParagraph(
@@ -139,9 +141,7 @@ export function renderTelegramProgressDraftPreview(
     );
   }
   if (checklist.summary) {
-    addParagraph(
-      literalProgressText(compactChannelProgressDraftLine(checklist.summary, maxLineChars)),
-    );
+    addParagraph(literalProgressText(compact(checklist.summary)));
   }
   if (checklist.steps.length) {
     blocks.push({
@@ -149,10 +149,7 @@ export function renderTelegramProgressDraftPreview(
       items: checklist.steps.map((step) => {
         const active = step.status === "in_progress";
         const text = literalProgressText(
-          compactChannelProgressDraftLine(
-            active ? `${step.step} (in progress)` : step.step,
-            maxLineChars,
-          ),
+          compact(active ? `${step.step} (in progress)` : step.step),
           active ? "bold" : undefined,
         );
         const completed = step.status === "completed";
@@ -166,10 +163,28 @@ export function renderTelegramProgressDraftPreview(
     });
   }
   if (diffStat) {
-    addParagraph(literalProgressText(compactChannelProgressDraftLine(diffStat, maxLineChars)));
+    addParagraph(literalProgressText(compact(diffStat)));
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages
-    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true }
-    : { text: html.join("<br>"), parseMode: "HTML", complete: true };
+    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true, linkPreview: false }
+    : { text: html.join("<br>"), parseMode: "HTML", complete: true, linkPreview: false };
+}
+
+export function renderTelegramAccountProgressDraftPreview(
+  snapshot: ChannelProgressDraftCompositorSnapshot,
+  params: { cfg: OpenClawConfig; accountId?: string | null },
+): TelegramDraftPreview {
+  const accountConfig = resolveTelegramAccount(params).config;
+  const streamMode = resolveTelegramPreviewStreamMode(accountConfig);
+  return renderTelegramProgressDraftPreview(snapshot, {
+    richMessages: resolveTelegramRichMessages({ ...params, accountConfig }),
+    toolProgress: resolveChannelStreamingPreviewToolProgress(
+      accountConfig,
+      streamMode !== "progress",
+      streamMode,
+    ),
+    maxLines: resolveChannelProgressDraftMaxLines(accountConfig),
+    maxLineChars: resolveChannelProgressDraftMaxLineChars(accountConfig),
+  });
 }

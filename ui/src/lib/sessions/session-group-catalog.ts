@@ -1,3 +1,4 @@
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { formatUiError } from "../format-error.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
@@ -35,16 +36,7 @@ function readLegacyStoredGroups(): string[] {
     const parsed: unknown = JSON.parse(
       getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY) ?? "[]",
     );
-    return Array.isArray(parsed)
-      ? [
-          ...new Set(
-            parsed
-              .filter((name): name is string => typeof name === "string")
-              .map((name) => name.trim())
-              .filter(Boolean),
-          ),
-        ]
-      : [];
+    return normalizeUniqueTrimmedStringList(parsed);
   } catch {
     return [];
   }
@@ -65,23 +57,20 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  const invalidate = () => {
-    loadedEpoch = -1;
-    loadGeneration += 1;
-    catalogGeneration += 1;
-    pendingLoad = null;
-    clearRetry();
-    defaultsStatus = "loading";
-    // Every invalidation publishes its generation, including back-to-back
-    // events while the previous reload is still pending.
-    host.publish({ ...host.readState() });
-  };
-
   const dispose = () => {
     loadedEpoch = -1;
     loadGeneration += 1;
     pendingLoad = null;
     clearRetry();
+  };
+
+  const invalidate = () => {
+    dispose();
+    catalogGeneration += 1;
+    defaultsStatus = "loading";
+    // Every invalidation publishes its generation, including back-to-back
+    // events while the previous reload is still pending.
+    host.publish({ ...host.readState() });
   };
 
   const publishCatalog = (

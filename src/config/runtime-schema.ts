@@ -1,4 +1,3 @@
-// Builds runtime config schema defaults from agent and workspace state.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataCore,
@@ -35,7 +34,7 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const snapshot = await readConfigFileSnapshot({ observe: false });
   const config = snapshot.valid
     ? snapshot.sourceConfig
-    : { agents: { list: [{ id: "main" }] }, plugins: { enabled: true } };
+    : { agents: { entries: { main: {} } }, plugins: { enabled: true } };
   const registry = resolveConfigWidePluginManifestRegistry({ config, env: process.env });
   return buildConfigSchemaCore({
     plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],

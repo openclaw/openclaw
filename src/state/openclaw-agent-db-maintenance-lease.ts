@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -38,7 +40,7 @@ async function runMaintenanceScope<T>(
     pending: [],
     ownership: ancestors[0]?.ownership ?? {},
   };
-  const assertCurrent = () => {
+  const assertCurrent = (database?: DatabaseSync) => {
     if (!scope.active || ancestors.some((parent) => !parent.active)) {
       throw new Error("Agent database maintenance scope is closed");
     }
@@ -46,47 +48,29 @@ async function runMaintenanceScope<T>(
       throw scope.ownership.failure.error;
     }
     try {
-      owner.assertOwned();
+      if (database) {
+        owner.assertOwnedInTransaction(database);
+      } else {
+        owner.assertOwned();
+      }
     } catch (error) {
       // One failed ownership observation retires every scope under the same owner.
       scope.ownership.failure = { error };
       throw error;
     }
   };
-  const assertAdmission = () => {
-    assertCurrent();
-    if (!scope.accepting) {
-      throw new Error("Agent database maintenance admission is closed");
-    }
-  };
-  const track = <R>(operation: Promise<R>): Promise<R> => {
-    scope.pending.push(operation);
-    void operation.catch(() => undefined);
-    return operation;
-  };
   const lease: OpenClawStateLeaseContext = {
     signal: owner.signal,
     assertOwned: assertCurrent,
-    assertOwnedInTransaction(database) {
-      assertCurrent();
-      owner.assertOwnedInTransaction(database);
-    },
+    assertOwnedInTransaction: assertCurrent,
     ...(owner.renew
       ? {
           renew() {
-            assertAdmission();
+            assertCurrent();
+            if (!scope.accepting) {
+              throw new Error("Agent database maintenance admission is closed");
+            }
             owner.renew!();
-          },
-        }
-      : {}),
-    ...(owner.withDatabaseFileExclusion
-      ? {
-          withDatabaseFileExclusion<R>(
-            operation: (assertCurrent: () => void) => Promise<R>,
-            bind?: (result: R, assertCurrent: () => void) => undefined,
-          ) {
-            assertAdmission();
-            return track(owner.withDatabaseFileExclusion!(operation, bind));
           },
         }
       : {}),
@@ -121,14 +105,7 @@ async function runMaintenanceScope<T>(
               errors.push(error);
             }
           }
-          if (errors.length > 1) {
-            throw new AggregateError(errors, "Agent maintenance and nested work failed", {
-              cause: errors[0],
-            });
-          }
-          if (errors.length === 1) {
-            throw errors[0];
-          }
+          throwSqliteLifecycleErrors(errors, "Agent maintenance and nested work failed");
           if ("error" in outcome) {
             throw outcome.error;
           }
@@ -146,6 +123,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
   options: Pick<OpenClawStateDatabaseOptions, "env"> & {
     schemaPolicy?: "existing";
     leaseMs?: number;
+    processBound?: boolean;
   },
   run: (maintenance: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
@@ -174,6 +152,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       waitMs: 5_000,
       prepareDatabase: true,
       heartbeat: "worker",
+      processBound: options.processBound,
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",
     },

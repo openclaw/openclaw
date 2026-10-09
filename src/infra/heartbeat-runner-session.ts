@@ -5,6 +5,8 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isSubagentSessionKey,
@@ -100,23 +102,38 @@ export function resolveHeartbeatSessionKey(
     : mainSession();
 }
 
-export function resolveHeartbeatSession(
+/** The heartbeat's event queue session and its stored row. */
+export type ResolvedHeartbeatSession = {
+  sessionKey: string;
+  storePath: string;
+  suppressOriginatingContext: boolean;
+  entry: SessionEntry | undefined;
+};
+
+export async function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
-) {
+): Promise<ResolvedHeartbeatSession> {
   const resolved = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, forcedSessionKey, env);
   return {
     ...resolved,
-    entry: loadSessionEntry({
+    entry: await readSessionEntryInWorker({
       agentId,
       storePath: resolved.storePath,
       sessionKey: resolved.sessionKey,
       env,
     }),
   };
+}
+
+function isHeartbeatSessionOf(sessionKey: string, baseSessionKey: string): boolean {
+  return (
+    sessionKey.startsWith(baseSessionKey) &&
+    /^(:heartbeat)+$/.test(sessionKey.slice(baseSessionKey.length))
+  );
 }
 
 function resolveIsolatedHeartbeatSessionKey(params: {
@@ -133,69 +150,61 @@ function resolveIsolatedHeartbeatSessionKey(params: {
       agentId: params.agentId,
       requestKey: "global:heartbeat",
     });
-    const suffix = params.sessionKey.slice(isolatedSessionKey.length);
     if (
       params.sessionKey === "global" ||
       (storedBaseSessionKey === "global" &&
         (params.sessionKey === isolatedSessionKey ||
-          (params.sessionKey.startsWith(isolatedSessionKey) && /^(:heartbeat)+$/.test(suffix))))
+          isHeartbeatSessionOf(params.sessionKey, isolatedSessionKey)))
     ) {
       return { isolatedSessionKey, isolatedBaseSessionKey: "global" };
     }
   }
-  if (storedBaseSessionKey) {
-    const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
-    if (
-      params.sessionKey.startsWith(storedBaseSessionKey) &&
-      suffix.length > 0 &&
-      /^(:heartbeat)+$/.test(suffix)
-    ) {
-      return {
-        isolatedSessionKey: `${storedBaseSessionKey}:heartbeat`,
-        isolatedBaseSessionKey: storedBaseSessionKey,
-      };
-    }
-  }
-
   // Collapse repeated `:heartbeat` suffixes introduced by wake-triggered re-entry.
   // The guard on configuredSessionKey ensures we do not strip a legitimate single
   // `:heartbeat` suffix that is part of the user-configured base key itself
   // (e.g. heartbeat.session: "alerts:heartbeat"). When the configured key already
   // ends with `:heartbeat`, a forced wake passes `configuredKey:heartbeat` which
   // must be treated as a new base rather than an existing isolated key.
-  const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
-  if (
-    params.sessionKey.startsWith(params.configuredSessionKey) &&
-    /^(:heartbeat)+$/.test(configuredSuffix) &&
+  let isolatedBaseSessionKey = params.sessionKey;
+  if (storedBaseSessionKey && isHeartbeatSessionOf(params.sessionKey, storedBaseSessionKey)) {
+    isolatedBaseSessionKey = storedBaseSessionKey;
+  } else if (
+    isHeartbeatSessionOf(params.sessionKey, params.configuredSessionKey) &&
     !params.configuredSessionKey.endsWith(":heartbeat")
   ) {
-    return {
-      isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,
-      isolatedBaseSessionKey: params.configuredSessionKey,
-    };
+    isolatedBaseSessionKey = params.configuredSessionKey;
   }
   return {
-    isolatedSessionKey: `${params.sessionKey}:heartbeat`,
-    isolatedBaseSessionKey: params.sessionKey,
+    isolatedSessionKey: `${isolatedBaseSessionKey}:heartbeat`,
+    isolatedBaseSessionKey,
   };
 }
 
-/** Selects the event queue, execution key and descriptive conversation before delivery. */
+/** Execution key and descriptive conversation chosen for a heartbeat event queue. */
+export type HeartbeatSessionSelection = ResolvedHeartbeatSession & {
+  run:
+    | { kind: "shared"; sessionKey: string }
+    | { kind: "isolated"; sessionKey: string; baseSessionKey: string };
+  conversationEntry: SessionEntry | undefined;
+  inspectsRunQueue: boolean;
+};
+
+/** Selects the execution key and descriptive conversation for an already-resolved event queue. */
 export function resolveHeartbeatSessionSelection(
   cfg: OpenClawConfig,
   agentId: string,
-  heartbeat?: HeartbeatConfig,
-  forcedSessionKey?: string,
+  heartbeat: HeartbeatConfig | undefined,
+  session: ResolvedHeartbeatSession,
+  isolated: boolean,
   env: NodeJS.ProcessEnv = process.env,
-) {
-  const session = resolveHeartbeatSession(cfg, agentId, heartbeat, forcedSessionKey, env);
-  if (heartbeat?.isolatedSession !== true) {
+): HeartbeatSessionSelection {
+  if (!isolated) {
     return {
       ...session,
       run: { kind: "shared", sessionKey: session.sessionKey },
       conversationEntry: session.entry,
       inspectsRunQueue: true,
-    } as const;
+    };
   }
   const configured = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, undefined, env);
   const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
@@ -222,7 +231,7 @@ export function resolveHeartbeatSessionSelection(
           }),
     // Legacy isolated queues retain their route after the execution key is canonicalized.
     inspectsRunQueue: session.sessionKey !== isolatedBaseSessionKey,
-  } as const;
+  };
 }
 
 export function resolveStaleHeartbeatIsolatedSessionKey(params: {
@@ -233,15 +242,9 @@ export function resolveStaleHeartbeatIsolatedSessionKey(params: {
   if (params.sessionKey === params.isolatedSessionKey) {
     return undefined;
   }
-  const suffix = params.sessionKey.slice(params.isolatedBaseSessionKey.length);
-  if (
-    params.sessionKey.startsWith(params.isolatedBaseSessionKey) &&
-    suffix.length > 0 &&
-    /^(:heartbeat)+$/.test(suffix)
-  ) {
-    return params.sessionKey;
-  }
-  return undefined;
+  return isHeartbeatSessionOf(params.sessionKey, params.isolatedBaseSessionKey)
+    ? params.sessionKey
+    : undefined;
 }
 
 export async function restoreHeartbeatUpdatedAt(params: {

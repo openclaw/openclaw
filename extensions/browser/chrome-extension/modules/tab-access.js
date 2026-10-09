@@ -612,6 +612,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (state.reason === "incognito") {
       throw new Error(`tab ${tabId} is incognito and unavailable to OpenClaw`);
     }
+    if (state.reason === "discarded") {
+      throw new Error(`tab ${tabId} is discarded by Chrome; open it to reload before using it`);
+    }
     throw new Error(`tab ${tabId} is restricted or unavailable to OpenClaw`);
   }
 
@@ -754,7 +757,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     addTabToGroup,
     inspectTab,
     requireTab,
-    requireTabAfterNavigation: (tabId, epoch) => requireTab(tabId, epoch, true),
     listAccessibleTabs,
     canPublishTab: (tabId) => !createdTabs.has(tabId) || createdTabs.get(tabId).handedOff,
     pause,

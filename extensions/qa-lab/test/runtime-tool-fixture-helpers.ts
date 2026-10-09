@@ -1,20 +1,29 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSqliteTrajectoryRuntimeEvents } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import { createQaBusState } from "../src/bus-state.js";
 import { createQaChannelTransport } from "../src/qa-channel-transport.js";
 import { runRuntimeToolFixture } from "../src/runtime-tool-fixture.js";
 import type { QaSuiteRuntimeEnv } from "../src/suite-runtime-types.js";
 
+let suiteRoot: string | undefined;
+let fixtureIndex = 0;
 const tempRoots: string[] = [];
 
 async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSuiteRuntimeEnv> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-tool-fixture-"));
+  // openclaw-temp-dir: allow suite-owned session stores drain once before removal
+  suiteRoot ??= await fs.mkdtemp(
+    path.join(realpathSync.native(os.tmpdir()), "runtime-tool-fixture-"),
+  );
+  const tempRoot = path.join(suiteRoot, `case-${++fixtureIndex}`);
   const workspaceDir = path.join(tempRoot, "workspace");
-  await fs.mkdir(workspaceDir);
+  await fs.mkdir(workspaceDir, { recursive: true });
   tempRoots.push(tempRoot);
   return {
     outputDir: tempRoot,
@@ -39,6 +48,59 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
 type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
 
+function transcriptToolCall(
+  toolName: string,
+  phase: "happy" | "failure",
+  input: Record<string, unknown>,
+) {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "tool_use",
+        id: `call-${toolName}-${phase}`,
+        name: toolName,
+        input,
+      },
+    ],
+  };
+}
+
+function transcriptToolResult(
+  toolName: string,
+  phase: "happy" | "failure",
+  content: string,
+  isError?: boolean,
+) {
+  return {
+    role: "tool",
+    toolName,
+    tool_call_id: `call-${toolName}-${phase}`,
+    ...(isError === undefined ? {} : { isError }),
+    content,
+  };
+}
+
+function runLiveRuntimeToolFixture(
+  env: QaSuiteRuntimeEnv,
+  params: {
+    toolName?: string;
+    config?: RuntimeToolFixtureConfig;
+    tools?: Iterable<string>;
+    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+  } = {},
+) {
+  const toolName = params.toolName ?? "read";
+  return runRuntimeToolFixture(
+    env,
+    params.config ?? runtimeToolFixtureConfig(toolName),
+    runtimeToolFixtureDeps({
+      tools: params.tools ?? [toolName],
+      runAgentPrompt: params.runAgentPrompt,
+    }),
+  );
+}
+
 const MOCK_BASE_URL = "http://127.0.0.1:9999";
 
 function runtimeToolFixtureConfig(
@@ -50,6 +112,7 @@ function runtimeToolFixtureConfig(
     toolCoverage: {
       bucket: "openclaw-dynamic-integration",
       expectedLayer: "openclaw-dynamic",
+      capabilityLayer: "openclaw-dynamic-direct",
     },
     ...overrides,
   };
@@ -154,6 +217,32 @@ async function runMockRuntimeToolFixture(params: {
   );
 }
 
+async function simulateRuntimePatchHappyTurn(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: { sessionKey: string },
+  contents: string | null = "runtime patch\n",
+) {
+  if (params.sessionKey.endsWith(":happy") && contents !== null) {
+    await fs.writeFile(
+      path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt"),
+      contents,
+      "utf8",
+    );
+  }
+  return {};
+}
+
+function runtimePatchAddInput(file = "runtime-tool-fixture-patch.txt") {
+  return `*** Begin Patch\n*** Add File: ${file}\n+runtime patch\n*** End Patch\n`;
+}
+
+function runtimePatchUpdateInput(
+  file = "../runtime-tool-fixture-denied.txt",
+  context = "runtime-tool-fixture-denied-original",
+) {
+  return `*** Begin Patch\n*** Update File: ${file}\n@@\n-${context}\n+runtime patch outside the workspace\n*** End Patch\n`;
+}
+
 export async function writeQaSessionTranscript(
   env: QaSuiteRuntimeEnv,
   sessionKey: string,
@@ -191,18 +280,78 @@ export async function writeRuntimeToolTranscripts(
   await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, failureMessages);
 }
 
+export function writeToolSearchDiscoveryEvidence(
+  env: QaSuiteRuntimeEnv,
+  toolName: string,
+  phase: "happy" | "failure",
+  targetCallId = `call-${toolName}-${phase}`,
+  options?: { callStatus?: string | null },
+) {
+  const sessionKey = `agent:qa:runtime-tool:${toolName}:${phase}`;
+  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
+  const sessionEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+  };
+  const storePath = resolveStorePath(undefined, { agentId: "qa", env: sessionEnv });
+  appendSqliteTrajectoryRuntimeEvents({ agentId: "qa", env: sessionEnv, sessionId, storePath }, [
+    {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: sessionId,
+      source: "runtime",
+      type: "tool.search.discovery",
+      ts: new Date().toISOString(),
+      seq: 1,
+      sessionId,
+      sessionKey,
+      runId: `run-${phase}`,
+      data: {
+        threadId: `thread-${phase}`,
+        turnId: `turn-${phase}`,
+        search: {
+          callId: `search-${phase}`,
+          callExecution: "client",
+          ...(options?.callStatus === null
+            ? {}
+            : { callStatus: options?.callStatus ?? "completed" }),
+          outputExecution: "client",
+          outputStatus: "completed",
+          tools: [{ namespace: "openclaw", name: toolName }],
+        },
+        target: {
+          callId: targetCallId,
+          namespace: "openclaw",
+          name: toolName,
+          success: phase === "happy",
+        },
+      },
+    },
+  ]);
+}
+
 export async function cleanupRuntimeToolFixtureTempRoots() {
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
-  );
+  if (!suiteRoot) {
+    return;
+  }
+  await Promise.all(tempRoots.map((root) => closeQaRuntimeStores(root)));
+  await fs.rm(suiteRoot, { recursive: true, force: true });
+  tempRoots.length = 0;
+  suiteRoot = undefined;
 }
 
 export {
   makeEnv,
   MOCK_BASE_URL,
   mockToolRequests,
+  runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
+  runtimePatchAddInput,
+  runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
   runtimeToolFixtureDeps,
+  simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
 };
 export type { RuntimeToolFixtureConfig, RuntimeToolFixtureDeps };

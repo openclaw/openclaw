@@ -3,15 +3,14 @@ import {
   createChannelPartialDeliveryError,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Msteams plugin module implements reply dispatcher behavior.
 import {
-  normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createChannelMessageReplyPipeline,
@@ -53,7 +52,6 @@ export function createMSTeamsReplyDispatcher(params: {
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   app: MSTeamsApp;
-  appId: string;
   conversationRef: StoredConversationReference;
   context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
@@ -69,22 +67,10 @@ export function createMSTeamsReplyDispatcher(params: {
   );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
-  /**
-   * Keepalive cadence for the typing indicator while the bot is running
-   * (including long tool chains). Bot Framework 1:1 TurnContext proxies
-   * expire after ~30s of inactivity; sending a typing activity every 8s
-   * keeps the proxy alive so the post-tool reply can still land via the
-   * turn context. Sits in the middle of the 5-10s range recommended in
-   * #59731.
-   */
+  // Bot Framework turn proxies expire after ~30s idle; keep them alive through tool calls.
   const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 
-  /**
-   * TTL ceiling for the typing keepalive loop. The default in
-   * createTypingCallbacks is 60s, which is too short for the Teams long tool
-   * chains described in #59731 (60s+ total runs are common). Give tool
-   * chains up to 10 minutes before auto-stopping the keepalive.
-   */
+  // Teams tool chains can exceed the shared typing callback's 60s default (#59731).
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
   const sendTypingIndicator = async () => {
@@ -162,9 +148,6 @@ export function createMSTeamsReplyDispatcher(params: {
     progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
 
-  // Resolve block-streaming preference from the canonical nested config
-  // (`streaming.mode = "block"` or `streaming.block.enabled = true`); legacy
-  // flat `blockStreaming` is migrated by `openclaw doctor --fix`.
   const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
   const blockStreamingResolved =
     teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
@@ -189,7 +172,6 @@ export function createMSTeamsReplyDispatcher(params: {
     content?: string;
     nativeResult?: AcceptedDeliveryPart;
     blockResults: AcceptedDeliveryPart[];
-    native: boolean;
     nativeSettled: boolean;
     blockSettled: boolean;
     settled: boolean;
@@ -201,33 +183,7 @@ export function createMSTeamsReplyDispatcher(params: {
   // before another payload can mutate or overtake the native segment.
   let pendingSettlement: Promise<void> | undefined;
   const findPendingNativeDelivery = () =>
-    pendingDeliveries.find((candidate) => candidate.native && !candidate.nativeSettled);
-
-  const joinAcceptedContents = (contents: readonly (string | undefined)[]): string =>
-    contents.filter((content): content is string => Boolean(content)).join("\n");
-
-  const sendMessages = async (messages: MSTeamsRenderedMessage[]): Promise<string[]> => {
-    return sendMSTeamsMessages({
-      replyStyle: params.replyStyle,
-      app: params.app,
-      appId: params.appId,
-      conversationRef: params.conversationRef,
-      context: params.context,
-      messages,
-      retry: {},
-      onRetry: (event) => {
-        params.log.debug?.("retrying send", {
-          replyStyle: params.replyStyle,
-          ...event,
-        });
-      },
-      tokenProvider: params.tokenProvider,
-      sharePointSiteId: params.sharePointSiteId,
-      mediaMaxBytes,
-      feedbackLoopEnabled,
-      serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
-    });
-  };
+    pendingDeliveries.find((candidate) => !candidate.nativeSettled);
 
   const queueDeliveryFailureSystemEvent = (failure: {
     failed: number;
@@ -263,14 +219,16 @@ export function createMSTeamsReplyDispatcher(params: {
   const renderReplyPayload = (payload: ReplyPayload) => {
     return renderReplyPayloadsToMessages([payload], {
       textChunkLimit: params.textLimit,
-      chunkText: true,
-      mediaMode: "split",
       tableMode,
       chunkMode,
     });
   };
 
-  const deliveryOutcome = (delivery: PendingDelivery): DeliveryOutcome => {
+  const settlePendingDelivery = (delivery: PendingDelivery) => {
+    if (delivery.settled || !delivery.blockSettled || !delivery.nativeSettled) {
+      return;
+    }
+    delivery.settled = true;
     const acceptedParts = [
       ...(delivery.nativeResult ? [delivery.nativeResult] : []),
       ...delivery.blockResults,
@@ -278,25 +236,16 @@ export function createMSTeamsReplyDispatcher(params: {
     const messageIds = acceptedParts.flatMap((part) => part.messageIds);
     const content =
       delivery.errors.length > 0
-        ? joinAcceptedContents(acceptedParts.map((part) => part.content))
+        ? acceptedParts
+            .map((part) => part.content)
+            .filter(Boolean)
+            .join("\n")
         : delivery.content;
-    return {
+    const outcome: DeliveryOutcome = {
       visibleReplySent: acceptedParts.length > 0,
       ...(messageIds.length > 0 ? { messageIds } : {}),
       ...(acceptedParts.length > 0 && content !== undefined ? { content } : {}),
     };
-  };
-
-  const settlePendingDelivery = (delivery: PendingDelivery) => {
-    if (
-      delivery.settled ||
-      !delivery.blockSettled ||
-      (delivery.native && !delivery.nativeSettled)
-    ) {
-      return;
-    }
-    delivery.settled = true;
-    const outcome = deliveryOutcome(delivery);
     if (delivery.errors.length === 0) {
       delivery.finalization.resolve(outcome);
       return;
@@ -316,27 +265,6 @@ export function createMSTeamsReplyDispatcher(params: {
     );
   };
 
-  const queueReplyPayload = (
-    payload: ReplyPayload,
-    messages: MSTeamsRenderedMessage[],
-    native: boolean,
-  ): PendingDelivery => {
-    const finalization = createDeferred<DeliveryOutcome>();
-    const delivery: PendingDelivery = {
-      messages,
-      finalization,
-      content: payload.text,
-      blockResults: [],
-      native,
-      nativeSettled: !native,
-      blockSettled: messages.length === 0,
-      settled: false,
-      errors: [],
-    };
-    pendingDeliveries.push(delivery);
-    return delivery;
-  };
-
   const flushPendingMessages = async () => {
     for (const delivery of pendingDeliveries) {
       if (delivery.blockSettled) {
@@ -349,7 +277,24 @@ export function createMSTeamsReplyDispatcher(params: {
       const sentIds: string[] = [];
       for (const msg of toSend) {
         try {
-          const msgIds = await sendMessages([msg]);
+          const msgIds = await sendMSTeamsMessages({
+            replyStyle: params.replyStyle,
+            app: params.app,
+            conversationRef: params.conversationRef,
+            context: params.context,
+            messages: [msg],
+            onRetry: (event) => {
+              params.log.debug?.("retrying send", {
+                replyStyle: params.replyStyle,
+                ...event,
+              });
+            },
+            tokenProvider: params.tokenProvider,
+            sharePointSiteId: params.sharePointSiteId,
+            mediaMaxBytes,
+            feedbackLoopEnabled,
+            serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
+          });
           const validIds = msgIds.filter((id) => id.trim() && id !== "unknown");
           if (msgIds.length > 0) {
             delivery.blockResults.push({
@@ -394,13 +339,7 @@ export function createMSTeamsReplyDispatcher(params: {
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
-      // Always start the typing keepalive loop when typing is enabled and
-      // supported by this conversation type. The sendTypingIndicator gate
-      // skips actual sends while the stream card is visually active, so
-      // during the first text segment the user only sees the streaming UI.
-      // Once the stream finalizes (between segments / during tool chains),
-      // the loop starts sending typing activities and keeps the Bot Framework
-      // TurnContext alive so the post-tool reply can still land. See #59731.
+      // The indicator gate suppresses sends during streams and resumes them between segments.
       if (typingIndicatorEnabled) {
         await typingCallbacks?.onReplyStart?.();
       }
@@ -431,7 +370,17 @@ export function createMSTeamsReplyDispatcher(params: {
         };
       }
 
-      const pending = queueReplyPayload(payload, messages, native);
+      const pending: PendingDelivery = {
+        messages,
+        finalization: createDeferred<DeliveryOutcome>(),
+        content: payload.text,
+        blockResults: [],
+        nativeSettled: !native,
+        blockSettled: messages.length === 0,
+        settled: false,
+        errors: [],
+      };
+      pendingDeliveries.push(pending);
 
       // When block streaming is enabled, flush immediately so blocks are
       // delivered progressively instead of batching until markDispatchIdle.
@@ -525,27 +474,22 @@ export function createMSTeamsReplyDispatcher(params: {
         pendingSettlement = undefined;
       }));
 
-  // Pipe agent tool/plan/approval/command events into the stream controller's
-  // progress-draft surface. In "progress" stream mode this lets the live
-  // streaming card show "Searching the schema..." → "Generating SQL..." as
-  // tools fire (instead of the rotating "Thinking..." label sitting unchanged
-  // for the duration of a long tool chain). In other modes these calls are
-  // no-ops on the controller side.
   const shouldSuppressDefaultToolProgressMessages =
     streamController.hasStream() && teamsStreamMode === "progress";
 
-  // Forward the rich pipeline event payload through to the channel-streaming
-  // formatters. The formatters accept the canonical union shape; the pipeline
-  // payload is structurally compatible but tsgo can't see through the
-  // optional-property unions for this signature, so we cast at the boundary.
-  type PipelinePayload = Record<string, unknown>;
-
-  const progressCallbacks = streamController.hasStream()
+  const progressCallbacks: Pick<
+    GetReplyOptions,
+    | "onReasoningStream"
+    | "onReasoningEnd"
+    | "onToolStart"
+    | "onItemEvent"
+    | "onPlanUpdate"
+    | "onApprovalEvent"
+  > = streamController.hasStream()
     ? {
-        onReasoningStream: async (payload: PipelinePayload) => {
-          const text = typeof payload?.text === "string" ? payload.text : undefined;
-          await streamController.pushReasoningProgress(text, {
-            snapshot: payload?.isReasoningSnapshot === true,
+        onReasoningStream: async (payload) => {
+          await streamController.pushReasoningProgress(payload.text, {
+            snapshot: payload.isReasoningSnapshot === true,
           });
           return false;
         },
@@ -555,25 +499,15 @@ export function createMSTeamsReplyDispatcher(params: {
         },
         onToolStart: streamController.pushToolEvent,
         onItemEvent: streamController.pushItemEvent,
-        onPlanUpdate: async (payload: PipelinePayload) => {
-          if (payload?.phase !== "update") {
+        onPlanUpdate: async (payload) => {
+          if (payload.phase !== "update") {
             return false;
           }
-          await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
-            explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
-            explanationFormat: payload.explanationFormat === "plain" ? "plain" : undefined,
-          });
+          await streamController.pushPlanProgress(payload.steps, payload);
           return false;
         },
-        onApprovalEvent: async (payload: PipelinePayload) => {
-          await streamController.pushApprovalEvent({
-            ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
-            ...(typeof payload?.approvalId === "string" ? { approvalId: payload.approvalId } : {}),
-            ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-            ...(typeof payload?.command === "string" ? { command: payload.command } : {}),
-            ...(typeof payload?.reason === "string" ? { reason: payload.reason } : {}),
-            ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
-          });
+        onApprovalEvent: async (payload) => {
+          await streamController.pushApprovalEvent(payload);
           return false;
         },
       }
@@ -597,16 +531,10 @@ export function createMSTeamsReplyDispatcher(params: {
           }
         : {}),
       ...progressCallbacks,
-      // When progress mode is active, suppress openclaw's default block-style
-      // tool-progress messages so they don't duplicate alongside the
-      // streaming card's progress lines.
+      // Progress is already visible in the native card.
       ...(shouldSuppressDefaultToolProgressMessages
         ? { suppressDefaultToolProgressMessages: true }
         : {}),
-      // Pass-through to the reply pipeline. `false` = "use block streaming"
-      // (the default when streaming.mode=block or streaming.block.enabled=true).
-      // `true` = "do not use it".
-      // `undefined` = "no preference" — let the pipeline decide.
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,
     },

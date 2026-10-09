@@ -1,9 +1,7 @@
-/** Emits ACP session updates and mirrors replayable updates into the event ledger. */
 import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
-/** Session identity used when emitting and recording ACP translator updates. */
 type AcpTranslatorSessionRef = {
   sessionId: string;
   sessionKey: string;
@@ -24,7 +22,6 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
   return session.ledgerSessionId ?? session.sessionId;
 }
 
-/** Helper that keeps ACP client updates and replay ledger writes in sync. */
 export class AcpTranslatorSessionUpdates {
   private stopped = false;
   // Queue each ledger session at emission time so a detached disconnect notice
@@ -187,7 +184,9 @@ export class AcpTranslatorSessionUpdates {
     kind: "prompt" | "update",
     mutation: () => Promise<void>,
   ): Promise<void> {
-    return this.enqueueLedgerMutation(resolveLedgerSessionId(session), async () => {
+    const ledgerSessionId = resolveLedgerSessionId(session);
+    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
+    const pending = previous.then(async () => {
       if (this.stopped) {
         return;
       }
@@ -200,14 +199,6 @@ export class AcpTranslatorSessionUpdates {
         await this.markLedgerIncomplete(session);
       }
     });
-  }
-
-  private enqueueLedgerMutation(
-    ledgerSessionId: string,
-    mutation: () => Promise<void>,
-  ): Promise<void> {
-    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
-    const pending = previous.then(mutation, mutation);
     const tail = pending.catch(() => {});
     this.ledgerMutationTails.set(ledgerSessionId, tail);
     void tail.then(() => {

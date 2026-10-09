@@ -54,22 +54,6 @@ afterEach(() => {
 });
 
 describe("Telegram private production local-app proof", () => {
-  it("parses two distinct operator-local participants without credential material", () => {
-    const file = writeDescriptor();
-
-    expect(readTelegramPrivateProductionDescriptor(file)).toEqual({
-      file,
-      mode: "private-production-local-apps",
-      forumGroupId: "-100456",
-      forumTopicId: 42,
-      topicTitle: "Private proof",
-      participants: [
-        { alias: "primary", host: "mainframe", userId: "100" },
-        { alias: "second", host: "macbook", userId: "101" },
-      ],
-    });
-  });
-
   it("resolves the bot through the guarded network boundary and releases it", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({

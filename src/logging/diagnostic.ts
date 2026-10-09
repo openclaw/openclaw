@@ -9,6 +9,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
@@ -152,18 +153,7 @@ async function recoverStuckSession(
     });
 }
 
-function pushLimitedDiagnosticLabel(
-  labels: string[],
-  state: {
-    sessionId?: string;
-    sessionKey?: string;
-    state: SessionStateValue;
-    queueDepth: number;
-    activeQueuedTurn?: boolean;
-    lastActivity: number;
-  },
-  now: number,
-): void {
+function pushLimitedDiagnosticLabel(labels: string[], state: SessionState, now: number): void {
   const label = state.sessionKey ?? state.sessionId ?? "unknown";
   const ageSeconds = Math.round(Math.max(0, now - state.lastActivity) / 1000);
   const activity = getDiagnosticSessionActivitySnapshot(
@@ -181,11 +171,7 @@ function pushLimitedDiagnosticLabel(
   );
 }
 
-function resolveDiagnosticQueuedBacklog(state: {
-  activeQueuedTurn?: boolean;
-  queueDepth: number;
-  state: SessionStateValue;
-}): number {
+function resolveDiagnosticQueuedBacklog(state: SessionState): number {
   return Math.max(
     0,
     state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
@@ -516,7 +502,8 @@ export function logMessageDispatchCompleted(
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  if (diag.isEnabled(params.outcome === "error" ? "error" : "debug")) {
+  const level = params.outcome === "error" ? "error" : "debug";
+  if (diag.isEnabled(level)) {
     const payload = `message dispatch completed: channel=${params.channel ?? "unknown"} sessionId=${
       params.sessionId ?? "unknown"
     } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source} outcome=${
@@ -524,11 +511,7 @@ export function logMessageDispatchCompleted(
     } duration=${params.durationMs}ms${params.reason ? ` reason=${params.reason}` : ""}${
       params.error ? ` error="${params.error}"` : ""
     }`;
-    if (params.outcome === "error") {
-      diag.error(payload);
-    } else {
-      diag.debug(payload);
-    }
+    diag[level](payload);
   }
   emitDiagnosticEvent({
     type: "message.dispatch.completed",
@@ -548,8 +531,8 @@ export function logMessageProcessed(params: DiagnosticLogParams<"message.process
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  const wantsLog = params.outcome === "error" ? diag.isEnabled("error") : diag.isEnabled("debug");
-  if (wantsLog) {
+  const level = params.outcome === "error" ? "error" : "debug";
+  if (diag.isEnabled(level)) {
     const payload = `message processed: channel=${params.channel} chatId=${
       params.chatId ?? "unknown"
     } messageId=${params.messageId ?? "unknown"} sessionId=${
@@ -559,11 +542,7 @@ export function logMessageProcessed(params: DiagnosticLogParams<"message.process
     }ms${params.reason ? ` reason=${params.reason}` : ""}${
       params.error ? ` error="${params.error}"` : ""
     }`;
-    if (params.outcome === "error") {
-      diag.error(payload);
-    } else {
-      diag.debug(payload);
-    }
+    diag[level](payload);
   }
   emitDiagnosticEvent({
     type: "message.processed",
@@ -828,10 +807,12 @@ function logSessionAttention(
   return recovery;
 }
 
-let heartbeatInterval: NodeJS.Timeout | null = null;
+let heartbeatJob: GatewayScheduledJob | undefined;
+let detachHeartbeatOwner: (() => void) | undefined;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
 
-export function startDiagnosticHeartbeat(
+export function startGatewayDiagnosticHeartbeat(
+  scheduler: GatewayScheduler,
   config?: OpenClawConfig,
   opts?: StartDiagnosticHeartbeatOptions,
 ) {
@@ -844,7 +825,7 @@ export function startDiagnosticHeartbeat(
   startDiagnosticStabilityRecorder();
   installDiagnosticStabilityFatalHook();
   reconcileDiagnosticGcObserver();
-  if (heartbeatInterval) {
+  if (heartbeatJob) {
     return;
   }
   // Gateway supplies its lifecycle-owned monitor; other runtimes retain the
@@ -853,9 +834,11 @@ export function startDiagnosticHeartbeat(
     startDiagnosticLivenessSampler();
   }
   const livenessGraceUntil =
-    opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
-  lastDiagnosticHeartbeatTickAt = Date.now();
-  heartbeatInterval = setInterval(() => {
+    opts?.startupGraceMs != null && opts.startupGraceMs > 0
+      ? scheduler.now() + opts.startupGraceMs
+      : 0;
+  lastDiagnosticHeartbeatTickAt = scheduler.now();
+  const tick = () => {
     // Reuse this tick for exporter demand changes; GC collection never adds a timer.
     reconcileDiagnosticGcObserver();
     emitChildProcessSpawnSample();
@@ -871,7 +854,7 @@ export function startDiagnosticHeartbeat(
     const stuckSessionAbortMs =
       opts?.testTimings?.stuckSessionAbortMs ?? resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
-    const now = Date.now();
+    const now = scheduler.now();
     const heartbeatElapsedMs =
       lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
     lastDiagnosticHeartbeatTickAt = now;
@@ -917,7 +900,7 @@ export function startDiagnosticHeartbeat(
     }
 
     diag.debug(
-      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${work.activeCount} waiting=${work.waitingCount} queued=${work.queuedCount}`,
+      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${work.activeCount} waiting=${work.waitingCount} queued=${work.queuedCount} nextWakeAtMs=${scheduler.nextWakeAtMs ?? "none"}`,
     );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
@@ -1009,17 +992,33 @@ export function startDiagnosticHeartbeat(
         });
       }
     }
-  }, DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
-  heartbeatInterval.unref?.();
+  };
+  const job = scheduler.schedule({
+    id: "diagnostic-heartbeat",
+    atMs: scheduler.now() + DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    everyMs: DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    run: tick,
+  });
+  heartbeatJob = job;
+  const stopOwnedHeartbeat = () => {
+    if (heartbeatJob === job) {
+      stopGatewayDiagnosticHeartbeat();
+    }
+  };
+  scheduler.signal.addEventListener("abort", stopOwnedHeartbeat, { once: true });
+  detachHeartbeatOwner = () => scheduler.signal.removeEventListener("abort", stopOwnedHeartbeat);
+  if (scheduler.signal.aborted) {
+    stopOwnedHeartbeat();
+  }
 }
 
-export function stopDiagnosticHeartbeat() {
+export function stopGatewayDiagnosticHeartbeat() {
+  detachHeartbeatOwner?.();
+  detachHeartbeatOwner = undefined;
   retireSessionDiagnosticLogs();
   stopDiagnosticGcObserver();
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
+  heartbeatJob?.cancel();
+  heartbeatJob = undefined;
   lastDiagnosticHeartbeatTickAt = undefined;
   stopDiagnosticRunActivityTracking();
   retireDiagnosticSessionObservations();
@@ -1029,7 +1028,7 @@ export function stopDiagnosticHeartbeat() {
 }
 
 function resetDiagnosticStateForTest(): void {
-  stopDiagnosticHeartbeat();
+  stopGatewayDiagnosticHeartbeat();
   resetDiagnosticSessionRecoveryCoordinatorForTest();
   resetDiagnosticSessionStateForTest();
   resetDiagnosticActivityForTest();

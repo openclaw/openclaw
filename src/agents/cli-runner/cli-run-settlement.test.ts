@@ -1,19 +1,28 @@
 /** Tests native CLI continuity projection and bounded transcript-flush probing. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { wrapRunWithTestPreparedAdmission } from "../admitted-run-context.test-support.js";
 import {
-  isCliBindingFlushed,
-  restoreCliRunnerTestDeps,
-  runCliAgent,
-  setCliRunnerTestDeps,
-} from "../cli-runner.js";
+  acquireSessionMcpRuntime,
+  peekSessionMcpRuntime,
+} from "../agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
+import {
+  createSessionMcpRuntimeManager,
+  unopenedMcpConfig,
+} from "../agent-bundle-mcp-manager.test-support.js";
+import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "../agent-bundle-mcp-runtime-shared.js";
+import { isCliBindingFlushed, runCliAgent } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
+import * as cliTranscript from "../command/attempt-execution.helpers.js";
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
+  settleCliPreparationError,
+  settlePreparedCliRun,
 } from "./cli-run-settlement.js";
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -28,18 +37,17 @@ describe("isCliBindingFlushed", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
-    restoreCliRunnerTestDeps();
   });
 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    restoreCliRunnerTestDeps();
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
   it("returns false when no sessionId is provided", async () => {
     const probe = vi.fn(async () => true);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed(undefined, "claude-cli")).toBe(false);
     expect(probe).not.toHaveBeenCalled();
@@ -47,7 +55,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true when the transcript has content on the first probe", async () => {
     const probe = vi.fn(async () => true);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed("sid-fresh", "claude-cli", workspaceDir)).toBe(true);
     expect(probe).toHaveBeenCalledTimes(1);
@@ -55,17 +63,21 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
-    const delay = vi.fn(async () => undefined);
+    vi.useFakeTimers();
     let calls = 0;
     const probe = vi.fn(async () => {
       calls += 1;
       return calls >= 2;
     });
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
-    expect(await isCliBindingFlushed("sid-late", "claude-cli", workspaceDir)).toBe(true);
+    const result = isCliBindingFlushed("sid-late", "claude-cli", workspaceDir);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(probe).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toBe(true);
     expect(probe).toHaveBeenCalledTimes(2);
-    expect(delay).toHaveBeenCalledExactlyOnceWith(50);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
@@ -74,7 +86,7 @@ describe("isCliBindingFlushed", () => {
       // Fake timers enforce the retry contract without introducing wall-clock
       // sleeps into this import-heavy agent test.
       const probe = vi.fn(async () => false);
-      setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+      vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
       const settled = vi.fn();
       const errored = vi.fn();
@@ -96,7 +108,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true without probing for non-claude-cli providers", async () => {
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
     expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
@@ -106,7 +118,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true without probing when provider is undefined", async () => {
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
@@ -114,7 +126,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(
       await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
@@ -237,6 +249,30 @@ describe.each(["anthropic", undefined])(
   },
 );
 
+describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFails) => {
+  it.each([undefined, null, 0, false])(
+    "rejects the thrown value %s after cleanup",
+    async (error) => {
+      const context = buildPreparedCliRunContext();
+      const cleanup = vi.fn(async () => {
+        if (cleanupFails) {
+          throw new Error("synthetic cleanup failure");
+        }
+      });
+      context.params.cleanupCliLiveSessionOnRunEnd = true;
+      context.preparedBackend.closeLiveSession = cleanup;
+
+      await expect(
+        settlePreparedCliRun({
+          context,
+          run: vi.fn().mockRejectedValue(error),
+        }),
+      ).rejects.toThrow(new Error(String(error)));
+      expect(cleanup).toHaveBeenCalledOnce();
+    },
+  );
+});
+
 it("preserves completed result boundaries for independent final delivery", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   const result = buildCliRunResult({
@@ -258,4 +294,99 @@ it("preserves completed result boundaries for independent final delivery", async
       assistantMessageIndex,
     });
   }
+});
+
+describe("CLI MCP retirement", () => {
+  let manager: ReturnType<typeof createSessionMcpRuntimeManager>;
+  let previous: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    manager = createSessionMcpRuntimeManager();
+    previous = Object.getOwnPropertyDescriptor(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, {
+      configurable: true,
+      writable: true,
+      value: manager,
+    });
+  });
+  afterEach(async () => {
+    await manager.disposeAll();
+    if (previous) {
+      Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
+    } else {
+      Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    }
+  });
+  const input = (sessionId: string) => ({
+    sessionId,
+    workspaceDir: "/workspace",
+    cfg: unopenedMcpConfig,
+    manifestRegistry: { plugins: [] },
+  });
+
+  it.each([false, true])("joins preparation cleanup with revoked authority %s", async (revoked) => {
+    const runtime = await manager.getOrCreate(input("preparation"));
+    const survivor = await manager.getOrCreate(input("survivor"));
+    const started = createDeferred();
+    const finish = createDeferred();
+    const dispose = runtime.dispose.bind(runtime);
+    let closing = false;
+    vi.spyOn(runtime, "dispose").mockImplementationOnce(async () => {
+      closing = true;
+      started.resolve();
+      await finish.promise;
+      await dispose();
+    });
+    const context = buildPreparedCliRunContext({ sessionId: runtime.sessionId });
+    const authorityError = new Error("Preparation authority revoked");
+    let settled = false;
+    const cleanup = settleCliPreparationError(new Error("Preparation failed"), {
+      ...context.params,
+      cleanupBundleMcpOnRunEnd: true,
+      assertCurrent: () => {
+        if (revoked) {
+          throw authorityError;
+        }
+      },
+    }).finally(() => {
+      settled = true;
+    });
+    void cleanup.catch(() => undefined);
+    try {
+      await Promise.race([started.promise, cleanup.catch(() => undefined)]);
+      expect(closing).toBe(true);
+      expect(settled).toBe(false);
+      finish.resolve();
+      if (revoked) {
+        await expect(cleanup).rejects.toBe(authorityError);
+      } else {
+        await expect(cleanup).resolves.toBeUndefined();
+      }
+      expect(peekSessionMcpRuntime({ sessionId: runtime.sessionId })).toBeUndefined();
+      expect(peekSessionMcpRuntime({ sessionId: survivor.sessionId })).toBe(survivor);
+    } finally {
+      finish.resolve();
+      await cleanup.catch(() => undefined);
+    }
+  });
+
+  it("defers terminal retirement until the session's active lease releases", async () => {
+    const acquired = await acquireSessionMcpRuntime(input("active"));
+    const survivor = await manager.getOrCreate(input("survivor"));
+    const context = buildPreparedCliRunContext({ sessionId: acquired.runtime.sessionId });
+    context.params.cleanupBundleMcpOnRunEnd = true;
+    const result = { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
+    try {
+      await expect(settlePreparedCliRun({ context, run: async () => result })).resolves.toBe(
+        result,
+      );
+      expect(peekSessionMcpRuntime({ sessionId: acquired.runtime.sessionId })).toBe(
+        acquired.runtime,
+      );
+      await releaseSessionMcpRuntime(acquired);
+      expect(peekSessionMcpRuntime({ sessionId: acquired.runtime.sessionId })).toBeUndefined();
+      expect(peekSessionMcpRuntime({ sessionId: survivor.sessionId })).toBe(survivor);
+    } finally {
+      await releaseSessionMcpRuntime(acquired);
+    }
+  });
 });

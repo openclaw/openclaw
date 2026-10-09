@@ -8,10 +8,13 @@ import {
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
 
-export function createTuiStartupRelease(
-  tempDir: string,
-  opts: { holdStartupHistory?: boolean; holdSessionDescription?: boolean },
-) {
+export type TuiStartupFixtureOptions = {
+  failInitialHistory?: boolean;
+  holdStartupHistory?: boolean;
+  holdSessionDescription?: boolean;
+};
+
+export function createTuiStartupRelease(tempDir: string, opts: TuiStartupFixtureOptions) {
   const startupReleasePath =
     opts.holdStartupHistory || opts.holdSessionDescription
       ? path.join(tempDir, "startup.release")
@@ -70,7 +73,8 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
           }
         }
   `,
-  variables: `
+  variables: (failInitialHistory: boolean) => `
+      let failInitialHistory = ${JSON.stringify(failInitialHistory)};
       const restoreDelayMs = Number(process.env.OPENCLAW_TUI_PTY_RESTORE_DELAY_MS ?? 0);
       const restoreFailures = Number(process.env.OPENCLAW_TUI_PTY_RESTORE_FAILURES ?? 0);
       const reconnectHistoryDelayMs = Number(
@@ -100,6 +104,11 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
       ] : [];
   `,
   loadHistory: `
+          if (failInitialHistory) {
+            failInitialHistory = false;
+            record("initialHistoryFailed", { sessionKey });
+            throw new Error("fixture initial history failed");
+          }
           if (reconnectHistoryReady && reconnectHistoryDelayMs > 0) {
             reconnectHistoryReady = false;
             record("reconnectHistoryPending", { sessionKey });
@@ -143,9 +152,10 @@ export async function exerciseStartupHistoryRendering(
     releaseStartup: () => Promise<void>;
   },
   timeoutMs: number,
+  signal: AbortSignal,
 ) {
   try {
-    await fixture.waitForLogEntry((entry) => entry.method === "startupHistoryPending", timeoutMs);
+    await fixture.waitForLogEntry((entry) => entry.method === "startupHistoryPending", signal);
     let startupOutput = "";
     const startupRows = await waitForSynchronizedFrameRows(
       {

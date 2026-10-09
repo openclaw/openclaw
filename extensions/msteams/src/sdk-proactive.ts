@@ -1,7 +1,6 @@
 import type { IMessageActivityInput } from "@microsoft/teams.api";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-// Msteams plugin module implements sdk proactive behavior.
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import {
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -14,6 +13,7 @@ import {
   withMSTeamsConnectorHandoff,
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
+import { recordMSTeamsSentMessage } from "./sent-message-cache.js";
 
 type MSTeamsAccountRef = {
   id?: string;
@@ -36,17 +36,7 @@ type MSTeamsSdkReferenceSource = {
   aadObjectId?: string;
 };
 
-type MSTeamsSdkConversationReference = {
-  activityId?: string;
-  channelId: "msteams";
-  serviceUrl: string;
-  bot: MSTeamsAccountRef & { id: string; role: "bot" };
-  conversation: { id: string; conversationType?: string; tenantId?: string };
-  locale?: string;
-  user?: MSTeamsAccountRef;
-  tenantId?: string;
-  aadObjectId?: string;
-};
+type MSTeamsSdkConversationReference = ReturnType<typeof buildSdkConversationReference>;
 
 type MSTeamsActivitiesClient = {
   create(activity: unknown): Promise<{ id?: string }>;
@@ -88,11 +78,8 @@ async function quoteMSTeamsActivity(
 }
 
 function resolveThreadedConversationId(conversationId: string, threadActivityId?: string): string {
-  if (!threadActivityId) {
-    return conversationId.split(";")[0] ?? conversationId;
-  }
   const baseId = conversationId.split(";")[0] ?? conversationId;
-  return `${baseId};messageid=${threadActivityId}`;
+  return threadActivityId ? `${baseId};messageid=${threadActivityId}` : baseId;
 }
 
 function normalizeRequiredServiceUrl(ref: MSTeamsSdkReferenceSource): string {
@@ -105,7 +92,7 @@ function normalizeRequiredServiceUrl(ref: MSTeamsSdkReferenceSource): string {
 function buildSdkConversationReference(
   source: MSTeamsSdkReferenceSource,
   options?: MSTeamsProactiveOptions,
-): MSTeamsSdkConversationReference {
+) {
   const bot = source.agent ?? source.bot ?? undefined;
   if (!bot?.id) {
     throw new Error("Invalid stored reference: missing agent.id");
@@ -135,7 +122,7 @@ function buildSdkConversationReference(
 
   return {
     activityId: source.activityId,
-    channelId: "msteams",
+    channelId: "msteams" as const,
     serviceUrl,
     bot: botRef,
     conversation: {
@@ -266,6 +253,16 @@ export async function sendMSTeamsActivityWithReference(
       isTargeted && activities.createTargeted
         ? await activities.createTargeted(activityWithRef)
         : await activities.create(activityWithRef);
+    const conversationId = ref.conversation.id.split(";")[0] ?? ref.conversation.id;
+    // The effective Connector destination proves whether this send created a channel root.
+    if (
+      res.id &&
+      activityWithRef.type === "message" &&
+      ref.conversation.conversationType === "channel" &&
+      ref.conversation.id === conversationId
+    ) {
+      recordMSTeamsSentMessage(conversationId, res.id, ref.bot.id);
+    }
     return { ...activityWithRef, ...res };
   });
 }

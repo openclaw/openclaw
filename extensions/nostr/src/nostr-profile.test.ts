@@ -328,7 +328,7 @@ describe("publishProfile", () => {
     const result = await promise;
 
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]?.error).toContain("timeout");
+    expect(result.failures[0]?.error).toBe("timeout");
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 

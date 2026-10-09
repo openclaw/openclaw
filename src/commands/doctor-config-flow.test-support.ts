@@ -1,12 +1,31 @@
 import { vi } from "vitest";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   createDoctorPrompter,
   type DoctorOptions,
   type DoctorPrompter,
 } from "./doctor-prompter.js";
+
+export async function withDoctorConfigMaintenance<T>(run: () => Promise<T>): Promise<T> {
+  const database = openOpenClawStateDatabase();
+  const owner = acquireGatewayStateOwner({ databasePath: database.path });
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: owner.assertCurrent,
+    assertDatabaseAccess: owner.assertDatabaseAccess,
+  });
+  try {
+    return await maintenance.run(run);
+  } finally {
+    await maintenance.close();
+    owner.release();
+  }
+}
 
 export async function prepareDoctorContext(
   configPath: string,

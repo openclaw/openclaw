@@ -38,11 +38,11 @@ async function resolveRemotePinnedCanonicalFrame(params: {
   const pinnedPath = normalizeContainerPath(params.pinnedPath);
   const probePath = params.directory ? pinnedPath : path.posix.dirname(pinnedPath);
   const result = await params.runRemoteShellScript({
-    script: 'canonical_root=$(readlink -f -- "$1")\nprintf "%s\\n" "$canonical_root"',
+    script: 'readlink -n -f -- "$1"',
     args: [params.mountRootPath],
     signal: params.signal,
   });
-  const canonicalMountRoot = normalizeContainerPath(result.stdout.toString("utf8").trim());
+  const canonicalMountRoot = normalizeContainerPath(result.stdout.toString("utf8"));
   if (!canonicalMountRoot.startsWith("/")) {
     throw new Error(`Sandbox path canonicalization failed; cannot ${params.action}: ${pinnedPath}`);
   }
@@ -94,7 +94,6 @@ export type RemotePinnedTargetParams = {
   requireWritable?: boolean;
   directory?: boolean;
   includeDescendants?: boolean;
-  allowFinalSymlinkForUnlink?: boolean;
   /** Pre-authorized canonical pin path; skips destination re-canonicalization. */
   pinnedCanonicalPath?: string;
   signal?: AbortSignal;
@@ -115,7 +114,6 @@ export async function resolveRemotePinnedTarget(
       containerPath: string;
       mountRootPath: string;
       action: string;
-      allowFinalSymlinkForUnlink?: boolean;
       signal?: AbortSignal;
     }): Promise<RemoteCanonicalPath>;
     assertRemoteProtectedPathWritable(params: {
@@ -146,14 +144,13 @@ export async function resolveRemotePinnedTarget(
           runRemoteShellScript: (command) => deps.runRemoteShellScript(command),
         })
       : await deps.resolveCanonicalPath({
-          // mkdirp pins the directory itself; file operations pin their parent and
-          // retain no-follow handling for the final filename.
+          // Resolve the full parent; the guest mutation owns the final entry's
+          // no-follow unlink/rename semantics after the basename is separated.
           containerPath: normalizeContainerPath(
             params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
           ),
           mountRootPath: params.mountRootPath,
           action: params.action,
-          allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
           signal: params.signal,
         });
   const mount = resolveRemoteMountByContainerPath(deps.mounts, logicalPath);

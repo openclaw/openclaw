@@ -8,7 +8,6 @@ import {
 } from "../../api/gateway.ts";
 import {
   deleteSessionPlacementDraft,
-  deleteRecoveredSessionPlacementDraft,
   startSessionPlacementInitialTurn,
 } from "./session-placement-startup.ts";
 
@@ -20,8 +19,14 @@ const params = {
   mode: "dispatch" as const,
 };
 
-function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
-  return { request: request as GatewayBrowserClient["request"] };
+function clientWith(
+  request: ReturnType<typeof vi.fn>,
+): Parameters<typeof startSessionPlacementInitialTurn>[0] {
+  const client = { request: request as GatewayBrowserClient["request"] };
+  return {
+    client,
+    describe: (target) => client.request("sessions.describe", target),
+  };
 }
 
 describe("session placement startup", () => {
@@ -751,7 +756,7 @@ describe("session placement startup", () => {
       .mockResolvedValueOnce({ ok: true, deleted: true });
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBeUndefined();
     expect(request.mock.calls).toEqual([
       ["sessions.describe", { key: params.key }],
@@ -782,7 +787,7 @@ describe("session placement startup", () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("gateway unavailable"));
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBe("session placement could not be verified");
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
@@ -792,7 +797,7 @@ describe("session placement startup", () => {
     const request = vi.fn().mockResolvedValueOnce({ session: null });
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(1);
   });

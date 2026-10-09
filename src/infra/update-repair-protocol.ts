@@ -136,7 +136,7 @@ export type UpdateRepairParams = {
   };
   /** Read-only oracle for the captured target. Honor the signal to cancel diagnostics. */
   validate: (signal: AbortSignal) => Promise<UpdateRepairValidation>;
-  budget?: z.input<typeof updateRepairBudgetSchema>;
+  budget?: Omit<z.input<typeof updateRepairBudgetSchema>, "maxTurns">;
   onEvent?: (event: UpdateRepairEvent) => void;
   signal?: AbortSignal;
   /** The caller still owns this repair slot. */

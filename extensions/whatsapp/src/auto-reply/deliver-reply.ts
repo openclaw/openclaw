@@ -39,27 +39,17 @@ import { elide } from "./util.js";
 
 const AUTO_REPLY_SEND_RETRY_OPTIONS = { reconnectWindows: 3 } as const;
 
-export type WhatsAppReplyDeliveryResult = {
-  results: WhatsAppSendResult[];
-  receipt: MessageReceipt;
-  providerAccepted: boolean;
-};
+export type WhatsAppReplyDeliveryResult = Awaited<ReturnType<typeof deliverWebReply>>;
 
-export type WhatsAppReplyTransportContext = {
-  accountId: string;
-  conversationId: string;
-  conversationKind: "direct" | "group";
-  chatJid: string;
+export type WhatsAppReplyTransportContext = Omit<
+  ReturnType<typeof createWhatsAppReplyTransportContext>,
+  "senderJid" | "correlationId"
+> & {
   senderJid?: string;
-  recipientJid: string;
   correlationId?: string;
-  reply: AdmittedWebInboundMessage["platform"]["reply"];
-  sendMedia: AdmittedWebInboundMessage["platform"]["sendMedia"];
 };
 
-export function createWhatsAppReplyTransportContext(
-  msg: AdmittedWebInboundMessage,
-): WhatsAppReplyTransportContext {
+export function createWhatsAppReplyTransportContext(msg: AdmittedWebInboundMessage) {
   const admission = requireWhatsAppInboundAdmission(msg);
   return {
     accountId: admission.accountId,
@@ -91,24 +81,17 @@ function createWhatsAppReplyDeliveryReceipt(
 ): MessageReceipt {
   const receiptResultsById = new Map<string, MessageReceiptSourceResult>();
   for (const result of results) {
-    if (result.receipt?.parts.length) {
-      for (const part of result.receipt.parts) {
-        receiptResultsById.set(part.platformMessageId, {
-          ...(part.raw ?? { channel: "whatsapp", messageId: part.platformMessageId }),
-          meta: {
-            ...part.raw?.meta,
-            kind: result.kind,
-            providerAccepted: result.providerAccepted,
-          },
-        });
-      }
-      continue;
-    }
-    for (const messageId of listWhatsAppSendResultMessageIds(result)) {
-      receiptResultsById.set(messageId, {
-        channel: "whatsapp",
-        messageId,
+    const parts = result.receipt?.parts.length
+      ? result.receipt.parts
+      : listWhatsAppSendResultMessageIds(result).map((platformMessageId) => ({
+          platformMessageId,
+          raw: undefined,
+        }));
+    for (const part of parts) {
+      receiptResultsById.set(part.platformMessageId, {
+        ...(part.raw ?? { channel: "whatsapp", messageId: part.platformMessageId }),
         meta: {
+          ...part.raw?.meta,
           kind: result.kind,
           providerAccepted: result.providerAccepted,
         },
@@ -139,15 +122,11 @@ type WhatsAppReplyDeliveryParams = {
   onMediaAccepted?: (mediaUrl: string) => void;
 };
 
-export async function deliverWebReply(
-  params: WhatsAppReplyDeliveryParams,
-): Promise<WhatsAppReplyDeliveryResult> {
+export async function deliverWebReply(params: WhatsAppReplyDeliveryParams) {
   return await withWhatsAppLogicalDeliveryActivity(() => deliverWebReplyInActivityScope(params));
 }
 
-async function deliverWebReplyInActivityScope(
-  params: WhatsAppReplyDeliveryParams,
-): Promise<WhatsAppReplyDeliveryResult> {
+async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParams) {
   const { replyResult, transport, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } =
     params;
   const conversationId = transport.conversationId;
@@ -159,7 +138,7 @@ async function deliverWebReplyInActivityScope(
     acceptedMediaUrls.add(mediaUrl);
     params.onMediaAccepted?.(mediaUrl);
   };
-  const finishDelivery = (): WhatsAppReplyDeliveryResult => {
+  const finishDelivery = () => {
     const receipt = createWhatsAppReplyDeliveryReceipt(sendResults);
     return {
       results: sendResults,
@@ -269,18 +248,21 @@ async function deliverWebReplyInActivityScope(
     }
   };
 
-  // Text-only replies
+  const sendText = async (chunk: string, quote = getQuote) => {
+    rememberSendResult(
+      await sendAndPreserveAccepted(
+        () => transport.reply(chunk, quote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
+        "text",
+      ),
+    );
+  };
+
   if (mediaList.length === 0 && textChunks.length) {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
       const quote = getQuote();
-      rememberSendResult(
-        await sendAndPreserveAccepted(
-          () => transport.reply(chunk, quote, AUTO_REPLY_SEND_RETRY_OPTIONS),
-          "text",
-        ),
-      );
+      await sendText(chunk, () => quote);
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -310,7 +292,6 @@ async function deliverWebReplyInActivityScope(
 
   const remainingText = [...textChunks];
 
-  // Media (with optional caption on first item)
   const leadingCaption = remainingText.shift() || "";
   await sendMediaWithLeadingCaption({
     mediaUrls: mediaList,
@@ -352,12 +333,7 @@ async function deliverWebReplyInActivityScope(
         mediaUrl,
       );
       if (media.kind === "audio" && caption) {
-        rememberSendResult(
-          await sendAndPreserveAccepted(
-            () => transport.reply(caption, quote, AUTO_REPLY_SEND_RETRY_OPTIONS),
-            "text",
-          ),
-        );
+        await sendText(caption, () => quote);
       }
       whatsappOutboundLog.info(
         `Sent media reply to ${conversationId} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
@@ -386,43 +362,21 @@ async function deliverWebReplyInActivityScope(
         `Failed sending web media to ${conversationId}: ${formatError(error)}`,
       );
       replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
-      if (!isFirst) {
-        // Non-first media failures were silently dropped before. Notify the user
-        // so they know a trailing attachment did not arrive.
-        whatsappOutboundLog.warn(`Trailing media failed; sent warning to ${conversationId}`);
-        rememberSendResult(
-          await sendAndPreserveAccepted(
-            () =>
-              transport.reply("⚠️ Media unavailable.", getQuote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
-            "text",
-          ),
-        );
-        return;
-      }
-      const warning = "⚠️ Media failed.";
-      const fallbackTextParts = [caption ?? "", warning].filter(Boolean);
-      const fallbackText = fallbackTextParts.join("\n");
-      if (!fallbackText) {
-        return;
-      }
-      whatsappOutboundLog.warn(`Media skipped; sent text-only to ${conversationId}`);
-      rememberSendResult(
-        await sendAndPreserveAccepted(
-          () => transport.reply(fallbackText, getQuote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
-          "text",
-        ),
+      // A failed trailing attachment needs its own warning after earlier accepted media.
+      const fallbackText = isFirst
+        ? [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n")
+        : "⚠️ Media unavailable.";
+      whatsappOutboundLog.warn(
+        isFirst
+          ? `Media skipped; sent text-only to ${conversationId}`
+          : `Trailing media failed; sent warning to ${conversationId}`,
       );
+      await sendText(fallbackText);
     },
   });
 
-  // Remaining text chunks after media
   for (const chunk of remainingText) {
-    rememberSendResult(
-      await sendAndPreserveAccepted(
-        () => transport.reply(chunk, getQuote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
-        "text",
-      ),
-    );
+    await sendText(chunk);
   }
   return finishDelivery();
 }

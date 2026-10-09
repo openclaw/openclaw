@@ -1,97 +1,18 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
-import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
-import { resolveRuntimeConversationBindingRouteAsync } from "../../channels/plugins/binding-routing.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
-  type SessionBindingRecord,
-} from "../../infra/outbound/session-binding-service.js";
-import type { OpenClawPluginCommandDefinition } from "../../plugin-sdk/channel-entry-contract.js";
-import { createPluginCommandRuntime } from "../../plugin-sdk/plugin-command-runtime.js";
-import {
-  createPluginRecord,
-  createPluginRegistry,
-  createPluginRuntimeMock,
-  disposePluginRegistryInstances,
-  initializeGlobalHookRunner,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../../plugin-sdk/plugin-test-runtime.js";
-import type {
-  PluginHookInboundClaimContext,
-  PluginHookInboundClaimEvent,
-  PluginHookInboundClaimResult,
-  PluginHookBeforeDispatchContext,
-  PluginHookBeforeDispatchEvent,
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchContext,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-} from "../../plugins/hook-types.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
+  conversation,
+  createHookHarness,
+  createRouteChangeBarrier,
+  registerCurrentAdapter,
+  releaseDedupeForRetry,
+} from "./dispatch-from-config.route-change.test-support.js";
 import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
-import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { claimInboundDedupe } from "./inbound-dedupe.js";
 
 const pluginId = "hook-owner";
-const conversation = {
-  channel: "webchat",
-  accountId: "default",
-  conversationId: "room",
-};
-
-type BeforeDispatchHandler = (
-  event: PluginHookBeforeDispatchEvent,
-  context: PluginHookBeforeDispatchContext,
-) => PluginHookBeforeDispatchResult | void | Promise<PluginHookBeforeDispatchResult | void>;
-type InboundClaimHandler = (
-  event: PluginHookInboundClaimEvent,
-  context: PluginHookInboundClaimContext,
-) => PluginHookInboundClaimResult | void | Promise<PluginHookInboundClaimResult | void>;
-type ReplyDispatchHandler = (
-  event: PluginHookReplyDispatchEvent,
-  context: PluginHookReplyDispatchContext,
-) => PluginHookReplyDispatchResult | void | Promise<PluginHookReplyDispatchResult | void>;
-
-let state: OpenClawTestState | undefined;
-let adapter: SessionBindingAdapter | undefined;
-let cleanupRegistry: (() => Promise<void>) | undefined;
-let releaseRuntimeLoader: (() => void) | undefined;
-let releaseBeforeDispatch: (() => void) | undefined;
-let pendingDispatch: Promise<unknown> | undefined;
-
-afterEach(async () => {
-  releaseRuntimeLoader?.();
-  releaseRuntimeLoader = undefined;
-  releaseBeforeDispatch?.();
-  releaseBeforeDispatch = undefined;
-  await pendingDispatch?.catch(() => undefined);
-  pendingDispatch = undefined;
-  if (adapter) {
-    unregisterSessionBindingAdapter({
-      channel: adapter.channel,
-      accountId: adapter.accountId,
-      adapter,
-    });
-  }
-  adapter = undefined;
-  await cleanupRegistry?.();
-  cleanupRegistry = undefined;
-  await state?.cleanup();
-  state = undefined;
-  resetInboundDedupe();
-  resetPluginRuntimeStateForTest();
-  vi.restoreAllMocks();
-});
 
 function createAgentBinding(params: {
   agentId: string;
@@ -110,407 +31,139 @@ function createAgentBinding(params: {
   };
 }
 
-async function createHookHarness(params: {
-  beforeDispatch: BeforeDispatchHandler | readonly BeforeDispatchHandler[];
-  label: string;
-  messageId: string;
-  replyDispatch?: ReplyDispatchHandler;
-  registeredCommand?: OpenClawPluginCommandDefinition;
-  inboundClaim?: InboundClaimHandler;
-}) {
-  const testState = await createOpenClawTestState({
-    label: params.label,
-    env: { OPENCLAW_TEST_FAST: "0" },
-  });
-  state = testState;
-  const pluginRoot = params.registeredCommand
-    ? testState.statePath(pluginId)
-    : testState.path(pluginId);
-  let pluginFile: string | undefined;
-  if (params.registeredCommand) {
-    const { name, description, requireAuth } = params.registeredCommand;
-    pluginFile = await testState.writeText(
-      `${pluginId}/index.cjs`,
-      `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
-        api.registerCommand({ ...${JSON.stringify({ name, description, requireAuth })},
-          handler() { throw new Error("before_dispatch must handle before command execution"); }
+it.each(["runtime-loader", "before-dispatch"] as const)(
+  "revalidates route ownership after %s and before the next claiming hook",
+  async (checkpoint) => {
+    const early = checkpoint === "runtime-loader";
+    let phase = "first";
+    const beforeEffects: Array<{
+      phase: string;
+      eventSessionKey: string | undefined;
+      contextSessionKey: string | undefined;
+    }> = [];
+    const replyEffects: Array<{
+      phase: string;
+      agentId: string | undefined;
+      contextSessionKey: string | undefined;
+      eventSessionKey: string | undefined;
+    }> = [];
+    const entered = createDeferred();
+    const release = createRouteChangeBarrier();
+    const harness = await createHookHarness({
+      label: `ordinary-hook-${checkpoint}`,
+      messageId: `ordinary-hook-${checkpoint}`,
+      beforeDispatch: async (event, context) => {
+        beforeEffects.push({
+          phase,
+          eventSessionKey: event.sessionKey,
+          contextSessionKey: context.sessionKey,
         });
-      } };`,
-    );
-    await testState.writeJson(`${pluginId}/openclaw.plugin.json`, {
-      id: pluginId,
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    });
-  }
-  const cfg = withFullRuntimeReplyConfig({
-    agents: {
-      ownership: "explicit",
-      entries: {
-        main: { workspace: testState.path("main-workspace") },
-        work: { workspace: testState.path("work-workspace") },
+        if (early) {
+          return { handled: true };
+        }
+        if (phase === "first") {
+          entered.resolve();
+          await release.promise;
+        }
+        return undefined;
       },
-      defaults: {
-        workspace: testState.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: {
-      enabled: true,
-      allow: [pluginId],
-      ...(pluginFile ? { load: { paths: [pluginFile] } } : {}),
-      entries: { [pluginId]: { enabled: true } },
-    },
-    session: { scope: "global" },
-    ...(params.registeredCommand ? { commands: { text: true } } : {}),
-  });
-  await testState.writeConfig(cfg);
-
-  const registryBuilder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: createPluginRuntimeMock(),
-    activateGlobalSideEffects: false,
-  });
-  cleanupRegistry = async () => {
-    await disposePluginRegistryInstances(registryBuilder.registry);
-  };
-  const pluginRecord = createPluginRecord({
-    id: pluginId,
-    origin: "bundled",
-    source: pluginFile ?? `${pluginRoot}/index.ts`,
-    status: "loaded",
-  });
-  const pluginApi = registryBuilder.createApi(pluginRecord, { config: cfg });
-  registryBuilder.registry.plugins.push(pluginRecord);
-  if (params.registeredCommand) {
-    pluginApi.registerCommand(params.registeredCommand);
-  }
-  if (params.inboundClaim) {
-    pluginApi.on("inbound_claim", params.inboundClaim);
-  }
-  const beforeDispatchHandlers =
-    typeof params.beforeDispatch === "function" ? [params.beforeDispatch] : params.beforeDispatch;
-  for (const [index, handler] of beforeDispatchHandlers.entries()) {
-    pluginApi.on("before_dispatch", handler, { priority: -index });
-  }
-  if (params.replyDispatch) {
-    pluginApi.on("reply_dispatch", params.replyDispatch, { eligibleDispatchKinds: ["agent"] });
-  }
-  setActivePluginRegistry(registryBuilder.registry);
-  initializeGlobalHookRunner(registryBuilder.registry);
-  if (params.registeredCommand) {
-    expect(
-      createPluginCommandRuntime()
-        .listNativeCandidates("webchat")
-        .map((item) => item.name),
-    ).toContain(params.registeredCommand.name);
-  }
-
-  const preparedCatalogs: string[][] = [];
-  if (params.registeredCommand) {
-    const loadAbortRuntime = runtimeLoaders.loadAbortRuntime;
-    vi.spyOn(runtimeLoaders, "loadAbortRuntime").mockImplementation(async () => {
-      preparedCatalogs.push(
-        createPluginCommandRuntime()
-          .listNativeCandidates("webchat")
-          .map((item) => item.name),
-      );
-      return await loadAbortRuntime();
+      replyDispatch: early
+        ? undefined
+        : async (event, context) => {
+            replyEffects.push({
+              phase,
+              agentId: event.ctx.AgentId,
+              contextSessionKey: event.ctx.SessionKey,
+              eventSessionKey: event.sessionKey,
+            });
+            context.recordProcessed("completed", { reason: "synthetic-ordinary-hook" });
+            context.markIdle("message_completed");
+            return {
+              handled: true,
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            };
+          },
     });
-  }
-
-  const buildContext = async () => {
-    const routed = await resolveRuntimeConversationBindingRouteAsync({
-      route: {
-        agentId: "main",
-        channel: conversation.channel,
-        accountId: conversation.accountId,
-        sessionKey: "global",
-        mainSessionKey: "agent:main:main",
-        lastRoutePolicy: "session",
-        matchedBy: "default",
-      },
-      conversation,
+    const mainBinding = createAgentBinding({
+      agentId: "main",
+      bindingId: "main-owner",
+      boundAt: 1,
+      sessionKey: "agent:main:main",
     });
-    const text = params.registeredCommand ? `/${params.registeredCommand.name}` : "hello";
-    return buildChannelInboundEventContext({
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      messageId: params.messageId,
-      from: "synthetic-user",
-      sender: { id: "synthetic-user" },
-      conversation: { kind: "direct", id: conversation.conversationId },
-      route: {
-        ...routed.route,
-        routeSessionKey: routed.route.sessionKey,
-      },
-      reply: { to: conversation.conversationId },
-      message: { rawBody: text },
-      access: { commands: { authorized: Boolean(params.registeredCommand) } },
-      command: params.registeredCommand
-        ? { kind: "text-slash", name: params.registeredCommand.name, body: text, authorized: true }
-        : undefined,
-    });
-  };
-  const invoke = (ctx: Awaited<ReturnType<typeof buildContext>>) => {
-    const run = async () => {
-      const dispatcher = createReplyDispatcher({
-        deliver: async () => {
-          throw new Error("The handled hook must not send a provider message");
-        },
-      });
-      try {
-        return await withPluginRuntimeRegistryScope(registryBuilder.registry, () =>
-          dispatchReplyFromConfig({
-            ctx,
-            cfg,
-            dispatcher,
-            replyResolver: async () => {
-              throw new Error("The registered dispatch hook was not selected");
-            },
-          }),
-        );
-      } finally {
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
-    };
-    const work = run();
-    pendingDispatch = work;
-    return work;
-  };
-
-  return { buildContext, invoke, pluginRoot, preparedCatalogs };
-}
-
-function registerCurrentAdapter(readCurrent: () => SessionBindingRecord | null) {
-  adapter = {
-    channel: conversation.channel,
-    accountId: conversation.accountId,
-    listBySession: () => {
-      const current = readCurrent();
-      return current ? [current] : [];
-    },
-    inspectByConversation: readCurrent,
-    inspectByConversationAsync: async () => readCurrent(),
-    resolveByConversation: readCurrent,
-    resolveByConversationAsync: async () => readCurrent(),
-    touchAsync: async () => undefined,
-  };
-  registerSessionBindingAdapter(adapter);
-}
-
-function releaseDedupeForRetry(ctx: Parameters<typeof claimInboundDedupe>[0]) {
-  const claim = claimInboundDedupe(ctx);
-  expect.soft(claim.status).toBe("claimed");
-  claim.release?.();
-}
-
-it("refuses an early none-to-agent change before handled before_dispatch", async () => {
-  let phase = "first";
-  const effects: Array<{
-    phase: string;
-    eventSessionKey: string | undefined;
-    contextSessionKey: string | undefined;
-  }> = [];
-  const harness = await createHookHarness({
-    label: "ordinary-hook-none-to-agent",
-    messageId: "ordinary-hook-none-to-agent",
-    beforeDispatch: async (event, context) => {
-      effects.push({
-        phase,
-        eventSessionKey: event.sessionKey,
-        contextSessionKey: context.sessionKey,
-      });
-      return { handled: true };
-    },
-  });
-  const workBinding = createAgentBinding({
-    agentId: "work",
-    bindingId: "work-owner",
-    boundAt: 1,
-    sessionKey: "agent:work:main",
-  });
-  let current: SessionBindingRecord | null = null;
-  registerCurrentAdapter(() => current);
-
-  const firstContext = await harness.buildContext();
-  expect(firstContext).toMatchObject({ AgentId: "main", SessionKey: "global" });
-  const firstObservation = readConversationBindingRouteFacts(firstContext);
-  expect(firstObservation?.kind).toBe("none");
-  expect(Object.isFrozen(firstObservation)).toBe(true);
-
-  const entered = createDeferred();
-  const release = createDeferred();
-  releaseRuntimeLoader = () => release.resolve();
-  const loadRuntimePlugins = runtimeLoaders.loadRuntimePlugins;
-  vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
-    entered.resolve();
-    await release.promise;
-    return await loadRuntimePlugins();
-  });
-  const first = harness.invoke(firstContext).then(
-    () => ({ error: undefined }),
-    (error: unknown) => ({ error }),
-  );
-  await Promise.race([
-    entered.promise,
-    first.then(() => {
-      throw new Error("Dispatch completed before reaching the real runtime loader barrier");
-    }),
-  ]);
-  current = workBinding;
-  release.resolve();
-  const firstOutcome = await first;
-
-  expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect.soft(effects).toEqual([]);
-  releaseDedupeForRetry(firstContext);
-
-  phase = "retry";
-  const retryContext = await harness.buildContext();
-  expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
-  expect(readConversationBindingRouteFacts(retryContext)).toMatchObject({
-    kind: "agent",
-    bindingId: "work-owner",
-  });
-  await harness.invoke(retryContext);
-
-  expect(effects).toEqual([
-    {
-      phase: "retry",
-      eventSessionKey: "agent:work:main",
-      contextSessionKey: "agent:work:main",
-    },
-  ]);
-  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
-});
-
-it("revalidates an agent route after nonclaiming before_dispatch and before reply_dispatch", async () => {
-  let phase = "first";
-  const beforeEffects: Array<{
-    phase: string;
-    eventSessionKey: string | undefined;
-    contextSessionKey: string | undefined;
-  }> = [];
-  const replyEffects: Array<{
-    phase: string;
-    agentId: string | undefined;
-    contextSessionKey: string | undefined;
-    eventSessionKey: string | undefined;
-  }> = [];
-  const beforeEntered = createDeferred();
-  const release = createDeferred();
-  releaseBeforeDispatch = () => release.resolve();
-  const harness = await createHookHarness({
-    label: "ordinary-hook-agent-replacement",
-    messageId: "ordinary-hook-agent-replacement",
-    beforeDispatch: async (event, context) => {
-      beforeEffects.push({
-        phase,
-        eventSessionKey: event.sessionKey,
-        contextSessionKey: context.sessionKey,
-      });
-      if (phase === "first") {
-        beforeEntered.resolve();
-        await release.promise;
-      }
-    },
-    replyDispatch: async (event, context) => {
-      replyEffects.push({
-        phase,
-        agentId: event.ctx.AgentId,
-        contextSessionKey: event.ctx.SessionKey,
-        eventSessionKey: event.sessionKey,
-      });
-      context.recordProcessed("completed", { reason: "synthetic-ordinary-hook" });
-      context.markIdle("message_completed");
-      return {
-        handled: true,
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      };
-    },
-  });
-  const mainBinding = createAgentBinding({
-    agentId: "main",
-    bindingId: "main-owner",
-    boundAt: 1,
-    sessionKey: "agent:main:main",
-  });
-  const workBinding = createAgentBinding({
-    agentId: "work",
-    bindingId: "work-owner",
-    boundAt: 2,
-    sessionKey: "agent:work:main",
-  });
-  let current: SessionBindingRecord | null = mainBinding;
-  registerCurrentAdapter(() => current);
-
-  const firstContext = await harness.buildContext();
-  expect(firstContext).toMatchObject({ AgentId: "main", SessionKey: "agent:main:main" });
-  expect(readConversationBindingRouteFacts(firstContext)).toMatchObject({
-    kind: "agent",
-    bindingId: "main-owner",
-  });
-
-  const first = harness.invoke(firstContext).then(
-    () => ({ error: undefined }),
-    (error: unknown) => ({ error }),
-  );
-  await Promise.race([
-    beforeEntered.promise,
-    first.then(() => {
-      throw new Error("Dispatch completed before the registered before_dispatch barrier");
-    }),
-  ]);
-  current = workBinding;
-  release.resolve();
-  const firstOutcome = await first;
-
-  expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect.soft(beforeEffects).toEqual([
-    {
-      phase: "first",
-      eventSessionKey: "agent:main:main",
-      contextSessionKey: "agent:main:main",
-    },
-  ]);
-  expect.soft(replyEffects).toEqual([]);
-  releaseDedupeForRetry(firstContext);
-
-  phase = "retry";
-  const retryContext = await harness.buildContext();
-  expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
-  expect(readConversationBindingRouteFacts(retryContext)).toMatchObject({
-    kind: "agent",
-    bindingId: "work-owner",
-  });
-  await harness.invoke(retryContext);
-
-  expect(beforeEffects).toEqual([
-    {
-      phase: "first",
-      eventSessionKey: "agent:main:main",
-      contextSessionKey: "agent:main:main",
-    },
-    {
-      phase: "retry",
-      eventSessionKey: "agent:work:main",
-      contextSessionKey: "agent:work:main",
-    },
-  ]);
-  expect(replyEffects).toEqual([
-    {
-      phase: "retry",
+    const workBinding = createAgentBinding({
       agentId: "work",
-      contextSessionKey: "agent:work:main",
+      bindingId: "work-owner",
+      boundAt: early ? 1 : 2,
+      sessionKey: "agent:work:main",
+    });
+    let current: SessionBindingRecord | null = early ? null : mainBinding;
+    registerCurrentAdapter(() => current);
+
+    const firstContext = await harness.buildContext();
+    expect(firstContext).toMatchObject({
+      AgentId: "main",
+      SessionKey: early ? "global" : "agent:main:main",
+    });
+    const observation = readConversationBindingRouteFacts(firstContext);
+    if (early) {
+      expect(observation?.kind).toBe("none");
+      expect(Object.isFrozen(observation)).toBe(true);
+      const loadRuntimePlugins = runtimeLoaders.loadRuntimePlugins;
+      vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return await loadRuntimePlugins();
+      });
+    } else {
+      expect(observation).toMatchObject({ kind: "agent", bindingId: "main-owner" });
+    }
+
+    const first = harness.invoke(firstContext).then(
+      () => ({ error: undefined }),
+      (error: unknown) => ({ error }),
+    );
+    await Promise.race([
+      entered.promise,
+      first.then(() => {
+        throw new Error(`Dispatch completed before the ${checkpoint} barrier`);
+      }),
+    ]);
+    current = workBinding;
+    release.resolve();
+    expect.soft((await first).error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    const firstEffect = {
+      phase: "first",
+      eventSessionKey: "agent:main:main",
+      contextSessionKey: "agent:main:main",
+    };
+    expect.soft(beforeEffects).toEqual(early ? [] : [firstEffect]);
+    if (!early) {
+      expect.soft(replyEffects).toEqual([]);
+    }
+    releaseDedupeForRetry(firstContext);
+
+    phase = "retry";
+    const retryContext = await harness.buildContext();
+    expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
+    expect(readConversationBindingRouteFacts(retryContext)).toMatchObject({
+      kind: "agent",
+      bindingId: "work-owner",
+    });
+    await harness.invoke(retryContext);
+
+    const retryEffect = {
+      phase: "retry",
       eventSessionKey: "agent:work:main",
-    },
-  ]);
-  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
-});
+      contextSessionKey: "agent:work:main",
+    };
+    expect(beforeEffects).toEqual(early ? [retryEffect] : [firstEffect, retryEffect]);
+    if (!early) {
+      expect(replyEffects).toEqual([{ ...retryEffect, agentId: "work" }]);
+    }
+    expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
+  },
+);
 
 it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
   "revalidates between registered before_dispatch handlers before a later handler claims: %s",
@@ -530,8 +183,7 @@ it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
       contextSessionKey: string | undefined;
     }> = [];
     const entered = createDeferred();
-    const release = createDeferred();
-    releaseBeforeDispatch = () => release.resolve();
+    const release = createRouteChangeBarrier();
     const harness = await createHookHarness({
       label: `ordinary-hook-between-handlers-${input}`,
       messageId: `ordinary-hook-between-handlers-${input}`,

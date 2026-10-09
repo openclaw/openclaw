@@ -35,6 +35,8 @@ describe("matrix approval capability", () => {
     });
 
     expect(text).toContain("`channels.matrix.execApprovals.approvers`");
+    expect(text).toContain("Approve it from the Web UI for now.");
+    expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(text).toContain("`channels.matrix.dm.allowFrom`");
   });
 

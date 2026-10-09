@@ -8,6 +8,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
 export function createContext(): GatewayRequestContext {
   const context = {
@@ -16,6 +17,8 @@ export function createContext(): GatewayRequestContext {
     getRuntimeConfig: () => ({}),
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  context.resolveSessionRequestTargets = (request) =>
+    resolveSessionRequestTargets({ ...request, context });
   context.createAgentTurnFacade = (principal) =>
     createInternalAgentTurnFacade({
       ...principal,

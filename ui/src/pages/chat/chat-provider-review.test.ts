@@ -1,7 +1,8 @@
-// @vitest-environment node
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+// @vitest-environment node
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -16,8 +17,8 @@ import {
   requestCalls,
   requireRecord,
 } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { flushChatQueueForEvent, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -42,13 +43,11 @@ const paused: GatewaySessionRow = {
   },
 };
 
-it("holds composer and queued inputs across the provider pause and only retries an explicitly selected row", async () => {
-  let row = paused;
-  const request = makeRequestMock({
-    "chat.history": () => ({ sessionInfo: row, sessionId: row.sessionId, messages: [] }),
-    "sessions.list": () => sessionsResult([row], row.snapshotAt ?? 0),
-    "chat.send": { runId: "accepted-input", status: "started" },
-  });
+async function createReviewHost(
+  request: ReturnType<typeof makeRequestMock>,
+  initialRow: GatewaySessionRow,
+  chatMessage: string,
+) {
   const client = createTestGatewayClient(request);
   const { gateway, emitEvent } = createGatewayHarness(client);
   const sessions = createTestSessionCapability(gateway);
@@ -56,17 +55,80 @@ it("holds composer and queued inputs across the provider pause and only retries 
   const host = makeChatHost({
     client,
     sessions,
-    sessionKey: paused.key,
-    currentSessionId: paused.sessionId,
-    chatMessage: "Keep this draft",
-    sessionsResult: sessionsResult([row], row.snapshotAt ?? 0),
+    sessionKey: initialRow.key,
+    currentSessionId: initialRow.sessionId,
+    sessionsResult: sessionsResult([initialRow], initialRow.snapshotAt ?? 0),
+    chatMessage,
   });
+  const publish = (row: GatewaySessionRow, clearReview = false) =>
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: row.key,
+        agentId: "main",
+        session: clearReview ? { ...row, providerReview: null } : row,
+      },
+    });
+  return { host, publish };
+}
+
+it.each([
+  { selected: " MAIN ", candidates: ["other", "agent:main:main", "main"], index: 1 },
+  { selected: " ", candidates: ["", " "], index: -1 },
+  {
+    selected: "agent:main:matrix:group:Room",
+    candidates: ["agent:main:matrix:group:room", "AGENT:MAIN:MATRIX:GROUP:Room"],
+    index: 1,
+  },
+  { selected: " GLOBAL ", candidates: ["global", "global"], index: 1 },
+])("keeps provider-review row selection for $selected", ({ selected, candidates, index }) => {
+  const rows = candidates.map((key, candidate) => ({
+    ...paused,
+    key,
+    agentId: candidate === 0 ? "other" : "main",
+  }));
+  const fallback = { ...paused, key: selected };
+  const host = {
+    sessionKey: selected,
+    sessionsResult: sessionsResult(rows, 1),
+    sessions: {
+      state: {
+        result: sessionsResult([fallback], 1),
+        agentId: "main",
+        modelOverrides: {},
+        loading: false,
+        error: null,
+        deletedSessions: [],
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      },
+    },
+  };
+  expect(chatProviderReviewRow(host, selected, "main")).toBe(index < 0 ? undefined : rows[index]);
+  host.sessionsResult = sessionsResult([], 1);
+  expect(chatProviderReviewRow(host, selected, "main")).toBe(index < 0 ? undefined : fallback);
+});
+
+it("holds composer and queued inputs across the provider pause and only retries an explicitly selected row", async () => {
+  let row = paused;
+  const request = makeRequestMock({
+    "chat.history": () => ({ sessionInfo: row, sessionId: row.sessionId, messages: [] }),
+    "sessions.list": () => sessionsResult([row], row.snapshotAt ?? 0),
+    "chat.send": { runId: "accepted-input", status: "started" },
+  });
+  const { host, publish } = await createReviewHost(request, row, "Keep this draft");
   const outbox = { sessionKey: paused.key, agentId: "main" };
   for (const id of ["first", "second"]) {
     expect(
       admitQueuedMessageForSession(
         host,
-        { scope: outbox, awaitingDefaults: false },
+        {
+          ...captureChatOutboxAdmission(host, outbox.sessionKey, outbox.agentId),
+          scope: outbox,
+          awaitingDefaults: false,
+        },
         {
           id,
           text: `Retained ${id} input`,
@@ -98,15 +160,7 @@ it("holds composer and queued inputs across the provider pause and only retries 
   ]);
 
   row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: paused.key,
-      agentId: "main",
-      session: { ...row, providerReview: null },
-    },
-  });
+  publish(row, true);
   expect(chatProviderReviewRow(host)?.providerReview).toBeUndefined();
   await flushChatQueueForEvent(host);
   expect(requestCalls(request, "chat.send")).toHaveLength(0);
@@ -188,11 +242,7 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
     sendState: "waiting-idle" as const,
   };
   expect(
-    admitQueuedMessageForSession(
-      host,
-      { scope: { sessionKey: paused.key, agentId: "main" }, awaitingDefaults: false },
-      item,
-    ),
+    admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, paused.key, "main"), item),
   ).toBe(true);
   host.requestUpdate = () => {
     if (host.chatQueue[0]?.sendState === "waiting-model") {
@@ -259,18 +309,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
         return { runId, status: "started", messageSeq: 1 };
       },
     });
-    const client = createTestGatewayClient(request);
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-    await sessions.refresh({ agentId: "main", force: true });
-    const host = makeChatHost({
-      client,
-      sessions,
-      sessionKey: row.key,
-      currentSessionId: row.sessionId,
-      sessionsResult: sessionsResult([row], 9),
-      chatMessage: "Keep this delivery identity",
-    });
+    const { host, publish } = await createReviewHost(request, row, "Keep this delivery identity");
     await handleSendChat(host);
     expect(attempts).toBe(1);
     const attempted = host.chatQueue[0];
@@ -280,11 +319,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
       sendRunId: attemptedRunId,
     });
     row = paused;
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: row.key, agentId: "main", session: row },
-    });
+    publish(row);
     expect(chatProviderReviewRow(host)?.providerReview).toEqual(paused.providerReview);
     await flushChatQueueForEvent(host);
     expect(host.chatQueue[0]).toMatchObject({
@@ -298,11 +333,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     });
 
     row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: row.key, agentId: "main", session: { ...row, providerReview: null } },
-    });
+    publish(row, true);
     await loadChatHistory(host, { deferBranches: true });
     await flushChatQueueForEvent(host);
     expect(attempts).toBe(1);
@@ -352,18 +383,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
         return acknowledgment.promise;
       },
     });
-    const client = createTestGatewayClient(request);
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-    await sessions.refresh({ agentId: "main", force: true });
-    const host = makeChatHost({
-      client,
-      sessions,
-      sessionKey: paused.key,
-      currentSessionId: paused.sessionId,
-      sessionsResult: sessionsResult([initial], 9),
-      chatMessage: "Already in flight",
-    });
+    const { host, publish } = await createReviewHost(request, initial, "Already in flight");
     const sending = handleSendChat(host);
     await started.promise;
     const inFlight = host.chatQueue[0];
@@ -383,15 +403,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     });
     const continued = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
     host.sessionsResult = sessionsResult([continued], 11);
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: continued.key,
-        agentId: "main",
-        session: { ...continued, providerReview: null },
-      },
-    });
+    publish(continued, true);
     expect(chatProviderReviewRow(host)?.providerReview).toBeUndefined();
     if (outcome === "disconnected") {
       acknowledgment.reject(new Error("Gateway disconnected before acknowledgment"));

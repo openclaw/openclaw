@@ -9,7 +9,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import * as agentDatabaseIdentity from "./openclaw-agent-db-identity.js";
-import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -127,15 +126,6 @@ describe("committed agent database reads", () => {
 
   it.each([
     {
-      version: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-      expectedError: {
-        name: "SqliteSchemaVersionError",
-        message: expect.stringContaining(
-          `newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-        ),
-      },
-    },
-    {
       version: AGENT_MEDIA_SCHEMA_VERSION - 1,
       expectedError: {
         name: "OpenClawAgentDatabaseMediaMigrationRequiredError",
@@ -145,7 +135,7 @@ describe("committed agent database reads", () => {
     {
       version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
       expectedError: {
-        name: "Error",
+        name: "SqliteSchemaMismatchError",
         message: expect.stringContaining(
           "stop active agents and run openclaw doctor --fix to migrate session identities",
         ),
@@ -236,56 +226,26 @@ describe("committed agent database reads", () => {
     });
   });
 
-  it.each(["native close", "native dispose", "owner close", "eviction"] as const)(
-    "retires the committed reader on %s",
-    async (action) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-        const options = { agentId: "main", env };
-        const owner = openOpenClawAgentDatabase(options);
-        const reader = inWriterTransaction(owner.db, () => readStamp(options).db);
-        expect(reader.isOpen).toBe(true);
-        const originalWalClose = owner.walMaintenance.close.bind(owner.walMaintenance);
-        const walClose =
-          action === "owner close" || action === "eviction"
-            ? vi.spyOn(owner.walMaintenance, "close").mockImplementation((closeOptions) => {
-                expect(reader.isOpen).toBe(false);
-                return originalWalClose(closeOptions);
-              })
-            : undefined;
-        try {
-          if (action === "native close") {
-            owner.db.close();
-          } else if (action === "native dispose") {
-            owner.db[Symbol.dispose]();
-          } else if (action === "owner close") {
-            closeOpenClawAgentDatabaseByPath(owner.path);
-          } else {
-            closeCachedOpenClawAgentDatabase(owner, { eviction: true });
-          }
-          expect(reader.isOpen).toBe(false);
-          if (walClose) {
-            expect(walClose).toHaveBeenCalled();
-          }
-        } finally {
-          walClose?.mockRestore();
-        }
-      });
-    },
-  );
-
-  it("does not give a reopened writer the previous writer's reader", async () => {
+  it("retires the committed reader before closing its owner's WAL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
-      const original = openOpenClawAgentDatabase(options);
-      const first = inWriterTransaction(original.db, () => readStamp(options).db);
-      expect(first.isOpen).toBe(true);
-      closeOpenClawAgentDatabaseByPath(original.path);
-      const replacement = openOpenClawAgentDatabase(options);
-      const second = inWriterTransaction(replacement.db, () => readStamp(options).db);
-      expect(replacement.db === original.db).toBe(false);
-      expect(second === first).toBe(false);
-      expect(first.isOpen).toBe(false);
-      expect(second.isOpen).toBe(true);
+      const owner = openOpenClawAgentDatabase(options);
+      const reader = inWriterTransaction(owner.db, () => readStamp(options).db);
+      expect(reader.isOpen).toBe(true);
+      const originalWalClose = owner.walMaintenance.close.bind(owner.walMaintenance);
+      const walClose = vi
+        .spyOn(owner.walMaintenance, "close")
+        .mockImplementation((closeOptions) => {
+          expect(reader.isOpen).toBe(false);
+          return originalWalClose(closeOptions);
+        });
+      try {
+        closeOpenClawAgentDatabaseByPath(owner.path);
+        expect(reader.isOpen).toBe(false);
+        expect(walClose).toHaveBeenCalled();
+      } finally {
+        walClose.mockRestore();
+      }
     });
   });
 

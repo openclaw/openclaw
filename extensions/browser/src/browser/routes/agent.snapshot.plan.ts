@@ -1,9 +1,3 @@
-/**
- * Snapshot planning for browser route handlers.
- *
- * Resolves requested snapshot mode, format, limits, refs, labels, and driver
- * choice before the route talks to Playwright or Chrome MCP.
- */
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -16,44 +10,27 @@ import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
 import { resolveBrowserEngine } from "../engines/registry.js";
-import { resolveDefaultSnapshotFormat } from "../profile-capabilities.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
-type BrowserSnapshotPlan = {
-  format: "ai" | "aria";
-  mode?: "efficient";
-  labels?: boolean;
-  urls?: boolean;
-  limit?: number;
-  resolvedMaxChars?: number;
-  interactive?: boolean;
-  compact?: boolean;
-  depth?: number;
-  refsMode?: "aria" | "role";
-  selectorValue?: string;
-  frameSelectorValue?: string;
-  timeoutMs?: number;
-  wantsRoleSnapshot: boolean;
-};
-
-/** Resolve a normalized snapshot plan from query parameters and profile caps. */
 export function resolveSnapshotPlan(params: {
   profile: ResolvedBrowserProfile;
   query: Record<string, unknown>;
   hasPlaywright: boolean;
-}): BrowserSnapshotPlan {
+}) {
   const mode = params.query.mode === "efficient" ? "efficient" : undefined;
   const labels = toBoolean(params.query.labels) ?? undefined;
   const urls = toBoolean(params.query.urls) ?? undefined;
   const explicitFormat =
     params.query.format === "aria" ? "aria" : params.query.format === "ai" ? "ai" : undefined;
-  const format = resolveDefaultSnapshotFormat({
-    profile: params.profile,
-    hasPlaywright: params.hasPlaywright,
-    explicitFormat,
-    mode,
-  });
+  const format =
+    explicitFormat ??
+    (mode === "efficient" ||
+    getBrowserProfileCapabilities(params.profile).usesChromeMcp ||
+    params.hasPlaywright
+      ? "ai"
+      : "aria");
   const limit = parseStrictPositiveInteger(params.query.limit);
   const maxCharsRaw = Object.hasOwn(params.query, "maxChars")
     ? parseStrictNonNegativeInteger(params.query.maxChars)

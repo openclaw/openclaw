@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 
 const OnboardingRecommendationMatchSchema = z.object({
   appLabel: z.string(),
@@ -55,18 +54,12 @@ export type ClearPendingOnboardingRecommendationsParams = {
   expected: OnboardingRecommendationsRecord;
 };
 
-export type PreparedOnboardingRecommendationOffer = {
-  inventoryHash: string;
-  matches: OnboardingRecommendationMatch[];
-  answered: boolean;
-  nowMs: number;
-};
-
-export type PreparedOnboardingRecommendationPending = {
-  matches: OnboardingRecommendationMatch[];
-  expected: OnboardingRecommendationsRecord;
-  nowMs: number;
-};
+export type PreparedOnboardingRecommendationOffer = ReturnType<
+  typeof prepareOnboardingRecommendationOffer
+>;
+export type PreparedOnboardingRecommendationPending = ReturnType<
+  typeof prepareOnboardingRecommendationPending
+>;
 
 function canonicalInventory(
   inventory: readonly OnboardingRecommendationInventoryItem[],
@@ -83,64 +76,19 @@ function canonicalInventory(
     );
 }
 
-function hashOnboardingRecommendationInventory(
-  inventory: readonly OnboardingRecommendationInventoryItem[],
-): string {
-  return sha256Hex(JSON.stringify(canonicalInventory(inventory)));
-}
-
 export function prepareOnboardingRecommendationOffer(
   params: WriteOnboardingRecommendationsOfferParams,
-): PreparedOnboardingRecommendationOffer {
+) {
   const nowMs = params.nowMs ?? Date.now();
-  const inventoryHash = hashOnboardingRecommendationInventory(params.inventory);
+  const inventoryHash = sha256Hex(JSON.stringify(canonicalInventory(params.inventory)));
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
   return { inventoryHash, matches, answered: params.answered, nowMs };
 }
 
 export function prepareOnboardingRecommendationPending(
   params: UpdatePendingOnboardingRecommendationsParams,
-): PreparedOnboardingRecommendationPending {
+) {
   const nowMs = params.nowMs ?? Date.now();
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
   return { matches, expected: structuredClone(params.expected), nowMs };
-}
-
-export type OnboardingRecommendationWriteOperations = {
-  "onboardingRecommendations.writeOffer": {
-    input: { configKey: string; params: PreparedOnboardingRecommendationOffer };
-    output: OnboardingRecommendationsRecord;
-  };
-  "onboardingRecommendations.acknowledge": {
-    input: { configKey: string; params: AcknowledgeOnboardingRecommendationsParams };
-    output: OnboardingRecommendationsRecord | null;
-  };
-  "onboardingRecommendations.updatePending": {
-    input: { configKey: string; params: PreparedOnboardingRecommendationPending };
-    output: OnboardingRecommendationsRecord | null;
-  };
-  "onboardingRecommendations.clearPending": {
-    input: { configKey: string; params: ClearPendingOnboardingRecommendationsParams };
-    output: boolean;
-  };
-  "onboardingRecommendations.clear": {
-    input: { configKey: string };
-    output: boolean;
-  };
-};
-
-export function isOnboardingRecommendationWriteCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<OnboardingRecommendationWriteOperations> {
-  switch (command.type) {
-    case "onboardingRecommendations.writeOffer":
-    case "onboardingRecommendations.acknowledge":
-    case "onboardingRecommendations.updatePending":
-    case "onboardingRecommendations.clearPending":
-    case "onboardingRecommendations.clear":
-      return true;
-    default:
-      return false;
-  }
 }

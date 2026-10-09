@@ -1,4 +1,5 @@
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   buildDiscordActivityCustomId,
   parseDiscordActivityCustomIdForInteraction,
@@ -69,21 +70,13 @@ class DiscordActivityButton extends Button {
           this.logPendingLaunchFailure(error);
           return "failed" as const;
         });
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), PENDING_LAUNCH_WRITE_BUDGET_MS);
-        timer.unref?.();
+      const result = await raceWithTimeout(write, PENDING_LAUNCH_WRITE_BUDGET_MS, () => "timeout", {
+        ref: false,
       });
-      try {
-        if ((await Promise.race([write, timeout])) === "timeout") {
-          this.logPendingLaunchFailure(
-            new Error(`pending launch write exceeded ${PENDING_LAUNCH_WRITE_BUDGET_MS}ms`),
-          );
-        }
-      } finally {
-        if (timer) {
-          clearTimeout(timer);
-        }
+      if (result === "timeout") {
+        this.logPendingLaunchFailure(
+          new Error(`pending launch write exceeded ${PENDING_LAUNCH_WRITE_BUDGET_MS}ms`),
+        );
       }
     }
     await interaction.launchActivity();
@@ -99,7 +92,7 @@ export function createDiscordActivityButton(
   } = {},
 ): DiscordActivityButton | null {
   const runtime = getDiscordActivitiesRuntime();
-  if (!runtime || !runtime.isAccountEnabled(ctx.accountId, ctx.cfg)) {
+  if (!runtime) {
     return null;
   }
   if (applicationId) {

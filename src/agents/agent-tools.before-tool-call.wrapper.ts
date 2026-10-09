@@ -13,8 +13,8 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { captureDiagnosticToolProgress } from "../logging/diagnostic-run-activity.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
   captureAgentToolExecutionBudget,
@@ -27,12 +27,12 @@ import {
 } from "./agent-tools.before-tool-call.decision.js";
 import {
   buildToolContentPrivateData,
-  emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
   prepareToolTerminalPresentation,
   reconcileLoopCallExecutionParams,
   recordLoopOutcome,
+  recordSkillUsed,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
   resolveToolErrorDiagnostic,
@@ -69,6 +69,7 @@ import {
   bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
   getBeforeToolCallDiagnosticOptions,
+  getBeforeToolCallExecutionWrappers,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
@@ -147,23 +148,6 @@ export function finalizeBeforeToolCallExecutionParams(params: {
   return finalize.call(params.tool, reconciledParams, params.preparedParams) ?? reconciledParams;
 }
 
-class BeforeToolCallBlockedError extends Error {
-  constructor(readonly reason: string) {
-    super(reason);
-    this.name = "BeforeToolCallBlockedError";
-  }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.beforeToolCallBlockedErrorTestApi")
-  ] = {
-    create(message: string): Error {
-      return new BeforeToolCallBlockedError(message);
-    },
-  };
-}
-
 class BeforeToolCallFailureError extends Error {
   constructor(
     message: string,
@@ -196,7 +180,6 @@ function tagBeforeToolCallFailure(
   return tagged;
 }
 
-/** Return the closed terminal disposition carried by a before-tool failure. */
 export function getBeforeToolCallFailureDisposition(
   error: unknown,
 ): BeforeToolCallFailureDisposition | undefined {
@@ -216,22 +199,14 @@ export function recordAdjustedParamsForToolCall(
   if (!toolCallId) {
     return;
   }
-  const cloneResult = cloneParamsForAdjustedReplay(params);
-  if (!cloneResult.ok) {
+  let snapshot: unknown;
+  try {
+    snapshot = structuredClone(params);
+  } catch {
     return;
   }
-  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), cloneResult.value);
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), snapshot);
   pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
-}
-
-function cloneParamsForAdjustedReplay(
-  params: unknown,
-): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: structuredClone(params) };
-  } catch {
-    return { ok: false };
-  }
 }
 
 /** Record that one concrete core-owned tool call may use structured replay classification. */
@@ -253,13 +228,6 @@ export function recordStructuredReplayTrustForToolCall(
   }
 }
 
-/**
- * Returns true when an error represents an intentional before_tool_call veto.
- */
-export function isBeforeToolCallBlockedError(err: unknown): err is BeforeToolCallBlockedError {
-  return err instanceof BeforeToolCallBlockedError;
-}
-
 const preExecutionBlockedToolResults = new WeakSet<object>();
 
 export function isPreExecutionBlockedToolResult(result: unknown): boolean {
@@ -268,7 +236,6 @@ export function isPreExecutionBlockedToolResult(result: unknown): boolean {
   );
 }
 
-/** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -304,6 +271,7 @@ export function wrapToolWithBeforeToolCallHook(
     return tool;
   }
   const toolName = tool.name || "tool";
+  const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;
   const admitExecution = captureAgentToolExecutionBudget();
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallDiagnosticOptions = {
@@ -447,7 +415,11 @@ export function wrapToolWithBeforeToolCallHook(
           params: hookParams,
           ...hookMetadata,
           toolCallId,
-          ctx,
+          ctx: ctx
+            ? { ...ctx, toolOwnerPluginId }
+            : toolOwnerPluginId
+              ? { toolOwnerPluginId }
+              : undefined,
           signal,
           approvalMode: hookOptions.approvalMode,
         });
@@ -510,6 +482,7 @@ export function wrapToolWithBeforeToolCallHook(
       const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
         toolCallId,
         toolName,
+        toolKind: hookMetadata?.toolKind,
         params: executeParams,
         ctx,
       });
@@ -529,6 +502,7 @@ export function wrapToolWithBeforeToolCallHook(
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      const recordProgress = captureDiagnosticToolProgress(eventBase);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
       const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
       const startedAt = Date.now();
@@ -570,25 +544,16 @@ export function wrapToolWithBeforeToolCallHook(
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
         const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
+        if (terminalDiagnostic.type === "tool.execution.completed" && !signal?.aborted) {
+          recordProgress?.();
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
         });
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
-          recordRunSkillUsage({
-            runId: ctx?.runId,
-            name: skillMatch.skillName,
-            source: skillMatch.skillSource,
-            activation: skillMatch.activation,
-            ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
-          });
-          emitSkillUsedDiagnostic({
-            ctx,
-            match: skillMatch,
-            toolName: normalizedToolName,
-            toolCallId,
-          });
+          recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });
         }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
@@ -711,8 +676,18 @@ export function rewrapToolWithBeforeToolCallHook(
   };
   clearBeforeToolCallWrappedMarker(rewrapSource);
   copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(sourceTool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
-  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, wrapperOptions);
+  let rebuilt = wrapToolWithBeforeToolCallHook(
+    rewrapSource,
+    ctx ?? preservedContext,
+    wrapperOptions,
+  );
+  // Replace only the hook layer; caller authority and lifetime guards still enclose it.
+  for (const wrapExecution of getBeforeToolCallExecutionWrappers(tool)) {
+    rebuilt = wrapExecution(rebuilt);
+  }
+  return rebuilt;
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

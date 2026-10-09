@@ -1,12 +1,10 @@
 import { getRuntimeConfig } from "../config/config.js";
-import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
-import {
-  createExecApprovalPolicySnapshot,
-  loadExecApprovals,
-  recordAllowlistMatchesUse,
-} from "../infra/exec-approvals.js";
+import { assertCurrentUsageAuthorization } from "../infra/exec-approvals-authorization.kernel.js";
+import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
+import { createExecApprovalPolicySnapshot, loadExecApprovals } from "../infra/exec-approvals.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveNodeExecConfigPolicy } from "./exec-policy.js";
 
 /** Local policy stays on the executor; Gateway approval never overrides a local deny. */
@@ -24,11 +22,11 @@ export function preparePluginExecAuthorization(params: {
     resolveNodeExecConfigPolicy({
       cfg: getRuntimeConfig(),
       agentId,
-      defaultSecurity: DEFAULT_SECURITY,
-      defaultAsk: DEFAULT_ASK,
     });
   const policy = resolvePolicy();
   const approvals = loadExecApprovals();
+  const policyContext = captureOpenClawStateWorkerContext();
+  const readCurrent = prepareExecApprovalsCurrentRead(policyContext);
   const policySnapshot = createExecApprovalPolicySnapshot({ file: approvals, agentId });
   const assertCurrent = () => {
     params.assertActive();
@@ -42,13 +40,12 @@ export function preparePluginExecAuthorization(params: {
     ) {
       throw new Error("SYSTEM_RUN_DENIED: node-local exec policy does not authorize this launch");
     }
-    // The synchronous commit primitive rereads the canonical approvals floor.
-    // Empty matches validate authority without writing usage or durable grants.
-    recordAllowlistMatchesUse({
-      approvals,
+    // The released synchronous launch guard must observe foreign policy commits.
+    assertCurrentUsageAuthorization({
+      file: readCurrent(),
       agentId,
       command: params.command,
-      matches: [],
+      matchKeys: new Set(),
       authorization: {
         source: params.source === "human-approved" ? "explicit-approval" : "current-policy",
         security: current.security,

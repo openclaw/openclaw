@@ -8,11 +8,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
@@ -37,8 +36,9 @@ import {
   decodeOperatorApprovalHistoryCursor,
   encodeOperatorApprovalHistoryCursor,
 } from "./operator-approval-store.rows.js";
-import { expireDueOperatorApprovalsInDatabase } from "./operator-approval-store.transitions.js";
 import type {
+  NewOperatorApproval,
+  OperatorApprovalKind,
   InsertOperatorApprovalResult,
   GetOperatorApprovalResult,
   OperatorApprovalDatabase,
@@ -46,16 +46,16 @@ import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
 } from "./operator-approval-store.types.js";
-import type { OperatorApprovalWorkerOperations } from "./operator-approval-store.worker-contract.js";
 
-type Input<Key extends keyof OperatorApprovalWorkerOperations> =
-  OperatorApprovalWorkerOperations[Key]["input"] & {
-    databaseOptions?: OpenClawStateDatabaseOptions;
-  };
+const ensureExecutionIdentitySchema = createSqliteSchemaEnsurer(
+  () => OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL,
+  { tables: ["operator_approval_execution_identities"] },
+);
 
-export function insertOperatorApprovalInDatabase(
-  params: Input<"operatorApprovals.insert">,
-): InsertOperatorApprovalResult {
+export function insertOperatorApprovalInDatabase(params: {
+  approval: NewOperatorApproval;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): InsertOperatorApprovalResult {
   const input = params.approval;
   const id = requireApprovalId(input.id);
   const resolutionRef = buildApprovalResolutionRef({
@@ -155,8 +155,7 @@ export function insertOperatorApprovalInDatabase(
     }
     if (result.numAffectedRows === 1n) {
       if (executionIdentityBinding) {
-        // sqlite-allow-raw -- feature-local additive schema DDL; binding rows use Kysely.
-        database.db.exec(OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL);
+        ensureExecutionIdentitySchema(database.db);
         executeSqliteQuerySync(
           database.db,
           stateDb.insertInto("operator_approval_execution_identities").values({
@@ -193,9 +192,12 @@ export function insertOperatorApprovalInDatabase(
   }, params.databaseOptions);
 }
 
-export function getOperatorApprovalDetailedInDatabase(
-  params: Input<"operatorApprovals.get">,
-): GetOperatorApprovalResult {
+export function getOperatorApprovalDetailedInDatabase(params: {
+  id: string;
+  allowTransportRef?: boolean;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): GetOperatorApprovalResult {
   const locator = requireApprovalId(params.id);
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
@@ -222,12 +224,16 @@ export function getOperatorApprovalDetailedInDatabase(
 }
 
 export function listPendingOperatorApprovalsInDatabase(
-  params: Input<"operatorApprovals.pending"> = {},
+  params: {
+    kind?: OperatorApprovalKind;
+    sourceSessionKey?: string;
+    audienceSessionKey?: string;
+    reviewerDeviceId?: string;
+    limit?: number;
+    nowMs?: number;
+    databaseOptions?: OpenClawStateDatabaseOptions;
+  } = {},
 ): OperatorApprovalRecord[] {
-  expireDueOperatorApprovalsInDatabase({
-    nowMs: params.nowMs,
-    databaseOptions: params.databaseOptions,
-  });
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
     const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);

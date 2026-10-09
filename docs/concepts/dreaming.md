@@ -17,15 +17,19 @@ Dreaming is enabled by default. Set
 
 When the cron scheduler is disabled (`cron.enabled: false` or
 `OPENCLAW_SKIP_CRON=1`), dreaming defers automatic job creation and updates while
-preserving existing jobs. Startup cleanup of historical dreaming artifacts still
-runs. Explicitly disabling dreaming removes jobs carrying its canonical
-declaration key in the active cron store.
+preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
+for each agent's pending database preparation before running. Explicitly disabling
+dreaming removes jobs carrying its canonical declaration key in the active cron store.
 
 ## What dreaming writes
 
 - **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+
+The built-in SQLite store reads only the selected workspace's state for lookups
+and cleanup. Corrupt JSON in another workspace does not block these operations;
+corrupt JSON in a live record in the selected workspace still reports a storage error.
 
 Long-term promotion still writes only to `MEMORY.md`.
 Deep reports summarize why ranked candidates were not promoted, using counts by
@@ -172,6 +176,10 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+Plugin reloads preserve the managed schedule. The previous instance stops its
+background callbacks and settles pending diary publication before its replacement
+takes over, so scheduled sweeps can continue without a Gateway restart.
 
 Runtime reconciliation owns only jobs declared as
 `memory-core:memory-dreaming-promotion`. It uses Doctor's read-only classifier

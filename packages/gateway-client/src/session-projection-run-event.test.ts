@@ -14,6 +14,57 @@ const scope: SessionProjectionScope = {
 };
 
 describe("session projection Gateway run events", () => {
+  it("reconstructs append-only output without losing rich content or duplicating snapshot text", () => {
+    let projection = createSessionProjection(scope);
+    const canvas = { type: "canvas", id: "canvas-1" };
+    const metadata = { media: [{ id: "image-1" }] };
+    const snapshot = {
+      role: "assistant",
+      content: [{ type: "text", text: "hello " }, canvas],
+      __openclaw: metadata,
+    };
+    for (const event of [
+      { message: snapshot, deltaText: "hello ", text: "hello " },
+      { deltaText: " world\n", text: "hello  world\n" },
+      { deltaText: "reset", replace: true, text: "reset" },
+      { deltaText: "", replace: true, text: "" },
+      { deltaText: "done", text: "done" },
+    ]) {
+      const transition = reduceSessionProjectionRunEvent(projection, {
+        ...event,
+        runId: "shared-run",
+        state: "delta",
+      });
+      if (!transition) {
+        throw new Error("Expected a chat run projection");
+      }
+      projection = transition.projection;
+      expect(transition.currentRun?.message).toEqual({
+        ...snapshot,
+        content: [{ type: "text", text: event.text }, canvas],
+      });
+    }
+    expect(snapshot.content[0]).toEqual({ type: "text", text: "hello " });
+    const final = { role: "assistant", content: "done!" };
+    expect(
+      reduceSessionProjectionRunEvent(projection, {
+        runId: "shared-run",
+        state: "final",
+        message: final,
+      })?.currentRun?.message,
+    ).toBe(final);
+  });
+
+  it("does not invent a baseline from an orphan append", () => {
+    expect(
+      reduceSessionProjectionRunEvent(createSessionProjection(scope), {
+        runId: "shared-run",
+        state: "delta",
+        deltaText: "missing prefix",
+      })?.currentRun?.message,
+    ).toBeUndefined();
+  });
+
   it.each([
     { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 11, resumes: false },
     { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 12, resumes: false },

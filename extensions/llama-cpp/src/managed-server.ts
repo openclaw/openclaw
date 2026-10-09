@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   readProviderJsonResponse,
   readProviderTextResponse,
@@ -29,12 +30,15 @@ import {
   resolveLlamaCppModelSource,
 } from "./defaults.js";
 import {
+  findManagedLlamaServerAsset,
+  resolveManagedLlamaServerPaths,
+  type LlamaServerAsset,
+} from "./llama-server-assets.js";
+import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
-  resolveManagedLlamaServerPaths,
   sha256File,
   type LlamaDownloadProgress,
-  type LlamaServerAsset,
 } from "./llama-server-install.js";
 import {
   buildLlamaServerPreset,
@@ -78,8 +82,8 @@ const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets rema
 const presetState = {
   appliedRevisions: new Map<string, string>(),
   desiredRevisions: new Map<string, string>(),
-  transition: Promise.resolve(),
 };
+const runPresetTransition = createAsyncLock();
 const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // Allows five seconds beyond model shutdown.
 
 function parseHuggingFaceSource(source: string): {
@@ -326,12 +330,6 @@ async function writePreset(presetPath: string, contents: string): Promise<void> 
   }
 }
 
-async function runPresetTransition(run: () => Promise<void>): Promise<void> {
-  const pending = presetState.transition.catch(() => undefined).then(run);
-  presetState.transition = pending;
-  await pending;
-}
-
 async function updatePreset(
   presetPath: string,
   params: LlamaServerPresetOptions & { reconcileOrigin?: string },
@@ -418,15 +416,25 @@ export async function prepareManagedLlamaServer(params: {
   onProgress?: LlamaDownloadProgress;
 }): Promise<ManagedLlamaServer> {
   params.signal?.throwIfAborted();
-  const command =
-    params.localService?.command ??
-    (
-      await ensureLlamaServerInstalled({
-        asset: params.asset,
-        signal: params.signal,
-        onProgress: params.onProgress,
-      })
-    ).command;
+  let command = params.localService?.command;
+  const asset = command === undefined ? params.asset : findManagedLlamaServerAsset(command);
+  if (command !== undefined && asset) {
+    try {
+      await fsp.stat(command);
+    } catch (error) {
+      if (asOptionalRecord(error)?.code !== "ENOENT") {
+        throw error;
+      }
+      command = undefined;
+    }
+  }
+  command ??= (
+    await ensureLlamaServerInstalled({
+      asset,
+      signal: params.signal,
+      onProgress: params.onProgress,
+    })
+  ).command;
   const port = params.port ?? (await findAvailableLlamaServerPort(params.isolated ? 0 : undefined));
   const rootUrl = `http://127.0.0.1:${port}`;
   const reconcileOrigin = params.reconcileBaseUrl

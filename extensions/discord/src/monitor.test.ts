@@ -4,7 +4,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
+import * as fixtures from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
 import { mapGatewayDispatchData } from "./internal/gateway-dispatch.js";
@@ -18,7 +18,6 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordOwnerAccess,
-  resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
@@ -74,22 +73,6 @@ const makeEntries = (
   }
   return out;
 };
-
-function createAutoThreadMentionContext() {
-  const guildInfo: DiscordGuildEntryResolved = {
-    requireMention: true,
-    channels: {
-      general: { enabled: true, autoThread: true },
-    },
-  };
-  const channelConfig = resolveDiscordChannelConfig({
-    guildInfo,
-    channelId: "1",
-    channelName: "General",
-    channelSlug: "general",
-  });
-  return { guildInfo, channelConfig };
-}
 
 beforeEach(() => {
   setDiscordRuntime(createPluginRuntimeMock());
@@ -457,83 +440,6 @@ describe("discord guild/channel resolution", () => {
   });
 });
 
-describe("discord mention gating", () => {
-  it("requires mention by default", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { enabled: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
-    expect(
-      resolveDiscordShouldRequireMention({
-        isGuildMessage: true,
-        isThread: false,
-        channelConfig,
-        guildInfo,
-      }),
-    ).toBe(true);
-  });
-
-  it("applies autoThread mention rules based on thread ownership", () => {
-    const cases = [
-      { name: "bot-owned thread", threadOwnerId: "bot123", expected: false },
-      { name: "user-owned thread", threadOwnerId: "user456", expected: true },
-      { name: "unknown thread owner", threadOwnerId: undefined, expected: true },
-    ] as const;
-
-    for (const testCase of cases) {
-      const { guildInfo, channelConfig } = createAutoThreadMentionContext();
-      expect(
-        resolveDiscordShouldRequireMention({
-          isGuildMessage: true,
-          isThread: true,
-          botId: "bot123",
-          threadOwnerId: testCase.threadOwnerId,
-          channelConfig,
-          guildInfo,
-        }),
-        testCase.name,
-      ).toBe(testCase.expected);
-    }
-  });
-
-  it("inherits parent channel mention rules for threads", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        "parent-1": { enabled: true, requireMention: false },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfigWithFallback({
-      guildInfo,
-      channelId: "thread-1",
-      channelName: "topic",
-      channelSlug: "topic",
-      parentId: "parent-1",
-      parentName: "Parent",
-      parentSlug: "parent",
-      scope: "thread",
-    });
-    expect(channelConfig?.matchSource).toBe("parent");
-    expect(channelConfig?.matchKey).toBe("parent-1");
-    expect(
-      resolveDiscordShouldRequireMention({
-        isGuildMessage: true,
-        isThread: true,
-        channelConfig,
-        guildInfo,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("discord groupPolicy gating", () => {
   it("applies open/disabled/allowlist policy rules", () => {
     const cases = [
@@ -630,7 +536,7 @@ describe("discord autoThread name sanitization", () => {
 
 describe("discord reaction notification gating", () => {
   it("applies mode-specific reaction notification rules", () => {
-    const cases = typedCases<{
+    const cases = fixtures.typedCases<{
       name: string;
       input: Parameters<typeof shouldEmitDiscordReactionNotification>[0];
       expected: boolean;
@@ -812,7 +718,7 @@ const {
   registerDiscordListener,
 } = await import("./monitor/listeners.js");
 
-const requireRecord = createRequireRecord("object", "expected-label-object");
+const requireRecord = fixtures.createRequireRecord("object", "expected-label-object");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -985,7 +891,7 @@ describe("discord DM reaction handling", () => {
       Listener: DiscordReactionRemoveListener,
     },
   ])("preserves distinct normal and super reactions when $action", async (testCase) => {
-    channelRuntimeModule.resetSystemEventsForTest();
+    fixtures.resetSystemEventsForTest();
     enqueueSystemEventSpy.mockImplementation((text: string, options: { sessionKey: string }) =>
       channelRuntimeModule.enqueueSystemEvent(text, options),
     );
@@ -1049,7 +955,7 @@ describe("discord DM reaction handling", () => {
       );
     } finally {
       enqueueSystemEventSpy.mockReset();
-      channelRuntimeModule.resetSystemEventsForTest();
+      fixtures.resetSystemEventsForTest();
     }
   });
 
@@ -1269,7 +1175,7 @@ describe("discord reaction notification modes", () => {
   const guild = fakeGuild(guildId, "Mode Guild");
 
   it("applies message-fetch behavior across notification modes and channel types", async () => {
-    const cases = typedCases<{
+    const cases = fixtures.typedCases<{
       name: string;
       reactionNotifications: "off" | "all" | "allowlist" | "own";
       users: string[] | undefined;

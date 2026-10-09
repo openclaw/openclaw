@@ -1,5 +1,6 @@
 @preconcurrency import ActivityKit
 import Foundation
+import OpenClawKit
 import os
 
 /// Owns the single ActivityKit presentation for connection, attention, tool,
@@ -8,11 +9,6 @@ import os
 @MainActor
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
-
-    private struct PendingActivityUpdate {
-        var state: OpenClawActivityAttributes.ContentState
-        var staleDate: Date?
-    }
 
     private struct StatusPresentation {
         let status: OpenClawActivityAttributes.ContentState.Status
@@ -31,7 +27,7 @@ final class LiveActivityManager {
     private var currentActivity: Activity<OpenClawActivityAttributes>?
     private var currentState: OpenClawActivityAttributes.ContentState?
     private var currentStaleDate: Date?
-    private var pendingActivityUpdate: PendingActivityUpdate?
+    private var pendingActivityUpdate: ActivityContent<OpenClawActivityAttributes.ContentState>?
     private var activityUpdateTask: Task<Void, Never>?
     private var activityGeneration: UInt64 = 0
     private var voiceSampleBuffer = LiveActivityVoiceSampleBuffer()
@@ -385,12 +381,9 @@ final class LiveActivityManager {
         guard state != self.currentState || staleDate != self.currentStaleDate else { return }
         self.currentState = state
         self.currentStaleDate = staleDate
-        self.pendingActivityUpdate = PendingActivityUpdate(state: state, staleDate: staleDate)
+        self.pendingActivityUpdate = ActivityContent(state: state, staleDate: staleDate)
         guard self.activityUpdateTask == nil else { return }
-        self.startUpdateWorker(activity: activity, generation: self.activityGeneration)
-    }
-
-    private func startUpdateWorker(activity: Activity<OpenClawActivityAttributes>, generation: UInt64) {
+        let generation = self.activityGeneration
         self.activityUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self,
@@ -399,16 +392,11 @@ final class LiveActivityManager {
                       let pending = self.pendingActivityUpdate
                 else { break }
                 self.pendingActivityUpdate = nil
-                await activity.update(ActivityContent(state: pending.state, staleDate: pending.staleDate))
+                await activity.update(pending)
             }
 
             guard let self, generation == self.activityGeneration else { return }
             self.activityUpdateTask = nil
-            if self.pendingActivityUpdate != nil,
-               self.currentActivity?.id == activity.id
-            {
-                self.startUpdateWorker(activity: activity, generation: generation)
-            }
         }
     }
 
@@ -423,15 +411,7 @@ final class LiveActivityManager {
         self.currentState = nil
         self.currentStaleDate = nil
         self.logger.info("ending live activity reason=\(reason, privacy: .public)")
-        let finalState = OpenClawActivityAttributes.ContentState(
-            status: .disconnected,
-            verbatimDetail: nil,
-            startedAt: startedAt)
-        Task {
-            await activity.end(
-                ActivityContent(state: finalState, staleDate: nil),
-                dismissalPolicy: .immediate)
-        }
+        self.end(activity: activity, startedAt: startedAt)
     }
 
     private func hydrateCurrentAndPruneDuplicates() {
@@ -537,8 +517,8 @@ final class LiveActivityManager {
         return existing?.state.startedAt ?? now
     }
 
-    private func end(activity: Activity<OpenClawActivityAttributes>) {
-        let startedAt = activity.content.state.startedAt
+    private func end(activity: Activity<OpenClawActivityAttributes>, startedAt: Date? = nil) {
+        let startedAt = startedAt ?? activity.content.state.startedAt
         Task {
             await activity.end(
                 ActivityContent(
@@ -560,7 +540,7 @@ final class LiveActivityManager {
         if statusText == String(localized: "Reconnecting...") || statusText == "Reconnecting..." {
             return StatusPresentation(status: .reconnecting, verbatimDetail: nil)
         }
-        return StatusPresentation(status: .connecting, verbatimDetail: self.normalizedDetail(statusText))
+        return StatusPresentation(status: .connecting, verbatimDetail: statusText.trimmedNonEmpty)
     }
 
     private static func attentionPresentation(statusText: String) -> StatusPresentation {
@@ -570,12 +550,7 @@ final class LiveActivityManager {
         if statusText == String(localized: "Action required") || statusText == "Action required" {
             return StatusPresentation(status: .actionRequired, verbatimDetail: nil)
         }
-        return StatusPresentation(status: .attention, verbatimDetail: self.normalizedDetail(statusText))
-    }
-
-    private static func normalizedDetail(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return StatusPresentation(status: .attention, verbatimDetail: statusText.trimmedNonEmpty)
     }
 
     private static func voiceDetail(
@@ -603,6 +578,6 @@ final class LiveActivityManager {
         if knownLabels.contains(value) {
             return nil
         }
-        return self.normalizedDetail(value)
+        return value.trimmedNonEmpty
     }
 }

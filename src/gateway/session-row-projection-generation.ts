@@ -1,11 +1,15 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   captureSessionStoreReadCandidates,
   prepareSessionStoreTargetInventory,
 } from "../config/sessions/session-store-target-inventory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  readDatabaseIdentityBirthtime,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import * as records from "./session-row-projection-record.js";
@@ -23,7 +27,7 @@ function samePhysicalFile(candidate: PhysicalCandidate, pathname = candidate.pat
     return Boolean(
       file?.isFile() &&
       `${file.dev}:${file.ino}` === candidate.identity &&
-      file.birthtimeNs.toString() === candidate.birthtime,
+      readDatabaseIdentityBirthtime(file) === candidate.birthtime,
     );
   } catch {
     return false;
@@ -42,7 +46,7 @@ export function createSessionRowGenerationObservations(owner: {
   put: (row: records.Row) => void;
   remove: (id: string) => void;
   dirty: Set<string>;
-  mark: (change: { agentId: string; sessionKey: string }) => void;
+  mark: (change: { agentId: string; sessionKey: string; storePath?: string }) => void;
   ensureMaterialized: () => Promise<void>;
 }) {
   const observations = new Set<{
@@ -105,7 +109,7 @@ export function createSessionRowGenerationObservations(owner: {
             candidates.set(candidate.path, {
               path: candidate.path,
               identity: `${file.dev}:${file.ino}`,
-              birthtime: file.birthtimeNs.toString(),
+              birthtime: readDatabaseIdentityBirthtime(file),
             });
           }
         }
@@ -178,6 +182,10 @@ export function createSessionRowGenerationObservations(owner: {
           observation.dispose();
         }
       }
+      // Prepared identities follow row publication; replay would overwrite reentrant commits.
+      if (readPreparedSessionSharingChange(mutation) !== undefined) {
+        return;
+      }
       for (const key of mutation.previous.sessionKeys) {
         for (const row of owner.matching({ key, agentId: mutation.agentId })) {
           if (
@@ -190,8 +198,15 @@ export function createSessionRowGenerationObservations(owner: {
           }
           owner.markRelated(row);
           if ("current" in mutation && mutation.current.sessionKeys.includes(row.key)) {
-            owner.put(records.renewGeneration(row));
-            owner.dirty.add(records.identity(row));
+            // An unprepared reset cannot prove which lifecycle revision has already published.
+            const published =
+              mutation.kind !== "reset" &&
+              row.publishedSource?.identity === mutation.databaseIdentity &&
+              row.sharingEntry?.sessionId === mutation.current.sessionId;
+            if (!published) {
+              owner.put(records.renewGeneration(row));
+              owner.dirty.add(records.identity(row));
+            }
           } else {
             owner.remove(records.identity(row));
           }
@@ -199,7 +214,38 @@ export function createSessionRowGenerationObservations(owner: {
       }
       if ("current" in mutation) {
         for (const sessionKey of mutation.current.sessionKeys) {
-          owner.mark({ agentId: mutation.agentId, sessionKey });
+          const committedRows = owner
+            .matching({ key: sessionKey, agentId: mutation.agentId })
+            .filter(
+              (row) =>
+                row.publishedSource?.identity === mutation.databaseIdentity &&
+                owner.stores().get(row.storeTarget.storePath)?.identity ===
+                  mutation.databaseIdentity,
+            );
+          const published = committedRows.some(
+            (row) => row.sharingEntry?.sessionId === mutation.current.sessionId,
+          );
+          const superseded = committedRows.some(
+            (row) =>
+              row.sharingEntry &&
+              row.sharingEntry.sessionId !== mutation.current.sessionId &&
+              row.sharingEntry.sessionId !== mutation.previous.sessionId,
+          );
+          // Native row publication precedes its lifecycle notification, including reentrant writes.
+          if (mutation.kind !== "reset" && (published || superseded)) {
+            continue;
+          }
+          const source = [...owner.stores().values()].find(
+            (store) => store.identity === mutation.databaseIdentity,
+          );
+          if (!source) {
+            continue;
+          }
+          owner.mark({
+            agentId: mutation.agentId,
+            sessionKey,
+            storePath: source.filename,
+          });
         }
       } else {
         void owner.ensureMaterialized().catch(() => {});

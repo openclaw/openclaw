@@ -13,6 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import { registerActiveDebugProxyCapture } from "./runtime-cleanup.js";
+import { isDebugProxyCaptureDeferred } from "./runtime-deferral.js";
 import {
   registerCaptureStoreFinalizer,
   registerAsyncCaptureStoreFinalizer,
@@ -233,6 +234,9 @@ export function resolveCaptureOwner(
   runtime: ReturnType<typeof resolveRuntimeDeps>,
   options: { initialize?: boolean; explicit?: boolean; asynchronous?: boolean } = {},
 ): CaptureOwner | undefined {
+  if (isDebugProxyCaptureDeferred()) {
+    return undefined;
+  }
   let registry = captureOwners.get(runtime.getStore);
   const key = captureOwnerKey(settings);
   let session = registry?.owners.get(key);
@@ -534,18 +538,12 @@ function ensureAsyncCaptureLease(owner: CaptureOwner) {
       owner.asyncStore = finalizingStore;
       const finishing = finishCaptureOwnerAsync(owner);
       // Observe the memoized owning close without awaiting it from its finalizer.
-      void lease.store.close().then(
-        () => {
-          if (!owner.closing) {
-            forgetCaptureOwner(owner);
-          }
-        },
-        () => {
-          if (!owner.closing) {
-            forgetCaptureOwner(owner);
-          }
-        },
-      );
+      const forgetAfterStoreClose = () => {
+        if (!owner.closing) {
+          forgetCaptureOwner(owner);
+        }
+      };
+      void lease.store.close().then(forgetAfterStoreClose, forgetAfterStoreClose);
       return finishing;
     });
     const previous = owner.unregister;

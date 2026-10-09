@@ -46,15 +46,16 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
 vi.mock("./developer-instruction-sections.js", () => ({
   joinPresentSections: () => "developer instructions",
 }));
-vi.mock("./thread-lifecycle.js", () => ({
+vi.mock("./turn-params.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./turn-params.js")>()),
+  buildCodexParentLocalInstructions: vi.fn(),
   buildTurnStartParams: (_params: unknown, options: { threadId: string; promptText: string }) => ({
     threadId: options.threadId,
     input: [{ type: "text", text: options.promptText, text_elements: [] }],
   }),
 }));
 vi.mock("./trajectory.js", () => ({ recordCodexTrajectoryContext: vi.fn() }));
-vi.mock("./transcript-mirror.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
-vi.mock("./turn-params.js", () => ({ buildCodexParentLocalInstructions: vi.fn() }));
+vi.mock("./user-prompt-message.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
 
 beforeEach(() => {
   references.delivered = false;
@@ -163,7 +164,6 @@ async function prepare(
     prompt: {
       turnState,
       systemPromptReport: { injectedWorkspaceFiles: [] },
-      codexModelInputHistoryMessages: [],
       contextImageGroups: [],
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {
@@ -240,8 +240,14 @@ function changeSelection(attempt: Awaited<ReturnType<typeof prepare>>, kind: Sel
   }
 }
 async function start(acknowledged: boolean) {
-  const attempt = await prepare(acknowledged ? createAcknowledgment().acknowledgment : undefined);
+  const host = acknowledged ? createAcknowledgment() : undefined;
+  const attempt = await prepare(host?.acknowledgment);
   await attempt.prepared.startCodexTurn();
+  if (host) {
+    expect(host.acknowledgment.read().phase).toBe("accepted");
+  }
+  expect(cleanup.interrupt).not.toHaveBeenCalled();
+  expect(attempt.releaseCurrentRoute).not.toHaveBeenCalled();
   return attempt.request.mock.calls.find(([method]) => method === "turn/start")?.[1].input;
 }
 
@@ -347,12 +353,10 @@ describe("native acknowledged turn requests", () => {
     expect(attempt.releaseCurrentRoute).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])("accepts a stable tuple (supervision: %s)", async (supervised) => {
+  it("accepts a stable managed tuple without a live supervision owner", async () => {
     const host = createAcknowledgment();
-    const attempt = await prepare(host.acknowledgment, createNativeThread(), supervised);
-    if (!supervised) {
-      delete attempt.resources.state.thread.liveThreadOwnership;
-    }
+    const attempt = await prepare(host.acknowledgment, createNativeThread(), false);
+    delete attempt.resources.state.thread.liveThreadOwnership;
     await expect(attempt.prepared.startCodexTurn()).resolves.toMatchObject({
       turn: { turn: { id: "new-turn", status: "inProgress" } },
       upstreamUserText: "literal steer",

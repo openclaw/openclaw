@@ -15,7 +15,6 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
-export type EmbeddingProviderId = string;
 export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
 
 export type EmbeddingProviderResult = {
@@ -151,7 +150,7 @@ export async function createEmbeddingProvider(
     if (primaryErr instanceof MemoryManagerReloadError) {
       throw primaryErr;
     }
-    const reason = formatProviderError(primaryAdapter, primaryErr);
+    let reason = formatProviderError(primaryAdapter, primaryErr);
     if (options.fallback && options.fallback !== "none" && options.fallback !== provider) {
       const fallbackAdapter = getAdapter(options.fallback, options.config);
       try {
@@ -177,11 +176,7 @@ export async function createEmbeddingProvider(
           throw fallbackErr;
         }
         const fallbackReason = formatProviderError(fallbackAdapter, fallbackErr);
-        const wrapped = new Error(
-          `${reason}\n\nFallback to ${options.fallback} failed: ${fallbackReason}`,
-        );
-        wrapped.cause = primaryErr;
-        throw wrapped;
+        reason = `${reason}\n\nFallback to ${options.fallback} failed: ${fallbackReason}`;
       }
     }
     const wrapped = new Error(reason);

@@ -204,6 +204,8 @@ describe("session list requests", () => {
         expect.objectContaining({ agentId: "writer", limit: 2 }),
       );
       expect(listener).toHaveBeenLastCalledWith({
+        readSucceeded: true,
+        pagination: { count: 2, totalCount: 3, hasMore: true, nextOffset: 2 },
         result: listResult(["agent:writer:0", "agent:writer:1"], 3),
         agentId: "writer",
         loading: false,
@@ -455,6 +457,9 @@ describe("session list requests", () => {
     await sessions.list({ ...options, spawnedBy: "  agent:main:parent  " });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       ...options,
+      rowMode: "compact",
+      source: "chat-pane",
+      excludeDock: true,
       configuredAgentsOnly: true,
       spawnedBy: "agent:main:parent",
     });
@@ -481,6 +486,9 @@ describe("session list requests", () => {
     const { sessions } = sessionHarness(request);
     await sessions.list({ boardFace: "dashboard" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      rowMode: "compact",
+      source: "chat-pane",
+      excludeDock: true,
       configuredAgentsOnly: true,
       boardFace: "dashboard",
       includeGlobal: true,
@@ -776,6 +784,9 @@ describe("session list requests", () => {
       "agent:main:sidebar-result",
     );
     expect(request.mock.calls[0]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "chat-pane",
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -820,6 +831,9 @@ describe("session list requests", () => {
     expect(sessions.state.result).toBe(primaryResult);
     expect(sessions.listSnapshot(pageQuery).result?.sessions[0]?.key).toBe("agent:main:page");
     expect(request.mock.calls[1]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "chat-pane",
+      excludeDock: true,
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,

@@ -78,11 +78,6 @@ function resolveBindingConversation(params: {
   });
 }
 
-type PluginCommandRuntimeLlm = NonNullable<PluginCommandContext["runtimeContext"]>["llm"];
-type PluginCommandLlmCompleteParams = Parameters<
-  NonNullable<PluginCommandRuntimeLlm>["complete"]
->[0];
-
 function buildRuntimeContext(
   command: RegisteredPluginCommand,
   params: PluginCommandDispatchContext,
@@ -101,7 +96,7 @@ function buildRuntimeContext(
   }
   return {
     llm: {
-      complete: async (request: PluginCommandLlmCompleteParams) => {
+      complete: async (request) => {
         const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");
         return await createRuntimeLlm({
           getConfig: () => params.config,

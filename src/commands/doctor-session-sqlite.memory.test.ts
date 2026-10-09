@@ -6,7 +6,10 @@ import { promisify } from "node:util";
 import { build as esbuild } from "esbuild";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
-import { runtimeProcessCoreBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
+import {
+  createRuntimeProcessBuildEntries,
+  runtimeProcessCoreEntrypoints,
+} from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sqliteImportMemorySupportUrl } from "./doctor-session-sqlite.memory.test-support.js";
 
@@ -28,7 +31,7 @@ beforeAll(async () => {
     bundle: true,
     entryPoints: {
       child: fileURLToPath(sqliteImportMemorySupportUrl),
-      ...runtimeProcessCoreBuildEntries,
+      ...createRuntimeProcessBuildEntries(runtimeProcessCoreEntrypoints),
     },
     format: "esm",
     // Keep generated source overhead out of the transcript-data heap budget;

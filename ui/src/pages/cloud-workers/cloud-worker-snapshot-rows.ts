@@ -37,6 +37,7 @@ export type SnapshotImage = {
     phase: "scrubbing" | "creating" | "uncertain";
     stale: boolean;
   };
+  captureUnsupported?: { atMs: number; provider: string; message: string };
 };
 export type SnapshotProfile = {
   id: string;
@@ -64,55 +65,71 @@ type SnapshotRowOptions = {
   onRebuild?: () => void;
 };
 
-function renderPin(image: SnapshotImage, options: SnapshotRowOptions, previous = false) {
-  const checkpoint = previous ? image.previous : image;
-  if (!checkpoint?.checkpointId || !options.onPin) {
-    return nothing;
-  }
-  const reason =
-    image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : "";
-  return html`<button
-    class="btn btn--sm"
-    type="button"
-    aria-label=${`${t(checkpoint.pinned ? "cloudWorkersPage.snapshots.unpin" : "cloudWorkersPage.snapshots.pin")}: ${checkpoint.checkpointId}`}
-    title=${reason}
-    ?disabled=${Boolean(reason) || options.busy}
-    @click=${() => options.onPin?.(previous)}
-  >
-    ${t(checkpoint.pinned ? "cloudWorkersPage.snapshots.unpin" : "cloudWorkersPage.snapshots.pin")}
-  </button>`;
+function renderImageAction(
+  action: "pin" | "unpin" | "rollback" | "delete" | "rebuild" | "recover",
+  target: string | undefined,
+  onClick: (() => void) | undefined,
+  disabled: boolean,
+  title?: string,
+) {
+  const label = t(`cloudWorkersPage.snapshots.${action}`);
+  return onClick
+    ? html`<button
+        class=${action === "delete" ? "btn btn--sm danger" : "btn btn--sm"}
+        type="button"
+        aria-label=${`${label}: ${target}`}
+        title=${title ?? nothing}
+        ?disabled=${disabled}
+        @click=${onClick}
+      >
+        ${label}
+      </button>`
+    : nothing;
 }
 
 export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOptions) {
+  const changeReason =
+    image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : "";
+  const renderPin = (previous = false) => {
+    const checkpoint = previous ? image.previous : image;
+    return checkpoint?.checkpointId && options.onPin
+      ? renderImageAction(
+          checkpoint.pinned ? "unpin" : "pin",
+          checkpoint.checkpointId,
+          () => options.onPin?.(previous),
+          Boolean(changeReason) || options.busy,
+          changeReason,
+        )
+      : nothing;
+  };
   const phase = image.capture?.phase;
   const retiringCurrentImage = Boolean(
     image.retirement && image.retirement.checkpointId === image.checkpointId,
   );
   const imageState =
     phase ??
-    (retiringCurrentImage ? "retiring" : image.state === "no-image" ? "noImage" : image.state);
+    (retiringCurrentImage
+      ? "retiring"
+      : image.state === "no-image"
+        ? image.captureUnsupported
+          ? "coldOnly"
+          : "noImage"
+        : image.state);
   const runtimeDigest = image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12);
   const facts = [
     ...(options.showMachineFacts ? [image.backend, image.machineClass, image.os] : []),
-    ...(image.baseCommit
-      ? [t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) })]
-      : []),
-    ...(image.createdAtMs != null
-      ? [
-          t("cloudWorkersPage.snapshots.created", {
-            age: formatRelativeTimestamp(image.createdAtMs),
-          }),
-        ]
-      : []),
-    ...(image.lastDemandAtMs != null
-      ? [
-          t("cloudWorkersPage.snapshots.lastUsed", {
-            age: formatRelativeTimestamp(image.lastDemandAtMs),
-          }),
-        ]
-      : []),
+    image.baseCommit &&
+      t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) }),
+    image.createdAtMs != null &&
+      t("cloudWorkersPage.snapshots.created", {
+        age: formatRelativeTimestamp(image.createdAtMs),
+      }),
+    image.lastDemandAtMs != null &&
+      t("cloudWorkersPage.snapshots.lastUsed", {
+        age: formatRelativeTimestamp(image.lastDemandAtMs),
+      }),
     t("cloudWorkersPage.snapshots.allocations", { count: String(image.allocationCount) }),
-    ...(runtimeDigest ? [t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest })] : []),
+    runtimeDigest && t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest }),
   ];
   return renderSettingsRow({
     title: image.projectKey
@@ -121,6 +138,14 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
     description: html`
       ${facts.filter(Boolean).join(" · ")}
       ${
+        image.captureUnsupported
+          ? html`<div>
+              ${image.captureUnsupported.message.replace(/[.\s]+$/u, "")}.
+              ${t("cloudWorkersPage.snapshots.captureUnsupportedHint")}
+            </div>`
+          : nothing
+      }
+      ${
         image.previous
           ? html`<div>
               ${t("cloudWorkersPage.snapshots.previous")}:
@@ -128,21 +153,14 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
               ${t("cloudWorkersPage.snapshots.created", { age: formatRelativeTimestamp(image.previous.createdAtMs) })}
               ${image.previous.baseCommit ? t("cloudWorkersPage.snapshots.baseCommit", { commit: image.previous.baseCommit.slice(0, 8) }) : nothing}
               ${image.previous.pinned ? renderSettingsStatus({ kind: "accent", label: t("cloudWorkersPage.snapshots.pinned") }) : nothing}
-              ${renderPin(image, options, true)}
-              ${
-                options.onRollback
-                  ? html`<button
-                      class="btn btn--sm"
-                      type="button"
-                      aria-label=${`${t("cloudWorkersPage.snapshots.rollback")}: ${image.previous.checkpointId}`}
-                      title=${image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : ""}
-                      ?disabled=${Boolean(image.capture || image.retirement) || options.busy}
-                      @click=${options.onRollback}
-                    >
-                      ${t("cloudWorkersPage.snapshots.rollback")}
-                    </button>`
-                  : nothing
-              }
+              ${renderPin(true)}
+              ${renderImageAction(
+                "rollback",
+                image.previous.checkpointId,
+                options.onRollback,
+                Boolean(image.capture || image.retirement) || options.busy,
+                changeReason,
+              )}
             </div>`
           : nothing
       }
@@ -168,21 +186,14 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
         label: t(`cloudWorkersPage.snapshots.${imageState}`),
       })}
       ${image.pinned ? renderSettingsStatus({ kind: "accent", label: t("cloudWorkersPage.snapshots.pinned") }) : nothing}
-      ${renderPin(image, options)}
-      ${
-        image.checkpointId && options.onDelete
-          ? html`<button
-              class="btn btn--sm danger"
-              type="button"
-              aria-label=${`${t("cloudWorkersPage.snapshots.delete")}: ${image.checkpointId}`}
-              title=${options.deleteReason ?? ""}
-              ?disabled=${Boolean(options.deleteReason) || options.busy}
-              @click=${options.onDelete}
-            >
-              ${t("cloudWorkersPage.snapshots.delete")}
-            </button>`
-          : nothing
-      }
+      ${renderPin()}
+      ${renderImageAction(
+        "delete",
+        image.checkpointId,
+        image.checkpointId ? options.onDelete : undefined,
+        Boolean(options.deleteReason) || options.busy,
+        options.deleteReason ?? "",
+      )}
       ${
         image.retirement
           ? renderSettingsStatus({
@@ -191,34 +202,22 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
             })
           : nothing
       }
-      ${
-        options.onRebuild
-          ? html`<button
-              class="btn btn--sm"
-              type="button"
-              aria-label=${`${t("cloudWorkersPage.snapshots.rebuild")}: ${image.projectLabel ?? image.projectRoot ?? image.projectKey ?? image.profileId ?? image.profileKey}`}
-              ?disabled=${options.buildBusy}
-              @click=${options.onRebuild}
-            >
-              ${t("cloudWorkersPage.snapshots.rebuild")}
-            </button>`
-          : nothing
-      }
-      ${
-        phase === "uncertain" && options.onRecover
-          ? html`
-              <button
-                class="btn btn--sm"
-                type="button"
-                aria-label=${`${t("cloudWorkersPage.snapshots.recover")}: ${image.capture?.selector}`}
-                ?disabled=${options.busy}
-                @click=${options.onRecover}
-              >
-                ${t("cloudWorkersPage.snapshots.recover")}
-              </button>
-            `
-          : nothing
-      }
+      ${renderImageAction(
+        "rebuild",
+        image.projectLabel ??
+          image.projectRoot ??
+          image.projectKey ??
+          image.profileId ??
+          image.profileKey,
+        options.onRebuild,
+        options.buildBusy,
+      )}
+      ${renderImageAction(
+        "recover",
+        image.capture?.selector,
+        phase === "uncertain" ? options.onRecover : undefined,
+        options.busy,
+      )}
     `,
   });
 }

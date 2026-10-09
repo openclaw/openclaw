@@ -155,7 +155,8 @@ export const linkReaderContentStyles = css`
     display: flex;
     color: var(--muted);
   }
-  .lr-checks-chevron svg {
+  .lr-checks-chevron svg,
+  .lr-check-symbol svg {
     width: 16px;
     height: 16px;
   }
@@ -201,10 +202,6 @@ export const linkReaderContentStyles = css`
   .lr-check-symbol {
     display: flex;
     color: var(--check-color);
-  }
-  .lr-check-symbol svg {
-    width: 16px;
-    height: 16px;
   }
   .lr-check-copy {
     display: flex;

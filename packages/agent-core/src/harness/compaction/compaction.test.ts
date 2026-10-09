@@ -2,10 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
+import {
+  InvalidSummaryOutputError,
+  SummaryOutputBudgetError,
+  type SessionTreeEntry,
+} from "../types.js";
 import {
   calculateContextTokens,
   compact,
+  compactWithoutSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,
@@ -657,6 +663,47 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
   );
 });
 
+describe("generateSummary progress updates", () => {
+  it("asks to keep completed checks distinct from unresolved blockers", async () => {
+    const completeSimple = vi.fn(async () => createAssistant("summary", createUsage(1), 4));
+    const result = await generateSummary(
+      [
+        { role: "user", content: "Check whether the release is approved.", timestamp: 1 },
+        {
+          ...createAssistant("", createUsage(0), 2),
+          content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "check",
+          toolName: "verify",
+          content: [{ type: "text", text: "Verification FAILED: missing release approval." }],
+          isError: true,
+          timestamp: 3,
+        },
+      ],
+      createSummaryModel(),
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Release approval check: pending.",
+      undefined,
+      undefined,
+      { completeSimple },
+    );
+
+    expect(result.ok).toBe(true);
+    const request = JSON.stringify(completeSimple.mock.calls);
+    expect(request).toContain("Release approval check: pending.");
+    expect(request).toContain("Verification FAILED: missing release approval.");
+    expect(request).toContain("Record checks that ran and their results as completed");
+    expect(request).toContain("keep unresolved blockers separate");
+  });
+});
+
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
     const model = createSummaryModel();
@@ -787,10 +834,52 @@ describe("generateSummary thinking options", () => {
     if (result.ok) {
       throw new Error("expected empty compaction output to fail");
     }
+    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
     expect(result.error).toMatchObject({
       name: "CompactionError",
       code: "summarization_failed",
       message: "Summarization failed: model returned no summary text",
+    });
+  });
+
+  it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
+    const model = createSummaryModel(true);
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "length",
+        message: {
+          ...createAssistant("", createUsage(800), 1),
+          content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+          stopReason: "length",
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ error: expect.any(SummaryOutputBudgetError) });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "summarization_failed",
+        message: expect.stringContaining("output budget (800 tokens) was exhausted"),
+      },
     });
   });
 });
@@ -802,7 +891,7 @@ describe("split-turn compaction", () => {
     customType: "openclaw.runtime-context",
     content: "PRIVATE_RUNTIME_CONTEXT",
     display: false,
-    details: { runtimeContextCarrier: true },
+    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
     timestamp: 1,
   };
   it.each([
@@ -906,4 +995,38 @@ describe("split-turn compaction", () => {
       }
     },
   );
+});
+
+describe("compactWithoutSummary", () => {
+  const lossNotice = "2 earlier message(s) were removed without a summary";
+  // About 1,200 characters with the constraint in the middle: inside the 2,000-character
+  // split-turn ask bound, beyond the 800-character unresolved-request bound.
+  const filler = "Context for the split request. ".repeat(19);
+  const sourceAsk = `${filler}Constraint: keep SOURCE-ASK-MIDDLE. ${filler}`.trim();
+  it.each([
+    { name: "a capped previous summary", summaryTokenBudget: undefined },
+    { name: "a constrained foreground budget", summaryTokenBudget: 450 },
+  ])("keeps the loss notice, source ask, and unresolved request beside $name", (case_) => {
+    const result = compactWithoutSummary({
+      firstKeptEntryId: "kept-entry",
+      messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
+      turnPrefixMessages: [{ role: "user", content: sourceAsk, timestamp: 2 }],
+      isSplitTurn: true,
+      latestUnresolvedUserRequest: "finish the review",
+      previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      tokensBefore: 100,
+      fileOps: createFileOps(),
+      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+      summaryTokenBudget: case_.summaryTokenBudget,
+    });
+
+    expect(result.ok).toBe(true);
+    const summary = result.ok ? result.value.summary : "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(lossNotice);
+    expect(summary).toContain('"finish the review"');
+    expect(sourceAsk.length).toBeGreaterThan(1_100);
+    expect(summary).toContain(JSON.stringify(sourceAsk));
+    expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
+  });
 });

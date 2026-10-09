@@ -9,7 +9,7 @@ import {
   asNonArrayRecord as asParamRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
+import { GoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
   type GoogleMeetConfig,
@@ -23,6 +23,7 @@ export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
 );
 export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./cli.js"));
+export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
 const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
@@ -33,19 +34,9 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/gateway-runtime"),
 );
 
-type GoogleMeetGatewayRuntimeModule = Awaited<
-  ReturnType<typeof loadGoogleMeetGatewayRuntimeModule>
->;
-type CallGatewayFromCli = GoogleMeetGatewayRuntimeModule["callGatewayFromCli"];
-type GoogleMeetGatewayError = NonNullable<Parameters<GatewayRequestHandlerOptions["respond"]>[2]>;
-type GoogleMeetGatewayErrorCode = GoogleMeetGatewayError["code"];
-
-type LoadGoogleMeetNodeInvokePolicy = (
-  config: GoogleMeetConfig,
-) => Promise<OpenClawPluginNodeInvokePolicy>;
-
-const loadGoogleMeetNodeInvokePolicy: LoadGoogleMeetNodeInvokePolicy = async (config) =>
-  (await loadGoogleMeetNodeInvokePolicyModule()).createGoogleMeetChromeNodeInvokePolicy(config);
+type GoogleMeetGatewayErrorCode = NonNullable<
+  Parameters<GatewayRequestHandlerOptions["respond"]>[2]
+>["code"];
 
 export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
   return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
@@ -70,46 +61,21 @@ export function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
   return raw.join !== false && raw.join !== "false";
 }
 
-const googleMeetToolDeps: {
-  callGatewayFromCli?: CallGatewayFromCli;
-  platform: () => NodeJS.Platform;
-} = {
-  platform: () => process.platform,
+const googleMeetGatewayMethods = {
+  join: "googlemeet.join",
+  create: "googlemeet.create",
+  status: "googlemeet.status",
+  transcript: "googlemeet.transcript",
+  participate: "googlemeet.participate",
+  leave: "googlemeet.leave",
+  speak: "googlemeet.speak",
+  participation_context: "googlemeet.participationContext",
+  recover_current_tab: "googlemeet.recoverCurrentTab",
+  setup_status: "googlemeet.setup",
+  test_speech: "googlemeet.testSpeech",
+  test_listen: "googlemeet.testListen",
+  end_active_conference: "googlemeet.endActiveConference",
 };
-
-type GoogleMeetGatewayToolAction =
-  | "join"
-  | "create"
-  | "status"
-  | "transcript"
-  | "participation_context"
-  | "participate"
-  | "recover_current_tab"
-  | "setup_status"
-  | "leave"
-  | "end_active_conference"
-  | "speak"
-  | "test_speech"
-  | "test_listen";
-
-function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
-  switch (action) {
-    case "participation_context":
-      return "googlemeet.participationContext";
-    case "recover_current_tab":
-      return "googlemeet.recoverCurrentTab";
-    case "setup_status":
-      return "googlemeet.setup";
-    case "test_speech":
-      return "googlemeet.testSpeech";
-    case "test_listen":
-      return "googlemeet.testListen";
-    case "end_active_conference":
-      return "googlemeet.endActiveConference";
-    default:
-      return `googlemeet.${action}`;
-  }
-}
 
 export function readGoogleMeetParticipationParams(raw: Record<string, unknown>): {
   sessionId: string;
@@ -151,13 +117,13 @@ export function readGoogleMeetParticipationParams(raw: Record<string, unknown>):
   };
 }
 
-function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
+export function assertGoogleMeetAgentToolActionSupported(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
-}): boolean {
-  const platform = googleMeetToolDeps.platform();
+}): void {
+  const platform = process.platform;
   if (platform === "darwin" || platform === "linux") {
-    return false;
+    return;
   }
   const action = params.raw.action;
   if (
@@ -165,21 +131,14 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
     action !== "test_speech" &&
     !(action === "create" && shouldJoinCreatedMeet(params.raw))
   ) {
-    return false;
+    return;
   }
   const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
   const mode =
     action === "test_speech"
       ? "agent"
       : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
-  return transport === "chrome" && (mode === "agent" || mode === "bidi");
-}
-
-export function assertGoogleMeetAgentToolActionSupported(params: {
-  config: GoogleMeetConfig;
-  raw: Record<string, unknown>;
-}): void {
-  if (!isGoogleMeetAgentToolActionUnsupportedOnHost(params)) {
+  if (transport !== "chrome" || (mode !== "agent" && mode !== "bidi")) {
     return;
   }
   throw new Error(
@@ -187,37 +146,25 @@ export function assertGoogleMeetAgentToolActionSupported(params: {
   );
 }
 
-function readGatewayErrorDetails(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return (err as { details?: unknown }).details;
-}
-
 export async function callGoogleMeetGatewayFromTool(params: {
   config: GoogleMeetConfig;
-  action: GoogleMeetGatewayToolAction;
+  action: keyof typeof googleMeetGatewayMethods;
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
+  const method = googleMeetGatewayMethods[params.action];
   try {
     if (params.runtime) {
-      return await params.runtime.gateway.request(
-        googleMeetGatewayMethodForToolAction(params.action),
-        params.raw,
-        {
-          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
-          scopes: ["operator.admin"],
-        },
-      );
+      return await params.runtime.gateway.request(method, params.raw, {
+        timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+        scopes: ["operator.admin"],
+      });
     }
     // Standalone agent workers connect as this bundled plugin, not as the
     // model session; its Gateway methods remain the only exposed actions.
-    const callGatewayFromCli =
-      googleMeetToolDeps.callGatewayFromCli ??
-      (await loadGoogleMeetGatewayRuntimeModule()).callGatewayFromCli;
+    const { callGatewayFromCli } = await loadGoogleMeetGatewayRuntimeModule();
     return await callGatewayFromCli(
-      googleMeetGatewayMethodForToolAction(params.action),
+      method,
       {
         json: true,
         timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
@@ -226,7 +173,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       { progress: false, scopes: ["operator.admin"] },
     );
   } catch (err) {
-    const details = readGatewayErrorDetails(err);
+    const details = err && typeof err === "object" && "details" in err ? err.details : undefined;
     if (details && typeof details === "object") {
       return details;
     }
@@ -287,7 +234,6 @@ export function createGoogleMeetRuntimeAccessor(params: {
 
 export function createLazyGoogleMeetNodeInvokePolicy(
   config: GoogleMeetConfig,
-  loadPolicy: LoadGoogleMeetNodeInvokePolicy = loadGoogleMeetNodeInvokePolicy,
 ): OpenClawPluginNodeInvokePolicy {
   let policyPromise: Promise<OpenClawPluginNodeInvokePolicy> | undefined;
   return {
@@ -296,7 +242,9 @@ export function createLazyGoogleMeetNodeInvokePolicy(
     async handle(ctx) {
       let policy: OpenClawPluginNodeInvokePolicy;
       try {
-        policyPromise ??= loadPolicy(config);
+        policyPromise ??= loadGoogleMeetNodeInvokePolicyModule().then((module) =>
+          module.createGoogleMeetChromeNodeInvokePolicy(config),
+        );
         policy = await policyPromise;
       } catch (error) {
         return {
@@ -312,7 +260,7 @@ export function createLazyGoogleMeetNodeInvokePolicy(
 }
 
 export function formatGoogleMeetGatewayError(err: unknown) {
-  return isGoogleMeetBrowserManualActionError(err)
+  return err instanceof GoogleMeetBrowserManualActionError
     ? err.payload
     : { error: formatErrorMessage(err) };
 }
@@ -329,12 +277,3 @@ export function sendGoogleMeetGatewayError(
     details: payload,
   });
 }
-
-export const testing = {
-  setCallGatewayFromCliForTests(next?: CallGatewayFromCli): void {
-    googleMeetToolDeps.callGatewayFromCli = next;
-  },
-  setPlatformForTests(next?: () => NodeJS.Platform): void {
-    googleMeetToolDeps.platform = next ?? (() => process.platform);
-  },
-};

@@ -7,14 +7,20 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
       "$ARTIFACT_DIR"/update-noop.{json,err} \
       "$ARTIFACT_DIR/candidate-cohort.json" \
+      "$ARTIFACT_DIR"/native-assignment-{eligibility,baseline,first-hop,proof,ready,phase}.json \
+      "$ARTIFACT_DIR"/native-assignment-inventory-{after-first-hop,before-recovery,after-recovery,live-final}.json \
+      "$ARTIFACT_DIR/native-assignment-messages.jsonl" "$ARTIFACT_DIR/native-assignment-server.log" \
+      "$ARTIFACT_DIR"/native-recover{,-wait}.{out,err} \
       "$ARTIFACT_DIR/backup-rollback.json" \
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json \
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json.err \
       "$ARTIFACT_DIR/legacy-operator-restored-index.json" \
+      "$ARTIFACT_DIR/legacy-operator-pending-delivery.json" \
+      "$ARTIFACT_DIR/legacy-operator-pending-delivery-before-start.json" \
       "$ARTIFACT_DIR"/restored-index-{post-update,candidate-import,rollback}.json \
       "$ARTIFACT_DIR"/legacy-operator-baseline-turn.{out,err} \
       "$ARTIFACT_DIR"/legacy-operator-candidate-turn.{out,err} \
-      "$ARTIFACT_DIR"/legacy-operator-run-survivor-{default,ops}-owner.{out,err} \
+      "$ARTIFACT_DIR"/legacy-operator-{add,run}-survivor-{default,ops}-owner.{out,err} \
       "$ARTIFACT_DIR"/legacy-operator-{post-update,candidate}-transcript-{0,1}{,-earlier}.{out,err} \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway.log" \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway-convergence-refusal.log" \

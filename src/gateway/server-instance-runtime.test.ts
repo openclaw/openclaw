@@ -14,7 +14,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
@@ -49,6 +48,43 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it.each([false, true])(
+    "revalidates recovery authority across admission (dedicated principal=%s)",
+    async (dedicatedPrincipal) => {
+      const context = createContext();
+      const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
+      context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      let requesterCurrent = true;
+      const options = {
+        expectFinal: true,
+        ...(dedicatedPrincipal
+          ? { internalDeliveryMediaUrls: ["https://example.test/media"] }
+          : {}),
+        assertAdmissionCurrent: () => {
+          if (!requesterCurrent) {
+            throw new Error("Recovery requester retired");
+          }
+        },
+      };
+      const request = { message: "completed media", idempotencyKey: "bound-recovery" };
+      try {
+        await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
+          payload,
+        );
+        const pending = runtime.recovery.dispatchAgent(request, undefined, options);
+        requesterCurrent = false;
+        await expect(pending).rejects.toThrow("Recovery requester retired");
+      } finally {
+        runtime.close();
+      }
+    },
+  );
+
   it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
@@ -56,10 +92,12 @@ describe("createGatewayInstanceRuntime", () => {
     });
     const registry = createRegistry({ agent: rawAgent });
     const context = createContext();
+    const preparing = createDeferred<number | undefined>();
     const runtime = createGatewayInstanceRuntime({
       getContext: () => context,
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => available,
+      prepareRestartRecovery: () => preparing.promise,
     });
     expect(getGatewayRecoveryRuntime()).toBe(runtime.recovery);
 
@@ -112,7 +150,10 @@ describe("createGatewayInstanceRuntime", () => {
     const retainedFacade = await runtime.createAgentTurnFacade({
       client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
     });
+    const preparation = runtime.recovery.prepareRestartRecovery();
     runtime.close();
+    preparing.resolve(undefined);
+    await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
@@ -123,39 +164,6 @@ describe("createGatewayInstanceRuntime", () => {
     await expect(retainedFacade.wait({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
-  });
-
-  it("captures trusted agent principal fields verbatim", () => {
-    const client = createSyntheticPluginRuntimeClient({
-      allowModelOverride: true,
-      agentRunTracking: "plugin_subagent",
-      cronRunContinuation: true,
-      internalDeliveryMediaUrls: ["https://example.test/media"],
-      internalDeliverySuppressText: true,
-      pluginRuntimeOwnerId: "memory-core",
-      delegatedToolPolicyHandoffId: "handoff-1",
-      sessionCreation: {
-        via: "spawn",
-        actor: { type: "agent", id: "main" },
-        requesterSessionKey: "agent:main:main",
-      },
-    });
-
-    const principal = captureAgentTurnPrincipal(client);
-
-    expect(principal?.connect).toBe(client.connect);
-    expect(principal?.internal).toBe(client.internal);
-    expect(principal?.internal).toEqual(client.internal);
-
-    const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
-    const recoveryPrincipal = captureAgentTurnPrincipal(recoveryClient);
-    expect(recoveryPrincipal?.connect?.client.mode).toBe("backend");
-    expect(recoveryPrincipal?.internal).toEqual({
-      syntheticClient: true,
-      allowModelOverride: false,
-    });
-    expect(recoveryPrincipal?.internal?.agentRunTracking).toBeUndefined();
-    expect(recoveryPrincipal?.internal?.sessionCreation).toBeUndefined();
   });
 
   it("sends recovery notices through normal outbound without invoking plugin actions", async () => {

@@ -1,18 +1,19 @@
 // Tests reset hook emission and cleanup around reset commands.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext } from "./commands-context.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-soft-reset-tombstone-");
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const routeReplyMock = vi.hoisted(() =>
@@ -68,7 +69,8 @@ vi.mock("./commands-handlers.runtime.js", () => ({
   loadCommandHandlers: () => [],
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
   routeReply: (params: unknown) => routeReplyMock(params),
 }));
 
@@ -258,6 +260,7 @@ describe("handleCommands reset hooks", () => {
       ok: true,
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       sessionId: "session-after-acp-reset",
+      lifecycleRevision: "after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
     resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
@@ -301,6 +304,7 @@ describe("handleCommands reset hooks", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       sessionId: "session-after-acp-reset",
+      lifecycleRevision: "after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
   });
@@ -469,7 +473,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("marks soft reset turns and emits reset hooks", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-soft-reset-tombstone-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const params = buildResetParams("/reset soft", resetCommandConfig);
     const sessionEntry: NonNullable<HandleCommandsParams["sessionEntry"]> = {
@@ -490,27 +494,23 @@ describe("handleCommands reset hooks", () => {
     params.storePath = storePath;
     await replaceSessionEntry({ sessionKey: params.sessionKey, storePath }, sessionEntry);
 
-    try {
-      const result = await maybeHandleResetCommand(params);
+    const result = await maybeHandleResetCommand(params);
 
-      expect(result).toBeNull();
-      const event = firstHookEvent();
-      expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
-      const context = requireRecord(event.context, "hook context");
-      expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
-      expect(params.command.resetHookTriggered).toBe(true);
-      expect(params.command.softResetTriggered).toBe(true);
-      expect(params.command.softResetTail).toBe("");
-      expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
-      expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
-      expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
-      expect(
-        loadSessionEntry({ sessionKey: params.sessionKey, storePath })?.updatedAt,
-      ).toBeGreaterThan(0);
-      expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(result).toBeNull();
+    const event = firstHookEvent();
+    expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
+    const context = requireRecord(event.context, "hook context");
+    expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
+    expect(params.command.resetHookTriggered).toBe(true);
+    expect(params.command.softResetTriggered).toBe(true);
+    expect(params.command.softResetTail).toBe("");
+    expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
+    expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
+    expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
+    expect(
+      loadSessionEntry({ sessionKey: params.sessionKey, storePath })?.updatedAt,
+    ).toBeGreaterThan(0);
+    expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
   });
 
   it.each<{

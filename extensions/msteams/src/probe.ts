@@ -9,7 +9,6 @@ import { loadMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import { withMSTeamsRequestDeadline } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type ProbeMSTeamsResult = BaseProbeResult<string> & {
@@ -54,11 +53,7 @@ function readStringArray(value: unknown): string[] | undefined {
 }
 
 function readScopes(value: unknown): string[] | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const out = normalizeStringEntries(value.split(/\s+/));
-  return out.length > 0 ? out : undefined;
+  return typeof value === "string" ? readStringArray(value.split(/\s+/)) : undefined;
 }
 
 export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsResult> {
@@ -76,7 +71,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     // Token-manager calls can outlive the SDK HTTP timeout, so keep both probe
     // phases bounded by the shared Teams request deadline.
     const botTokenValue = await withMSTeamsRequestDeadline({
-      label: "MS Teams Bot Framework probe token",
+      label: "MS Teams Bot Framework token check",
       work: () => tokenProvider.getAccessToken("https://api.botframework.com"),
     });
     if (!botTokenValue) {
@@ -85,11 +80,10 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
 
     let graph: ProbeMSTeamsResult["graph"];
     try {
-      const graphTokenValue = await withMSTeamsRequestDeadline({
-        label: "MS Teams Graph probe token",
+      const accessToken = await withMSTeamsRequestDeadline({
+        label: "MS Teams Graph token check",
         work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
       });
-      const accessToken = readAccessToken(graphTokenValue);
       const payload = accessToken ? decodeJwtPayload(accessToken) : null;
       graph = {
         ok: true,

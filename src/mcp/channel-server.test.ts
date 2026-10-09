@@ -72,15 +72,12 @@ function attachReadyGateway(
 ) {
   const bridgeInternals = bridge as unknown as {
     gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-    readySettled: boolean;
-    resolveReady: () => void;
   };
   bridgeInternals.gateway = {
     request: gatewayRequest,
     stopAndWait: async () => {},
   };
-  bridgeInternals.readySettled = true;
-  bridgeInternals.resolveReady();
+  vi.spyOn(bridge, "waitUntilReady").mockResolvedValue();
 }
 
 async function flushMcpNotifications() {

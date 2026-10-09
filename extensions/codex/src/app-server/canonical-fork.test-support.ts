@@ -8,13 +8,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionUpstreamLink } from "openclaw/plugin-sdk/session-catalog";
+import { upsertSessionUpstreamLinkAsync } from "openclaw/plugin-sdk/session-catalog";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 import { continueLocalCodexSession } from "../session-catalog-adoption.js";
 import { createCodexSessionCatalogControl } from "../session-catalog-control.js";
-import { codexSessionCatalogRuntime } from "../session-catalog.js";
+import { registerCodexSessionCatalog } from "../session-catalog.js";
 import {
   codexUpstreamContinueResult,
   type CodexUpstreamBaseline,
@@ -40,9 +40,9 @@ import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlit
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resetSharedCodexAppServerClientForTests,
   resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -125,7 +125,7 @@ export async function createCanonicalForkFixture(params: {
   );
   const captured = createCapturedPluginRegistration({ id: "codex", config });
   const api = { ...captured.api, runtime };
-  codexSessionCatalogRuntime.register({
+  registerCodexSessionCatalog({
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     api,
     bindingStore,
@@ -272,8 +272,11 @@ export async function createCanonicalForkFixture(params: {
             buildAttemptParams: () => attempt,
             pluginConfig,
             computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
-            startupAuthProfileId: null,
-            startupAuthBindingFingerprint: undefined,
+            clientOptions: {
+              authProfileId: null,
+              authBindingFingerprint: undefined,
+              authRequirement: undefined,
+            },
             startupAuthAccountCacheKey: undefined,
             startupEnvApiKeyCacheKey: undefined,
             sessionAgentId: "main",
@@ -391,7 +394,7 @@ export async function createCanonicalForkFixture(params: {
       );
       // Seed the catalog response through the same canonical link store as its Gateway caller.
       if (
-        !upsertSessionUpstreamLink({
+        !(await upsertSessionUpstreamLinkAsync({
           sessionKey: result.sessionKey,
           agentId: "main",
           catalogId: "codex",
@@ -400,7 +403,7 @@ export async function createCanonicalForkFixture(params: {
           upstreamKind: upstream.kind,
           upstreamRef: upstream.ref,
           marker: upstream.marker,
-        })
+        }))
       ) {
         throw new Error("Failed to seed catalog upstream link");
       }

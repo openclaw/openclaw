@@ -171,7 +171,14 @@ describe("shared chat content column", () => {
                 '[data-chat-row-key="own"] .chat-sender-name',
               );
               expect(ownName).not.toBeNull();
-              expect(Math.abs(edge(ownName!) - boundary)).toBeLessThanOrEqual(1);
+              // Mobile actions share the identity line after the name; the footer,
+              // not the name alone, owns the bubble edge.
+              const ownFooter = container.querySelector(
+                '[data-chat-row-key="own"] > .chat-group-footer',
+              )!;
+              expect(
+                Math.abs(edge(width <= 768 ? ownFooter : ownName!) - boundary),
+              ).toBeLessThanOrEqual(1);
               const context = `${width}/${theme}/${direct ? "direct" : "shared"}/${direction}/${mode}`;
               const leftGroups = container.querySelectorAll(
                 '.chat-group:not([data-chat-row-key="own"])',

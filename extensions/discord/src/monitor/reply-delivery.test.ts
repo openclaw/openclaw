@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
@@ -86,7 +85,6 @@ function objectArgAt(
 }
 
 describe("deliverDiscordReply", () => {
-  const runtime = {} as RuntimeEnv;
   const cfg = {
     channels: { discord: { token: "test-token" } },
   } as OpenClawConfig;
@@ -94,7 +92,6 @@ describe("deliverDiscordReply", () => {
   const deliveryDefaults = {
     target: "channel:101",
     token: "token",
-    runtime,
     cfg,
     textLimit: 2000,
     kind: "final" as const,

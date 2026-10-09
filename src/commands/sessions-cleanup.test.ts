@@ -1,7 +1,8 @@
 // Sessions cleanup tests cover stale session cleanup and runtime output.
 import { spawnSync } from "node:child_process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -32,10 +33,8 @@ vi.mock("../config/sessions.js", async (importOriginal) => ({
   runSessionsCleanup: mocks.runSessionsCleanup,
 }));
 
-vi.mock("../gateway/call.js", async () => ({
-  ...(await vi.importActual<typeof import("../gateway/transport-error.js")>(
-    "../gateway/transport-error.js",
-  )),
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: mocks.callGateway,
 }));
 
@@ -127,6 +126,7 @@ function cleanupPreview(
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     process.exitCode = undefined;
     mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
@@ -139,6 +139,10 @@ describe("sessionsCleanupCommand", () => {
       previewResults: [],
       appliedSummaries: [],
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("keeps an empty explicit store local instead of delegating default cleanup to the gateway", async () => {
@@ -242,6 +246,13 @@ describe("sessionsCleanupCommand", () => {
     { label: "established WebSocket close", error: gatewayTransportError("closed", 1006) },
     { label: "authentication rejection", error: new Error("unauthorized") },
     {
+      label: "missing local credentials",
+      error: new GatewayCredentialsRequiredError({
+        method: "sessions.cleanup",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
+    {
       label: "malformed transport failure",
       error: Object.assign(new Error("malformed transport failure"), {
         name: "GatewayTransportError",
@@ -259,8 +270,42 @@ describe("sessionsCleanupCommand", () => {
     expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
   });
 
+  it.each(["remote config", "environment override"])(
+    "surfaces a refused loopback tunnel selected by %s without cleaning local sessions",
+    async (source) => {
+      const url = "ws://127.0.0.1:18789";
+      if (source === "remote config") {
+        mocks.loadConfig.mockReturnValue({
+          gateway: { mode: "remote", remote: { url } },
+          session: { store: "/cfg/sessions.json" },
+        });
+      } else {
+        vi.stubEnv("OPENCLAW_GATEWAY_URL", url);
+      }
+      const error = new GatewayTransportError({
+        kind: "closed",
+        reason: "connect ECONNREFUSED 127.0.0.1:18789",
+        message: "Gateway not reachable (ECONNREFUSED)",
+        connectionDetails: { url, urlSource: source, message: "test tunnel" },
+      });
+      mocks.callGateway.mockRejectedValue(error);
+
+      const { runtime, logs } = makeRuntime();
+      await expect(
+        sessionsCleanupCommand({ enforce: true, fixMissing: true, json: true }, runtime),
+      ).rejects.toBe(error);
+
+      expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
+      expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
+      expect(logs).toEqual([]);
+    },
+  );
+
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
     const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
+    mocks.loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+    });
     mocks.callGateway.mockResolvedValue(gatewayCleanupResult(remoteStorePath));
 
     const { runtime, logs } = makeRuntime();

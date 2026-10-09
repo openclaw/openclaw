@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const saveMediaBufferMock = vi.hoisted(() =>
   vi.fn(async (_buffer: Buffer, mime?: string, _subdir?: string) => ({
@@ -58,7 +59,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
-import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 
 const PNG_1x1 =
@@ -228,6 +229,8 @@ describe("composer attachment origin", () => {
         "inbound",
         expect.any(Number),
         fileName,
+        undefined,
+        { assertCommitAllowed: undefined },
       );
       expect(parsed.message).toBe(
         `Read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
@@ -269,35 +272,49 @@ describe("composer attachment origin", () => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
+  it("does not turn a rejected upload commit into a best-effort omission after policy re-enables", async () => {
+    const denied = new SessionMutationAuthorizationChangedError({
+      code: "FORBIDDEN",
+      message: "File and image uploads are disabled",
+      details: { code: "UPLOADS_DISABLED" },
+    });
+    saveMediaBufferMock.mockRejectedValueOnce(denied);
+    const warn = vi.fn();
+    await expect(
+      persistInboundImagesForTranscript({
+        images: [{ type: "image", data: PNG_1x1, mimeType: "image/png", sourceIndex: 0 }],
+        offloadedRefs: [],
+        log: { warn },
+        logContext: "policy-test",
+        assertCurrent: () => {},
+      }),
+    ).rejects.toBe(denied);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("preserves original mixed-media order in claim-only transcript facts", async () => {
+    const fileName = "bands café 雪 🦞.png";
+    saveMediaBufferMock.mockResolvedValueOnce({
+      id: "video",
+      path: "/media/inbound/video.mp4",
+      size: 100,
+      contentType: "video/mp4",
+    });
+    const parsed = await parseMessageWithAttachments("Compare these", [
+      { fileName: "video.mp4", mimeType: "video/mp4", content: GENERIC_MP4, durationMs: 2_000 },
+      pngAttachment({ fileName }),
+    ]);
     saveMediaBufferMock.mockResolvedValueOnce({
       id: "inline",
-      path: "/media/inbound/inline.jpg",
+      path: "/media/inbound/inline.png",
       size: 5,
-      contentType: "image/jpeg",
+      contentType: "image/png",
     });
 
     const result = await persistInboundImagesForTranscript({
-      images: [
-        {
-          type: "image",
-          data: "aGVsbG8=",
-          mimeType: "image/jpeg",
-          sourceIndex: 1,
-        },
-      ],
+      images: parsed.images,
       offloadedRefs: [
-        {
-          mediaRef: "https://signed.example/private-video",
-          id: "video",
-          path: "/media/inbound/video.mp4",
-          kind: "video",
-          mimeType: "video/mp4",
-          label: "video.mp4",
-          sizeBytes: 100,
-          durationMs: 2_000,
-          sourceIndex: 0,
-        },
+        { ...parsed.offloadedRefs[0]!, mediaRef: "https://signed.example/private-video" },
       ],
       log: { warn: vi.fn() },
       logContext: "test",
@@ -310,16 +327,34 @@ describe("persistInboundImagesForTranscript", () => {
         contentType: "video/mp4",
         kind: "video",
         fileName: "video.mp4",
-        sizeBytes: 100,
+        sizeBytes: Buffer.from(GENERIC_MP4, "base64").length,
         durationMs: 2_000,
         hydrationSuppressed: true,
       },
       {
         url: "media://inbound/inline",
-        contentType: "image/jpeg",
+        contentType: "image/png",
         kind: "image",
+        fileName,
         sizeBytes: 5,
       },
+    ]);
+    expect(saveMediaBufferMock).toHaveBeenLastCalledWith(
+      Buffer.from(PNG_1x1, "base64"),
+      "image/png",
+      "inbound",
+      undefined,
+      fileName,
+      undefined,
+      { assertCommitAllowed: undefined },
+    );
+    const persisted = buildPersistedUserTurnMessage({
+      text: parsed.message,
+      media: result.entries.map((entry) => entry.fact),
+    });
+    expect(readPersistedMediaFacts(persisted)?.map((fact) => fact.fileName)).toEqual([
+      "video.mp4",
+      fileName,
     ]);
     expect(result.omission).toBe("none");
     const durable = JSON.stringify(result.entries.map((entry) => entry.fact));

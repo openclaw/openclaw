@@ -5,6 +5,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
@@ -47,6 +48,7 @@ import { talkClientHandlers } from "./client.js";
 const nativeUpstream = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
   const sockets: NativeSocket[] = [];
+  const events = new EventEmitter<{ socket: [] }>();
   class NativeSocket extends EventEmitter {
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
@@ -56,6 +58,7 @@ const nativeUpstream = await vi.hoisted(async () => {
     constructor(readonly url: string) {
       super();
       sockets.push(this);
+      events.emit("socket");
     }
 
     open(): void {
@@ -89,6 +92,7 @@ const nativeUpstream = await vi.hoisted(async () => {
   return {
     NativeSocket,
     sockets,
+    events,
     fetch: vi.fn<typeof fetch>(),
     runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
     authConfigured: vi.fn(
@@ -372,18 +376,32 @@ export async function connectNativeSession(
   expect(result.clientControl).toEqual(negotiated ? { owner: "gateway" } : undefined);
   expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
-  const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
-  await vi.waitFor(() => expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1));
-  await vi.waitFor(() => expect(upstream.sockets).toHaveLength(socketIndex + 1));
-  expect(response.end).not.toHaveBeenCalled();
-  const socket = upstream.sockets[socketIndex];
-  if (!socket) {
-    throw new Error("Missing native sideband");
+  const socketCreated = createDeferredCore();
+  upstream.events.once("socket", socketCreated.resolve);
+  try {
+    const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
+    await Promise.race([
+      socketCreated.promise,
+      handling.then(() => {
+        throw new Error(
+          `Native offer completed before sideband readiness (HTTP ${response.res.statusCode})`,
+        );
+      }),
+    ]);
+    expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
+    expect(upstream.sockets).toHaveLength(socketIndex + 1);
+    expect(response.end).not.toHaveBeenCalled();
+    const socket = upstream.sockets[socketIndex];
+    if (!socket) {
+      throw new Error("Missing native sideband");
+    }
+    socket.open();
+    await handling;
+    expect(response.res.statusCode).toBe(200);
+    return { result, socket };
+  } finally {
+    upstream.events.removeListener("socket", socketCreated.resolve);
   }
-  socket.open();
-  await handling;
-  expect(response.res.statusCode).toBe(200);
-  return { result, socket };
 }
 
 export function nativeDelegation(id: string, text: string) {
@@ -491,6 +509,7 @@ export async function withParkedNativeTask(
                   hasDeliveredSourceReply: () => false,
                   markSourceReplyDelivered: () => {},
                   builtinToolNames: new Set(),
+                  sourceReplyCapableToolNames: new Set(),
                   coreBuiltinToolNames: new Set(),
                   replaySafeToolNames: new Set(),
                   codeModeExecToolNames: new Set(),
@@ -503,7 +522,7 @@ export async function withParkedNativeTask(
                   sessionId: params.sessionId,
                   runId: params.runId,
                 }),
-                nestedToolActivities: [],
+                nestedToolActivityState: createAttemptNestedToolActivityState(),
                 isReplaySafeTool: () => false,
                 runAbortController,
                 abortRun: abortOwned,

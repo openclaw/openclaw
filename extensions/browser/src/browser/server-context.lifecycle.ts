@@ -412,9 +412,9 @@ async function cleanupProfileResources(params: {
 
   if (actor.cleanupChromeMcp.size > 0) {
     try {
-      const { closeChromeMcpSession } = await getChromeMcpModule();
+      const chromeMcp = await getChromeMcpModule.peek();
       for (const profileName of actor.cleanupChromeMcp) {
-        stopped = (await closeChromeMcpSession(profileName)) || stopped;
+        stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
         actor.cleanupChromeMcp.delete(profileName);
       }
     } catch (err) {
@@ -503,19 +503,22 @@ export function beginProfileTransition(
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;
-  if (params.closeRelay) {
-    const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
+  const captureRelay = () => {
+    const relay =
+      params.closeRelay && params.state.extensionRelays?.get(params.runtime.profile.name);
     if (relay) {
       actor.cleanupRelays.add(relay);
     }
-  }
+  };
+  captureRelay();
 
   // Start closing MCP before waiting for a start, lease, or older transition.
   const eagerMcpClose =
     closeSharedAdapters && usesChromeMcp
-      ? getChromeMcpModule()
-          .then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
-          .catch(() => false)
+      ? (getChromeMcpModule
+          .peek()
+          ?.then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
+          .catch(() => false) ?? null)
       : null;
   const transitionGeneration = actor.generation;
   let cleanupCompleted = false;
@@ -525,12 +528,7 @@ export function beginProfileTransition(
       if (shouldClosePlaywright && hadPendingWork) {
         capturePlaywrightRetirement(actor, ownerProfile.cdpUrl);
       }
-      if (params.closeRelay) {
-        const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
-        if (relay) {
-          actor.cleanupRelays.add(relay);
-        }
-      }
+      captureRelay();
       const result = await cleanupProfileResources({
         state: params.state,
         runtime: params.runtime,

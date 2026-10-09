@@ -41,6 +41,21 @@ export function deleteDurableApproval(
   );
 }
 
+export function corruptDurableApprovalPresentation(
+  databaseOptions: OpenClawStateDatabaseOptions,
+  id: string,
+): void {
+  const database = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .updateTable("operator_approvals")
+      .set({ presentation_json: "{}" })
+      .where("approval_id", "=", id),
+  );
+}
+
 export function createClient(params: {
   scopes?: string[];
   deviceId?: string;
@@ -96,7 +111,10 @@ type ApprovalInvocationParams = {
     | "approval.resolve"
     | "exec.approval.get"
     | "exec.approval.list"
+    | "exec.approval.grants.list"
+    | "exec.approval.grants.revoke"
     | "exec.approval.resolve"
+    | "exec.approval.waitDecision"
     | "plugin.approval.list"
     | "plugin.approval.resolve";
   body: Record<string, unknown>;

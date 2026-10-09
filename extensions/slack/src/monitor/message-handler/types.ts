@@ -9,6 +9,15 @@ import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 
+export type SlackMessageSourceOptions = {
+  source: "message" | "app_mention";
+  wasMentioned?: boolean;
+  relayIdentity?: SlackSendIdentity;
+  senderAuthentication?: "verified" | "asserted";
+  /** Non-serializable listener scope for a validated enterprise event. */
+  eventScope?: SlackEventScope;
+};
+
 export type PreparedSlackMessage = {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -21,17 +30,14 @@ export type PreparedSlackMessage = {
   replyTarget: string;
   ctxPayload: FinalizedMsgContext;
   turn: {
-    storePath: string;
     record: InboundReplyRecordOptions;
   };
   replyToMode: "off" | "first" | "all" | "batched";
   forcedReplyThreadTs?: string;
   sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
-  requireMention: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
-  preview: string;
   ackReactionMessageTs?: string;
   ackReactionValue: string;
   ackReactionPromise: Promise<boolean> | null;

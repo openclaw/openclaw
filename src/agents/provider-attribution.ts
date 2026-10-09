@@ -32,7 +32,6 @@ type ProviderAttributionHook =
   | "user-agent-extra"
   | "custom-user-agent";
 
-/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -45,12 +44,9 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
-/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
-/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -71,6 +67,7 @@ export type ProviderEndpointClass =
   | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
+  | "vercel-ai-gateway"
   | "xai-native"
   | "xiaomi-native"
   | "zai-native"
@@ -80,14 +77,12 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
-/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
-/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
@@ -113,16 +108,13 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
-/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: unknown;
 };
 
-/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
-/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -148,8 +140,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
-const OPENROUTER_ATTRIBUTION_CATEGORIES =
-  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
+// OpenRouter honors at most two recognized categories per request and silently drops the rest.
+const OPENROUTER_ATTRIBUTION_CATEGORIES = "personal-agent,cli-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -167,11 +159,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
   const candidate = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
     ? `https://${trimmed}`
     : trimmed;
-  try {
-    return normalizeOptionalLowercaseString(new URL(candidate).hostname);
-  } catch {
-    return undefined;
-  }
+  return normalizeOptionalLowercaseString(URL.parse(candidate)?.hostname);
 }
 
 type ProviderMetadataOwners = {
@@ -287,19 +275,9 @@ function resolveKnownProviderFamily(
   if (manifestFamily) {
     return manifestFamily;
   }
-  switch (provider) {
-    case "openai":
-    case "azure-openai":
-    case "azure-openai-responses":
-      return "openai-family";
-    default:
-      return provider || "unknown";
-  }
-}
-
-function isOpenAIResponsesApi(api: string | null | undefined): boolean {
-  const normalizedApi = normalizeOptionalLowercaseString(api);
-  return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
+  return provider && OPENAI_RESPONSES_PROVIDERS.has(provider)
+    ? "openai-family"
+    : provider || "unknown";
 }
 
 function resolveProviderAttributionPolicy(
@@ -322,7 +300,8 @@ function resolveProviderAttributionPolicy(
       return {
         ...policy,
         docsUrl: "https://openrouter.ai/docs/app-attribution",
-        reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
+        reviewNote:
+          "Documented app attribution headers. Applied on OpenRouter endpoints regardless of configured provider id.",
         headers: {
           "HTTP-Referer": "https://openclaw.ai",
           "X-OpenRouter-Title": policy.product,
@@ -343,6 +322,25 @@ function resolveProviderAttributionPolicy(
         reviewNote:
           "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
         headers: { "x-goog-api-client": userAgent },
+      };
+    case "vercel-ai-gateway":
+      return {
+        ...policy,
+        docsUrl: "https://vercel.com/docs/ai-gateway/ecosystem/app-attribution",
+        reviewNote:
+          'Vercel documents: "AI Gateway reads two request headers when present: http-referer … x-title". Applied on ai-gateway.vercel.sh regardless of configured provider id.',
+        headers: {
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-Title": policy.product,
+        },
+      };
+    case "perplexity":
+      return {
+        ...policy,
+        docsUrl: "https://docs.perplexity.ai/docs/getting-started/integrations/opencode",
+        reviewNote:
+          'Perplexity documents integrations identifying themselves with "X-Pplx-Integration": "<client>/<version>". Applied only on the direct Perplexity API.',
+        headers: { "X-Pplx-Integration": userAgent },
       };
     case "openai":
     case "xai":
@@ -406,25 +404,16 @@ export function resolveProviderRequestPolicy(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "azure-openai";
-  const usesOpenAIPublicAttributionHost = endpointClass === "openai-public";
-  const usesOpenAICodexAttributionHost = endpointClass === "openai";
   const usesVerifiedOpenAIAttributionHost =
-    usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
-  const usesXaiNativeAttributionHost = endpointClass === "xai-native";
+    endpointClass === "openai-public" || endpointClass === "openai";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
   if (provider === "openai" && usesVerifiedOpenAIAttributionHost) {
     attributionProvider = "openai";
-  } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented, but only apply it to known
-    // OpenRouter endpoints or the default (unset) baseUrl path.
-    if (endpointClass === "openrouter" || endpointClass === "default") {
-      attributionProvider = "openrouter";
-    }
   } else if (provider === "xai" && policy?.enabledByDefault) {
     // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
-    if (usesXaiNativeAttributionHost || endpointClass === "default") {
+    if (endpointClass === "xai-native" || endpointClass === "default") {
       attributionProvider = "xai";
     }
   } else if (
@@ -435,6 +424,26 @@ export function resolveProviderRequestPolicy(
     // The documented identification contract belongs to Go's native endpoint.
     // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
     attributionProvider = "opencode-go";
+  }
+  // OpenRouter and Vercel AI Gateway attribution follows the endpoint, so custom provider
+  // ids pointed at their hosts are attributed too; custom proxy baseUrls are withheld.
+  if (
+    !attributionProvider &&
+    (endpointClass === "openrouter" || (provider === "openrouter" && endpointClass === "default"))
+  ) {
+    attributionProvider = "openrouter";
+  }
+  if (
+    !attributionProvider &&
+    (endpointClass === "vercel-ai-gateway" ||
+      (provider === "vercel-ai-gateway" && endpointClass === "default"))
+  ) {
+    attributionProvider = "vercel-ai-gateway";
+  }
+  // Perplexity's API is only reached through its own plugin, which resolves the direct
+  // host as the provider default; any configured baseUrl is a proxy.
+  if (!attributionProvider && provider === "perplexity" && endpointClass === "default") {
+    attributionProvider = "perplexity";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
@@ -513,7 +522,7 @@ export function resolveProviderRequestCapabilities(
   });
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
-  const isResponsesApi = isOpenAIResponsesApi(api);
+  const isResponsesApi = api !== undefined && OPENAI_RESPONSES_APIS.has(api);
   const promptCacheKeySupport = readCompatBoolean(input.compat, "supportsPromptCacheKey");
   // Default strip behavior (proxy-like endpoints with responses APIs) is
   // preserved as a safety net for providers that reject prompt_cache_key,
@@ -576,7 +585,7 @@ export function resolveProviderRequestCapabilities(
 
 function describeProviderRequestRoutingPolicy(
   policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "sdk-hook-only" | "none" {
+): "hidden" | "documented" | "none" {
   if (!policy.attributionProvider) {
     return "none";
   }
@@ -585,8 +594,6 @@ function describeProviderRequestRoutingPolicy(
       return "hidden";
     case "vendor-documented":
       return "documented";
-    case "vendor-sdk-hook-only":
-      return "sdk-hook-only";
     default:
       return "none";
   }
@@ -595,19 +602,17 @@ function describeProviderRequestRoutingPolicy(
 function describeProviderRequestRouteClass(
   policy: ProviderRequestPolicyResolution,
 ): "default" | "native" | "proxy-like" | "local" | "invalid" {
-  if (policy.endpointClass === "default") {
-    return "default";
+  switch (policy.endpointClass) {
+    case "default":
+    case "invalid":
+    case "local":
+      return policy.endpointClass;
+    case "custom":
+    case "openrouter":
+      return "proxy-like";
+    default:
+      return "native";
   }
-  if (policy.endpointClass === "invalid") {
-    return "invalid";
-  }
-  if (policy.endpointClass === "local") {
-    return "local";
-  }
-  if (policy.endpointClass === "custom" || policy.endpointClass === "openrouter") {
-    return "proxy-like";
-  }
-  return "native";
 }
 
 export function describeProviderRequestRoutingSummary(

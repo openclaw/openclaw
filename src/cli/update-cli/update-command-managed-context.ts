@@ -2,19 +2,19 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
   createManagedUpdateRequesterContinuationAuthority,
   UpdateRequesterRevokedError,
 } from "../../infra/update-requester-authority.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   captureTargetDatabaseSchemaContext,
+  updateConfigSource,
   isCandidateAdmissionContextCovered,
   type TargetDatabaseSchemaContextOptions,
 } from "./schema-preflight.js";
-import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
@@ -23,16 +23,14 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 
-export type OwnedManagedUpdateContext = {
-  env: NodeJS.ProcessEnv;
-  configSnapshot: ConfigFileSnapshot;
-  pluginInstallRecords: Record<string, PluginInstallRecord>;
-};
+export type OwnedManagedUpdateContext = NonNullable<
+  Awaited<ReturnType<typeof captureOwnedManagedUpdateContext>>
+>;
 
 /** Resolve the service's selectors without reading or validating its configuration. */
 export function resolveOwnedManagedUpdatePreflightEnv(params: {
   stopState: PreManagedServiceStop | undefined;
-  processEnv: NodeJS.ProcessEnv;
+  processEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }) {
   const state = params.stopState;
@@ -69,19 +67,9 @@ export async function revalidateUpdateDatabaseContext(
     configValidation: expected.configValidation,
   });
   const before = expected.configSnapshot;
-  const after = current.configSnapshot;
-  if (
-    before.path !== after.path ||
-    before.exists !== after.exists ||
-    before.raw !== after.raw ||
-    before.hash !== after.hash ||
-    !isDeepStrictEqual(before.includedPaths ?? [], after.includedPaths ?? []) ||
-    !isDeepStrictEqual(before.includeProvenance ?? [], after.includeProvenance ?? []) ||
-    !isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
-  ) {
-    throw new UpdatePreMutationError(
-      "database-schema-preflight",
-      `Update refused: configuration changed during database admission at ${before.path}. Retry against the current configuration.`,
+  if (!isDeepStrictEqual(updateConfigSource(before), updateConfigSource(current.configSnapshot))) {
+    defaultRuntime.error(
+      `Warning: Configuration changed during database admission at ${before.path}; continuing with the current configuration.`,
     );
   }
   return current;
@@ -91,23 +79,15 @@ export async function captureOwnedManagedUpdateContext(params: {
   stopState: PreManagedServiceStop | undefined;
   processEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
-}): Promise<OwnedManagedUpdateContext | undefined> {
+}) {
   const stopState = params.stopState;
-  if (
-    stopState?.inspected !== true ||
-    stopState.serviceUpdateVerdict?.kind !== "owned" ||
-    !stopState.serviceEnv
-  ) {
+  if (stopState?.inspected !== true) {
     return undefined;
   }
-  const env = stripGatewayServiceMarkerEnv(
-    resolveOwnedManagedUpdateEnv({
-      processEnv: params.processEnv,
-      serviceEnv: stopState.serviceEnv,
-      serviceDefinitionEnv: stopState.serviceDefinitionEnv,
-      invocationCwd: params.invocationCwd,
-    }),
-  );
+  const env = resolveOwnedManagedUpdatePreflightEnv(params);
+  if (!env) {
+    return undefined;
+  }
   // Every later schema, doctor, recovery, and restart step consumes serviceEnv. Promote the
   // normalized owned environment before I/O so even capture failure recovery targets its owner.
   stopState.serviceEnv = env;
@@ -126,24 +106,22 @@ export async function readUpdateCandidateSource(
   legacyConfigPlan?: LegacyConfigUpdatePlan,
   options?: Pick<TargetDatabaseSchemaContextOptions, "configValidation">,
 ) {
-  if (legacyConfigPlan) {
-    const context = await captureTargetDatabaseSchemaContext(env, {
-      legacyConfigPlan,
-      ...options,
-    });
-    if (context.legacyConfigPlan) {
-      return { config: context.config, hash: hashConfigRaw(context.configSnapshot.raw) };
-    }
-  }
-  const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-    readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-  );
+  const context = legacyConfigPlan
+    ? await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan, ...options })
+    : undefined;
+  const snapshot = context?.legacyConfigPlan
+    ? context.configSnapshot
+    : await withOwnedManagedUpdateEnv(env, () =>
+        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+      );
   return {
-    config:
-      options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
+    config: context?.legacyConfigPlan
+      ? context.config
+      : options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
         ? snapshot.sourceConfig
         : snapshot.config,
     hash: hashConfigRaw(snapshot.raw),
+    source: updateConfigSource(snapshot),
   };
 }
 

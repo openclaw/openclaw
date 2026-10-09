@@ -26,17 +26,15 @@ function calculateAuthProfileCooldownMs(errorCount: number): number {
   return 5 * 60_000; // 5 minutes max
 }
 
-// Without a provider reset, grow failed half-open probes up to one billing day:
-// frequent retries risk metered fallback spend, while a finite cap still retries daily.
-const RATE_LIMIT_BACKOFF_BASE_MS = 30_000;
-const RATE_LIMIT_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
-
-type DisabledFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
+type BackoffFailureReason = Extract<
+  AuthProfileFailureReason,
+  "billing" | "auth_permanent" | "rate_limit"
+>;
 
 const FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Keep the initial billing disable short so inline API keys can retry soon
 // after recharge, even though they cannot probe during an active window.
-const DISABLED_FAILURE_BACKOFF_POLICIES = {
+const FAILURE_BACKOFF_POLICIES = {
   billing: {
     baseMs: 10 * 60 * 1000,
     maxMs: 24 * 60 * 60 * 1000,
@@ -47,7 +45,9 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
     baseMs: 10 * 60 * 1000,
     maxMs: 60 * 60 * 1000,
   },
-} satisfies Record<DisabledFailureReason, { baseMs: number; maxMs: number }>;
+  // Limit metered fallback spend from repeated half-open failures, capped at one day.
+  rate_limit: { baseMs: 30_000, maxMs: 24 * 60 * 60 * 1000 },
+} satisfies Record<BackoffFailureReason, { baseMs: number; maxMs: number }>;
 
 function calculateCappedExponentialBackoffMs(params: {
   errorCount: number;
@@ -61,17 +61,6 @@ function calculateCappedExponentialBackoffMs(params: {
   const exponent = Math.min(normalized - 1, maxExponent);
   const raw = baseMs * 2 ** exponent;
   return Math.min(maxMs, raw);
-}
-
-function keepActiveWindowOrRecompute(params: {
-  existingUntil: number | undefined;
-  now: number;
-  recomputedUntil: number;
-}): number {
-  const { existingUntil, now, recomputedUntil } = params;
-  const hasActiveWindow =
-    typeof existingUntil === "number" && Number.isFinite(existingUntil) && existingUntil > now;
-  return hasActiveWindow ? existingUntil : recomputedUntil;
 }
 
 export function computeNextProfileUsageStats(params: {
@@ -128,76 +117,43 @@ export function computeNextProfileUsageStats(params: {
 
   const disabledFailureReason =
     params.reason === "billing" || params.reason === "auth_permanent" ? params.reason : null;
-
+  const backoffPolicy =
+    disabledFailureReason || params.reason === "rate_limit"
+      ? FAILURE_BACKOFF_POLICIES[disabledFailureReason ?? "rate_limit"]
+      : undefined;
+  const backoffMs = backoffPolicy
+    ? calculateCappedExponentialBackoffMs({
+        errorCount: failureCounts[params.reason] ?? 1,
+        ...backoffPolicy,
+      })
+    : calculateAuthProfileCooldownMs(nextErrorCount);
+  const window = disabledFailureReason ? "disabledUntil" : "cooldownUntil";
+  // Retries within either active window cannot push recovery further out.
+  const existingUntil = params.existing[window];
+  const recomputedUntil = resolveUsageWindowUntil(params.now, backoffMs);
+  updatedStats[window] =
+    typeof existingUntil === "number" &&
+    Number.isFinite(existingUntil) &&
+    existingUntil > params.now
+      ? existingUntil
+      : recomputedUntil;
   if (disabledFailureReason) {
-    const disableCount = failureCounts[disabledFailureReason] ?? 1;
-    const backoffMs = calculateCappedExponentialBackoffMs({
-      errorCount: disableCount,
-      ...DISABLED_FAILURE_BACKOFF_POLICIES[disabledFailureReason],
-    });
-    // Keep active disable windows immutable so retries within the window cannot
-    // extend recovery time indefinitely.
-    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.disabledUntil,
-      now: params.now,
-      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-    });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
-    const backoffMs =
-      params.reason === "rate_limit"
-        ? calculateCappedExponentialBackoffMs({
-            errorCount: failureCounts.rate_limit ?? 1,
-            baseMs: RATE_LIMIT_BACKOFF_BASE_MS,
-            maxMs: RATE_LIMIT_BACKOFF_MAX_MS,
-          })
-        : calculateAuthProfileCooldownMs(nextErrorCount);
-    // Keep active cooldown windows immutable so retries within the window
-    // cannot push recovery further out.
-    updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.cooldownUntil,
-      now: params.now,
-      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-    });
-    // Update cooldown metadata based on whether the window is still active
-    // and whether the same or a different model is failing.
     const existingCooldownActive =
       typeof params.existing.cooldownUntil === "number" &&
       params.existing.cooldownUntil > params.now;
-    if (existingCooldownActive) {
-      // Always use the latest failure reason so that downstream consumers
-      // (e.g. isProfileInCooldown model-bypass) see the most recent signal.
-      // A non-rate_limit failure (auth, billing, …) is profile-wide, so
-      // upgrading from rate_limit → auth correctly blocks all models.
-      updatedStats.cooldownReason = params.reason;
-      // If a different model fails during an active window, widen the scope
-      // to all models (undefined) so neither model bypasses the cooldown.
-      if (
-        params.existing.cooldownModel &&
-        params.modelId &&
-        params.existing.cooldownModel !== params.modelId
-      ) {
-        updatedStats.cooldownModel = undefined;
-      } else if (
-        isModelScopedCooldownReason(params.reason) &&
-        !params.modelId &&
-        params.existing.cooldownModel
-      ) {
-        // Unknown originating model during an active model-scoped cooldown:
-        // widen scope conservatively so no model can bypass on stale metadata.
-        updatedStats.cooldownModel = undefined;
-      } else if (!isModelScopedCooldownReason(params.reason)) {
-        // Profile-wide failures (auth, billing, format, server_error, ...) —
-        // clear model scope so that no model can bypass.
-        updatedStats.cooldownModel = undefined;
-      } else {
-        updatedStats.cooldownModel = params.existing.cooldownModel;
-      }
+    updatedStats.cooldownReason = params.reason;
+    if (!isModelScopedCooldownReason(params.reason)) {
+      updatedStats.cooldownModel = undefined;
+    } else if (existingCooldownActive) {
+      // Keep an active scope only while every failure names the same model.
+      // An already profile-wide window cannot narrow until it expires.
+      const previousModel = params.existing.cooldownModel;
+      updatedStats.cooldownModel =
+        !previousModel || previousModel === params.modelId ? previousModel : undefined;
     } else {
-      updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = isModelScopedCooldownReason(params.reason)
-        ? params.modelId
-        : undefined;
+      updatedStats.cooldownModel = params.modelId;
     }
   }
 

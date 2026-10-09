@@ -1,12 +1,16 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withSessionHistoryBudgetSweepsForTest } from "../config/sessions/session-history-budget.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveAgentRunSessionTarget as resolveAgentRunSessionTargetImpl } from "./run-session-target.js";
+
+function seedSessionEntry(...args: Parameters<typeof upsertSessionEntryCore>) {
+  return withSessionHistoryBudgetSweepsForTest(() => upsertSessionEntryCore(...args));
+}
 
 type ResolveTargetParams = Omit<
   Parameters<typeof resolveAgentRunSessionTargetImpl>[0],
@@ -21,14 +25,11 @@ function resolveAgentRunSessionTarget(
 }
 
 describe("agent run session target", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-run-session-target-");
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-run-session-target-"));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    tempDir = sessionDirs.make();
   });
 
   it("resolves runtime identity through the run config store", async () => {
@@ -92,10 +93,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "existing", "sessions.json");
     const sessionId = "2fb701ef-6425-4c48-9b6f-5a170aa2477e";
     const sessionKey = "agent:main:telegram:direct:reporter";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId, updatedAt: 1 },
-    );
+    await seedSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt: 1 });
 
     await expect(
       resolveAgentRunSessionTarget({
@@ -109,7 +107,7 @@ describe("agent run session target", () => {
   it("resolves an existing bare row through its persisted fixed-store owner", async () => {
     const storePath = path.join(tempDir, "fixed-owner", "sessions.json");
     const sessionId = "fixed-owner-session";
-    await upsertSessionEntryCore(
+    await seedSessionEntry(
       { agentId: "ops", sessionKey: "global", storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -138,7 +136,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "retired-owner", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
-    await upsertSessionEntryCore(
+    await seedSessionEntry(
       { agentId: "research", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -162,7 +160,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "ownerless", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
-    await upsertSessionEntryCore(
+    await seedSessionEntry(
       { agentId: "research", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -185,10 +183,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "runtime-config", "sessions.json");
     const sessionId = "7ef14ab2-4801-40e1-9c56-83f9250c1706";
     const sessionKey = "agent:main:discord:direct:reporter";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId, updatedAt: 1 },
-    );
+    await seedSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt: 1 });
     setRuntimeConfigSnapshot({ session: { store: storePath } });
     try {
       await expect(
@@ -304,11 +299,11 @@ describe("agent run session target", () => {
   it("recovers the persisted owner from a legacy SQLite marker", async () => {
     const storePath = path.join(tempDir, "legacy", "sessions.json");
     const sessionKey = "agent:main:dashboard:legacy-session";
-    await upsertSessionEntryCore(
+    await seedSessionEntry(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "legacy-session", updatedAt: 1 },
     );
-    await upsertSessionEntryCore(
+    await seedSessionEntry(
       { agentId: "main", sessionKey: "agent:main:legacy-session", storePath },
       { sessionId: "legacy-session", updatedAt: 2 },
     );

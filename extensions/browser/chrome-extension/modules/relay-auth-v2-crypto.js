@@ -1,6 +1,6 @@
 // Browser-native proof primitives shared by the extension auth client and its vectors.
 
-const RELAY_AUTH_LABEL = "openclaw.browser-relay.auth";
+export const RELAY_AUTH_LABEL = "openclaw.browser-relay.auth";
 export const RELAY_AUTH_VERSION = 2;
 
 const RELAY_KEY_PATTERN = /^[0-9a-f]{64}$/;

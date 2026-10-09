@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
+import { postNativeExternalLink } from "../../../app/native-link-routing.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
 import { browserTabKey, readBrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
@@ -15,7 +16,7 @@ import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { loadLinkPreview } from "../../../lib/link-preview.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import sessionMenuStyles from "../../../styles/session-menu.css?inline";
@@ -42,14 +43,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    );
+    this.subscriptions.watchStore(() => this.context?.gateway);
+    this.subscriptions.watchStore(() => this.context?.config);
+    this.subscriptions.watchStore(() => this.context?.theme);
   }
 
   static override styles = [
@@ -105,8 +101,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         justify-content: center;
         color: var(--muted);
       }
-      .icon svg,
-      .icon img {
+      .icon svg {
         width: 16px;
         height: 16px;
       }
@@ -175,6 +170,10 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       .actions .more svg {
         width: 16px;
         height: 16px;
+      }
+      .shot[data-new-tab-action],
+      .actions button[data-new-tab-action] {
+        cursor: pointer;
       }
     `,
   ];
@@ -290,6 +289,25 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     });
   }
 
+  private get opensExternally() {
+    return this.context?.theme.settings.openLinksExternally === true;
+  }
+
+  private readonly open = () => {
+    if (this.opensExternally) {
+      this.openExternal();
+    } else {
+      this.openPanel();
+    }
+  };
+
+  private openExternal() {
+    const url = resolveSafeExternalUrl(this.preview?.url ?? "", window.location.href);
+    if (url && !postNativeExternalLink(url)) {
+      openExternalUrlSafe(url);
+    }
+  }
+
   private readonly openPanel = () => {
     const browserTab = readBrowserTabTarget(this.preview);
     if (!browserTab) {
@@ -312,9 +330,22 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     if (event.detail.item.value === "copy-url") {
       void copyToClipboard(url, () => this.isConnected && this.preview?.url === url);
     } else if (event.detail.item.value === "open-new-tab") {
-      openExternalUrlSafe(url);
+      this.openExternal();
+    } else if (event.detail.item.value === "open-within-openclaw") {
+      this.openPanel();
     }
   };
+
+  private renderImage(src: string) {
+    return html`<img
+      src=${src}
+      alt=""
+      @error=${() => {
+        this.failedImages.add(src);
+        this.requestUpdate();
+      }}
+    />`;
+  }
 
   override render() {
     const preview = this.preview;
@@ -347,17 +378,11 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                   type="button"
                   class=${image === currentImage ? "shot" : "shot social"}
                   aria-label=${label}
-                  title=${t("browser.openPanel")}
-                  @click=${this.openPanel}
+                  title=${this.opensExternally ? t("browser.openExternal") : t("browser.openPanel")}
+                  ?data-new-tab-action=${this.opensExternally}
+                  @click=${this.open}
                 >
-                  <img
-                    src=${image}
-                    alt=""
-                    @error=${() => {
-                      this.failedImages.add(image);
-                      this.requestUpdate();
-                    }}
-                  />
+                  ${this.renderImage(image)}
                 </button>
               `
             : nothing
@@ -365,16 +390,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         <div class="bar">
           <span class="icon" aria-hidden="true"
             >${
-              favicon && !this.failedImages.has(favicon)
-                ? html`<img
-                    src=${favicon}
-                    alt=""
-                    @error=${() => {
-                      this.failedImages.add(favicon);
-                      this.requestUpdate();
-                    }}
-                  />`
-                : icons.globe
+              favicon && !this.failedImages.has(favicon) ? this.renderImage(favicon) : icons.globe
             }</span
           >
           <span class="identity">
@@ -382,7 +398,12 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
             ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
           </span>
           <span class="actions">
-            <button type="button" title=${t("browser.openPanel")} @click=${this.openPanel}>
+            <button
+              type="button"
+              title=${this.opensExternally ? t("browser.openExternal") : t("browser.openPanel")}
+              ?data-new-tab-action=${this.opensExternally}
+              @click=${this.open}
+            >
               ${t("browser.open")}
             </button>
             <wa-dropdown
@@ -404,11 +425,15 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
                 ${t("browser.copyUrl")}
               </wa-dropdown-item>
-              <wa-dropdown-item class="session-menu__item" value="open-new-tab" data-new-tab-action>
+              <wa-dropdown-item
+                class="session-menu__item"
+                value=${this.opensExternally ? "open-within-openclaw" : "open-new-tab"}
+                ?data-new-tab-action=${!this.opensExternally}
+              >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.externalLink}</span
+                  >${this.opensExternally ? icons.globe : icons.externalLink}</span
                 >
-                ${t("browser.openNewTab")}
+                ${this.opensExternally ? t("browser.openWithinOpenClaw") : t("browser.openNewTab")}
               </wa-dropdown-item>
             </wa-dropdown>
           </span>

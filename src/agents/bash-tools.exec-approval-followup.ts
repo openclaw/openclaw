@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
@@ -176,14 +177,15 @@ function formatDirectExecApprovalFollowupText(
     return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
   }
 
+  const metadata =
+    parsed.kind === "finished" ? normalizeLowercaseStringOrEmpty(parsed.metadata) : "";
+  const body = redactToolPayloadText(
+    renderUserFacingText(
+      parsed.kind === "finished" || parsed.kind === "completed" ? parsed.body : parsed.raw,
+      { errorContext: !metadata.includes("code 0") },
+    ),
+  ).trim();
   if (parsed.kind === "finished") {
-    const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, {
-        errorContext: !metadata.includes("code 0"),
-      }),
-    ).trim();
-
     return (
       body ||
       (metadata.includes("code 0")
@@ -194,20 +196,7 @@ function formatDirectExecApprovalFollowupText(
     );
   }
 
-  if (parsed.kind === "completed") {
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, { errorContext: true }),
-    ).trim();
-    return body || "Background command finished.";
-  }
-
-  return (
-    redactToolPayloadText(renderUserFacingText(parsed.raw, { errorContext: true })).trim() || null
-  );
-}
-
-function buildSessionResumeFallbackPrefix(): string {
-  return "Automatic session resume failed, so sending the status directly.\n\n";
+  return body || (parsed.kind === "completed" ? "Background command finished." : null);
 }
 
 function readGatewayStatus(value: unknown): string | undefined {
@@ -280,10 +269,7 @@ async function waitForAgentFollowupRun(params: {
         return { status: "observation_ended", reason: "deadline", transportErrors };
       }
       if (consecutiveTransportErrors > 1) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, retryDelayMs);
-          timer.unref?.();
-        });
+        await sleepWithAbort(retryDelayMs, undefined, { ref: false });
       }
       continue;
     }
@@ -383,7 +369,7 @@ async function sendDirectFollowupFallback(params: {
 
   const prefix =
     !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-      ? buildSessionResumeFallbackPrefix()
+      ? "Automatic session resume failed, so sending the status directly.\n\n"
       : "";
   const availableBodyUnits =
     DIRECT_FOLLOWUP_MAX_UTF16_UNITS - prefix.length - DIRECT_FOLLOWUP_TRUNCATION_MARKER.length - 1;

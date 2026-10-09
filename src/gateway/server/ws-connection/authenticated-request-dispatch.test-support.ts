@@ -74,12 +74,14 @@ export function createDispatchTestHarness(
   const close = vi.fn();
   const setCloseCause = vi.fn();
   const logGateway = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const config = {};
+  const context = { broadcast: vi.fn(), getRuntimeConfig: () => config };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
       clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
-      buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
+      buildRequestContext: () => (options.buildRequestContext?.() ?? context) as never,
       send: sendForDispatcher,
       close,
       isClosed: options.isClosed ?? (() => false),

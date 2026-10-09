@@ -1,11 +1,6 @@
 import type { ConfigUiHints } from "../api/types.ts";
 import { hintForPath, type JsonSchema } from "../lib/config-form-utils.ts";
 
-type ConfigSchemaTierSplit = {
-  common: JsonSchema | null;
-  advanced: JsonSchema | null;
-};
-
 function projectSchemaTier(params: {
   schema: JsonSchema;
   path: string[];
@@ -18,15 +13,12 @@ function projectSchemaTier(params: {
   }
   const properties: Record<string, JsonSchema> = {};
   let hasSchemaChildren = false;
+  const projectChild = (childSchema: JsonSchema, key: string) =>
+    projectSchemaTier({ schema: childSchema, path: [...path, key], advanced, hints });
 
   for (const [key, child] of Object.entries(schema.properties ?? {})) {
     hasSchemaChildren = true;
-    const projected = projectSchemaTier({
-      schema: child,
-      path: [...path, key],
-      advanced,
-      hints,
-    });
+    const projected = projectChild(child, key);
     if (projected) {
       properties[key] = projected;
     }
@@ -35,25 +27,13 @@ function projectSchemaTier(params: {
   let additionalProperties = schema.additionalProperties;
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
     hasSchemaChildren = true;
-    additionalProperties =
-      projectSchemaTier({
-        schema: schema.additionalProperties,
-        path: [...path, "*"],
-        advanced,
-        hints,
-      }) ?? undefined;
+    additionalProperties = projectChild(schema.additionalProperties, "*") ?? undefined;
   }
 
   let items = schema.items;
   if (schema.items) {
     hasSchemaChildren = true;
-    items =
-      projectSchemaTier({
-        schema: schema.items,
-        path: [...path, "*"],
-        advanced,
-        hints,
-      }) ?? undefined;
+    items = projectChild(schema.items, "*") ?? undefined;
   }
 
   const projectBranches = (branches: JsonSchema[] | undefined): JsonSchema[] | undefined => {
@@ -97,12 +77,11 @@ function projectSchemaTier(params: {
   };
 }
 
-/** Split one schema section into common and advanced projections. */
 export function splitConfigSchemaByTier(params: {
   schema: JsonSchema;
   path: string[];
   hints: ConfigUiHints;
-}): ConfigSchemaTierSplit {
+}) {
   return {
     common: projectSchemaTier({ ...params, advanced: false }),
     advanced: projectSchemaTier({ ...params, advanced: true }),

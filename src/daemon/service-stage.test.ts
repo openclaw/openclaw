@@ -14,7 +14,7 @@ describe.skipIf(process.platform === "win32")("service publication permissions",
       import fs from "node:fs/promises";
       import path from "node:path";
       import { publishServiceFile } from ${JSON.stringify(new URL("./service-stage.ts", import.meta.url).href)};
-      import { writeTaskXmlTempFile } from ${JSON.stringify(new URL("./schtasks-layout.ts", import.meta.url).href)};
+      import { writeTaskXmlTempFile } from ${JSON.stringify(new URL("./schtasks-xml.ts", import.meta.url).href)};
       process.umask(${umask});
       const home = ${JSON.stringify(home)};
       await fs.chmod(home, 0o700);

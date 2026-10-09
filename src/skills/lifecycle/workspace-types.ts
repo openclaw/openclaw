@@ -33,6 +33,8 @@ export type SkillRootInstallFiles = {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   rootMarkers?: readonly string[];
+  /** Revalidate the caller at the workspace host's final filesystem publication. */
+  beforePersistentApply?: () => void;
   /** Undefined skips the native update guard; null means the install was absent. */
   expectedClawHubState?: ClawHubSkillFileState | null;
 };
@@ -169,7 +171,6 @@ export type CommittedSkillChange = {
   workspaceDir: string;
   before?: PluginHookSkillArtifact;
   after?: PluginHookSkillArtifact;
-  proposal?: PluginHookSkillChangedEvent["proposal"];
   logger?: { warn?: (message: string) => void };
 };
 

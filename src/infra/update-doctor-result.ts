@@ -48,6 +48,10 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
 };
 
 const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+const configFileWriteSchema = z.object({
+  inputHash: configHashSchema.optional(),
+  hash: configHashSchema,
+});
 const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("deferred"),
@@ -68,6 +72,13 @@ export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSc
 const doctorResultEvidence = {
   configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
   configInputHash: configHashSchema.optional(),
+  configFileWrites: z
+    .record(
+      z.string().refine((filePath) => path.isAbsolute(filePath)),
+      configFileWriteSchema,
+    )
+    .optional()
+    .catch(undefined),
   warnings: z.array(z.string()).optional(),
   maintenanceRefusal: DoctorMaintenanceRefusalSchema.optional(),
   // Invalid optional diagnostics cannot change the child's classified outcome.
@@ -75,7 +86,11 @@ const doctorResultEvidence = {
   configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
   configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.optional(),
   databaseWrites: z
-    .object({ unchanged: z.boolean(), generations: z.record(z.string(), z.string().nullable()) })
+    .object({
+      unchanged: z.boolean(),
+      fromGenerations: z.record(z.string(), z.string().nullable()).optional(),
+      generations: z.record(z.string(), z.string().nullable()),
+    })
     .optional()
     .catch(undefined),
 };
@@ -146,14 +161,21 @@ export type DoctorConfigCapture = {
   path: string;
   hash: string;
   inputHash?: string;
+  fileWrites?: Record<string, z.infer<typeof configFileWriteSchema>>;
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
 };
 export type UpdateDoctorWriteAuthority = {
   inputHash: string;
   assertCurrent: () => void;
+  commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  originalRecoveryCapture?: {
+    runId: string;
+    installRoot: string;
+    ref?: import("./update-recovery-baseline-capture.js").UpdateRecoveryBaselineRef;
+  };
 };
 
 /** Receipts describe the caller's existing maintenance interval without owning its lifecycle. */
@@ -171,6 +193,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     return undefined;
   }
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
+  let fromGenerations: UpdateDatabaseGenerations | undefined;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
   const read = async () => {
@@ -207,6 +230,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       receipt = undefined;
       const generations = await read();
       if (generations && expectedGenerations) {
+        fromGenerations ??= generations;
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= Object.entries(expectedGenerations).every(
           ([pathname, generation]) => generations[pathname] === generation,
@@ -215,9 +239,13 @@ export function createUpdateDoctorDatabaseWriteCapture(
     },
     async settle() {
       const generations = await read();
-      if (generations) {
-        receipt = { unchanged, generations };
-        expectedGenerations = generations;
+      if (generations && expectedGenerations) {
+        // Maintenance excludes Gateway writers, not independent SQLite writers.
+        // Without transaction attribution, even Doctor-time changes are unknown.
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
+        receipt = { unchanged, fromGenerations, generations };
       }
     },
   };
@@ -275,7 +303,7 @@ export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash:
   }
 }
 
-/** Include publication retains its legacy writer until fs-safe supports final-effect authority. */
+/** Retain the validated root input and live Doctor owner through include publication. */
 export async function runUpdateDoctorIncludeWrite<T>(
   configPath: string,
   inputHash: string,
@@ -287,9 +315,33 @@ export async function runUpdateDoctorIncludeWrite<T>(
   }
   context.authority.assertCurrent();
   assertUpdateDoctorConfigInputHash(configPath, inputHash);
-  const result = await doctorConfigWrites.run({ capture: context.capture }, run);
+  const result = await run();
   context.authority.assertCurrent();
   return result;
+}
+
+/** Retain one contiguous chain from the writer's input through its actual publications. */
+export function recordUpdateDoctorConfigFileWrite(
+  configPath: string,
+  inputHash: string | null,
+  hash: string,
+): void {
+  const capture = doctorConfigWrites.getStore()?.capture;
+  if (!capture) {
+    return;
+  }
+  const resolvedPath = path.resolve(configPath);
+  const write =
+    capture.path === resolvedPath
+      ? capture
+      : ((capture.fileWrites ??= {})[resolvedPath] ??= { hash: "unchanged" });
+  if (write.hash === "unchanged") {
+    write.inputHash = inputHash ?? undefined;
+  } else if (inputHash !== write.hash) {
+    // An outside write between Doctor passes breaks ownership permanently for this run.
+    delete write.inputHash;
+  }
+  write.hash = hash;
 }
 
 /** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
@@ -300,15 +352,9 @@ export function recordUpdateDoctorConfigWrite(
   inputConfig: unknown,
   outputJson: string,
 ): void {
+  recordUpdateDoctorConfigFileWrite(configPath, inputHash, hash);
   const capture = doctorConfigWrites.getStore()?.capture;
   if (capture && capture.path === path.resolve(configPath)) {
-    if (capture.hash === "unchanged") {
-      capture.inputHash = inputHash ?? undefined;
-    } else if (inputHash !== capture.hash) {
-      // An outside write between Doctor passes breaks ownership permanently for this run.
-      delete capture.inputHash;
-    }
-    capture.hash = hash;
     const before = isRecord(inputConfig) ? inputConfig : {};
     const after: unknown = JSON.parse(outputJson);
     if (!isRecord(after)) {

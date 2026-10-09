@@ -338,7 +338,7 @@ setInterval(() => {}, 1000);
             checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
             path: command,
             message:
-              "Managed Codex app-server version check failed: Version probe timed out after 5000 ms",
+              "Managed Codex app-server version check failed: Version check timed out after 5000 ms",
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
           }),
         ]);
@@ -395,7 +395,7 @@ setInterval(() => {}, 1000);
     const cfg = config();
     cfg.agents = {
       ...cfg.agents,
-      list: [{ id: "main", agentDir }],
+      entries: { main: { agentDir } },
     };
     const deps = managedDeps();
     const check = createCheck(deps);
@@ -417,10 +417,10 @@ setInterval(() => {}, 1000);
     const cfg = config();
     cfg.agents = {
       ...cfg.agents,
-      list: [
-        { id: "desktop", agentDir: desktopAgentDir },
-        { id: "package", agentDir: packageAgentDir },
-      ],
+      entries: {
+        desktop: { agentDir: desktopAgentDir },
+        package: { agentDir: packageAgentDir },
+      },
     };
     const deps = managedDeps("0.146.0");
     const check = createCheck(deps);
@@ -449,16 +449,15 @@ setInterval(() => {}, 1000);
     const cfg = config();
     cfg.agents = {
       ...cfg.agents,
-      list: [
-        { id: "desktop", agentDir: desktopAgentDir },
-        {
-          id: "openclaw",
+      entries: {
+        desktop: { agentDir: desktopAgentDir },
+        openclaw: {
           model: "anthropic/claude-opus-4-7",
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
           },
         },
-      ],
+      },
     };
     const deps = managedDeps();
     const check = createCheck(deps);

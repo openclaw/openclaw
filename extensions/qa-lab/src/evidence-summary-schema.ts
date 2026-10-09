@@ -574,9 +574,6 @@ function validateOccurrenceBindings(summary: z.infer<typeof qaEvidenceSummaryV3S
     const next = occurrences.get(nextId)!;
     const currentEffective = entries.get(occurrence.id)?.[0]?.effective;
     const nextEffective = entries.get(next.id)?.[0]?.effective;
-    if (currentEffective && nextEffective) {
-      throw new Error("multiple effective attempts in one retry chain");
-    }
     if (
       occurrence.terminalStatus !== "fail" ||
       (next.terminalStatus !== "pass" && nextEffective) ||

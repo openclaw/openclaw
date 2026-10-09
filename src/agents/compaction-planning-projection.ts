@@ -99,12 +99,8 @@ function jsonLengthWithin(
   if (Array.isArray(value)) {
     for (const entry of value) {
       const separatorLength = length === 2 ? 0 : 1;
-      const entryLength = jsonLengthWithin(
-        entry,
-        maxChars - length - separatorLength,
-        estimate,
-        seen,
-      );
+      const remainingChars = maxChars - length - separatorLength;
+      const entryLength = jsonLengthWithin(entry, remainingChars, estimate, seen);
       if (entryLength === undefined) {
         return undefined;
       }
@@ -121,12 +117,8 @@ function jsonLengthWithin(
       }
       const separatorLength = length === 2 ? 0 : 1;
       const keyLength = jsonStringLengthWithin(key, maxChars - length - separatorLength, estimate);
-      const entryLength = jsonLengthWithin(
-        record[key],
-        maxChars - length - separatorLength - (keyLength ?? 0) - 1,
-        estimate,
-        seen,
-      );
+      const remainingChars = maxChars - length - separatorLength - (keyLength ?? 0) - 1;
+      const entryLength = jsonLengthWithin(record[key], remainingChars, estimate, seen);
       if (keyLength === undefined || entryLength === undefined) {
         return undefined;
       }
@@ -158,9 +150,9 @@ function projectToolArguments(value: unknown, budget: ProjectionBudget): number 
 function projectContentBlock(
   block: unknown,
   budget: ProjectionBudget,
-): { block: unknown; omittedChars: number; changed: boolean } {
+): { block: unknown; omittedChars: number } {
   if (!block || typeof block !== "object") {
-    return { block, omittedChars: 0, changed: false };
+    return { block, omittedChars: 0 };
   }
   const record = block as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : "";
@@ -168,7 +160,6 @@ function projectContentBlock(
     return {
       block: { ...record, data: "" },
       omittedChars: 0,
-      changed: true,
     };
   }
   const hasText = typeof record.text === "string" && record.text.length > 0;
@@ -210,9 +201,7 @@ function projectContentBlock(
       delete next[signature];
     }
   }
-  return next
-    ? { block: next, omittedChars, changed: true }
-    : { block, omittedChars, changed: false };
+  return { block: next ?? block, omittedChars };
 }
 
 function projectStringFields(
@@ -275,7 +264,7 @@ function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentM
   const projectedContent = content.map((block) => {
     const projected = projectContentBlock(block, budget);
     omittedChars += projected.omittedChars;
-    changed ||= projected.changed;
+    changed ||= !Object.is(projected.block, block);
     return projected.block;
   });
   if (!changed) {

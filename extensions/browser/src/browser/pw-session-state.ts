@@ -13,7 +13,6 @@ import {
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
   type BrowserConsoleMessage,
-  type DownloadPayload,
   type PageState,
   type RoleRefs,
   type RoleRefsCacheEntry,
@@ -90,7 +89,6 @@ export function storeRoleRefsForTarget(opts: {
   }
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
-  state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsFrame = opts.frame;
   state.roleRefsMode = opts.mode;
   const targetId = normalizeOptionalString(opts.targetId);
@@ -125,7 +123,6 @@ function clearRoleRefs(state: PageState): void {
   }
   state.roleRefs = undefined;
   state.roleRefsMode = undefined;
-  state.roleRefsFrameSelector = undefined;
   state.roleRefsFrame = undefined;
   state.roleRefsTargetKey = undefined;
   state.roleRefsTargetGeneration = undefined;
@@ -228,12 +225,8 @@ export function ensurePageState(page: Page): PageState {
     pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
   });
   page.on("response", (resp: Response) => {
-    const req = resp.request();
-    const id = state.requestIds.get(req);
-    if (!id) {
-      return;
-    }
-    const rec = state.requests.get(id);
+    const id = state.requestIds.get(resp.request());
+    const rec = id ? state.requests.get(id) : undefined;
     if (!rec) {
       return;
     }
@@ -242,10 +235,7 @@ export function ensurePageState(page: Page): PageState {
   });
   page.on("requestfailed", (req: Request) => {
     const id = state.requestIds.get(req);
-    if (!id) {
-      return;
-    }
-    const rec = state.requests.get(id);
+    const rec = id ? state.requests.get(id) : undefined;
     if (!rec) {
       return;
     }
@@ -256,7 +246,7 @@ export function ensurePageState(page: Page): PageState {
   page.on("dialog", (dialog: Dialog) => {
     observeDialog(state, dialog);
   });
-  page.on("download", (download: DownloadPayload) => {
+  page.on("download", (download) => {
     if (state.downloadWaiterDepth > 0) {
       return;
     }

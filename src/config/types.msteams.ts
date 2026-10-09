@@ -1,11 +1,10 @@
-// Defines Microsoft Teams channel configuration types.
 import type { ChannelPreviewStreamingConfig } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
 import type { SecretInput } from "./types.secrets.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
   /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
@@ -44,21 +43,18 @@ export type MSTeamsSsoConfig = {
   connectionName?: string;
 };
 
-/** Reply style for MS Teams messages. */
 export type MSTeamsReplyStyle = "thread" | "top-level";
 
-/** Channel-level config for MS Teams. */
-export type MSTeamsChannelConfig = {
-  /** Require @mention to respond. Default: true. */
-  requireMention?: boolean;
-  /** Optional tool policy overrides for this channel. */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
+export type MSTeamsChannelConfig = Pick<
+  CommonChannelGroupConfig,
+  "requireMention" | "tools" | "toolsBySender"
+> & {
+  /** Override mention gating in channel threads rooted at this bot's message. */
+  requireMentionInBotThreads?: boolean;
   /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
 };
 
-/** Team-level config for MS Teams. */
 export type MSTeamsTeamConfig = MSTeamsChannelConfig & {
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
   channels?: Record<string, MSTeamsChannelConfig>;
@@ -96,9 +92,8 @@ export type MSTeamsConfig = Omit<
     useManagedIdentity?: boolean;
     /** User-assigned managed-identity client ID. When omitted with `useManagedIdentity: true`, system-assigned identity is used. */
     managedIdentityClientId?: string;
-    /** Gateway webhook route configuration. */
     webhook?: MSTeamsWebhookConfig;
-    /** Compatibility listener; omitted retains wildcard port 3978, false disables it. */
+    /** Explicit compatibility listener; omitted or false opens no separate port. */
     legacyWebhook?: false | { port: number; host?: string };
     /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
     typingIndicator?: boolean;
@@ -120,6 +115,8 @@ export type MSTeamsConfig = Omit<
     graphMediaFallback?: boolean;
     /** Default: require @mention to respond in channels/groups. */
     requireMention?: boolean;
+    /** Override mention gating in channel threads rooted at this bot's message. */
+    requireMentionInBotThreads?: boolean;
     /** Default reply style: "thread" replies to the message, "top-level" posts a new message. */
     replyStyle?: MSTeamsReplyStyle;
     /** Per-team config. Key is team ID (from the /team/ URL path segment). */

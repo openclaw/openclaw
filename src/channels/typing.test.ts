@@ -406,7 +406,7 @@ describe("createTypingCallbacks", () => {
     });
   });
 
-  it("does not restart keepalive when breaker trips on initial start", async () => {
+  it("stops keepalive when the initial start trips the breaker and resets for a new reply", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({
         start: vi.fn().mockRejectedValue(new Error("gone")),
@@ -419,6 +419,12 @@ describe("createTypingCallbacks", () => {
 
       await vi.advanceTimersByTimeAsync(9_000);
       expect(start).toHaveBeenCalledTimes(1);
+      expect(onStartError).toHaveBeenCalledTimes(1);
+
+      start.mockResolvedValue(undefined);
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(start).toHaveBeenCalledTimes(3);
       expect(onStartError).toHaveBeenCalledTimes(1);
     });
   });

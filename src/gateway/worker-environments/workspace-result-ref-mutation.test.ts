@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "../../agents/worktrees/service.js";
@@ -120,7 +120,7 @@ it("shares ref serialization and deferred retention between snapshots and result
   const started = createDeferred();
   const release = createDeferred();
   const discovered = createDeferred();
-  const mutations: string[][] = [];
+  let mutations = 0;
   const run = processExec.runCommandWithTimeout;
   vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
     const args = argv.slice(argv.indexOf("-C") + 2);
@@ -152,8 +152,11 @@ it("shares ref serialization and deferred retention between snapshots and result
       commands.push(receipt);
     }
     if (args[0] === "update-ref" && argv[argv.indexOf("-C") + 1] !== other) {
-      mutations.push(args);
-      if (args[1] === "-d" && args[2] === snapshotRef) {
+      mutations += 1;
+      if (
+        typeof options !== "number" &&
+        options?.input?.toString().includes(`delete ${snapshotRef}\0`)
+      ) {
         started.resolve();
         await release.promise;
       }
@@ -187,7 +190,11 @@ it("shares ref serialization and deferred retention between snapshots and result
   let move: Promise<string> | undefined;
   let cleanup: Promise<void> | undefined;
   try {
-    await started.promise;
+    await awaitGateBeforeSettlement(
+      started.promise,
+      pruning,
+      "Snapshot expiry settled before reaching the shared ref queue gate",
+    );
     phase = "ref_discovery";
     move = observe(
       "move",
@@ -209,7 +216,8 @@ it("shares ref serialization and deferred retention between snapshots and result
     await expect(hasWorkerWorkspaceResultRef({ root: linked, stagedResultRef })).resolves.toBe(
       true,
     );
-    expect(mutations).toEqual([["update-ref", "-d", snapshotRef, snapshotHead]]);
+    expect(mutations).toBe(1);
+    expect(await requireGit(root, ["rev-parse", `${snapshotRef}^{commit}`])).toBe(snapshotHead);
     expect(readRetainedRefs).not.toHaveBeenCalled();
     // A queued result writer must not adopt a later repository redirect.
     vi.stubEnv("GIT_COMMON_DIR", path.join(other, ".git"));

@@ -6,6 +6,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { pathDisplayName } from "./path-display.ts";
 
 const CHANNEL_LABELS = new Map<string, string>([
   ["imessage", "iMessage"],
@@ -23,14 +24,6 @@ const CHANNEL_LABELS = new Map<string, string>([
   ["email", "Email"],
   ["sms", "SMS"],
 ]);
-
-const KNOWN_CHANNEL_KEYS = [...CHANNEL_LABELS.keys()];
-
-/** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
-function shortenPeerId(identifier: string): string {
-  const trimmed = identifier.trim();
-  return trimmed.length <= 10 ? trimmed : `…${sliceUtf16Safe(trimmed, -6)}`;
-}
 
 // Long hex/uuid runs inside keys and node ids are machine ids, not names;
 // keep a short recognizable tail so rows never fill with opaque hashes.
@@ -79,14 +72,18 @@ type SessionWorktreeDisplayRow = {
   spawnedCwd?: string;
 };
 
+function resolveWorktreeBranch(row: SessionWorktreeDisplayRow): string | undefined {
+  const branch =
+    normalizeOptionalString(row.repository?.branch) ??
+    normalizeOptionalString(row.worktree?.branch);
+  return !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+    : branch;
+}
+
 export type SessionWorkContext =
   | { kind: "project"; name: string; path: string; cwd?: string; branch?: string }
   | { kind: "workspace"; name: string; path: string };
-
-/** Basename shown for a repository path on every Control UI surface. */
-export function repoName(repoRoot: string): string {
-  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
-}
 
 export function resolveSessionWorkContext(
   row: SessionWorktreeDisplayRow,
@@ -103,41 +100,24 @@ export function resolveSessionWorkContext(
         : undefined;
     const repositoryDirectory =
       remoteDirectory ?? (row.execNode ? normalizeOptionalString(row.execCwd) : undefined);
-    const branch =
-      normalizeOptionalString(row.repository?.branch) ??
-      normalizeOptionalString(row.worktree?.branch);
     return {
       kind: "project",
-      name: repoName(repoRoot),
+      name: pathDisplayName(repoRoot),
       // Project grouping uses the source repository, not this task checkout.
       path: repoRoot,
       cwd: row.repository ? repositoryDirectory : normalizeOptionalString(row.spawnedCwd),
-      branch:
-        !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-          ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-          : branch,
+      branch: resolveWorktreeBranch(row),
     };
-  }
-
-  if (row.execNode) {
-    const workspacePath = normalizeOptionalString(row.execCwd);
-    return workspacePath
-      ? { kind: "workspace", name: repoName(workspacePath), path: workspacePath }
-      : undefined;
   }
 
   // Match the chat workspace owner: local spawned sessions own their recorded
   // workspace first, then their spawned cwd.
-  const workspacePath =
-    normalizeOptionalString(row.spawnedWorkspaceDir) ?? normalizeOptionalString(row.spawnedCwd);
-  if (!workspacePath) {
-    return undefined;
-  }
-  return {
-    kind: "workspace",
-    name: repoName(workspacePath),
-    path: workspacePath,
-  };
+  const workspacePath = row.execNode
+    ? normalizeOptionalString(row.execCwd)
+    : (normalizeOptionalString(row.spawnedWorkspaceDir) ?? normalizeOptionalString(row.spawnedCwd));
+  return workspacePath
+    ? { kind: "workspace", name: pathDisplayName(workspacePath), path: workspacePath }
+    : undefined;
 }
 
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
@@ -148,17 +128,11 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   const repoRoot =
     normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
     normalizeOptionalString(row.worktree?.repoRoot);
-  const rawBranch =
-    normalizeOptionalString(row.repository?.branch) ??
-    normalizeOptionalString(row.worktree?.branch);
-  const branch =
-    !row.repository && rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
-      ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
-      : rawBranch;
+  const branch = resolveWorktreeBranch(row);
   const checkout = repoRoot
     ? branch
-      ? `${repoName(repoRoot)} ⎇ ${branch}`
-      : repoName(repoRoot)
+      ? `${pathDisplayName(repoRoot)} ⎇ ${branch}`
+      : pathDisplayName(repoRoot)
     : undefined;
   if (checkout && node) {
     // Checkout first: it names the work; the node is routing detail.
@@ -167,11 +141,9 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-type SessionTypedKind = "subagent" | "automation";
-
 type SessionKeyInfo = {
   /** Typed-session identity; display branching keys off this, not label text. */
-  kind?: SessionTypedKind;
+  kind?: "subagent" | "automation";
   /** Catalog-backed prefix for typed sessions. Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
@@ -180,28 +152,6 @@ type SessionKeyInfo = {
   accountId?: string;
 };
 
-/**
- * Two DMs from different accounts routinely share a name, so the account is the
- * only discriminator; `default` is what key builders write for absence and says
- * nothing. Which account to show comes from the recorded fact alone, never from
- * the rendered name. The suffix check preserves labels persisted by older
- * clients that included this decoration, avoiding `Alice · cards · cards`.
- */
-function withAccountDisambiguator(name: string, accountId: string | undefined): string {
-  if (!accountId || accountId === "default") {
-    return name;
-  }
-  const suffix = ` · ${accountId}`;
-  return name.endsWith(suffix) ? name : `${name}${suffix}`;
-}
-
-/** Typed-session prefixes come from the i18n catalog (RFC 0026). */
-function typedSessionPrefix(kind: SessionTypedKind): string {
-  return kind === "subagent"
-    ? t("sessionsView.subagentPrefix")
-    : t("sessionsView.automationPrefix");
-}
-
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
@@ -209,10 +159,6 @@ type SessionDisplayRow = {
   /** Canonical account projected from the delivery route by the Gateway. */
   accountId?: string;
 } & SessionWorktreeDisplayRow;
-
-type SessionDisplayOptions = {
-  includeSubagentPrefix?: boolean;
-};
 
 export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
@@ -226,14 +172,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   }
 
   if (key.includes(":subagent:")) {
-    const prefix = typedSessionPrefix("subagent");
-    return { kind: "subagent", prefix, fallbackName: prefix };
+    const prefix = t("sessionsView.subagentPrefix");
+    return { kind: "subagent", prefix, fallbackName: prefix.replace(/:\s*$/u, "") };
   }
 
   // Automation (cron) job. Session keys keep the `cron:` prefix; only the
   // display strings use the Automations feature name.
   if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    const prefix = typedSessionPrefix("automation");
+    const prefix = t("sessionsView.automationPrefix");
     return { kind: "automation", prefix, fallbackName: prefix };
   }
 
@@ -249,9 +195,11 @@ function parseSessionKey(key: string): SessionKeyInfo {
       return { prefix: "", fallbackName: key, accountId };
     }
     const channelLabel = formatSessionChannelLabel(channel);
+    const peerId = identifier.trim();
+    const peerLabel = peerId.length <= 10 ? peerId : `…${sliceUtf16Safe(peerId, -6)}`;
     return {
       prefix: "",
-      fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}`,
+      fallbackName: `${channelLabel} · ${peerLabel}`,
       accountId,
     };
   }
@@ -271,9 +219,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Channel-prefixed keys like "telegram:123": durable session rows written by
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
-  for (const ch of KNOWN_CHANNEL_KEYS) {
+  for (const [ch, label] of CHANNEL_LABELS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${formatSessionChannelLabel(ch)} Session` };
+      return { prefix: "", fallbackName: `${label} Session` };
     }
   }
 
@@ -295,14 +243,10 @@ function parseSessionKey(key: string): SessionKeyInfo {
   return { prefix: "", fallbackName: key };
 }
 
-export function resolveSessionDisplayName(
-  key: string,
-  row?: SessionDisplayRow,
-  options: SessionDisplayOptions = {},
-): string {
-  const label = normalizeOptionalString(row?.label) ?? "";
-  const displayName = normalizeOptionalString(row?.displayName) ?? "";
-  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
+export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
+  const label = normalizeOptionalString(row?.label);
+  const displayName = normalizeOptionalString(row?.displayName);
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle);
   const { kind, prefix, fallbackName, accountId: keyAccountId } = parseSessionKey(key);
   // The Gateway records the account on the row (src/gateway/session-classification.ts);
   // the key is parsed only for panes rendered before their row arrives.
@@ -319,8 +263,8 @@ export function resolveSessionDisplayName(
       kind === "automation"
         ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
         : rawName;
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    if (kind === "subagent" && options.includeSubagentPrefix === false) {
+    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
+    if (kind === "subagent") {
       return name.replace(prefixPattern, "").trim() || fallbackName;
     }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
@@ -344,7 +288,13 @@ export function resolveSessionDisplayName(
     return fallbackName;
   };
 
-  return withAccountDisambiguator(resolveNamedOrFallback(), accountId);
+  const name = resolveNamedOrFallback();
+  if (!accountId || accountId === "default") {
+    return name;
+  }
+  // Preserve account suffixes stored by older clients.
+  const suffix = ` · ${accountId}`;
+  return name.endsWith(suffix) ? name : `${name}${suffix}`;
 }
 
 // Wire kinds exclude cron; labels, sorting and grouping share this display classification.

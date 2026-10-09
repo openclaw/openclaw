@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as parseString } from "@openclaw/normalization-core/string-coerce";
 import { isApprovalNotFoundError } from "../infra/approval-errors.js";
+import { isUnsupportedShellWrapperArgv } from "../infra/command-explainer/format.js";
 import type {
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
@@ -16,12 +17,6 @@ import type {
   ExecSecurity,
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
-import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
-import {
-  isShellWrapperExecutable,
-  POSIX_PARSEABLE_SHELL_WRAPPERS,
-  resolveShellWrapperTransportArgv,
-} from "../infra/shell-wrapper-resolution.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
 import {
@@ -29,8 +24,6 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
-
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   () => import("./bash-tools.exec-approval-request.runtime.js"),
@@ -73,44 +66,6 @@ type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
   twoPhase: true;
 };
 
-function buildExecApprovalRequestToolParams(
-  params: RequestExecApprovalDecisionParams,
-): ExecApprovalRequestToolParams {
-  return {
-    id: params.id,
-    ...(params.command ? { command: params.command } : {}),
-    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
-    systemRunPlan: params.systemRunPlan,
-    env: params.env,
-    cwd: params.cwd,
-    nodeId: params.nodeId,
-    host: params.host,
-    security: params.security,
-    ask: params.ask,
-    warningText: params.warningText,
-    commandSpans: params.commandSpans,
-    ...(params.unavailableDecisions?.length
-      ? { unavailableDecisions: params.unavailableDecisions }
-      : {}),
-    agentId: params.agentId,
-    resolvedPath: params.resolvedPath,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    runId: params.runId,
-    toolCallId: params.toolCallId,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
-    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
-    requireDeliveryRoute: params.requireDeliveryRoute,
-    suppressDelivery: params.suppressDelivery,
-    deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-    twoPhase: true,
-  };
-}
-
 type ParsedDecision = { present: boolean; value: string | null };
 
 function parseDecision(value: unknown): ParsedDecision {
@@ -150,14 +105,14 @@ export function isExecApprovalRunAbortedError(error: unknown): boolean {
 
 /** Registers a two-phase exec approval request with the gateway. */
 async function registerExecApprovalRequest(
-  params: RequestExecApprovalDecisionParams,
+  params: ExecApprovalRequestToolParams,
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
   const registrationResult = await callGatewayTool(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-    buildExecApprovalRequestToolParams(params),
+    params,
     { expectFinal: false },
   );
   markToolDecisionRecorded();
@@ -212,22 +167,6 @@ type HostExecApprovalParams = Omit<
   trigger?: string;
 };
 
-type ExecApprovalRequesterContext = {
-  agentId?: string;
-  sessionKey?: string;
-};
-
-/** Builds requester identity context for an approval payload. */
-export function buildExecApprovalRequesterContext(params: ExecApprovalRequesterContext): {
-  agentId?: string;
-  sessionKey?: string;
-} {
-  return {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  };
-}
-
 type ExecApprovalTurnSourceContext = {
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -261,33 +200,17 @@ async function resolveCommandSpans(
   }
 }
 
-function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
-  if (!argv?.length) {
-    return false;
-  }
-  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
-  const executable = shellWrapperArgv[0];
-  if (!executable) {
-    return false;
-  }
-  const normalizedExecutable = normalizeExecutableToken(executable);
-  return (
-    isShellWrapperExecutable(normalizedExecutable) &&
-    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
-  );
-}
-
 function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolean {
   if (params.host === "gateway" && process.platform === "win32") {
     return true;
   }
   const argv = params.commandArgv?.length ? params.commandArgv : params.systemRunPlan?.argv;
-  return hasUnsupportedShellArgv(argv);
+  return argv?.length ? isUnsupportedShellWrapperArgv(argv) : false;
 }
 
 async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
-): Promise<RequestExecApprovalDecisionParams> {
+): Promise<ExecApprovalRequestToolParams> {
   const commandSpans =
     params.commandHighlighting === true
       ? (params.commandSpans ??
@@ -297,8 +220,8 @@ async function buildHostApprovalDecisionParams(
       : undefined;
   return {
     id: params.approvalId,
-    command: params.command,
-    commandArgv: params.commandArgv,
+    ...(params.command ? { command: params.command } : {}),
+    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
     systemRunPlan: params.systemRunPlan,
     env: params.env,
     cwd: params.workdir,
@@ -308,11 +231,11 @@ async function buildHostApprovalDecisionParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans,
-    unavailableDecisions: params.unavailableDecisions,
-    ...buildExecApprovalRequesterContext({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }),
+    ...(params.unavailableDecisions?.length
+      ? { unavailableDecisions: params.unavailableDecisions }
+      : {}),
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
     resolvedPath: params.resolvedPath,
     sessionId: params.sessionId,
     runId: params.runId,
@@ -334,6 +257,8 @@ async function buildHostApprovalDecisionParams(
       params.trigger === "cron" && params.host === "gateway" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
+    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    twoPhase: true,
   };
 }
 

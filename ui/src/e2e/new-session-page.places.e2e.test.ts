@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   PICKED,
@@ -16,6 +19,20 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+
+async function captureFolderBrowser(page: Page, name: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const browser = page.locator(".new-session-page__browser");
+  const frame = await takeControlUiScreenshotFrame(
+    page,
+    browser,
+    [browser.getByRole("combobox"), browser.getByRole("button", { name: "Use this folder" })],
+    { animations: "disabled", viewport: { width: 1280, height: 900 } },
+  );
+  await writeFile(path.join(suite.artifactDir, name), frame.png);
+}
 
 suite.define(() => {
   it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
@@ -214,12 +231,12 @@ suite.define(() => {
           .getByRole("switch", { name: "Incognito" })
           .count(),
       ).toBe(0);
-      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      const fastMode = page.locator('.new-session-page__composer [data-chat-speed-option="on"]');
       expect(await fastMode.count()).toBe(1);
       expect(await fastMode.getAttribute("aria-checked")).toBe("false");
       expect(
         await fastMode.evaluate((element) =>
-          element.classList.contains("chat-controls__speed-toggle"),
+          element.classList.contains("chat-controls__speed-option"),
         ),
       ).toBe(true);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
@@ -363,7 +380,7 @@ suite.define(() => {
       expect(
         await page
           .locator(".chat-controls__model-menu")
-          .getByText(/Effort|Fast mode/)
+          .getByText(/Effort|Speed/)
           .count(),
       ).toBe(0);
       await page.keyboard.press("Escape");
@@ -495,6 +512,7 @@ suite.define(() => {
       // Pointer light-dismiss still retires the unified popover after its
       // asynchronous hide animation completes.
       await checkoutTrigger.click();
+      await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
       const afterPointerHide = checkoutSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
@@ -503,6 +521,21 @@ suite.define(() => {
       );
       await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
+      await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("aria-label")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("title")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      await checkoutTrigger.click();
+      expect(await checkoutSelect.getByLabel("Name", { exact: true }).inputValue()).toBe(
+        "release-proof",
+      );
+      await page.keyboard.press("Escape");
       await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
@@ -514,6 +547,7 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
+        worktreeName: "release-proof",
         cwd: PICKED,
       });
       expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");
@@ -628,7 +662,7 @@ suite.define(() => {
     }
   });
 
-  it("filters folders live without reloading and opens the highlighted match", async () => {
+  it("opens the typed folder exactly and filters folders for keyboard activation", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -668,6 +702,13 @@ suite.define(() => {
       await expect.poll(() => input.inputValue()).toBe(WORKSPACE);
       // The draft path is set before the request finishes; filter only after its listing arrives.
       await place.locator(".new-session-page__browser-entry", { hasText: "packages" }).waitFor();
+      await input.fill(WORKSPACE);
+      await input.press("Enter");
+      await gateway.waitForRequest("fs.listDir", { after: 1 });
+      await place.locator(".new-session-page__browser-loading").waitFor({ state: "hidden" });
+      await captureFolderBrowser(page, "folder-enter.png");
+      expect(await input.inputValue()).toBe(WORKSPACE);
+      expect((await gateway.getRequests("fs.listDir")).at(-1)?.params).toEqual({ path: WORKSPACE });
       const requestsBefore = await gateway.getRequests("fs.listDir");
       await input.fill(`${WORKSPACE}/pa`);
       await expect
@@ -675,12 +716,55 @@ suite.define(() => {
         .toEqual([expect.stringMatching(/^\s*packages\s*$/)]);
       await page.screenshot({ path: path.join(suite.artifactDir, "folder-live-prefix.png") });
       expect(await gateway.getRequests("fs.listDir")).toHaveLength(requestsBefore.length);
+      await input.press("ArrowDown");
       await input.press("Enter");
       await gateway.waitForRequest("fs.listDir", { match: { path: PICKED } });
       await expect.poll(() => input.inputValue()).toBe(PICKED);
       await input.fill(`${WORKSPACE}/zzz`);
       await place.getByText("No matching folders", { exact: true }).waitFor();
       await page.screenshot({ path: path.join(suite.artifactDir, "folder-live-no-matches.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens HOME for a missing starting workspace and reports a typed missing folder", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const home = "/home/test";
+    const gateway = await installMockGateway(page, {
+      workspace: "/state/workspace-main",
+      methodResponses: {
+        "fs.listDir": {
+          path: home,
+          home,
+          parent: "/home",
+          entries: [{ name: "projects", path: `${home}/projects` }],
+        },
+      },
+    });
+    const missing = { code: "INVALID_REQUEST", message: "ENOENT: no such file or directory" };
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.locator("#new-session-project-trigger").click();
+      await gateway.deferNext("fs.listDir");
+      await page.getByRole("button", { name: "Browse folders" }).click();
+      await gateway.waitForRequest("fs.listDir", { match: { path: "/state/workspace-main" } });
+      await gateway.rejectDeferred("fs.listDir", missing);
+      const browser = page.locator(".new-session-page__browser");
+      await browser.getByRole("option", { name: "projects", exact: true }).waitFor();
+      await captureFolderBrowser(page, "folder-start.png");
+      expect(await browser.getByRole("combobox").inputValue()).toBe(home);
+      expect(await browser.getByRole("alert").count()).toBe(0);
+
+      await gateway.deferNext("fs.listDir");
+      await browser.getByRole("combobox").fill("/missing");
+      await browser.getByRole("combobox").press("Enter");
+      await gateway.waitForRequest("fs.listDir", { match: { path: "/missing" } });
+      await gateway.rejectDeferred("fs.listDir", missing);
+      await browser.getByRole("alert").waitFor();
+      expect(await browser.getByRole("alert").textContent()).toBe("Couldn't list that folder.");
+      expect(await browser.getByRole("combobox").inputValue()).toBe("/missing");
     } finally {
       await context.close();
     }

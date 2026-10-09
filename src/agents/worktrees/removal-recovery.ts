@@ -2,18 +2,16 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isMissingPathError } from "../../infra/errors.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
-import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
-import { requireWorktreeDiskSpace } from "./capacity.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
-import { splitNullBuffer } from "./git-path-inventory.js";
+import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
+import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
 import {
-  assertWorktreeRemovalClaim,
-  getRegistryWorktree,
+  createWorktreeRemovalClaimsGuard,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -23,20 +21,15 @@ import {
   withExactStateGitLocks,
 } from "./removal-git.js";
 import { createRemovalRecoveryInventory } from "./removal-recovery-inventory.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
 
 const preserved = (reason: string) =>
   new Error(`${reason}; remaining source and original snapshot preserved`);
-const stat = async (target: string) =>
-  fs.lstat(target).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
 
-/** CLI-only recovery: reconstitute a clean checkout without replacing any surviving file,
+/** Explicit recovery: reconstitute a clean checkout without replacing any surviving file,
  * then let native non-force Git removal own deletion. Dirty/exact-state captures keep their
  * existing recovery owners; neither their index nor their snapshots can be reconstructed here.
  */
@@ -44,8 +37,10 @@ export async function recoverManagedWorktreeRemoval(
   params: { id: string; snapshot: string; signal?: AbortSignal; commitGuard?: () => void },
   context: { env: NodeJS.ProcessEnv; now: () => number },
 ) {
-  return await withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
-    recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
+  return await withGitProcessOperation("worktree.recovery", () =>
+    withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
+      recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
+    ),
   );
 }
 
@@ -56,11 +51,17 @@ async function recoverRemovalWithAllocation(params: {
   now: () => number;
   signal?: AbortSignal;
   commitGuard?: () => void;
+  workerAuthority?: WorktreeWorkerAuthority;
+  requireDiskSpace: WorktreeAllocationGuard["requireDiskSpace"];
 }) {
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshot)) {
     throw preserved("Expected a full snapshot commit id");
   }
-  const record = getRegistryWorktree(params.env, params.id);
+  const context = captureWorktreeRunEndContext(params.env);
+  const accept = captureWorktreeRegistryReadGuard(context, "record");
+  const record = await readRegistryWorktree(context, params.id);
+  const assertRecordCurrent = accept(record);
+  params.commitGuard?.();
   if (!record || record.snapshotRef !== `refs/openclaw/snapshots/${params.id}`) {
     throw preserved("Recovery requires an ordinary removal snapshot");
   }
@@ -114,9 +115,7 @@ async function recoverRemovalWithAllocation(params: {
     const assertTerminal = () => {
       params.commitGuard?.();
       assertDirectRefFiles();
-      if (JSON.stringify(getRegistryWorktree(params.env, record.id)) !== JSON.stringify(record)) {
-        throw preserved("Completed removal lifecycle changed");
-      }
+      assertRecordCurrent();
     };
     const options = {
       signal: params.signal,
@@ -125,7 +124,7 @@ async function recoverRemovalWithAllocation(params: {
     };
     await assertDirectRefs(options);
     if (
-      (await stat(record.path)) ||
+      (await rawPathStat(record.path)) ||
       (await listGitWorktrees(record.repoRoot, options)).some(
         (entry) => path.resolve(entry.path) === record.path,
       ) ||
@@ -180,22 +179,24 @@ async function recoverRemovalWithAllocation(params: {
   const assertRecord = () => {
     params.commitGuard?.();
     params.signal?.throwIfAborted();
-    const current = getRegistryWorktree(params.env, record.id);
-    if (JSON.stringify(current) !== JSON.stringify(record)) {
-      throw preserved("Worktree registry changed during recovery");
-    }
+    assertRecordCurrent();
   };
   assertRecord();
-  claimWorktreeRemoval(params.env, {
+  await claimWorktreeRemoval(params.env, {
     worktreeId: record.id,
     token,
     ...(retiredRegistration ? { retiredRemoval: true as const } : {}),
     assertCurrent: assertRecord,
+    workerAuthority: {
+      ...params.workerAuthority,
+      predicates: [...(params.workerAuthority?.predicates ?? []), { kind: "record", record }],
+    },
   });
+  const assertClaim = createWorktreeRemovalClaimsGuard(params.env, [record.id], token);
   const assertCurrent = () => {
     assertRecord();
     assertDirectRefFiles();
-    assertWorktreeRemovalClaim(params.env, record.id, token);
+    assertClaim();
   };
   const options = {
     signal: params.signal,
@@ -209,9 +210,9 @@ async function recoverRemovalWithAllocation(params: {
       throw preserved("Provisioned-file recovery requires its original archive owner");
     }
     // A projection can retain ignored guest data outside the ordinary Git capture.
-    const { localWorkspaceStore } =
+    const { hasLocalWorkspaceProjection } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
-    if (localWorkspaceStore(params.env).get(record.id)) {
+    if (await hasLocalWorkspaceProjection(record.id, params.env)) {
       throw preserved("Projected worktree recovery requires its original archive owner");
     }
     const head = await requireGit(record.repoRoot, ["rev-parse", `${params.snapshot}^`], options);
@@ -243,7 +244,7 @@ async function recoverRemovalWithAllocation(params: {
       }
       assertCurrent();
     };
-    await assertRefs(!(await stat(record.path)));
+    await assertRefs(!(await rawPathStat(record.path)));
     const state = await lockState(record);
     if (state.kind === "live" || state.kind === "foreign") {
       throw preserved("Worktree is locked or in use");
@@ -252,7 +253,7 @@ async function recoverRemovalWithAllocation(params: {
     // Match the exact backlink, never infer administrative ownership from its basename.
     const registrations = await listGitWorktrees(record.repoRoot, options);
     const registered = registrations.some((entry) => path.resolve(entry.path) === record.path);
-    const originalRoot = await stat(record.path);
+    const originalRoot = await rawPathStat(record.path);
     if (retiredRegistration && originalRoot) {
       throw preserved("Retired checkout path reappeared");
     }
@@ -261,7 +262,7 @@ async function recoverRemovalWithAllocation(params: {
       const adminRoot = path.join(repository.commonDir, "worktrees");
       for (const name of await fs.readdir(adminRoot)) {
         const candidate = path.join(adminRoot, name);
-        if (!(await stat(candidate))?.isDirectory()) {
+        if (!(await rawPathStat(candidate))?.isDirectory()) {
           continue;
         }
         const backlink = await fs.readFile(path.join(candidate, "gitdir"), "utf8").catch(() => "");
@@ -310,7 +311,7 @@ async function recoverRemovalWithAllocation(params: {
         metadataNames.push(path.basename(shared));
       }
       const worktreeConfig = path.join(gitdir, "config.worktree");
-      const hadWorktreeConfig = Boolean(await stat(worktreeConfig));
+      const hadWorktreeConfig = Boolean(await rawPathStat(worktreeConfig));
       if (hadWorktreeConfig) {
         metadataNames.push("config.worktree");
       }
@@ -415,7 +416,7 @@ async function recoverRemovalWithAllocation(params: {
       });
       const missing = await inventory.verify();
       await assertRefs();
-      requireWorktreeDiskSpace(
+      await params.requireDiskSpace(
         [
           {
             path: record.path,
@@ -426,7 +427,7 @@ async function recoverRemovalWithAllocation(params: {
       );
       // Exclusive creation repairs only this backlink. Never rebuild/replace the index,
       // and never run repository-wide repair or prune as part of recovery.
-      if (!(await stat(gitfile))) {
+      if (!(await rawPathStat(gitfile))) {
         assertIdentity();
         await fs.writeFile(gitfile, `gitdir: ${gitdir}\n`, { flag: "wx", mode: 0o600 });
       }
@@ -469,7 +470,14 @@ async function recoverRemovalWithAllocation(params: {
             async (git) =>
               // The trusted status view cannot execute repository filters.
               // No await separates the final inventory from native admission.
-              await removeManagedCheckout(record, git, true, inventory.assertComplete),
+              await removeManagedCheckout(
+                record,
+                git,
+                true,
+                "recovery",
+                inventory.assertComplete,
+                params.signal,
+              ),
           );
         },
         [record.snapshotRef!, pendingRef],
@@ -482,24 +490,25 @@ async function recoverRemovalWithAllocation(params: {
         true,
         options,
         async (git) =>
-          await runOutsideCommandProcessScope(() =>
-            git.require(record.repoRoot, ["worktree", "remove", "--", record.path], {
-              beforeRun: () => {
-                assertCurrent();
-                assertAdmin();
-                if (fsSync.lstatSync(record.path, { throwIfNoEntry: false })) {
-                  throw preserved("Missing checkout reappeared before destructive admission");
-                }
-              },
-              killProcessTree: true,
-              waitForExit: true,
-            }),
+          await removeManagedCheckout(
+            record,
+            git,
+            true,
+            "recovery",
+            () => {
+              assertCurrent();
+              assertAdmin();
+              if (fsSync.lstatSync(record.path, { throwIfNoEntry: false })) {
+                throw preserved("Missing checkout reappeared before destructive admission");
+              }
+            },
+            params.signal,
           ),
       );
     }
     await assertRefs(true);
     if (
-      (await stat(record.path)) ||
+      (await rawPathStat(record.path)) ||
       (await listGitWorktrees(record.repoRoot, options)).some(
         (entry) => path.resolve(entry.path) === record.path,
       )
@@ -525,21 +534,35 @@ async function recoverRemovalWithAllocation(params: {
     }
     await assertRefs(true);
     assertCurrent();
-    updateRegistryWorktree(
+    await updateRegistryWorktree(
       params.env,
       record.id,
       { removedAt: record.removedAt ?? params.now() },
-      { assertCurrent, removalToken: token },
+      {
+        assertCurrent,
+        removalToken: token,
+        workerAuthority: {
+          ...params.workerAuthority,
+          assertCurrent: () => {
+            params.workerAuthority?.assertCurrent?.();
+            assertDirectRefFiles();
+          },
+          predicates: [
+            ...(params.workerAuthority?.predicates ?? []),
+            { kind: "record", record },
+            { kind: "removal-claim", id: record.id, token },
+          ],
+        },
+      },
     );
-    const finalized = JSON.stringify(getRegistryWorktree(params.env, record.id));
+    const acceptFinalized = captureWorktreeRegistryReadGuard(context, "record");
+    const assertFinalized = acceptFinalized(await readRegistryWorktree(context, record.id));
     await requireGit(record.repoRoot, ["update-ref", "--stdin"], {
       beforeRun: () => {
         params.commitGuard?.();
         assertDirectRefFiles();
-        assertWorktreeRemovalClaim(params.env, record.id, token);
-        if (JSON.stringify(getRegistryWorktree(params.env, record.id)) !== finalized) {
-          throw preserved("Completed removal lifecycle changed");
-        }
+        assertClaim();
+        assertFinalized();
       },
       env: options.env,
       input: `option no-deref\nverify ${record.snapshotRef} ${params.snapshot}\noption no-deref\ndelete ${pendingRef} ${params.snapshot}\n`,
@@ -547,6 +570,6 @@ async function recoverRemovalWithAllocation(params: {
     await fs.rmdir(path.dirname(record.path)).catch(() => undefined);
     return { removed: true as const, snapshotRef: record.snapshotRef };
   } finally {
-    abortWorktreeRemoval(params.env, record.id, token);
+    await abortWorktreeRemoval(params.env, record.id, token);
   }
 }

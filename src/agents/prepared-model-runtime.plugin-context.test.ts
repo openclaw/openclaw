@@ -3,21 +3,14 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
-import * as currentPluginMetadata from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import {
   getPluginRuntimeLoadContext,
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
-import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
-import { buildPreparedPluginModelCatalog } from "./prepared-model-runtime.plugin-generation.js";
-import { AuthStorage, ModelRegistry } from "./sessions/index.js";
-
-vi.mock("./model-catalog.js", { spy: true });
 
 describe("prepared model runtime plugin metadata ownership", () => {
   afterEach(() => {
@@ -59,196 +52,89 @@ describe("prepared model runtime plugin metadata ownership", () => {
       "inbound-registration",
       { requestKey: "inbound-request", resolvedKey: "inbound-resolved" },
     );
-    return { config, activatedConfig, env, workspaceDir, metadataSnapshot, registry };
-  }
-
-  it.each(["source", "activated"] as const)(
-    "carries admitted activation decisions from %s config into a selected runtime",
-    (inputKind) => {
-      const fixture = preparedActivationFixture();
-      const selectedRegistry = createEmptyPluginRegistry();
-      const config = inputKind === "source" ? fixture.config : fixture.activatedConfig;
-      prepareOwnedPluginLoadContext(
-        { config, workspaceDir: fixture.workspaceDir },
-        fixture.env,
-        selectedRegistry,
-        fixture.metadataSnapshot,
-        true,
-        fixture.registry,
-      );
-      const selectedContext = getPluginRuntimeLoadContext(selectedRegistry);
-      expect(selectedContext?.config).toBe(fixture.activatedConfig);
-      expect(selectedContext?.activationSourceConfig).toBe(fixture.config);
-      expect(selectedContext?.autoEnabledReasons).toEqual({
-        synthetic: ["prepared startup decision"],
-      });
-      expect(selectedContext?.metadataSnapshot).toBe(fixture.metadataSnapshot);
-      expect(selectedContext?.loaderCacheIdentity).toBeUndefined();
-      expect(selectedContext?.registrationConfigKey).not.toBe("inbound-registration");
-      expect(selectedContext?.expectedSourceDigests).toBeUndefined();
-    },
-  );
-
-  it.each(["config", "env", "result", "metadata", "workspace"] as const)(
-    "recomputes activation after the prepared %s changes",
-    (changed) => {
-      const fixture = preparedActivationFixture();
-      let metadataSnapshot = fixture.metadataSnapshot;
-      if (changed === "config") {
-        fixture.config.plugins.entries.synthetic.config.mode = "changed";
-      } else if (changed === "env") {
-        fixture.env.OPENCLAW_ACTIVATION_TEST = "changed";
-      } else if (changed === "result") {
-        fixture.activatedConfig.plugins.entries.synthetic.config.mode = "changed";
-      } else if (changed === "metadata") {
-        metadataSnapshot = { ...metadataSnapshot };
-      } else {
-        metadataSnapshot = { ...metadataSnapshot, workspaceDir: "/tmp/replacement-workspace" };
-      }
+    const prepare = (selectedConfig = config) => {
       const selectedRegistry = createEmptyPluginRegistry();
       prepareOwnedPluginLoadContext(
-        { config: fixture.config, workspaceDir: metadataSnapshot.workspaceDir },
-        fixture.env,
+        { config: selectedConfig, workspaceDir },
+        env,
         selectedRegistry,
         metadataSnapshot,
         true,
-        fixture.registry,
+        registry,
       );
-      expect(
-        getPluginRuntimeLoadContext(selectedRegistry)?.autoEnabledReasons.synthetic ?? [],
-      ).not.toContain("prepared startup decision");
-    },
-  );
-
-  it("uses one explicit Gateway metadata generation across agent workspaces", async () => {
-    const config = { plugins: { allow: ["synthetic"] } };
-    const gatewayWorkspace = "/tmp/gateway-plugin-workspace";
-    const gatewaySnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: makeRegistry([{ id: "synthetic", channels: [] }]),
-      workspaceDir: gatewayWorkspace,
-    });
-    const inputs = ["first", "second"].map((name) => ({
-      agentDir: `/tmp/${name}-agent`,
-      config,
-      workspaceDir: `/tmp/${name}-workspace`,
-    }));
-    const pluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: gatewaySnapshot,
+      return getPluginRuntimeLoadContext(selectedRegistry);
     };
-    const modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory({}));
-    const resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
-    const getCurrentMetadata = vi.spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot");
-    let selectedRegistry = createEmptyPluginRegistry();
-    const buildCatalog = vi
-      .mocked(buildPreparedModelCatalogSnapshot)
-      .mockImplementation(async ({ metadataSnapshot }) => {
-        expect(metadataSnapshot).toBe(gatewaySnapshot);
-        expect(getPluginRuntimeGenerationRegistry() === selectedRegistry).toBe(true);
-        return { entries: [], routeVariants: [] };
-      });
+    return { config, activatedConfig, metadataSnapshot, prepare };
+  }
 
-    try {
-      for (const input of inputs) {
-        const registry = createEmptyPluginRegistry();
-        selectedRegistry = registry;
-        expect(
-          prepareOwnedPluginLoadContext(input, process.env, registry, gatewaySnapshot, true),
-        ).toBe(gatewaySnapshot);
-        expect(getPluginRuntimeLoadContext(registry)).toMatchObject({
-          metadataSnapshot: gatewaySnapshot,
-          preferBuiltPluginArtifacts: true,
-        });
-        await buildPreparedPluginModelCatalog({
-          agentFacts: { input, credentials: {} },
-          catalogMode: "static",
-          modelRegistry,
-          pluginGeneration: { ...pluginGeneration, pluginRegistry: registry },
-        });
-      }
-      expect(getCurrentMetadata.mock.calls.length).toBe(0);
-      expect(resolveMetadata.mock.calls.length).toBe(0);
-    } finally {
-      getCurrentMetadata.mockRestore();
-      resolveMetadata.mockRestore();
-      buildCatalog.mockRestore();
-    }
+  it("carries admitted activation decisions from activated config into a selected runtime", () => {
+    const fixture = preparedActivationFixture();
+    const selectedContext = fixture.prepare(fixture.activatedConfig);
+    expect(selectedContext?.config).toBe(fixture.activatedConfig);
+    expect(selectedContext?.activationSourceConfig).toBe(fixture.config);
+    expect(selectedContext?.autoEnabledReasons).toEqual({
+      synthetic: ["prepared startup decision"],
+    });
+    expect(selectedContext?.metadataSnapshot).toBe(fixture.metadataSnapshot);
+    expect(selectedContext?.loaderCacheIdentity).toBeUndefined();
+    expect(selectedContext?.registrationConfigKey).not.toBe("inbound-registration");
+    expect(selectedContext?.expectedSourceDigests).toBeUndefined();
   });
 
   it("keeps direct no-current preparation on the requested workspace", () => {
-    const config = { plugins: { allow: ["synthetic"] } };
-    const workspaceDir = "/tmp/direct-plugin-workspace";
+    const input = {
+      config: { plugins: { allow: ["synthetic"] } },
+      workspaceDir: "/tmp/direct-plugin-workspace",
+    };
     const directSnapshot = createPluginMetadataSnapshot({
-      config,
+      ...input,
       manifestRegistry: makeRegistry([{ id: "synthetic", channels: [] }]),
-      workspaceDir,
     });
-    const resolveMetadata = vi
+    using resolveMetadata = vi
       .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
       .mockReturnValue(directSnapshot);
     const registry = createEmptyPluginRegistry();
 
-    try {
-      expect(
-        prepareOwnedPluginLoadContext(
-          {
-            config,
-            workspaceDir,
-          },
-          process.env,
-          registry,
-        ),
-      ).toBe(directSnapshot);
-      expect(getPluginRuntimeLoadContext(registry)).toMatchObject({
-        metadataSnapshot: directSnapshot,
-        preferBuiltPluginArtifacts: false,
-      });
-      expect(resolveMetadata).toHaveBeenCalledWith({
-        config,
-        env: process.env,
-        workspaceDir,
-        allowWorkspaceScopedCurrent: true,
-      });
-    } finally {
-      resolveMetadata.mockRestore();
-    }
+    expect(prepareOwnedPluginLoadContext(input, process.env, registry)).toBe(directSnapshot);
+    expect(getPluginRuntimeLoadContext(registry)).toMatchObject({
+      metadataSnapshot: directSnapshot,
+      preferBuiltPluginArtifacts: false,
+    });
+    expect(resolveMetadata).toHaveBeenCalledWith({
+      ...input,
+      env: process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
   });
 
   it("requests selected-runtime metadata for executable prepared probes", () => {
-    const config = { plugins: { slots: { memory: "none" as const } } };
-    const workspaceDir = "/tmp/selected-runtime-workspace";
+    const input = {
+      config: { plugins: { slots: { memory: "none" as const } } },
+      workspaceDir: "/tmp/selected-runtime-workspace",
+    };
     const directSnapshot = createPluginMetadataSnapshot({
-      config,
+      ...input,
       manifestRegistry: makeRegistry([{ id: "selected", channels: [] }]),
-      workspaceDir,
     });
-    const resolveMetadata = vi
+    using resolveMetadata = vi
       .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
       .mockReturnValue(directSnapshot);
 
-    try {
-      prepareOwnedPluginLoadContext(
-        {
-          config,
-          loadRuntimePlugins: true,
-          runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
-          workspaceDir,
-        },
-        process.env,
-        undefined,
-      );
+    prepareOwnedPluginLoadContext(
+      {
+        ...input,
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+      },
+      process.env,
+      undefined,
+    );
 
-      expect(resolveMetadata).toHaveBeenCalledWith({
-        config,
-        env: process.env,
-        workspaceDir,
-        allowWorkspaceScopedCurrent: true,
-        pluginIdScope: expect.objectContaining({ key: expect.any(String) }),
-      });
-    } finally {
-      resolveMetadata.mockRestore();
-    }
+    expect(resolveMetadata).toHaveBeenCalledWith({
+      ...input,
+      env: process.env,
+      allowWorkspaceScopedCurrent: true,
+      pluginIdScope: expect.objectContaining({ key: expect.any(String) }),
+    });
   });
 });

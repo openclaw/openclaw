@@ -89,7 +89,11 @@ export class CodexServerRequests {
           method: request.method,
           timeoutMs,
         });
-        deadline.resolve(timeoutServerRequestResponse(timeoutMs));
+        deadline.resolve(
+          failedToolResponse(
+            `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
+          ),
+        );
         controller.abort(new Error("codex app-server server request timed out"));
       }, timeoutMs);
       timeout.unref?.();
@@ -167,19 +171,9 @@ export class CodexServerRequests {
   }
 }
 
-function defaultServerRequestResponse(
-  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
-): JsonValue {
+function defaultServerRequestResponse(request: ServerRequest): JsonValue {
   if (request.method === "item/tool/call") {
-    return {
-      contentItems: [
-        {
-          type: "inputText",
-          text: "OpenClaw did not register a handler for this app-server tool call.",
-        },
-      ],
-      success: false,
-    };
+    return failedToolResponse("OpenClaw did not register a handler for this app-server tool call.");
   }
   if (
     request.method === "item/commandExecution/requestApproval" ||
@@ -191,9 +185,7 @@ function defaultServerRequestResponse(
     return { permissions: {}, scope: "turn" };
   }
   if (request.method === "item/tool/requestUserInput") {
-    return {
-      answers: {},
-    };
+    return { answers: {} };
   }
   if (request.method === "mcpServer/elicitation/request") {
     return createCodexElicitationResponse("decline", null, {
@@ -203,14 +195,9 @@ function defaultServerRequestResponse(
   return {};
 }
 
-function timeoutServerRequestResponse(timeoutMs: number): JsonValue {
+function failedToolResponse(text: string): JsonValue {
   return {
-    contentItems: [
-      {
-        type: "inputText",
-        text: `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
-      },
-    ],
+    contentItems: [{ type: "inputText", text }],
     success: false,
   };
 }

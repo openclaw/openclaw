@@ -2,6 +2,7 @@ import type { FinishReason } from "@google/genai";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { calculateCost } from "../model-utils.js";
 import {
+  createEmptyTransportUsage,
   transportAbortError,
   type WritableTransportStream,
 } from "../transports/transport-stream-shared.js";
@@ -167,19 +168,12 @@ export async function consumeGoogleGenerateContentStream(params: {
       const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
       params.output.usage = {
+        ...createEmptyTransportUsage(),
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
-        cacheWrite: 0,
         totalTokens:
           chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
       };
       calculateCost(params.model, params.output.usage);
     }
@@ -367,23 +361,18 @@ export async function consumeGoogleGenerateContentStream(params: {
     throw transportAbortError(params.signal);
   }
 
+  if (!sawTerminalReason) {
+    terminalGenerationError = Object.assign(
+      new Error("Google stream ended before a terminal finish reason"),
+      { code: "STREAM_INCOMPLETE", type: "google_incomplete_stream" },
+    );
+  }
   if (terminalGenerationError) {
     if (preserveParts) {
       params.output.errorCode = terminalGenerationError.code;
       params.output.errorType = terminalGenerationError.type;
     }
     throw terminalGenerationError;
-  }
-
-  if (!sawTerminalReason) {
-    if (preserveParts) {
-      params.output.errorCode = "STREAM_INCOMPLETE";
-      params.output.errorType = "google_incomplete_stream";
-    }
-    throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
-      code: "STREAM_INCOMPLETE",
-      type: "google_incomplete_stream",
-    });
   }
 
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {

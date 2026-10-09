@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { vi } from "vitest";
+import { fixtureReceiptWorkerClientSource } from "../../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
@@ -18,9 +19,12 @@ import {
 } from "../prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 
-export function createCatalogFleetFixture(makeTempDir: (prefix: string) => string) {
+export function createCatalogFleetFixture(
+  makeTempDir: (prefix: string) => string,
+  receiptBroadcastName?: () => string,
+) {
   return async function createFleetFixture(
-    onBeforePublication?: (fixture: ReturnType<typeof createCatalogFixture>) => void,
+    onBeforePublication?: (fixture: Awaited<ReturnType<typeof createCatalogFixture>>) => void,
     stableCatalog = false,
     options: {
       asyncSyntheticAuth?: boolean;
@@ -28,11 +32,12 @@ export function createCatalogFleetFixture(makeTempDir: (prefix: string) => strin
       publication?: "individual";
     } = {},
   ) {
-    const fixture = createCatalogFixture(
+    const broadcastName = receiptBroadcastName?.();
+    const fixture = await createCatalogFixture(
       makeTempDir,
       0,
       {},
-      { asyncSyntheticAuth: options.asyncSyntheticAuth },
+      { asyncSyntheticAuth: options.asyncSyntheticAuth, receiptBroadcastName: broadcastName },
     );
     if (stableCatalog) {
       fs.writeFileSync(
@@ -49,10 +54,12 @@ export function createCatalogFleetFixture(makeTempDir: (prefix: string) => strin
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Retained catalog", auth: [],
     catalog: { async run(ctx) {
+      ${broadcastName ? `const { sendReceipt } = await import(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixtureReceiptWorkerClientSource(broadcastName) + "\nexport { sendReceipt };"))});` : ""}
       const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
       fs.writeFileSync(marker + ".worker", JSON.stringify({ pid: process.pid, cwd: process.cwd(),
         threadId: require("node:worker_threads").threadId, agentDir: ctx.agentDir }));
       fs.appendFileSync(marker, "start\\n");
+      ${broadcastName ? 'sendReceipt(marker, "start");' : ""}
       const barrier = marker + ".hold";
       if (fs.existsSync(barrier)) await new Promise(resolve => {
         const check = () => {

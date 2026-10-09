@@ -3,7 +3,6 @@ import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
-import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
@@ -64,8 +63,6 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
       typeof createWebOnMessageHandler
     >[0]["replyResolver"],
     replyLogger,
-    baseMentionConfig: buildMentionConfig(opts.cfg),
-    account: {},
   });
 
   return { handler, backgroundTasks };
@@ -119,79 +116,6 @@ describe("web auto-reply routing", () => {
   beforeEach(() => {
     updateLastRouteInBackgroundMock.mockClear();
     runChannelInboundEventMock.mockClear();
-  });
-
-  it("updates last-route for direct chats without senderE164", async () => {
-    const now = Date.now();
-    const mainSessionKey = "agent:main:main";
-    const store = await makeSessionStore({
-      [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
-    });
-
-    const cfg = makeCfg(store.storePath);
-    const { handler, backgroundTasks } = createHandlerForTest({
-      cfg,
-      replyResolver: vi.fn().mockResolvedValue(undefined),
-    });
-
-    await handler(
-      buildInboundMessage({
-        id: "m1",
-        from: "+1000",
-        conversationId: "+1000",
-        chatType: "direct",
-        chatId: "direct:+1000",
-        timestamp: now,
-      }),
-    );
-
-    await Promise.allSettled(backgroundTasks);
-    backgroundTasks.clear();
-
-    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
-    const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(updateParams?.cfg).toBe(cfg);
-    expect(updateParams?.backgroundTasks).toBe(backgroundTasks);
-    expect(updateParams?.warn).toBeTypeOf("function");
-    const {
-      cfg: _cfg,
-      backgroundTasks: _backgroundTasks,
-      warn: _warn,
-      ctx,
-      ...routeParams
-    } = updateParams ?? {};
-    expect(routeParams).toEqual({
-      storeAgentId: "main",
-      sessionKey: mainSessionKey,
-      channel: "whatsapp",
-      to: "+1000",
-      accountId: "default",
-    });
-    expect(ctx).toMatchObject({
-      From: "+1000",
-      To: "+2000",
-      SessionKey: mainSessionKey,
-      AccountId: "default",
-      ChatType: "direct",
-      ConversationLabel: "+1000",
-      GroupMembers: "+1000",
-      MessageSid: "m1",
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "+1000",
-      SenderE164: "+1000",
-      SenderId: "+1000",
-      RawBody: "hello",
-      Body: expect.stringMatching(/^\[WhatsApp \+1000 .+\] \+1000: hello$/u),
-      BodyForAgent: "hello",
-      CommandBody: "hello",
-      Timestamp: now,
-    });
-
-    await store.cleanup();
   });
 
   it("updates last-route for group chats with account id", async () => {

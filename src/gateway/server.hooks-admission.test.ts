@@ -2,21 +2,36 @@
 import fs from "node:fs/promises";
 import { Agent, request as httpRequest } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent-runner/run.js";
+import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
+import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   connectWebchatClient,
+  createGatewaySuiteHarness,
   cronIsolatedRun,
+  gatewayReplyMock,
   installGatewayTestHooks,
   rpcReq,
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
+
+// mock-isolation: Both Gateway barrel instances share this inference boundary; admission stays real.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const hookModel = vi.mocked(runEmbeddedAgent);
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -25,7 +40,10 @@ await import("./server.js");
 const HOOK_TOKEN = "hook-secret";
 const ROTATED_HOOK_TOKEN = "hook-secret-rotated";
 
-afterEach(() => {
+const fixtureLifetime = createFixtureLifetime();
+
+afterEach(async () => {
+  await fixtureLifetime.cleanup();
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   vi.restoreAllMocks();
 });
@@ -62,12 +80,33 @@ async function waitForDuplicateRequest(): Promise<void> {
 
 async function writeReloadableHooksConfig(hooks: Record<string, unknown>): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("expected OPENCLAW_CONFIG_PATH");
-  }
+  assert(configPath, "expected OPENCLAW_CONFIG_PATH");
   await fs.writeFile(
     configPath,
-    `${JSON.stringify({ gateway: { reload: { mode: "hybrid" } }, hooks }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        gateway: { reload: { mode: "hybrid" } },
+        agents: {
+          defaults: {
+            skipBootstrap: true,
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.test/v1",
+              apiKey: "synthetic-fixture-key",
+              models: [{ id: "gpt-5.6-luna", name: "Hook fixture model" }],
+            },
+          },
+        },
+        hooks,
+      },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
 }
@@ -167,69 +206,199 @@ async function postOversizedChunkedHook(port: number): Promise<{
 
 async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("expected OPENCLAW_CONFIG_PATH");
-  }
+  assert(configPath, "expected OPENCLAW_CONFIG_PATH");
   const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
   await fs.mkdir(transformsDir, { recursive: true });
   await fs.writeFile(path.join(transformsDir, moduleName), source, "utf8");
 }
 
 async function createBlockedHookTransform(moduleName: string): Promise<{
-  waitUntilEntered: () => Promise<void>;
-  release: () => Promise<void>;
+  entered: Promise<void>;
+  release: () => void;
+  dispose: () => void;
 }> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("expected OPENCLAW_CONFIG_PATH");
-  }
-  const markerPath = path.join(path.dirname(configPath), `${moduleName}.entered`);
-  const releasePath = path.join(path.dirname(configPath), `${moduleName}.release`);
+  assert(configPath, "expected OPENCLAW_CONFIG_PATH");
+  const enteredEvent = `hook-transform:${configPath}:${moduleName}`;
+  const entered = createDeferred();
+  const released = createDeferred();
+  const onEntered = (complete: () => void) => {
+    entered.resolve();
+    void released.promise.then(complete);
+  };
   await writeHookTransformModule(
     moduleName,
-    `import fs from "node:fs/promises";
-const markerPath = ${JSON.stringify(markerPath)};
-const releasePath = ${JSON.stringify(releasePath)};
-export default async function transform() {
-  await fs.writeFile(markerPath, "entered", "utf8");
-  while (true) {
-    try {
-      await fs.access(releasePath);
-      return {};
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
+    `export default async function transform() {
+  await new Promise((resolve) => process.emit(${JSON.stringify(enteredEvent)}, resolve));
+  return {};
 }`,
   );
+  process.once(enteredEvent, onEntered);
   return {
-    waitUntilEntered: async () => {
-      await expect
-        .poll(
-          async () => {
-            try {
-              await fs.access(markerPath);
-              return true;
-            } catch {
-              return false;
-            }
-          },
-          { timeout: 2_000, interval: 10 },
-        )
-        .toBe(true);
-    },
-    release: async () => {
-      await fs.writeFile(releasePath, "released", "utf8");
+    entered: entered.promise,
+    release: released.resolve,
+    dispose: () => {
+      process.removeListener(enteredEvent, onEntered);
     },
   };
 }
 
-function readExecutionIdentityCall(index: number): unknown {
-  const call = cronIsolatedRun.mock.calls[index]?.[0];
-  if (!call || typeof call !== "object" || !("executionIdentity" in call)) {
-    return undefined;
-  }
-  return call.executionIdentity;
+function withRevokedHook(
+  mode: "disable" | "rotate",
+  { signal }: Pick<TestContext, "signal">,
+  afterRotation?: (
+    port: number,
+    socket: Parameters<typeof rpcReq>[0],
+    waitForEvent: (text: string) => Promise<void>,
+  ) => Promise<void>,
+): Promise<void> {
+  return fixtureLifetime.run(async () => {
+    const moduleName = `${mode}-reload.mjs`;
+    const transform = await createBlockedHookTransform(moduleName);
+    try {
+      await writeReloadableHooksConfig({
+        enabled: true,
+        token: HOOK_TOKEN,
+        mappings: [
+          {
+            match: { path: "revoked" },
+            action: "wake",
+            textTemplate: "{{payload.text}}",
+            transform: { module: moduleName },
+          },
+        ],
+      });
+      await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, async () => {
+        const gateway = await createGatewaySuiteHarness();
+        try {
+          const { port, server } = gateway;
+          await server.startupSettled;
+          const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+          const mainSessionKey = resolveMainSessionKeyFromConfig();
+          const receipts = new Map<
+            string,
+            ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>
+          >();
+          const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+          const eventObserver = vi
+            .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+            .mockImplementation((text, options) => {
+              const receipt = enqueue(text, options);
+              if (options.source === "hook") {
+                receipts.set(text, receipt);
+              }
+              return receipt;
+            });
+          // Admission, native session creation, and reload authority remain real.
+          gatewayReplyMock.mockImplementation((ctx, options, config) =>
+            getReplyFromConfig(
+              ctx,
+              options,
+              withFullRuntimeReplyConfig(config ?? getRuntimeConfig()),
+            ),
+          );
+          const model = hookModel.mockReset().mockImplementation(async (params) => {
+            assert(params.preparedRunAdmission, "expected ordinary reply admission");
+            await params.preparedRunAdmission.admit("gateway", params.runId);
+            params.onExecutionPhase?.({ phase: "model_call_started" });
+            await params.onExecutionStarted?.();
+            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+            return { payloads: [{ text: "Hook event observed" }], meta: { durationMs: 1 } };
+          });
+          const waitForEvent = async (text: string) => {
+            const receipt = receipts.get(text);
+            assert(receipt, `expected admitted hook occurrence: ${text}`);
+            await expect(receipt.accepted).resolves.toEqual({ ok: true });
+            const outcome = await receipt.settled;
+            expect(outcome, JSON.stringify(outcome)).toMatchObject({
+              status: "completed",
+              executionStarted: true,
+            });
+            expect(model.mock.calls.some(([params]) => params.prompt.includes(text))).toBe(true);
+          };
+          try {
+            const current = await postHook(
+              port,
+              "/hooks/wake",
+              { text: "before-reload" },
+              "before",
+            );
+            expect(current.status, await current.clone().text()).toBe(200);
+            await waitForEvent("before-reload");
+            const revoked = postHook(port, "/hooks/revoked", { text: "after-reload" }, "revoked");
+            let response: Response;
+            try {
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  transform.entered,
+                  revoked,
+                  "hook request settled before its transform entered",
+                ),
+                signal,
+              );
+              await patchHooksConfig(
+                socket,
+                mode === "disable"
+                  ? { enabled: false }
+                  : { enabled: true, token: ROTATED_HOOK_TOKEN },
+              );
+              await waitForHookStatus({
+                port,
+                path: "/hooks/wake",
+                token: HOOK_TOKEN,
+                body: "{}",
+                status: mode === "disable" ? 404 : 401,
+              });
+              if (mode === "rotate") {
+                const control = await postHook(
+                  port,
+                  "/hooks/wake",
+                  {},
+                  "current-token-control",
+                  ROTATED_HOOK_TOKEN,
+                );
+                expect(control.status).toBe(400);
+              }
+            } finally {
+              await fixtureLifetime.verifyCleanup(async () => {
+                transform.release();
+                await revoked;
+              });
+              response = await revoked;
+            }
+            expect(response.status).toBe(409);
+            await expect(response.json()).resolves.toEqual({
+              ok: false,
+              error: "hook configuration changed; retry request",
+            });
+            expect(
+              peekSystemEventEntries(mainSessionKey).some((event) =>
+                event.text.includes("after-reload"),
+              ),
+            ).toBe(false);
+            expect(receipts.has("after-reload")).toBe(false);
+            expect(
+              model.mock.calls.some(([params]) => params.prompt.includes("after-reload")),
+            ).toBe(false);
+            await afterRotation?.(port, socket, waitForEvent);
+          } finally {
+            for (const receipt of receipts.values()) {
+              receipt.cancel();
+            }
+            await Promise.allSettled([...receipts.values()].map((receipt) => receipt.settled));
+            eventObserver.mockRestore();
+            model.mockReset();
+            gatewayReplyMock.mockReset();
+            socket.close();
+          }
+        } finally {
+          await fixtureLifetime.verifyCleanup(() => gateway.close());
+        }
+      });
+    } finally {
+      await fixtureLifetime.verifyCleanup(async () => transform.dispose());
+    }
+  });
 }
 
 describe("gateway hook admission", () => {
@@ -247,283 +416,61 @@ describe("gateway hook admission", () => {
     });
   });
 
-  test("revokes in-flight hook authority when startup-enabled hooks are disabled", async () => {
-    const transform = await createBlockedHookTransform("disable-reload.mjs");
-    await writeReloadableHooksConfig({
-      enabled: true,
-      token: HOOK_TOKEN,
-      mappings: [
-        {
-          match: { path: "revoke-disable" },
-          action: "wake",
-          textTemplate: "{{payload.text}}",
-          transform: { module: "disable-reload.mjs" },
-        },
-      ],
-    });
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, () =>
-      withGatewayServer(async ({ port, server }) => {
-        await server.startupSettled;
-        const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-        try {
-          const mainSessionKey = resolveMainSessionKeyFromConfig();
-          const current = await postHook(
-            port,
-            "/hooks/wake",
-            { text: "current-before-disable" },
-            "current-before-disable",
-          );
-          expect(current.status).toBe(200);
-          await expect
-            .poll(
-              () =>
-                peekSystemEventEntries(mainSessionKey).some((event) =>
-                  event.text.includes("current-before-disable"),
-                ),
-              { timeout: 2_000, interval: 10 },
-            )
-            .toBe(true);
-          drainSystemEvents(mainSessionKey);
-
-          const revoked = postHook(
-            port,
-            "/hooks/revoke-disable",
-            { text: "revoked-after-disable" },
-            "revoked-after-disable",
-          );
-          let disabled: Response | undefined;
-          try {
-            await transform.waitUntilEntered();
-            await patchHooksConfig(socket, { enabled: false });
-            await waitForHookStatus({
-              port,
-              path: "/hooks/wake",
-              token: HOOK_TOKEN,
-              body: "{}",
-              status: 404,
-            });
-          } finally {
-            await transform.release();
-            disabled = await revoked;
-          }
-          expect(disabled.status).toBe(409);
-          await expect(disabled.json()).resolves.toEqual({
-            ok: false,
-            error: "hook configuration changed; retry request",
-          });
-          expect(
-            peekSystemEventEntries(mainSessionKey).some((event) =>
-              event.text.includes("revoked-after-disable"),
-            ),
-          ).toBe(false);
-        } finally {
-          socket.close();
-        }
-      }),
-    );
+  test("revokes in-flight hook authority when startup-enabled hooks are disabled", async (context) => {
+    await withRevokedHook("disable", context);
   });
 
-  test("rotates hook credentials and preserves replay across production hot reloads", async () => {
-    const transform = await createBlockedHookTransform("token-reload.mjs");
-    await writeReloadableHooksConfig({
-      enabled: true,
-      token: HOOK_TOKEN,
-      mappings: [
-        {
-          match: { path: "revoke-token" },
-          action: "wake",
-          textTemplate: "{{payload.text}}",
-          transform: { module: "token-reload.mjs" },
-        },
-      ],
-    });
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, () =>
-      withGatewayServer(async ({ port, server }) => {
-        await server.startupSettled;
-        const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-        try {
-          const mainSessionKey = resolveMainSessionKeyFromConfig();
-          const current = await postHook(
-            port,
-            "/hooks/wake",
-            { text: "current-before-rotation" },
-            "current-before-rotation",
-          );
-          expect(current.status).toBe(200);
-          await expect
-            .poll(
-              () =>
-                peekSystemEventEntries(mainSessionKey).some((event) =>
-                  event.text.includes("current-before-rotation"),
-                ),
-              { timeout: 2_000, interval: 10 },
-            )
-            .toBe(true);
-          drainSystemEvents(mainSessionKey);
-
-          const revokedByRotation = postHook(
-            port,
-            "/hooks/revoke-token",
-            { text: "revoked-after-rotation" },
-            "revoked-after-rotation",
-          );
-          let rotated: Response | undefined;
-          try {
-            await transform.waitUntilEntered();
-            await patchHooksConfig(socket, { enabled: true, token: ROTATED_HOOK_TOKEN });
-            await waitForHookStatus({
-              port,
-              path: "/hooks/wake",
-              token: HOOK_TOKEN,
-              body: "{}",
-              status: 401,
-            });
-            const currentToken = await postHook(
-              port,
-              "/hooks/wake",
-              {},
-              "current-token-control",
-              ROTATED_HOOK_TOKEN,
-            );
-            expect(currentToken.status).toBe(400);
-          } finally {
-            await transform.release();
-            rotated = await revokedByRotation;
-          }
-          expect(rotated.status).toBe(409);
-          await expect(rotated.json()).resolves.toEqual({
-            ok: false,
-            error: "hook configuration changed; retry request",
-          });
-          expect(
-            peekSystemEventEntries(mainSessionKey).some((event) =>
-              event.text.includes("revoked-after-rotation"),
-            ),
-          ).toBe(false);
-
-          const authorized = await postHook(
-            port,
-            "/hooks/wake",
-            { text: "current-after-rotation" },
-            "current-after-rotation",
-            ROTATED_HOOK_TOKEN,
-          );
-          expect(authorized.status).toBe(200);
-          await expect
-            .poll(
-              () =>
-                peekSystemEventEntries(mainSessionKey).some((event) =>
-                  event.text.includes("current-after-rotation"),
-                ),
-              { timeout: 2_000, interval: 10 },
-            )
-            .toBe(true);
-          drainSystemEvents(mainSessionKey);
-
-          cronIsolatedRun.mockClear();
-          cronIsolatedRun.mockImplementation(async (params: unknown) => {
-            (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
-            return { status: "ok", summary: "done" };
-          });
-          const replayKey = "production-reload-replay";
-          const firstAgent = await postHook(
-            port,
-            "/hooks/agent",
-            { message: "replay across reload" },
-            replayKey,
-            ROTATED_HOOK_TOKEN,
-          );
-          expect(firstAgent.status).toBe(200);
-          const firstAgentBody = (await firstAgent.json()) as { runId?: string };
-          await waitForCronIsolatedRuns(1);
-
-          await patchHooksConfig(socket, {
-            enabled: true,
-            token: ROTATED_HOOK_TOKEN,
-            path: "/incoming",
-          });
-          await waitForHookStatus({
-            port,
-            path: "/incoming/wake",
-            token: ROTATED_HOOK_TOKEN,
-            body: "{}",
-            status: 400,
-          });
-          const replayedAgent = await postHook(
-            port,
-            "/incoming/agent",
-            { message: "replay across reload" },
-            replayKey,
-            ROTATED_HOOK_TOKEN,
-          );
-          expect(replayedAgent.status).toBe(200);
-          const replayedAgentBody = (await replayedAgent.json()) as { runId?: string };
-          expect(replayedAgentBody.runId).toBe(firstAgentBody.runId);
-          expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-        } finally {
-          socket.close();
-        }
-      }),
-    );
-  });
-
-  test("rejects deferred wake delivery to an explicit session", async () => {
-    testState.hooksConfig = {
-      enabled: true,
-      token: HOOK_TOKEN,
-      allowRequestSessionKey: true,
-      allowedSessionKeyPrefixes: ["hook:"],
-    };
-    await withGatewayServer(async ({ port }) => {
-      const response = await postHook(
+  test("rotates hook credentials and preserves replay across production hot reloads", async (context) => {
+    await withRevokedHook("rotate", context, async (port, socket, waitForEvent) => {
+      const authorized = await postHook(
         port,
         "/hooks/wake",
-        { text: "Wake later", mode: "next-heartbeat", sessionKey: "hook:wake:later" },
-        "deferred-custom-wake",
+        { text: "current-after-rotation" },
+        "current-after-rotation",
+        ROTATED_HOOK_TOKEN,
       );
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        ok: false,
-        error: "sessionKey requires mode=now",
-      });
-    });
-  });
-
-  test("keeps direct hooks unattributed and mapped IDs as ingress attribution", async () => {
-    testState.hooksConfig = {
-      enabled: true,
-      token: HOOK_TOKEN,
-      mappings: [
-        {
-          id: "gmail-source",
-          match: { path: "gmail" },
-          action: "agent",
-          messageTemplate: "New email from {{messages[0].from}}",
-        },
-      ],
-    };
-    await withGatewayServer(async ({ port }) => {
+      expect(authorized.status, await authorized.clone().text()).toBe(200);
+      await waitForEvent("current-after-rotation");
       cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
-      expect(
-        (await postHook(port, "/hooks/agent", { message: "Direct" }, "direct-source")).status,
-      ).toBe(200);
-      expect(
-        (await postHook(port, "/hooks/gmail", { messages: [{ from: "Ada" }] }, "mapped-source"))
-          .status,
-      ).toBe(200);
-      expect(readExecutionIdentityCall(0)).toEqual({
-        ingress: { kind: "webhook", boundary: "gateway.hooks.agent", state: "present" },
+      cronIsolatedRun.mockImplementation(async (params: unknown) => {
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
       });
-      expect(readExecutionIdentityCall(1)).toEqual({
-        ingress: {
-          kind: "webhook",
-          boundary: "gateway.hooks.agent",
-          state: "present",
-          rawSourceRef: "gmail-source",
-        },
+      const replayKey = "production-reload-replay";
+      const firstAgent = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "replay across reload" },
+        replayKey,
+        ROTATED_HOOK_TOKEN,
+      );
+      expect(firstAgent.status).toBe(200);
+      const firstAgentBody = (await firstAgent.json()) as { runId?: string };
+      await waitForCronIsolatedRuns(1);
+
+      await patchHooksConfig(socket, {
+        enabled: true,
+        token: ROTATED_HOOK_TOKEN,
+        path: "/incoming",
       });
+      await waitForHookStatus({
+        port,
+        path: "/incoming/wake",
+        token: ROTATED_HOOK_TOKEN,
+        body: "{}",
+        status: 400,
+      });
+      const replayedAgent = await postHook(
+        port,
+        "/incoming/agent",
+        { message: "replay across reload" },
+        replayKey,
+        ROTATED_HOOK_TOKEN,
+      );
+      expect(replayedAgent.status).toBe(200);
+      const replayedAgentBody = (await replayedAgent.json()) as { runId?: string };
+      expect(replayedAgentBody.runId).toBe(firstAgentBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -600,28 +547,14 @@ describe("gateway hook admission", () => {
     });
   });
 
-  test.each<{
-    name: string;
-    config: NonNullable<OpenClawConfig["hooks"]>;
-    path: string;
-    body: Record<string, unknown>;
-    sessionTarget?: string;
-  }>([
-    {
-      name: "persistent",
-      config: { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:"] },
-      path: "/hooks/agent",
-      body: {
-        message: "Dispatch",
-        sessionKey: "hook:admission:shared",
-        sessionMode: "persistent",
-      },
-      sessionTarget: "session:hook:admission:shared",
-    },
-    { name: "direct", config: {}, path: "/hooks/agent", body: { message: "Dispatch" } },
-    {
-      name: "mapped",
-      config: {
+  test.each(["persistent", "mapped"])(
+    "shares one pending %s dispatch across simultaneous duplicates",
+    async (mode) => {
+      testState.hooksConfig = {
+        enabled: true,
+        token: HOOK_TOKEN,
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:"],
         mappings: [
           {
             match: { path: "mapped-pending" },
@@ -629,43 +562,49 @@ describe("gateway hook admission", () => {
             messageTemplate: "Mapped: {{payload.subject}}",
           },
         ],
-      },
-      path: "/hooks/mapped-pending",
-      body: { subject: "Email" },
-    },
-  ])("shares one pending $name dispatch across simultaneous duplicates", async (scenario) => {
-    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN, ...scenario.config };
-    await withGatewayServer(async ({ port }) => {
-      const runnerAdmission = createDeferred();
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
-        if (scenario.sessionTarget) {
-          expect((params as { job?: { sessionTarget?: string } }).job?.sessionTarget).toBe(
-            scenario.sessionTarget,
+      };
+      const persistent = mode === "persistent";
+      await withGatewayServer(async ({ port }) => {
+        const runnerAdmission = createDeferred();
+        cronIsolatedRun.mockClear();
+        cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+          if (persistent) {
+            expect(params).toHaveProperty("job.sessionTarget", "session:hook:admission:shared");
+          }
+          await runnerAdmission.promise;
+          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+          return { status: "ok", summary: "done" };
+        });
+        const request = () =>
+          postHook(
+            port,
+            persistent ? "/hooks/agent" : "/hooks/mapped-pending",
+            persistent
+              ? {
+                  message: "Dispatch",
+                  sessionKey: "hook:admission:shared",
+                  sessionMode: "persistent",
+                }
+              : { subject: "Email" },
+            `pending-${mode}-idem`,
           );
-        }
-        await runnerAdmission.promise;
-        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
-        return { status: "ok", summary: "done" };
+
+        const firstResponse = request();
+        await waitForCronIsolatedRuns(1);
+        const duplicateResponse = request();
+        await waitForDuplicateRequest();
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+        runnerAdmission.resolve();
+
+        const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
+        expect(first.status).toBe(200);
+        expect(duplicate.status).toBe(200);
+        const firstBody = (await first.json()) as { runId?: string };
+        const duplicateBody = (await duplicate.json()) as { runId?: string };
+        expect(duplicateBody.runId).toBe(firstBody.runId);
       });
-      const request = () =>
-        postHook(port, scenario.path, scenario.body, `pending-${scenario.name}-idem`);
-
-      const firstResponse = request();
-      await waitForCronIsolatedRuns(1);
-      const duplicateResponse = request();
-      await waitForDuplicateRequest();
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-      runnerAdmission.resolve();
-
-      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
-      expect(first.status).toBe(200);
-      expect(duplicate.status).toBe(200);
-      const firstBody = (await first.json()) as { runId?: string };
-      const duplicateBody = (await duplicate.json()) as { runId?: string };
-      expect(duplicateBody.runId).toBe(firstBody.runId);
-    });
-  });
+    },
+  );
 
   test("returns typed admission failures and leaves the idempotency key retryable", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
@@ -704,7 +643,7 @@ describe("gateway hook admission", () => {
       expect(gatewayFailureBody.runId).not.toBe(conflictBody.runId);
 
       const admitted = await request();
-      expect(admitted.status).toBe(200);
+      expect(admitted.status, await admitted.clone().text()).toBe(200);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(3);
     });
   });

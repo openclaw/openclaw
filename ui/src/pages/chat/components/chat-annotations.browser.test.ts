@@ -1,9 +1,11 @@
 import { html, nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import "./chat-comment-pins.ts";
 import { renderCommentPreviewChip, renderCommentPreviewRow } from "./chat-comment-preview.ts";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
@@ -57,12 +59,12 @@ function mountComments(count: number, top: number) {
 async function openComments(trigger: HTMLElement) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
-  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   const shown = new Promise<Event>((resolve) => {
-    popup.addEventListener("wa-after-show", resolve, { once: true });
+    tooltip.addEventListener("wa-after-show", resolve, { once: true });
   });
   trigger.focus();
   await shown;
+  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   await expect.poll(() => popup.open).toBe(true);
   const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
   await expect.poll(() => body.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -304,11 +306,16 @@ describe("annotation editor", () => {
     },
   );
 
-  it.each([1440, 390])(
-    "grows downward from one line to five, then scrolls (%ipx)",
-    async (width) => {
+  it.each([
+    { width: 1440, expanded: false },
+    { width: 390, expanded: false },
+    { width: 1440, expanded: true },
+    { width: 390, expanded: true },
+  ])(
+    "grows to five lines and scrolls without fading editable text ($width px, editing=$expanded)",
+    async ({ width, expanded }) => {
       await page.viewport(width, 900);
-      const { input, popup } = openEditor();
+      const { input, popup } = openEditor(expanded);
       const oneLine = input.getBoundingClientRect().height;
       const originalTop = popup.getBoundingClientRect().top;
       const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
@@ -323,7 +330,15 @@ describe("annotation editor", () => {
       expect(input.getBoundingClientRect().height).toBeLessThanOrEqual(
         oneLine + lineHeight * 4 + 1,
       );
-      input.scrollTop = input.scrollHeight;
+      for (const scrollTop of [
+        0,
+        (input.scrollHeight - input.clientHeight) / 2,
+        input.scrollHeight,
+      ]) {
+        input.scrollTop = scrollTop;
+        input.dispatchEvent(new Event("scroll"));
+        expect(getComputedStyle(input).maskImage).toBe("none");
+      }
       expect(input.scrollTop).toBeGreaterThan(0);
       expect(popup.getBoundingClientRect().top).toBeCloseTo(originalTop, 0);
       expect(popup.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
@@ -354,4 +369,99 @@ describe("annotation editor", () => {
       expect(cancelled.popup.isConnected).toBe(false);
     },
   );
+});
+
+describe("comment pins", () => {
+  it("relayouts for content that can move a placed source, not content after it", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    // Resize delivery is asynchronous in a real browser; this test isolates mutations.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    container.innerHTML = `<div class="chat-thread" style="height: 600px">
+      <div class="chat-thread-inner">
+        <div class="chat-bubble" data-entry-id="before">Earlier context</div>
+        <div class="chat-bubble" data-entry-id="source">Selected passage</div>
+        <div class="chat-bubble" data-entry-id="after">Streaming reply</div>
+      </div>
+    </div>`;
+    const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+    const bubble = (entryId: string) =>
+      thread.querySelector<HTMLElement>(`.chat-bubble[data-entry-id="${entryId}"]`)!;
+    const before = bubble("before");
+    const source = bubble("source");
+    const after = bubble("after");
+    const pins = document.createElement("openclaw-chat-comment-pins") as HTMLElement & {
+      attachments: ChatAttachment[];
+      sessionKey: string;
+      updateComplete: Promise<unknown>;
+    };
+    pins.attachments = [
+      {
+        id: "comment",
+        mimeType: "text/plain",
+        selectionAnnotation: {
+          text: "Selected passage",
+          comment: "Check this",
+          sessionKey: "main",
+          entryId: "source",
+          start: 0,
+          end: 16,
+        },
+      },
+    ];
+    pins.sessionKey = "main";
+    thread.append(pins);
+    const pin = () => pins.querySelector<HTMLButtonElement>("button")!;
+    const layouts = vi.spyOn(pins, "getBoundingClientRect");
+    const settle = async () => {
+      await pins.updateComplete;
+      // Mutation records reach the observer as a microtask.
+      await Promise.resolve();
+      for (const frame of frames.splice(0)) {
+        frame(0);
+      }
+      const count = layouts.mock.calls.length;
+      layouts.mockClear();
+      return count;
+    };
+    expect(await settle()).toBe(1);
+    expect(pin().hidden).toBe(false);
+    const top = Number.parseFloat(pin().style.top);
+
+    // Streaming below the source cannot move it in the top-aligned transcript.
+    after.append(" with more streamed words", document.createElement("p"));
+    after.dataset.messageText = "Streaming reply with more streamed words";
+    expect(await settle()).toBe(0);
+    thread.dispatchEvent(new Event("scroll"));
+    expect(await settle()).toBe(1);
+    expect(Number.parseFloat(pin().style.top)).toBe(top);
+
+    const spacer = document.createElement("div");
+    spacer.style.height = "40px";
+    before.append(spacer);
+    expect(await settle()).toBe(1);
+    expect(Number.parseFloat(pin().style.top)).toBeCloseTo(top + 40, 0);
+
+    source.append(" and its follow-up");
+    expect(await settle()).toBe(1);
+
+    // An unplaced pin cannot rule anything out.
+    source.remove();
+    expect(await settle()).toBe(1);
+    expect(pin().hidden).toBe(true);
+    after.append(" and more");
+    expect(await settle()).toBe(1);
+  });
 });

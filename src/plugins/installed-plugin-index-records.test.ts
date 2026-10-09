@@ -251,7 +251,7 @@ describe("plugin index install records store", () => {
       },
       { stateDir, candidates: [] },
     );
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);

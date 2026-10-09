@@ -109,27 +109,24 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       return selectedSchema ? renderNode({ ...params, schema: selectedSchema }) : nothing;
     }
 
-    const extractLiteral = (variant: (typeof nonNull)[number]): unknown => {
-      if (variant.const !== undefined) {
-        return variant.const;
-      }
-      if (variant.enum && variant.enum.length === 1) {
-        return variant.enum[0];
-      }
-      return undefined;
-    };
-    const literals = nonNull.map(extractLiteral);
+    const literals = nonNull.map((variant) =>
+      variant.const !== undefined
+        ? variant.const
+        : variant.enum?.length === 1
+          ? variant.enum[0]
+          : undefined,
+    );
     const allLiterals = literals.every((literal) => literal !== undefined);
 
     if (allLiterals && literals.length > 0) {
       return renderOptions(literals);
     }
 
-    const primitiveTypes = new Set(nonNull.map((variant) => schemaType(variant)).filter(Boolean));
     const normalizedTypes = new Set(
-      [...primitiveTypes].map((variantType) =>
-        variantType === "integer" ? "number" : variantType,
-      ),
+      nonNull.flatMap((variant) => {
+        const variantType = schemaType(variant);
+        return variantType ? [variantType === "integer" ? "number" : variantType] : [];
+      }),
     );
 
     if (
@@ -145,7 +142,7 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
 
     if (
       [...normalizedTypes].every((variantType) =>
-        ["string", "number", "boolean"].includes(variantType as string),
+        ["string", "number", "boolean"].includes(variantType),
       )
     ) {
       const hasString = normalizedTypes.has("string");
@@ -167,7 +164,6 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       }
     }
 
-    // Complex union (e.g. array | object) — render as JSON textarea
     return renderJsonTextarea(params);
   }
 

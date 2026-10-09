@@ -11,12 +11,9 @@ export function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unk
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    // SAFETY: callers only read string/object fields defensively from tailscale's JSON object output.
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-  }
-  // SAFETY: same defensive field reads as above; a non-object payload fails those reads, not this cast.
-  return JSON.parse(trimmed) as Record<string, unknown>;
+  const json = start >= 0 && end > start ? trimmed.slice(start, end + 1) : trimmed;
+  // SAFETY: callers only read string/object fields defensively from Tailscale's output.
+  return JSON.parse(json) as Record<string, unknown>;
 }
 
 export function isTransientTailscaleStatusError(error: unknown): boolean {
@@ -53,18 +50,21 @@ export async function waitForTailscaleBackendReady(params: {
   exec?: typeof runExec;
   deadlineMs?: number;
   pollMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const exec = params.exec ?? runExec;
   const pollMs = params.pollMs ?? TAILSCALE_BACKEND_READY_POLL_MS;
   const deadline = Date.now() + (params.deadlineMs ?? TAILSCALE_BACKEND_READY_WAIT_MS);
   let announced: string | undefined;
   for (;;) {
+    params.signal?.throwIfAborted();
     let pending: string;
     try {
       const { stdout } = await exec(params.bin, [...(params.prefix ?? []), "status", "--json"], {
         timeoutMs: 5000,
-        maxBuffer: 400_000,
+        maxBuffer: 16 * 1024 * 1024,
         logOutput: false,
+        signal: params.signal,
       });
       const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
       const state = typeof parsed.BackendState === "string" ? parsed.BackendState : undefined;
@@ -73,6 +73,7 @@ export async function waitForTailscaleBackendReady(params: {
       }
       pending = state;
     } catch (error) {
+      params.signal?.throwIfAborted();
       if (!isTransientTailscaleStatusError(error)) {
         return;
       }
@@ -85,6 +86,8 @@ export async function waitForTailscaleBackendReady(params: {
       params.info(`waiting for the local Tailscale daemon (${pending})`);
       announced = pending;
     }
-    await sleep(pollMs);
+    await sleep(pollMs, undefined, { signal: params.signal }).finally(() =>
+      params.signal?.throwIfAborted(),
+    );
   }
 }

@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
@@ -33,45 +32,6 @@ export function readNewSessionTerminalStartAccess(
       });
 }
 
-async function startNewSessionInTerminal(
-  client: GatewayBrowserClient,
-  params: {
-    catalogId: string;
-    agentId: string;
-    hostId: string;
-    cwd: string;
-    initialMessage: string;
-    worktree: boolean;
-    worktreeName: string;
-    baseRef: string;
-  },
-  isCurrent: () => boolean,
-): Promise<SessionsCatalogStartTerminalResult | null> {
-  let cwd = params.cwd;
-  if (params.worktree) {
-    const created = await createManagedWorktree(client, {
-      repoRoot: cwd,
-      name: params.worktreeName,
-      baseRef: params.baseRef,
-    });
-    if (!isCurrent()) {
-      return null;
-    }
-    cwd = created.path;
-  }
-  return startCatalogSessionInTerminal(
-    client,
-    {
-      catalogId: params.catalogId,
-      agentId: params.agentId,
-      hostId: params.hostId,
-      cwd,
-      ...(params.initialMessage ? { initialMessage: params.initialMessage } : {}),
-    },
-    isCurrent,
-  );
-}
-
 /** Native startup shares draft custody, but never falls through to chat creation. */
 export async function submitDraftInTerminal(options: {
   snapshot: DraftSubmissionSnapshot;
@@ -102,11 +62,8 @@ export async function submitDraftInTerminal(options: {
   const submission = options.capture(client);
   const initialMessage = flow.message.trim();
   const terminalInput = {
-    catalogId,
-    agentId,
     hostId: place.terminalHostId,
     cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
-    initialMessage,
     worktree: place.worktree,
     worktreeName: place.worktreeName,
     baseRef: place.baseRef,
@@ -119,7 +76,29 @@ export async function submitDraftInTerminal(options: {
   place.browser.close();
   options.closeTransientUi();
   try {
-    const result = await startNewSessionInTerminal(client, terminalInput, submission.isCurrent);
+    let cwd = terminalInput.cwd;
+    if (terminalInput.worktree) {
+      const created = await createManagedWorktree(client, {
+        repoRoot: cwd,
+        name: terminalInput.worktreeName,
+        baseRef: terminalInput.baseRef,
+      });
+      if (!submission.isCurrent()) {
+        return;
+      }
+      cwd = created.path;
+    }
+    const result = await startCatalogSessionInTerminal(
+      client,
+      {
+        catalogId,
+        agentId,
+        hostId: terminalInput.hostId,
+        cwd,
+        ...(initialMessage ? { initialMessage } : {}),
+      },
+      submission.isCurrent,
+    );
     if (!result || !submission.isCurrent()) {
       return;
     }

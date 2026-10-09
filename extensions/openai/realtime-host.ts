@@ -12,15 +12,14 @@ import {
   readProviderTextResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
-import {
-  captureWsEventAsync,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+// The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
 
 export const openAIRealtimeHost = {
   resolveAgentDir,
@@ -28,9 +27,9 @@ export const openAIRealtimeHost = {
   resolveProviderAuthProfileApiKey,
   resolveProviderRequestHeaders,
   createRealtimeTranscriptionWebSocketSession,
-  captureWsEventAsync,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
+  captureWsEventAsync: captureHost.captureWsEventAsync,
+  createDebugProxyWebSocketAgent: proxyCaptureSdk.createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings: proxyCaptureSdk.resolveDebugProxySettings,
   fetchWithSsrFGuard,
   createProviderHttpError,
   readProviderJsonResponse,
@@ -40,7 +39,11 @@ export const openAIRealtimeHost = {
   redactSensitiveText,
 } satisfies Omit<
   PluginCapabilityCatalogHostContext,
-  "isProviderApiKeyConfigured" | "resolveApiKeyForProvider" | "captureWsEvent"
->;
+  | "isProviderApiKeyConfigured"
+  | "resolveApiKeyForProvider"
+  | "captureWsEvent"
+  | "captureWsEventAsync"
+> &
+  Partial<Pick<PluginCapabilityCatalogHostContext, "captureWsEventAsync">>;
 
 export type OpenAIRealtimeHost = typeof openAIRealtimeHost;

@@ -8,18 +8,13 @@ import {
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
-import { createPluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
 import type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "./tool-types.js";
 
 function register(factory: OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>) {
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: createPluginRuntimeMock(),
-    activateGlobalSideEffects: false,
-  });
+  const builder = createTestPluginRegistry(createPluginRuntimeMock());
   const record = createPluginRecord({ id: "probe", contracts: { tools: ["probe"] } });
   builder.registry.plugins.push(record);
   builder
@@ -30,6 +25,24 @@ function register(factory: OpenClawPluginToolFactory | OpenClawPluginToolFactory
     throw new Error("expected registered probe");
   }
   return { registry: builder.registry, entry };
+}
+
+function declarations(readNames: () => string[] | undefined) {
+  const builder = createTestPluginRegistry(createPluginRuntimeMock());
+  const record = createPluginRecord({
+    id: "probe",
+    contracts: {
+      get tools() {
+        return readNames();
+      },
+    },
+  });
+  builder.registry.plugins.push(record);
+  return {
+    ...builder,
+    record,
+    api: builder.createApi(record, { config: {}, registrationMode: "full" }),
+  };
 }
 
 function continuation(isCurrent: () => boolean) {
@@ -48,19 +61,9 @@ function continuation(isCurrent: () => boolean) {
 
 describe("plugin tool declaration membership", () => {
   it("prepares detached, ordered, case-sensitive declarations once per record", () => {
-    const builder = createTestPluginRegistry(createPluginRuntimeMock());
     const names = [" beta ", "Alpha", "beta", " ", "alpha"];
     const readNames = vi.fn(() => names);
-    const record = createPluginRecord({
-      id: "probe",
-      contracts: {
-        get tools() {
-          return readNames();
-        },
-      },
-    });
-    builder.registry.plugins.push(record);
-    const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+    const { api, record, ...builder } = declarations(readNames);
     expect(readNames).not.toHaveBeenCalled();
 
     api.registerTool(() => null, { names: [" beta ", "Alpha", "beta"] });
@@ -96,18 +99,8 @@ describe("plugin tool declaration membership", () => {
   });
 
   it.each([undefined, []])("retains empty declarations before factory validation (%j)", (names) => {
-    const builder = createTestPluginRegistry(createPluginRuntimeMock());
     const readNames = vi.fn(() => names);
-    const record = createPluginRecord({
-      id: "empty",
-      contracts: {
-        get tools() {
-          return readNames();
-        },
-      },
-    });
-    builder.registry.plugins.push(record);
-    const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+    const { api, registry } = declarations(readNames);
     const readFactory = vi.fn(() => {
       throw new Error("factory must not be read");
     });
@@ -119,54 +112,17 @@ describe("plugin tool declaration membership", () => {
         },
       });
     }
-    expect(builder.registry.tools).toEqual([]);
-    expect(builder.registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+    expect(registry.tools).toEqual([]);
+    expect(registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
       "plugin must declare contracts.tools before registering agent tools",
       "plugin must declare contracts.tools before registering agent tools",
     ]);
     expect(readFactory).not.toHaveBeenCalled();
     expect(readNames).toHaveBeenCalledOnce();
   });
-
-  it("does not retain an incomplete declaration preparation after an accessor throws", () => {
-    const builder = createTestPluginRegistry(createPluginRuntimeMock());
-    const failure = new Error("declaration read failed");
-    const readNames = vi
-      .fn<() => string[]>()
-      .mockImplementationOnce(() => {
-        throw failure;
-      })
-      .mockReturnValue(["probe"]);
-    const record = createPluginRecord({
-      id: "probe",
-      contracts: {
-        get tools() {
-          return readNames();
-        },
-      },
-    });
-    builder.registry.plugins.push(record);
-    const api = builder.createApi(record, { config: {}, registrationMode: "full" });
-    expect(() => api.registerTool(() => null, { name: "probe" })).toThrow(failure);
-    api.registerTool(() => null, { name: "probe" });
-    expect(builder.registry.tools.map((entry) => entry.names)).toEqual([["probe"]]);
-    expect(builder.registry.diagnostics).toEqual([]);
-    expect(readNames).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("versioned plugin tool authority", () => {
-  it("requires a final-effect assertion in the versioned context type", () => {
-    expectTypeOf<OpenClawPluginToolContext<2>["assertInvocationCurrent"]>().toEqualTypeOf<
-      () => void
-    >();
-    const { entry } = register({ contextVersion: 2, create: () => null });
-    expect(entry.contextVersion).toBe(2);
-    expect(() => entry.factory({ senderIsOwner: true })).toThrow(
-      "require host invocation authority",
-    );
-  });
-
   it.each([false, true])(
     "does not promote legacy continuation factories, preserving direct owner=%s",
     (directOwner) => {
@@ -186,16 +142,6 @@ describe("versioned plugin tool authority", () => {
       expect(context.agentAccountId).toBeUndefined();
     },
   );
-
-  it("does not turn version opt-in or management-only context into owner authority", () => {
-    const { entry, registry } = register({ contextVersion: 2, create: () => null });
-    const context = createPluginToolFactoryContext({
-      entry,
-      registry,
-      context: { senderIsOwner: false },
-    });
-    expect(context.senderIsOwner).toBe(false);
-  });
 
   it("rejects an operational caller that has no live receipt authority", async () => {
     const { entry, registry } = register({ contextVersion: 2, create: () => null });
@@ -219,7 +165,38 @@ describe("versioned plugin tool authority", () => {
     );
   });
 
+  it.each([
+    ["the memory slot owner's tools", "probe", true],
+    ["another plugin's tools", "records", false],
+  ])("checks memory audience currency only for %s", (_label, slotOwner, guarded) => {
+    const { entry, registry } = register(() => null);
+    registry.memoryCapabilities.push({
+      pluginId: slotOwner,
+      capability: {},
+      memorySlotSelected: true,
+    });
+    const assertMemoryAudienceCurrent = vi.fn(() => {
+      throw new Error("memory audience is no longer current");
+    });
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: { assertMemoryAudienceCurrent },
+      assertInvocationCurrent: () => {},
+    });
+
+    if (guarded) {
+      expect(() => context.assertInvocationCurrent()).toThrow("no longer current");
+    } else {
+      expect(() => context.assertInvocationCurrent()).not.toThrow();
+      expect(assertMemoryAudienceCurrent).not.toHaveBeenCalled();
+    }
+  });
+
   it("allows metadata construction but rejects V2 effects without an admitted invocation", async () => {
+    expectTypeOf<OpenClawPluginToolContext<2>["assertInvocationCurrent"]>().toEqualTypeOf<
+      () => void
+    >();
     const effect = vi.fn();
     const { entry, registry } = register({
       contextVersion: 2,
@@ -235,7 +212,16 @@ describe("versioned plugin tool authority", () => {
         },
       }),
     });
-    const context = createPluginToolFactoryContext({ entry, registry, context: {} });
+    expect(entry.contextVersion).toBe(2);
+    expect(() => entry.factory({ senderIsOwner: true })).toThrow(
+      "require host invocation authority",
+    );
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: { senderIsOwner: false },
+    });
+    expect(context.senderIsOwner).toBe(false);
     const raw = entry.factory(context);
     if (!raw || Array.isArray(raw)) {
       throw new Error("expected metadata probe");

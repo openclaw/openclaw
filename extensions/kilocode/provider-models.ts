@@ -2,26 +2,31 @@ import {
   buildLiveModelProviderConfig,
   readLiveModelCatalogStringField,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
+  isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
-export const KILOCODE_DEFAULT_MODEL_ID = "kilo-auto/balanced";
+const KILOCODE_MANIFEST_CATALOG = manifest.modelCatalog.providers.kilocode;
+const KILOCODE_DEFAULT_MODEL = buildManifestModelProviderConfig({
+  providerId: "kilocode",
+  catalog: KILOCODE_MANIFEST_CATALOG,
+}).models[0]!;
+export const KILOCODE_BASE_URL = KILOCODE_MANIFEST_CATALOG.baseUrl;
+export const KILOCODE_DEFAULT_MODEL_ID = KILOCODE_DEFAULT_MODEL.id;
 export const KILOCODE_DEFAULT_MODEL_REF = `kilocode/${KILOCODE_DEFAULT_MODEL_ID}`;
-export const KILOCODE_DEFAULT_MODEL_NAME = "Auto Balanced";
+export const KILOCODE_DEFAULT_MODEL_NAME = KILOCODE_DEFAULT_MODEL.name;
 
-type KilocodeModelCatalogEntry = {
-  id: string;
-  name: string;
-  reasoning: boolean;
-  input: Array<"text" | "image">;
-  contextWindow?: number;
-  maxTokens?: number;
-};
+type KilocodeModelCatalogEntry = Pick<
+  ModelDefinitionConfig,
+  "id" | "name" | "reasoning" | "input"
+> &
+  Partial<Pick<ModelDefinitionConfig, "contextWindow" | "maxTokens">>;
 
 export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
   {
@@ -32,14 +37,9 @@ export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
   },
 ];
 
-export const KILOCODE_DEFAULT_CONTEXT_WINDOW = 1000000;
-export const KILOCODE_DEFAULT_MAX_TOKENS = 65536;
-export const KILOCODE_DEFAULT_COST = {
-  input: 0.325,
-  output: 1.95,
-  cacheRead: 0.0325,
-  cacheWrite: 0.40625,
-};
+export const KILOCODE_DEFAULT_CONTEXT_WINDOW = KILOCODE_DEFAULT_MODEL.contextWindow;
+export const KILOCODE_DEFAULT_MAX_TOKENS = KILOCODE_DEFAULT_MODEL.maxTokens;
+export const KILOCODE_DEFAULT_COST = KILOCODE_DEFAULT_MODEL.cost;
 
 export const KILOCODE_MODELS_URL = `${KILOCODE_BASE_URL}models`;
 
@@ -48,12 +48,8 @@ const DISCOVERY_TIMEOUT_MS = 5000;
 interface GatewayModelPricing {
   prompt: string;
   completion: string;
-  image?: string;
-  request?: string;
   input_cache_read?: string;
   input_cache_write?: string;
-  web_search?: string;
-  internal_reasoning?: string;
 }
 
 interface GatewayModelEntry {
@@ -133,19 +129,14 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
 }
 
 function asGatewayModelEntry(value: unknown): GatewayModelEntry {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Kilocode model list: malformed JSON response");
   }
   const entry = value as Partial<GatewayModelEntry>;
-  if (
-    typeof entry.id !== "string" ||
-    typeof entry.pricing !== "object" ||
-    entry.pricing === null ||
-    Array.isArray(entry.pricing)
-  ) {
+  if (typeof entry.id !== "string" || !isRecord(entry.pricing)) {
     throw new Error("Kilocode model list: malformed JSON response");
   }
-  return value as GatewayModelEntry;
+  return entry as GatewayModelEntry;
 }
 
 function readGatewayModelRows(body: unknown): readonly unknown[] {
@@ -196,7 +187,6 @@ export async function discoverKilocodeModels(
     timeoutMs: DISCOVERY_TIMEOUT_MS,
     ttlMs: 0,
     readRows: readGatewayModelRows,
-    buildRequestHeaders: () => ({ Accept: "application/json" }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
     auditContext: "kilocode.model_discovery",
     projectRows: projectKilocodeModels,
@@ -206,12 +196,7 @@ export async function discoverKilocodeModels(
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   return {
-    id: KILOCODE_DEFAULT_MODEL_ID,
-    name: KILOCODE_DEFAULT_MODEL_NAME,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: KILOCODE_DEFAULT_COST,
-    contextWindow: KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
+    ...KILOCODE_DEFAULT_MODEL,
+    input: [...KILOCODE_DEFAULT_MODEL.input],
   };
 }

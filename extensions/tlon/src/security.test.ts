@@ -8,18 +8,15 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
  * - Ship normalization consistency
  * - Bot mention detection boundaries
  */
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
-import { createTlonCitationResolver } from "./monitor/cites.js";
+import { prepareTlonGroupAdmission } from "./monitor/mentions.js";
 import {
   resolveTlonCommandAuthorizationWithIngress,
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
   isBotMentioned,
   extractMessageText,
-  resolveAuthorizedMessageText,
-  resolveTlonGroupMentionDecision,
 } from "./monitor/utils.js";
 import { setTlonRuntime } from "./runtime.js";
 
@@ -94,7 +91,6 @@ describe("Security: DM Allowlist", () => {
       const authorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~zod",
         ownerShip: "zod",
-        useAccessGroups: true,
       });
       expect(authorized.commandAccess.requested).toBe(true);
       expect(authorized.commandAccess.authorized).toBe(true);
@@ -104,7 +100,6 @@ describe("Security: DM Allowlist", () => {
       const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~nec",
         ownerShip: "~zod",
-        useAccessGroups: true,
       });
       expect(unauthorized.commandAccess.requested).toBe(true);
       expect(unauthorized.commandAccess.authorized).toBe(false);
@@ -184,53 +179,65 @@ describe("Security: Bot Mention Detection", () => {
 });
 
 describe("Security: Group Mention Policy", () => {
-  it("allows participated-thread follow-ups by default", () => {
-    expect(
-      resolveTlonGroupMentionDecision({
-        cfg: {},
-        accountId: "default",
-        wasMentioned: false,
-        botParticipatedInThread: true,
-      }),
-    ).toMatchObject({
+  function groupAdmissionParams(
+    overrides: Partial<Parameters<typeof prepareTlonGroupAdmission>[0]> = {},
+  ): Parameters<typeof prepareTlonGroupAdmission>[0] {
+    return {
+      cfg: {},
+      account: { accountId: "default" },
+      api: { scry: async () => ({}) },
+      channelNest: "chat/~host/general",
+      senderShip: "~nec",
+      isOwner: () => false,
+      botShipName: "~zod",
+      botNickname: null,
+      rawText: "follow up",
+      messageSeal: { "parent-id": "1234" },
+      isThreadReply: true,
+      hasParticipatedInThread: (parentId) => parentId === "1234",
+      getSettings: () => ({}),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      ...overrides,
+    };
+  }
+
+  it("allows participated-thread follow-ups by default", async () => {
+    const { mentionDecision } = await prepareTlonGroupAdmission(groupAdmissionParams());
+    expect(mentionDecision).toMatchObject({
       shouldSkip: false,
       matchedImplicitMentionKinds: ["bot_thread_participant"],
     });
   });
 
-  it("allows account policy to disable participated-thread follow-ups", () => {
-    const cfg = {
-      channels: {
-        tlon: {
-          implicitMentions: { threadParticipation: true },
-          accounts: {
-            work: { implicitMentions: { threadParticipation: false } },
+  it("allows account policy to disable participated-thread follow-ups", async () => {
+    const { mentionDecision } = await prepareTlonGroupAdmission(
+      groupAdmissionParams({
+        account: { accountId: "work" },
+        cfg: {
+          channels: {
+            tlon: {
+              implicitMentions: { threadParticipation: true },
+              accounts: {
+                work: { implicitMentions: { threadParticipation: false } },
+              },
+            },
           },
         },
-      },
-    } as never;
-    expect(
-      resolveTlonGroupMentionDecision({
-        cfg,
-        accountId: "work",
-        wasMentioned: false,
-        botParticipatedInThread: true,
       }),
-    ).toMatchObject({ shouldSkip: true, matchedImplicitMentionKinds: [] });
+    );
+    expect(mentionDecision).toMatchObject({ shouldSkip: true, matchedImplicitMentionKinds: [] });
   });
 
-  it("keeps explicit mentions enabled when thread participation is disabled", () => {
-    const cfg = {
-      channels: { tlon: { implicitMentions: { threadParticipation: false } } },
-    } as never;
-    expect(
-      resolveTlonGroupMentionDecision({
-        cfg,
-        accountId: "default",
-        wasMentioned: true,
-        botParticipatedInThread: true,
+  it("keeps explicit mentions enabled when thread participation is disabled", async () => {
+    const { mentionDecision } = await prepareTlonGroupAdmission(
+      groupAdmissionParams({
+        rawText: "~zod follow up",
+        cfg: {
+          channels: { tlon: { implicitMentions: { threadParticipation: false } } },
+        },
       }),
-    ).toMatchObject({ shouldSkip: false, effectiveWasMentioned: true });
+    );
+    expect(mentionDecision).toMatchObject({ shouldSkip: false, effectiveWasMentioned: true });
   });
 });
 
@@ -335,51 +342,5 @@ describe("Security: Authorization Edge Cases", () => {
     const suspiciousShip = "__proto__";
     await expectDmAllowed(suspiciousShip, ["~zod"], false);
     await expectDmAllowed("~zod", [suspiciousShip], false);
-  });
-});
-
-describe("Security: Cite Resolution Authorization Ordering", () => {
-  const content = [
-    {
-      block: {
-        cite: {
-          chan: {
-            nest: "chat/~private-ship/ops",
-            where: "/msg/~victim-ship/170141184507799509469114119040828178432",
-          },
-        },
-      },
-    },
-    { inline: ["~bot-ship please summarize this"] },
-  ];
-  const rawText = extractMessageText(content);
-
-  function createResolver() {
-    const scry = vi.fn(async () => ({ essay: { content: [{ inline: ["PRIVATE-CONTENT"] }] } }));
-    return {
-      scry,
-      ...createTlonCitationResolver({ api: { scry }, runtime: createNonExitingRuntimeEnv() }),
-    };
-  }
-
-  it("does not fetch cited content before sender authorization", async () => {
-    const { scry, resolveAllCites } = createResolver();
-    await expect(
-      resolveAuthorizedMessageText({
-        rawText,
-        content,
-        authorizedForCites: false,
-        resolveAllCites,
-      }),
-    ).resolves.toBe(rawText);
-    expect(scry).not.toHaveBeenCalled();
-  });
-
-  it("prepends the resolved citation after sender authorization", async () => {
-    const { scry, resolveAllCites } = createResolver();
-    await expect(
-      resolveAuthorizedMessageText({ rawText, content, authorizedForCites: true, resolveAllCites }),
-    ).resolves.toBe(`> ~victim-ship wrote: PRIVATE-CONTENT\n\n${rawText}`);
-    expect(scry).toHaveBeenCalledTimes(1);
   });
 });

@@ -34,11 +34,25 @@ export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): nu
   return addTimerTimeoutGraceMs(timeoutMs ?? 20_000, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
 }
 
-export function runBrowserCliCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (error) => {
+export async function runBrowserCliCommand(
+  action: () => Promise<void>,
+  errorPolicy: "runtime" | "inline" = "runtime",
+): Promise<void> {
+  const reportError = (error: unknown) => {
     defaultRuntime.error(danger(String(error)));
     defaultRuntime.exit(1);
-  });
+  };
+  if (errorPolicy === "runtime") {
+    await runCommandWithRuntime(defaultRuntime, action, reportError);
+    return;
+  }
+  // These older commands report even expected/JSON-mode errors locally. Keep
+  // that public CLI behavior distinct from runCommandWithRuntime's rethrow path.
+  try {
+    await action();
+  } catch (error) {
+    reportError(error);
+  }
 }
 
 /** Execute a scoped request with the command family's existing error and output policy. */
@@ -81,18 +95,7 @@ export async function runBrowserCliRequest<T = unknown>(params: {
       );
     }
   };
-  if (params.errorPolicy !== "inline") {
-    await runBrowserCliCommand(action);
-    return;
-  }
-  // These older commands report even expected/JSON-mode errors locally. Keep
-  // that public CLI behavior distinct from runCommandWithRuntime's rethrow path.
-  try {
-    await action();
-  } catch (err) {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  }
+  await runBrowserCliCommand(action, params.errorPolicy);
 }
 
 export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
@@ -101,6 +104,22 @@ export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unkno
   }
   defaultRuntime.writeJson(payload);
   return true;
+}
+
+export function printBrowserList<T>(
+  entries: T[],
+  emptyMessage: string,
+  format: (entry: T, index: number) => string,
+  header?: string,
+): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(emptyMessage);
+    return;
+  }
+  if (header !== undefined) {
+    defaultRuntime.log(header);
+  }
+  defaultRuntime.log(entries.map(format).join("\n"));
 }
 
 export function resolveBrowserProfileQuery(

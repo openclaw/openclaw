@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OpenAIQuicksilverPendingAudio,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
@@ -26,6 +26,28 @@ vi.mock("libopus-wasm", async (importOriginal) => {
       (libopusFactoryOverrides.createEncoder ?? actual.createEncoder)(...args),
   };
 });
+
+const peers: OpenAIQuicksilverAudioPeer[] = [];
+afterEach(() => {
+  for (const peer of peers.splice(0)) {
+    peer.close();
+  }
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  libopusFactoryOverrides.createEncoder = undefined;
+  libopusFactoryOverrides.createDecoder = undefined;
+});
+
+async function createAudioPeer(
+  callbacks: Parameters<typeof OpenAIQuicksilverAudioPeer.create>[0]["callbacks"] = {
+    onAudio: vi.fn(),
+    onError: vi.fn(),
+  },
+) {
+  const peer = await OpenAIQuicksilverAudioPeer.create({ callbacks, iceServers: [] });
+  peers.push(peer);
+  return peer;
+}
 
 function createRelayTone(): Buffer {
   const pcm = Buffer.alloc(480 * 2);
@@ -75,14 +97,11 @@ async function createInboundAudioHarness(params?: {
   const { RtpHeader, RtpPacket } = await import("werift");
   const onAudio = vi.fn();
   const onError = vi.fn();
-  const peer = await OpenAIQuicksilverAudioPeer.create({
-    callbacks: {
-      onAudio,
-      onError,
-      onRtpPacket: params?.onRtpPacket,
-      onMediaError: params?.onMediaError,
-    },
-    iceServers: [],
+  const peer = await createAudioPeer({
+    onAudio,
+    onError,
+    onRtpPacket: params?.onRtpPacket,
+    onMediaError: params?.onMediaError,
   });
   const testPeer = peer as unknown as TestableAudioPeer;
   const decodeOrder: Array<number | "plc"> = [];
@@ -115,85 +134,65 @@ async function createInboundAudioHarness(params?: {
 async function captureOutboundRtp(testPeer: TestableAudioPeer) {
   const { RtpPacket } = await import("werift");
   const packets: Array<{ atMs: number; sequenceNumber: number; timestamp: number }> = [];
-  const send = vi
-    .spyOn(testPeer.state.transceiver.sender, "sendRtp")
-    .mockImplementation(async (packet) => {
-      const rtp = Buffer.isBuffer(packet) ? RtpPacket.deSerialize(packet) : packet;
-      if (!(rtp instanceof RtpPacket)) {
-        throw new Error("Expected an RTP packet");
-      }
-      packets.push({
-        atMs: performance.now(),
-        sequenceNumber: rtp.header.sequenceNumber,
-        timestamp: rtp.header.timestamp,
-      });
+  vi.spyOn(testPeer.state.transceiver.sender, "sendRtp").mockImplementation(async (packet) => {
+    const rtp = Buffer.isBuffer(packet) ? RtpPacket.deSerialize(packet) : packet;
+    if (!(rtp instanceof RtpPacket)) {
+      throw new Error("Expected an RTP packet");
+    }
+    packets.push({
+      atMs: performance.now(),
+      sequenceNumber: rtp.header.sequenceNumber,
+      timestamp: rtp.header.timestamp,
     });
-  return { packets, send };
+  });
+  return packets;
 }
 
 describe("GPT-Live werift audio peer", () => {
   it("creates a full-candidate Opus sendrecv offer without a data channel", async () => {
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-      iceServers: [],
-    });
-    try {
-      const offer = await peer.createOffer();
-      expect(offer).toMatch(/^m=audio .*UDP\/TLS\/RTP\/SAVPF 111$/m);
-      expect(offer).toMatch(/^a=rtpmap:111 OPUS\/48000\/2$/im);
-      expect(offer).toMatch(/^a=sendrecv$/m);
-      expect(offer).toMatch(/^a=candidate:/m);
-      expect(offer).toMatch(/^a=end-of-candidates$/m);
-      expect(offer).not.toMatch(/^m=application /m);
-    } finally {
-      peer.close();
-    }
+    const peer = await createAudioPeer();
+    const offer = await peer.createOffer();
+    expect(offer).toMatch(/^m=audio .*UDP\/TLS\/RTP\/SAVPF 111$/m);
+    expect(offer).toMatch(/^a=rtpmap:111 OPUS\/48000\/2$/im);
+    expect(offer).toMatch(/^a=sendrecv$/m);
+    expect(offer).toMatch(/^a=candidate:/m);
+    expect(offer).toMatch(/^a=end-of-candidates$/m);
+    expect(offer).not.toMatch(/^m=application /m);
   });
 
   it("rejects a second SSRC before it can share Opus decoder state", async () => {
-    const { decodeOrder, decodePacketLoss, onError, packet, peer, testPeer } =
+    const { decodeOrder, decodePacketLoss, onError, packet, testPeer } =
       await createInboundAudioHarness();
-    try {
-      testPeer.handleInboundRtp(packet(10, 1));
-      testPeer.handleInboundRtp(packet(200, 2));
+    testPeer.handleInboundRtp(packet(10, 1));
+    testPeer.handleInboundRtp(packet(200, 2));
 
-      expect(decodeOrder).toEqual([10]);
-      expect(decodePacketLoss).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "GPT-Live WebRTC audio source changed unexpectedly" }),
-      );
-    } finally {
-      peer.close();
-    }
+    expect(decodeOrder).toEqual([10]);
+    expect(decodePacketLoss).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "GPT-Live WebRTC audio source changed unexpectedly" }),
+    );
   });
 
   it("fails closed on a large same-SSRC sequence discontinuity", async () => {
-    const { decodeOrder, decodePacketLoss, onError, packet, peer, testPeer } =
+    const { decodeOrder, decodePacketLoss, onError, packet, testPeer } =
       await createInboundAudioHarness();
-    try {
-      testPeer.handleInboundRtp(packet(40_000));
-      testPeer.handleInboundRtp(packet(10_000));
+    testPeer.handleInboundRtp(packet(40_000));
+    testPeer.handleInboundRtp(packet(10_000));
 
-      expect(decodeOrder).toEqual([40_000 & 0xff]);
-      expect(decodePacketLoss).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "GPT-Live WebRTC RTP sequence changed unexpectedly",
-        }),
-      );
-    } finally {
-      peer.close();
-    }
+    expect(decodeOrder).toEqual([40_000 & 0xff]);
+    expect(decodePacketLoss).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "GPT-Live WebRTC RTP sequence changed unexpectedly",
+      }),
+    );
   });
 
   it("keeps raw Opus RTP payload framing and round-trips relay PCM", async () => {
     const { RtpPacket, dePacketizeRtpPackets } = await import("werift");
     const onAudio = vi.fn<(audio: Buffer) => void>();
     const onError = vi.fn();
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio, onError },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer({ onAudio, onError });
     const testPeer = peer as unknown as TestableAudioPeer;
     const send = vi
       .spyOn(testPeer.state.transceiver.sender, "sendRtp")
@@ -204,105 +203,51 @@ describe("GPT-Live werift audio peer", () => {
         expect(dePacketizeRtpPackets("opus", [packet]).data).toEqual(packet.payload);
         testPeer.handleInboundRtp(packet);
       });
-    try {
-      testPeer.connected = true;
-      for (let index = 0; index < 3; index += 1) {
-        peer.sendAudio(createRelayTone());
-        testPeer.sendNextAudioFrame();
-      }
-      await Promise.resolve();
-      const relayPcm = Buffer.concat(onAudio.mock.calls.map(([audio]) => audio));
-      expect(send).toHaveBeenCalledTimes(3);
-      expect(onError).not.toHaveBeenCalled();
-      // The streaming filter retains seven samples until the next packet.
-      expect(relayPcm).toHaveLength((3 * 480 - 7) * 2);
-      expect(
-        Math.max(
-          ...Array.from({ length: relayPcm.length / 2 }, (_, i) =>
-            Math.abs(relayPcm.readInt16LE(i * 2)),
-          ),
+    testPeer.connected = true;
+    for (let index = 0; index < 3; index += 1) {
+      peer.sendAudio(createRelayTone());
+      testPeer.sendNextAudioFrame();
+    }
+    await Promise.resolve();
+    const relayPcm = Buffer.concat(onAudio.mock.calls.map(([audio]) => audio));
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(onError).not.toHaveBeenCalled();
+    // The streaming filter retains seven samples until the next packet.
+    expect(relayPcm).toHaveLength((3 * 480 - 7) * 2);
+    expect(
+      Math.max(
+        ...Array.from({ length: relayPcm.length / 2 }, (_, i) =>
+          Math.abs(relayPcm.readInt16LE(i * 2)),
         ),
-      ).toBeGreaterThan(1_000);
-    } finally {
-      peer.close();
-    }
-  });
-
-  it("decodes reordered inbound RTP packets in sequence order", async () => {
-    const { decodeOrder, onAudio, onError, packet, peer, testPeer } =
-      await createInboundAudioHarness();
-    try {
-      testPeer.handleInboundRtp(packet(10));
-      testPeer.handleInboundRtp(packet(12));
-      expect(decodeOrder).toEqual([10]);
-      testPeer.handleInboundRtp(packet(11));
-
-      expect(decodeOrder).toEqual([10, 11, 12]);
-      expect(onAudio).toHaveBeenCalledTimes(3);
-      expect(onError).not.toHaveBeenCalled();
-    } finally {
-      peer.close();
-    }
+      ),
+    ).toBeGreaterThan(1_000);
   });
 
   it("emits an Opus PLC frame for a dropped inbound RTP packet", async () => {
-    const { decodeOrder, decodePacketLoss, onAudio, onError, packet, peer, testPeer } =
+    const { decodeOrder, decodePacketLoss, onAudio, onError, packet, testPeer } =
       await createInboundAudioHarness();
-    try {
-      for (const sequenceNumber of [20, 22, 23, 24, 25]) {
-        testPeer.handleInboundRtp(packet(sequenceNumber));
-      }
-
-      expect(decodeOrder).toEqual([20, "plc", 22, 23, 24, 25]);
-      expect(decodePacketLoss).toHaveBeenCalledWith(960);
-      // The centered streaming filter retains seven 24 kHz samples of right-edge
-      // context until the next packet instead of fabricating a boundary per packet.
-      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
-        (6 * 480 - 7) * 2,
-      );
-      expect(onError).not.toHaveBeenCalled();
-    } finally {
-      peer.close();
+    for (const sequenceNumber of [20, 22, 23, 24, 25]) {
+      testPeer.handleInboundRtp(packet(sequenceNumber));
     }
+
+    expect(decodeOrder).toEqual([20, "plc", 22, 23, 24, 25]);
+    expect(decodePacketLoss).toHaveBeenCalledWith(960);
+    // The centered streaming filter retains seven 24 kHz samples of right-edge
+    // context until the next packet instead of fabricating a boundary per packet.
+    expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
+      (6 * 480 - 7) * 2,
+    );
+    expect(onError).not.toHaveBeenCalled();
   });
 
-  it("flushes a short reordered tail after the 80 ms window", async () => {
-    const { decodeOrder, onError, packet, peer, testPeer } = await createInboundAudioHarness();
-    vi.useFakeTimers();
-    try {
-      for (const sequenceNumber of [40, 42, 43, 44]) {
-        testPeer.handleInboundRtp(packet(sequenceNumber));
-      }
-      await vi.advanceTimersByTimeAsync(79);
-      expect(decodeOrder).toEqual([40]);
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(decodeOrder).toEqual([40, "plc", 42, 43, 44]);
-      expect(onError).not.toHaveBeenCalled();
-    } finally {
-      peer.close();
-      vi.useRealTimers();
-    }
-  });
-
-  it.each([
-    { first: 10, buffered: [12], retired: [11, 12], next: 13, expected: [10, "plc", 12] },
-    {
-      first: 10,
-      buffered: [12, 14],
-      retired: [11, 12, 13, 14],
-      next: 15,
-      expected: [10, "plc", 12, "plc", 14],
-    },
-    {
+  it("retires buffered RTP across rollover and delayed PCM at clear", async () => {
+    const scenario = {
       first: 65_534,
       buffered: [0, 2],
       retired: [65_535, 0, 1, 2],
       next: 3,
       expected: [254, "plc", 0, "plc", 2],
-    },
-    { first: 10, buffered: [], retired: [10], next: 11, expected: [10] },
-  ])("retires buffered RTP $buffered and delayed PCM at clear", async (scenario) => {
+    };
     const { decode, decodeOrder, onAudio, onError, packet, peer, testPeer } =
       await createInboundAudioHarness();
     let cleared = false;
@@ -311,127 +256,84 @@ describe("GPT-Live werift audio peer", () => {
       return new Int16Array(960 * 2).fill(cleared ? 0 : 12_000);
     });
     vi.useFakeTimers();
-    try {
-      testPeer.handleInboundRtp(packet(scenario.first));
-      for (const sequence of scenario.buffered) {
-        testPeer.handleInboundRtp(packet(sequence));
-      }
-      expect(decodeOrder).toEqual([scenario.first & 0xff]);
-      expect(onAudio).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(scenario.buffered.length > 0 ? 1 : 0);
-
-      peer.clearOutputAudio();
-      // Advance Opus/sequence state while discarding output, rather than
-      // forgetting the stream and admitting a late pre-clear packet as fresh.
-      expect(decodeOrder).toEqual(scenario.expected);
-      expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(80);
-      for (const sequence of scenario.retired) {
-        testPeer.handleInboundRtp(packet(sequence));
-      }
-      expect(decodeOrder).toEqual(scenario.expected);
-      expect(onAudio).toHaveBeenCalledOnce();
-
-      cleared = true;
-      testPeer.handleInboundRtp(packet(scenario.next));
-      expect(decodeOrder).toEqual([...scenario.expected, scenario.next]);
-      expect(onAudio).toHaveBeenCalledTimes(2);
-      // A fresh silent packet must not release the filter's old audible tail.
-      expect(onAudio.mock.calls[1]?.[0]).toEqual(Buffer.alloc((480 - 7) * 2));
-
-      testPeer.handleInboundRtp(packet(scenario.next + 2));
-      await vi.advanceTimersByTimeAsync(80);
-      expect(decodeOrder).toEqual([...scenario.expected, scenario.next, "plc", scenario.next + 2]);
-      expect(onAudio).toHaveBeenCalledTimes(4);
-      expect(onError).not.toHaveBeenCalled();
-    } finally {
-      peer.close();
-      vi.useRealTimers();
+    testPeer.handleInboundRtp(packet(scenario.first));
+    for (const sequence of scenario.buffered) {
+      testPeer.handleInboundRtp(packet(sequence));
     }
-  });
+    expect(decodeOrder).toEqual([scenario.first & 0xff]);
+    expect(onAudio).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(1);
 
-  it("discards inbound RTP packets that arrive beyond the reorder window", async () => {
-    const { decode, onError, packet, peer, testPeer } = await createInboundAudioHarness();
-    try {
-      for (const sequenceNumber of [30, 32, 33, 34, 35]) {
-        testPeer.handleInboundRtp(packet(sequenceNumber));
-      }
-      const decodedBeforeLatePacket = decode.mock.calls.length;
-      testPeer.handleInboundRtp(packet(31));
-
-      expect(decode).toHaveBeenCalledTimes(decodedBeforeLatePacket);
-      expect(onError).not.toHaveBeenCalled();
-    } finally {
-      peer.close();
+    peer.clearOutputAudio();
+    // Advance Opus/sequence state while discarding output, rather than
+    // forgetting the stream and admitting a late pre-clear packet as fresh.
+    expect(decodeOrder).toEqual(scenario.expected);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(80);
+    for (const sequence of scenario.retired) {
+      testPeer.handleInboundRtp(packet(sequence));
     }
+    expect(decodeOrder).toEqual(scenario.expected);
+    expect(onAudio).toHaveBeenCalledOnce();
+
+    cleared = true;
+    testPeer.handleInboundRtp(packet(scenario.next));
+    expect(decodeOrder).toEqual([...scenario.expected, scenario.next]);
+    expect(onAudio).toHaveBeenCalledTimes(2);
+    // A fresh silent packet must not release the filter's old audible tail.
+    expect(onAudio.mock.calls[1]?.[0]).toEqual(Buffer.alloc((480 - 7) * 2));
+
+    testPeer.handleInboundRtp(packet(scenario.next + 2));
+    await vi.advanceTimersByTimeAsync(79);
+    expect(decodeOrder).toEqual([...scenario.expected, scenario.next]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(decodeOrder).toEqual([...scenario.expected, scenario.next, "plc", scenario.next + 2]);
+    expect(onAudio).toHaveBeenCalledTimes(4);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it.each([
-    { packets: [40, 42, 43, 44], malformed: 42, expected: [40, "plc", "plc", 43, 44] },
     { packets: [40, 42, 43, 41], malformed: 41, expected: [40, "plc", 42, 43] },
     { packets: [40, 42, 44], malformed: 42, expected: [40, "plc", "plc", "plc", 44] },
   ])("continues audio after malformed packet $malformed in $packets", async (scenario) => {
     const { OpusError, OpusErrorCode } = await import("libopus-wasm");
     const error = new OpusError(OpusErrorCode.InvalidPacket, "invalid packet", "decode");
     const onMediaError = vi.fn();
-    const { decodeOrder, onAudio, onError, packet, peer, testPeer } =
-      await createInboundAudioHarness({
-        onMediaError,
-        decodeFailure: { sequence: scenario.malformed, error },
-      });
-    vi.useFakeTimers();
-    try {
-      for (const sequence of scenario.packets) {
-        testPeer.handleInboundRtp(packet(sequence));
-      }
-      await vi.advanceTimersByTimeAsync(160);
-      expect(decodeOrder).toEqual(scenario.expected);
-      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
-        (scenario.expected.length * 480 - 7) * 2,
-      );
-      expect(onMediaError).toHaveBeenCalledExactlyOnceWith(error);
-      expect(onError).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(160);
-      expect(onAudio).toHaveBeenCalledTimes(scenario.expected.length);
-    } finally {
-      peer.close();
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps unusable decoder state fatal with media recovery enabled", async () => {
-    const { OpusError, OpusErrorCode } = await import("libopus-wasm");
-    const error = new OpusError(OpusErrorCode.InvalidState, "invalid decoder state", "decode");
-    const onMediaError = vi.fn();
-    const { onAudio, onError, packet, peer, testPeer } = await createInboundAudioHarness({
+    const { decodeOrder, onAudio, onError, packet, testPeer } = await createInboundAudioHarness({
       onMediaError,
-      decodeFailure: { sequence: 41, error },
+      decodeFailure: { sequence: scenario.malformed, error },
     });
-    try {
-      testPeer.handleInboundRtp(packet(40));
-      testPeer.handleInboundRtp(packet(41));
-      expect(onError).toHaveBeenCalledExactlyOnceWith(error);
-      expect(onMediaError).not.toHaveBeenCalled();
-      expect(onAudio).toHaveBeenCalledOnce();
-    } finally {
-      peer.close();
+    vi.useFakeTimers();
+    for (const sequence of scenario.packets) {
+      testPeer.handleInboundRtp(packet(sequence));
     }
+    await vi.advanceTimersByTimeAsync(160);
+    expect(decodeOrder).toEqual(scenario.expected);
+    expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
+      (scenario.expected.length * 480 - 7) * 2,
+    );
+    expect(onMediaError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(onError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(160);
+    expect(onAudio).toHaveBeenCalledTimes(scenario.expected.length);
   });
 
-  it("preserves fatal packet handling when onMediaError is absent", async () => {
+  it.each([
+    ["unusable decoder state", "InvalidState", true],
+    ["invalid packet without media recovery", "InvalidPacket", false],
+  ] as const)("keeps %s fatal", async (_label, code, recovery) => {
     const { OpusError, OpusErrorCode } = await import("libopus-wasm");
-    const error = new OpusError(OpusErrorCode.InvalidPacket, "invalid packet", "decode");
-    const { onAudio, onError, packet, peer, testPeer } = await createInboundAudioHarness({
+    const error = new OpusError(OpusErrorCode[code], "decode failed", "decode");
+    const onMediaError = vi.fn();
+    const { onAudio, onError, packet, testPeer } = await createInboundAudioHarness({
+      ...(recovery ? { onMediaError } : {}),
       decodeFailure: { sequence: 41, error },
     });
-    try {
-      testPeer.handleInboundRtp(packet(40));
-      testPeer.handleInboundRtp(packet(41));
-      expect(onError).toHaveBeenCalledExactlyOnceWith(error);
-      expect(onAudio).toHaveBeenCalledOnce();
-    } finally {
-      peer.close();
-    }
+    testPeer.handleInboundRtp(packet(40));
+    testPeer.handleInboundRtp(packet(41));
+    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(onMediaError).not.toHaveBeenCalled();
+    expect(onAudio).toHaveBeenCalledOnce();
   });
 
   it("reports RTP activity callback failures through the peer error boundary", async () => {
@@ -439,25 +341,18 @@ describe("GPT-Live werift audio peer", () => {
     const onRtpPacket = vi.fn(() => {
       throw activityError;
     });
-    const { decode, onError, packet, peer, testPeer } = await createInboundAudioHarness({
+    const { decode, onError, packet, testPeer } = await createInboundAudioHarness({
       onRtpPacket,
     });
-    try {
-      testPeer.handleInboundRtp(packet(50));
+    testPeer.handleInboundRtp(packet(50));
 
-      expect(onRtpPacket).toHaveBeenCalledOnce();
-      expect(decode).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledWith(activityError);
-    } finally {
-      peer.close();
-    }
+    expect(onRtpPacket).toHaveBeenCalledOnce();
+    expect(decode).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(activityError);
   });
 
   it("consumes every audio tick while earlier RTP sends remain pending", async () => {
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer();
     const testPeer = peer as unknown as TestableAudioPeer;
     const sendRtp = vi
       .spyOn(testPeer.state.transceiver.sender, "sendRtp")
@@ -465,86 +360,70 @@ describe("GPT-Live werift audio peer", () => {
     const frames = [Buffer.alloc(480 * 2, 1), Buffer.alloc(480 * 2, 2), Buffer.alloc(480 * 2, 3)];
     const initialTimestamp = testPeer.timestamp;
     const initialSequenceNumber = testPeer.sequenceNumber;
-    try {
-      peer.sendAudio(Buffer.concat(frames));
-      testPeer.connected = true;
+    peer.sendAudio(Buffer.concat(frames));
+    testPeer.connected = true;
 
-      for (let index = 0; index < frames.length; index += 1) {
-        testPeer.sendNextAudioFrame();
-        expect(testPeer.pendingAudio).toHaveLength(
-          (frames.length - index - 1) * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
-        );
-      }
-
-      expect(sendRtp).toHaveBeenCalledTimes(3);
-      const packets = sendRtp.mock.calls.map(
-        ([packet]) => packet as { header: { sequenceNumber: number; timestamp: number } },
+    for (let index = 0; index < frames.length; index += 1) {
+      testPeer.sendNextAudioFrame();
+      expect(testPeer.pendingAudio).toHaveLength(
+        (frames.length - index - 1) * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
       );
-      expect(packets.map((packet) => packet.header.timestamp)).toEqual([
-        initialTimestamp,
-        (initialTimestamp + 960) >>> 0,
-        (initialTimestamp + 1_920) >>> 0,
-      ]);
-      expect(packets.map((packet) => packet.header.sequenceNumber)).toEqual([
-        initialSequenceNumber,
-        (initialSequenceNumber + 1) & 0xffff,
-        (initialSequenceNumber + 2) & 0xffff,
-      ]);
-    } finally {
-      peer.close();
     }
+
+    expect(sendRtp).toHaveBeenCalledTimes(3);
+    const packets = sendRtp.mock.calls.map(
+      ([packet]) => packet as { header: { sequenceNumber: number; timestamp: number } },
+    );
+    expect(packets.map((packet) => packet.header.timestamp)).toEqual([
+      initialTimestamp,
+      (initialTimestamp + 960) >>> 0,
+      (initialTimestamp + 1_920) >>> 0,
+    ]);
+    expect(packets.map((packet) => packet.header.sequenceNumber)).toEqual([
+      initialSequenceNumber,
+      (initialSequenceNumber + 1) & 0xffff,
+      (initialSequenceNumber + 2) & 0xffff,
+    ]);
   });
 
   it("keeps the RTP sample clock aligned through a minute of late timer callbacks", async () => {
     const { onError, peer, testPeer } = await createInboundAudioHarness();
-    const { packets, send } = await captureOutboundRtp(testPeer);
+    const packets = await captureOutboundRtp(testPeer);
     vi.useFakeTimers({
       toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
     });
     const scheduleTimeout = globalThis.setTimeout;
     const scheduleInterval = globalThis.setInterval;
     // Both timer APIs incur the same scheduler lateness; only a deadline can compensate.
-    const timeout = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) =>
-        scheduleTimeout(callback, (delay ?? 0) + 1, ...args),
-      );
-    const interval = vi
-      .spyOn(globalThis, "setInterval")
-      .mockImplementation((callback, delay, ...args) =>
-        scheduleInterval(callback, (delay ?? 0) + 1, ...args),
-      );
-    try {
-      peer.sendAudio(createRelayTone());
-      testPeer.state.peer.connectionStateChange.execute("connected");
-      expect(packets).toHaveLength(1);
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
+      scheduleTimeout(callback, (delay ?? 0) + 1, ...args),
+    );
+    vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) =>
+      scheduleInterval(callback, (delay ?? 0) + 1, ...args),
+    );
+    peer.sendAudio(createRelayTone());
+    testPeer.state.peer.connectionStateChange.execute("connected");
+    expect(packets).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
-      const first = packets[0]!;
-      expect(packets.at(-1)!.atMs - first.atMs).toBeGreaterThanOrEqual(59_980);
-      const clockErrors = packets.map((packet) =>
-        Math.abs(packet.atMs - first.atMs - ((packet.timestamp - first.timestamp) >>> 0) / 48),
-      );
-      expect(Math.max(...clockErrors)).toBeLessThanOrEqual(20);
-      expect(onError).not.toHaveBeenCalled();
+    const first = packets[0]!;
+    expect(packets.at(-1)!.atMs - first.atMs).toBeGreaterThanOrEqual(59_980);
+    const clockErrors = packets.map((packet) =>
+      Math.abs(packet.atMs - first.atMs - ((packet.timestamp - first.timestamp) >>> 0) / 48),
+    );
+    expect(Math.max(...clockErrors)).toBeLessThanOrEqual(20);
+    expect(onError).not.toHaveBeenCalled();
 
-      const sentBeforeClose = packets.length;
-      peer.close();
-      await vi.advanceTimersByTimeAsync(100);
-      expect(packets).toHaveLength(sentBeforeClose);
-    } finally {
-      peer.close();
-      timeout.mockRestore();
-      interval.mockRestore();
-      send.mockRestore();
-      vi.useRealTimers();
-    }
+    const sentBeforeClose = packets.length;
+    peer.close();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(packets).toHaveLength(sentBeforeClose);
   });
 
   it("keeps queued audio paced after a five-second scheduler pause", async () => {
     const { onError, peer, testPeer } = await createInboundAudioHarness();
-    const { packets, send } = await captureOutboundRtp(testPeer);
+    const packets = await captureOutboundRtp(testPeer);
     const pendingAudio = new OpenAIQuicksilverPendingAudio();
     const readFrame = vi.spyOn(pendingAudio, "readInto");
     const frames = [1, 2, 3].map((value) =>
@@ -555,49 +434,41 @@ describe("GPT-Live werift audio peer", () => {
     });
     const timerNow = performance.now.bind(performance);
     let suspensionMs = 0;
-    const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
-    try {
-      peer.adoptPendingAudio(pendingAudio);
-      peer.sendAudio(Buffer.concat(frames));
-      testPeer.state.peer.connectionStateChange.execute("connected");
-      expect(packets).toHaveLength(1);
+    vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
+    peer.adoptPendingAudio(pendingAudio);
+    peer.sendAudio(Buffer.concat(frames));
+    testPeer.state.peer.connectionStateChange.execute("connected");
+    expect(packets).toHaveLength(1);
 
-      suspensionMs = 5_000;
-      await vi.advanceTimersByTimeAsync(20);
-      expect(packets).toHaveLength(2);
-      expect(pendingAudio).toHaveLength(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    suspensionMs = 5_000;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(packets).toHaveLength(2);
+    expect(pendingAudio).toHaveLength(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
 
-      await vi.advanceTimersByTimeAsync(20);
-      expect(packets).toHaveLength(3);
-      const first = packets[0]!;
-      expect(packets.map((packet) => packet.atMs - first.atMs)).toEqual([0, 5_020, 5_040]);
-      expect(packets.map((packet) => (packet.timestamp - first.timestamp) >>> 0)).toEqual([
-        0,
-        5_020 * 48,
-        5_040 * 48,
-      ]);
-      expect(
-        packets.map((packet) => (packet.sequenceNumber - first.sequenceNumber) & 0xffff),
-      ).toEqual([0, 1, 2]);
-      expect(readFrame.mock.calls.map(([frame]) => frame)).toEqual(frames);
-      expect(pendingAudio).toHaveLength(0);
-      expect(onError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(packets).toHaveLength(3);
+    const first = packets[0]!;
+    expect(packets.map((packet) => packet.atMs - first.atMs)).toEqual([0, 5_020, 5_040]);
+    expect(packets.map((packet) => (packet.timestamp - first.timestamp) >>> 0)).toEqual([
+      0,
+      5_020 * 48,
+      5_040 * 48,
+    ]);
+    expect(
+      packets.map((packet) => (packet.sequenceNumber - first.sequenceNumber) & 0xffff),
+    ).toEqual([0, 1, 2]);
+    expect(readFrame.mock.calls.map(([frame]) => frame)).toEqual(frames);
+    expect(pendingAudio).toHaveLength(0);
+    expect(onError).not.toHaveBeenCalled();
 
-      peer.close();
-      await vi.advanceTimersByTimeAsync(100);
-      expect(packets).toHaveLength(3);
-    } finally {
-      peer.close();
-      now.mockRestore();
-      readFrame.mockRestore();
-      send.mockRestore();
-      vi.useRealTimers();
-    }
+    peer.close();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(packets).toHaveLength(3);
   });
 
   it("recovers one send rejection and escalates consecutive failures", async () => {
     const onMediaError = vi.fn();
-    const { onError, peer, testPeer } = await createInboundAudioHarness({ onMediaError });
+    const { onError, testPeer } = await createInboundAudioHarness({ onMediaError });
     const first = new Error("first packet rejected");
     const second = new Error("second packet rejected");
     const terminal = new Error("transport remains unusable");
@@ -608,31 +479,24 @@ describe("GPT-Live werift audio peer", () => {
       .mockRejectedValueOnce(second)
       .mockRejectedValueOnce(terminal);
     testPeer.connected = true;
-    try {
-      testPeer.sendNextAudioFrame();
-      await Promise.resolve();
-      expect(onMediaError).toHaveBeenCalledExactlyOnceWith(first);
-      testPeer.sendNextAudioFrame();
-      await Promise.resolve();
-      testPeer.sendNextAudioFrame();
-      await Promise.resolve();
-      expect(onError).not.toHaveBeenCalled();
-      expect(onMediaError).toHaveBeenLastCalledWith(second);
-      testPeer.sendNextAudioFrame();
-      await Promise.resolve();
-      expect(onError).toHaveBeenCalledExactlyOnceWith(terminal);
-      expect(onMediaError).toHaveBeenCalledTimes(2);
-      expect(send).toHaveBeenCalledTimes(4);
-    } finally {
-      peer.close();
-    }
+    testPeer.sendNextAudioFrame();
+    await Promise.resolve();
+    expect(onMediaError).toHaveBeenCalledExactlyOnceWith(first);
+    testPeer.sendNextAudioFrame();
+    await Promise.resolve();
+    testPeer.sendNextAudioFrame();
+    await Promise.resolve();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onMediaError).toHaveBeenLastCalledWith(second);
+    testPeer.sendNextAudioFrame();
+    await Promise.resolve();
+    expect(onError).toHaveBeenCalledExactlyOnceWith(terminal);
+    expect(onMediaError).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(4);
   });
 
   it("retains only the newest five seconds and releases it on close", async () => {
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer();
     const testPeer = peer as unknown as TestableAudioPeer;
     const maxPendingAudioBytes = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * 250;
     const source = Buffer.alloc(maxPendingAudioBytes + OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
@@ -654,37 +518,27 @@ describe("GPT-Live werift audio peer", () => {
   });
 
   it("rejects adoption over existing peer audio and clears adoption after close", async () => {
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer();
     const testPeer = peer as unknown as TestableAudioPeer;
     const existing = Buffer.from([0x01, 0x02]);
     const rejected = new OpenAIQuicksilverPendingAudio();
     rejected.append(Buffer.from([0x03, 0x04]));
-    try {
-      peer.sendAudio(existing);
-      expect(() => peer.adoptPendingAudio(rejected)).toThrow(
-        "GPT-Live WebRTC peer already owns pending audio",
-      );
-      expect(rejected).toHaveLength(0);
-      expect(testPeer.takeNextRelayFrame().subarray(0, existing.length)).toEqual(existing);
+    peer.sendAudio(existing);
+    expect(() => peer.adoptPendingAudio(rejected)).toThrow(
+      "GPT-Live WebRTC peer already owns pending audio",
+    );
+    expect(rejected).toHaveLength(0);
+    expect(testPeer.takeNextRelayFrame().subarray(0, existing.length)).toEqual(existing);
 
-      peer.close();
-      const afterClose = new OpenAIQuicksilverPendingAudio();
-      afterClose.append(Buffer.from([0x05, 0x06]));
-      peer.adoptPendingAudio(afterClose);
-      expect(afterClose).toHaveLength(0);
-    } finally {
-      peer.close();
-    }
+    peer.close();
+    const afterClose = new OpenAIQuicksilverPendingAudio();
+    afterClose.append(Buffer.from([0x05, 0x06]));
+    peer.adoptPendingAudio(afterClose);
+    expect(afterClose).toHaveLength(0);
   });
 
   it("consumes and zero-pads a sub-frame audio tail on the next tick", async () => {
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer();
     const testPeer = peer as unknown as TestableAudioPeer;
     const tail = Buffer.alloc(200);
     tail.writeInt16LE(1_234, 0);
@@ -695,79 +549,57 @@ describe("GPT-Live werift audio peer", () => {
       producedFrame = takeNextRelayFrame();
       return producedFrame;
     });
-    try {
-      peer.sendAudio(tail);
-      testPeer.connected = true;
-      testPeer.sendNextAudioFrame();
+    peer.sendAudio(tail);
+    testPeer.connected = true;
+    testPeer.sendNextAudioFrame();
 
-      expect(testPeer.pendingAudio).toHaveLength(0);
-      expect(producedFrame?.subarray(0, tail.length)).toEqual(tail);
-      expect(producedFrame?.subarray(tail.length).every((byte) => byte === 0)).toBe(true);
-    } finally {
-      peer.close();
-    }
+    expect(testPeer.pendingAudio).toHaveLength(0);
+    expect(producedFrame?.subarray(0, tail.length)).toEqual(tail);
+    expect(producedFrame?.subarray(tail.length).every((byte) => byte === 0)).toBe(true);
   });
 
   it("clears the media pump when the first encoder tick synchronously closes the peer", async () => {
     const encodeError = new Error("encoder failed");
     const peerRef: { current?: OpenAIQuicksilverAudioPeer } = {};
     const onError = vi.fn((_error: Error) => peerRef.current?.close());
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer({ onAudio: vi.fn(), onError });
     peerRef.current = peer;
     const testPeer = peer as unknown as TestableAudioPeer;
     const encode = vi.spyOn(testPeer.state.encoder, "encode").mockImplementation(() => {
       throw encodeError;
     });
     vi.useFakeTimers();
-    try {
-      testPeer.state.peer.connectionStateChange.execute("connected");
+    testPeer.state.peer.connectionStateChange.execute("connected");
 
-      expect(encode).toHaveBeenCalledOnce();
-      expect(onError).toHaveBeenCalledOnce();
-      expect(onError).toHaveBeenCalledWith(encodeError);
-      await vi.advanceTimersByTimeAsync(100);
+    expect(encode).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(encodeError);
+    await vi.advanceTimersByTimeAsync(100);
 
-      expect(encode).toHaveBeenCalledOnce();
-      expect(onError).toHaveBeenCalledOnce();
-    } finally {
-      peer.close();
-      vi.useRealTimers();
-    }
+    expect(encode).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
   });
 
   it.each(["disconnected", "closed"] as const)(
     "reports a terminal %s connection state",
     async (connectionState) => {
       const onError = vi.fn();
-      const peer = await OpenAIQuicksilverAudioPeer.create({
-        callbacks: { onAudio: vi.fn(), onError },
-        iceServers: [],
-      });
-      try {
-        (peer as unknown as TestableAudioPeer).state.peer.connectionStateChange.execute(
-          connectionState,
-        );
-        expect(onError).toHaveBeenCalledOnce();
-        expect(onError).toHaveBeenCalledWith(
-          expect.objectContaining({
-            message: `GPT-Live WebRTC media connection ${connectionState}`,
-          }),
-        );
-      } finally {
-        peer.close();
-      }
+      const peer = await createAudioPeer({ onAudio: vi.fn(), onError });
+      (peer as unknown as TestableAudioPeer).state.peer.connectionStateChange.execute(
+        connectionState,
+      );
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: `GPT-Live WebRTC media connection ${connectionState}`,
+        }),
+      );
     },
   );
 
   it("suppresses terminal state callbacks after local close", async () => {
     const onError = vi.fn();
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      callbacks: { onAudio: vi.fn(), onError },
-      iceServers: [],
-    });
+    const peer = await createAudioPeer({ onAudio: vi.fn(), onError });
     const connectionStateChange = (peer as unknown as TestableAudioPeer).state.peer
       .connectionStateChange;
 
@@ -813,20 +645,14 @@ try {
     };
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
-    try {
-      await expect(
-        OpenAIQuicksilverAudioPeer.create({
-          callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-          iceServers: [],
-        }),
-      ).rejects.toThrow("decoder init failed");
-      expect(encoder.free).toHaveBeenCalledOnce();
-      expect(closePeer).toHaveBeenCalled();
-    } finally {
-      closePeer.mockRestore();
-      libopusFactoryOverrides.createEncoder = undefined;
-      libopusFactoryOverrides.createDecoder = undefined;
-    }
+    await expect(
+      OpenAIQuicksilverAudioPeer.create({
+        callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+        iceServers: [],
+      }),
+    ).rejects.toThrow("decoder init failed");
+    expect(encoder.free).toHaveBeenCalledOnce();
+    expect(closePeer).toHaveBeenCalled();
   });
 
   it("releases partial peer resources when codec initialization is aborted", async () => {
@@ -845,24 +671,18 @@ try {
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     const controller = new AbortController();
-    try {
-      const creation = OpenAIQuicksilverAudioPeer.create({
-        callbacks: { onAudio: vi.fn(), onError: vi.fn() },
-        iceServers: [],
-        signal: controller.signal,
-      });
-      await vi.waitFor(() => expect(createDecoder).toHaveBeenCalledOnce());
-      controller.abort(new Error("peer startup stopped"));
-      await vi.waitFor(() => expect(closePeer).toHaveBeenCalled());
-      expect(encoder.free).toHaveBeenCalledOnce();
-      resolveDecoder?.(decoder);
-      await expect(creation).rejects.toThrow("peer startup stopped");
-      expect(decoder.free).toHaveBeenCalledOnce();
-      expect(encoder.free).toHaveBeenCalledOnce();
-    } finally {
-      closePeer.mockRestore();
-      libopusFactoryOverrides.createEncoder = undefined;
-      libopusFactoryOverrides.createDecoder = undefined;
-    }
+    const creation = OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+      iceServers: [],
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(createDecoder).toHaveBeenCalledOnce());
+    controller.abort(new Error("peer startup stopped"));
+    await vi.waitFor(() => expect(closePeer).toHaveBeenCalled());
+    expect(encoder.free).toHaveBeenCalledOnce();
+    resolveDecoder?.(decoder);
+    await expect(creation).rejects.toThrow("peer startup stopped");
+    expect(decoder.free).toHaveBeenCalledOnce();
+    expect(encoder.free).toHaveBeenCalledOnce();
   });
 });

@@ -8,15 +8,18 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { cronRunRecordStoreKey } from "../run-history-detail.js";
-import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunRecordsForTests,
+} from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
@@ -24,6 +27,8 @@ import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronJob } from "../types.js";
+import * as runReceipts from "./run-receipts.js";
+import * as serviceStore from "./store.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
@@ -98,7 +103,7 @@ for (const run of runs) {
     async runIsolatedAgentJob() {
       if (run.leavePending) {
         openOpenClawStateDatabase().db.exec(
-          "CREATE TEMP TRIGGER reject_scheduler_completion BEFORE UPDATE ON cron_jobs " +
+          "CREATE TRIGGER reject_scheduler_completion BEFORE UPDATE ON cron_jobs " +
           "WHEN json_extract(OLD.state_json, '$.runningAtMs') IS NOT NULL " +
           "AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL " +
           "BEGIN SELECT RAISE(ABORT, 'scheduler completion unavailable'); END;",
@@ -209,7 +214,7 @@ try {
   assert.equal(activated.state.runningScheduleChangeId, undefined);
   database = openOpenClawStateDatabase().db;
   database.exec(
-    "CREATE TEMP TRIGGER reject_successor_row BEFORE UPDATE ON cron_jobs WHEN NEW.job_id = '" +
+    "CREATE TRIGGER reject_successor_row BEFORE UPDATE ON cron_jobs WHEN NEW.job_id = '" +
     jobId.replaceAll("'", "''") +
     "' BEGIN SELECT RAISE(ABORT, 'successor row unavailable'); END;"
   );
@@ -239,6 +244,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       }),
     );
 
+    await closeOpenClawStateDatabaseAsync();
     await runSchedulerChild(
       cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })),
     );
@@ -304,25 +310,32 @@ describe("scheduler-disabled shared-store mutations", () => {
       ),
     );
     const resumeUpdates = createDeferred();
+    const prepareOwner = runReceipts.prepareCronRunReceiptOwnerMutation;
+    // Hold the edit before receipt observation, without installing a job-snapshot precondition.
+    const admission = vi
+      .spyOn(runReceipts, "prepareCronRunReceiptOwnerMutation")
+      .mockImplementation(async (params) => {
+        const testCase = cases.find(({ job }) => job.id === params.previousJob.id)!;
+        expect(params.previousJob.state.runningAtMs).toBeUndefined();
+        testCase.entered.resolve();
+        await resumeUpdates.promise;
+        const prepared = prepareOwner(params);
+        if (!prepared) {
+          throw new Error("Expected the owner-changing edit to observe its receipt.");
+        }
+        return prepared;
+      });
     const updates = Promise.allSettled(
-      cases.map(({ cron, job, operation, entered }) =>
-        cron.updateWithPrecondition(
-          job.id,
-          {
-            agentId: "beta",
-            state: {
-              ...(operation === "ordinary edit"
-                ? {}
-                : { runningAtMs: startedAtMs + (operation === "same timestamp" ? 0 : 1) }),
-              triggerState: { owner: "saved edit" },
-            },
+      cases.map(({ cron, job, operation }) =>
+        cron.update(job.id, {
+          agentId: "beta",
+          state: {
+            ...(operation === "ordinary edit"
+              ? {}
+              : { runningAtMs: startedAtMs + (operation === "same timestamp" ? 0 : 1) }),
+            triggerState: { owner: "saved edit" },
           },
-          async (snapshot) => {
-            expect(snapshot.state.runningAtMs).toBeUndefined();
-            entered.resolve();
-            await resumeUpdates.promise;
-          },
-        ),
+        }),
       ),
     );
     const database = openOpenClawStateDatabase().db;
@@ -349,7 +362,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       }
       const failedJob = cases.find(({ operation }) => operation === "failed replacement")!.job;
       database.exec(`
-        CREATE TEMP TRIGGER reject_shared_marker_update
+        CREATE TRIGGER reject_shared_marker_update
         BEFORE UPDATE ON cron_jobs
         WHEN NEW.job_id = '${failedJob.id}'
         BEGIN
@@ -358,6 +371,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       `);
       resumeUpdates.resolve();
       const results = await updates;
+      admission.mockRestore();
       for (const [index, { operation, storePath }] of cases.entries()) {
         const result = results[index]!;
         const receipt = admitted[index]!;
@@ -395,6 +409,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       database.exec("DROP TRIGGER IF EXISTS reject_shared_marker_update");
       resumeUpdates.resolve();
       await updates;
+      admission.mockRestore();
       for (const { cron } of cases) {
         cron.stop();
       }
@@ -435,10 +450,7 @@ describe("scheduler-disabled shared-store mutations", () => {
     });
     const storeKey = cronStoreKey(storePath);
     const readTasks = () =>
-      listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-        runtime: "cron",
-        sourceId: job.id,
-      }).filter((task) => cronRunRecordStoreKey(task) === storeKey);
+      readCronRunRecordsForTests(job.id).filter((task) => cronRunRecordStoreKey(task) === storeKey);
     const { child, closed, stderr, assertCompleted } = spawnSchedulerChild(
       overlappingRunsChildScript,
       { storePath, jobId: job.id, nowMs },
@@ -458,23 +470,31 @@ describe("scheduler-disabled shared-store mutations", () => {
         throw new Error("Expected the first edited run to remain active.");
       }
       expect(before.state.runningAtMs).toBe(nowMs);
-      const firstTasks = readTasks();
-      expect(firstTasks).toHaveLength(1);
+      expect(readTasks()).toHaveLength(0);
 
       // A child owns execution so the passive editor can hold its store lock
       // while both runs advance. Identical clocks cannot identify the new edit.
-      const acknowledged = await editor.updateWithPrecondition(
-        job.id,
-        { schedule: { kind: "every", everyMs: 120_000, anchorMs: nowMs } },
-        async (snapshot) => {
+      const persist = serviceStore.persistCronJobMutation;
+      const admission = vi
+        .spyOn(serviceStore, "persistCronJobMutation")
+        .mockImplementationOnce(async (params) => {
+          const snapshot = params.previous.jobs.find(({ id }) => id === job.id)!;
           expect(snapshot.schedule).toEqual(before.schedule);
           expect(snapshot.state.runningAtMs).toBe(firstReceipt.startedAtMs);
           expect(snapshot.state.runningScheduleChangeId).toBe(before.state.runningScheduleChangeId);
           child.send("advance");
           await closed;
           assertCompleted();
-        },
-      );
+          return persist(params);
+        });
+      let acknowledged: CronJob;
+      try {
+        acknowledged = await editor.update(job.id, {
+          schedule: { kind: "every", everyMs: 120_000, anchorMs: nowMs },
+        });
+      } finally {
+        admission.mockRestore();
+      }
       expect(acknowledged.state.nextRunAtMs).toBe(nowMs + 120_000);
       const after = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
       const secondReceipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
@@ -487,7 +507,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       expect(after?.state.nextRunAtMs).toBe(acknowledged.state.nextRunAtMs);
       const tasks = readTasks();
       expect(tasks).toHaveLength(2);
-      expect(tasks.filter((task) => task.taskId !== firstTasks[0]?.taskId)).toHaveLength(1);
+      expect(new Set(tasks.map((row) => row.runId)).size).toBe(2);
       const readHistory = () => readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries;
       const history = readHistory();
       expect(history).toHaveLength(2);

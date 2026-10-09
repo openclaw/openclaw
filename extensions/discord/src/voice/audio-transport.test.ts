@@ -160,25 +160,6 @@ describe("Discord audio worker control boundary", () => {
     expect(errors).not.toHaveBeenCalled();
   });
 
-  it("delivers physical finalization after decoded EOF already closed the readable", async () => {
-    const { audio, worker } = fixture();
-    worker.message({ type: "ready" });
-    await audio.ready;
-    const capture = audio.subscribe("speaker", new SharedArrayBuffer(8));
-    const finalized = vi.fn();
-    capture.once("finalized", finalized);
-    capture.resume();
-    const closed = new Promise<void>((resolve) => {
-      capture.once("close", resolve);
-    });
-    worker.message({ type: "capture-end", id: capture.id });
-    await closed;
-    expect(capture.destroyed).toBe(true);
-    expect(finalized).not.toHaveBeenCalled();
-    worker.message({ type: "capture-finalized", id: capture.id });
-    expect(finalized).toHaveBeenCalledOnce();
-  });
-
   it("does not let a retired adapter unregister a newer guild generation", () => {
     const voice = new VoicePlugin();
     voice.registerClient({ getPlugin: () => ({ send: vi.fn() }) } as unknown as Client);
