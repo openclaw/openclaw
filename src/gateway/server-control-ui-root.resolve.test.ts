@@ -119,19 +119,14 @@ describe("createGatewayControlUiRootLifecycle", () => {
       }
       return permit;
     });
-    const run = WorkerTaskPool.prototype.run;
-    let pool: WorkerTaskPool<unknown, unknown> | undefined;
-    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input,
-      options,
-    ) {
-      pool = this;
-      return run.call(this, input, options);
-    });
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
     const read = readControlUiRootAsset({ kind: "resolved", path: root }, "index.html", true);
     try {
-      expect(pool?.getSnapshot().activeTasks).toBe(1);
+      const pool = run.mock.contexts[0];
+      if (!(pool instanceof WorkerTaskPool)) {
+        throw new Error("Expected the file read to reach its worker pool");
+      }
+      expect(pool.getSnapshot().activeTasks).toBe(1);
       await expect(read).resolves.toMatchObject({ file: { body: Buffer.from("synthetic asset") } });
     } finally {
       for (const permit of permits) {
