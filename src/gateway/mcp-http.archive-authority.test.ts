@@ -70,6 +70,7 @@ describe("MCP HTTP session archive authority", () => {
     resolveTools.mockReset().mockResolvedValue({
       agentId: "main",
       workspaceDir: "/workspace/archive-authority",
+      mcpConfigToolDenylist: [],
       captureFinalCronCreatorTools: undefined,
       tools: [
         {
