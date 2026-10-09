@@ -19,10 +19,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "./openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 
 const { configureMemoryCoreDreamingState, createMemoryRuntime } = await vi.importActual<{

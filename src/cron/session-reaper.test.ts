@@ -14,7 +14,10 @@ import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combi
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  maintenanceLane,
+  targetDiscoveryLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
 import {
   listKnownSessionStoreAgentIds,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -391,40 +394,46 @@ describe("sweepCronRunSessions", () => {
     let foregroundRead:
       | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
       | undefined;
-    if (keepsMaintenanceWorker) {
-      const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
-      vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
-        const closing = closeResources(key);
-        foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
-          agentId: "main",
-          storePath: exactStorePath,
-          sessionKeys: [mainKey],
-        });
-        return closing;
+    const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
+    const closeObservation = keepsMaintenanceWorker
+      ? vi.spyOn(targetDiscoveryLane.pool, "closeResources").mockImplementationOnce((key) => {
+          const closing = closeResources(key);
+          foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
+            agentId: "main",
+            storePath: exactStorePath,
+            sessionKeys: [mainKey],
+          });
+          void foregroundRead.catch(() => {});
+          return closing;
+        })
+      : undefined;
+    try {
+      const result = await sweepCronRunSessionsImpl({
+        agentId: "ops",
+        sessionStorePath: exactStorePath,
+        nowMs: now,
+        log,
       });
-    }
-    const result = await sweepCronRunSessionsImpl({
-      agentId: "ops",
-      sessionStorePath: exactStorePath,
-      nowMs: now,
-      log,
-    });
 
-    expect(result).toEqual({ swept: true, pruned: 1 });
-    if (keepsMaintenanceWorker) {
-      expect(foregroundRead).toBeDefined();
-      expect(await foregroundRead).toMatchObject({
-        entries: [
-          {
-            sessionKey: mainKey,
-            entry: {
-              sessionId: "main-run",
-              skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+      expect(result).toEqual({ swept: true, pruned: 1 });
+      if (keepsMaintenanceWorker) {
+        expect(foregroundRead).toBeDefined();
+        expect(await foregroundRead).toMatchObject({
+          entries: [
+            {
+              sessionKey: mainKey,
+              entry: {
+                sessionId: "main-run",
+                skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+              },
             },
-          },
-        ],
-      });
-      expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
+          ],
+        });
+        expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
+      }
+    } finally {
+      closeObservation?.mockRestore();
+      await Promise.allSettled([foregroundRead]);
     }
     expect(
       sessionAccessor.loadSessionEntry({

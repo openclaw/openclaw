@@ -423,6 +423,25 @@ async function resolveSecretInputWithEnvFallback(params: {
     };
   }
 
+  const associateFailure = (error: unknown, reason: RuntimeWebProviderFailure["reason"]) => {
+    associateWebProviderResolutionError({
+      kind: params.kind,
+      config: params.sourceConfig,
+      error,
+      forceColdRefKeys: params.forceColdRefKeys,
+      unavailableProviders: [
+        {
+          providerId: params.providerId,
+          path: params.path,
+          ref,
+          refKey: secretRefKey(ref),
+          reason,
+          contractDigest: params.contractDigest,
+        },
+      ],
+    });
+  };
+
   let resolvedFromRef: string | undefined;
   let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
 
@@ -439,22 +458,7 @@ async function resolveSecretInputWithEnvFallback(params: {
       const resolvedValue = resolved.get(secretRefKey(ref));
       if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
         const error = new Error(`${params.path} resolved to a non-string or empty value.`);
-        associateWebProviderResolutionError({
-          kind: params.kind,
-          config: params.sourceConfig,
-          error,
-          forceColdRefKeys: params.forceColdRefKeys,
-          unavailableProviders: [
-            {
-              providerId: params.providerId,
-              path: params.path,
-              ref,
-              refKey: secretRefKey(ref),
-              reason: "resolved secret value was invalid",
-              contractDigest: params.contractDigest,
-            },
-          ],
-        });
+        associateFailure(error, "resolved secret value was invalid");
         throw error;
       }
       resolvedFromRef = normalizeSecretInput(resolvedValue);
@@ -464,22 +468,7 @@ async function resolveSecretInputWithEnvFallback(params: {
         // Invalid provider config or resolved values are structural failures. They must fail
         // activation before publishing an owner degradation that could imply retryability.
         if (reason) {
-          associateWebProviderResolutionError({
-            kind: params.kind,
-            config: params.sourceConfig,
-            error,
-            forceColdRefKeys: params.forceColdRefKeys,
-            unavailableProviders: [
-              {
-                providerId: params.providerId,
-                path: params.path,
-                ref,
-                refKey: secretRefKey(ref),
-                reason,
-                contractDigest: params.contractDigest,
-              },
-            ],
-          });
+          associateFailure(error, reason);
         }
         throw error;
       }

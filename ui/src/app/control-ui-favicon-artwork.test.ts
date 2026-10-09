@@ -146,34 +146,42 @@ describe("tab icon artwork lifecycle", () => {
     expect(applyControlUiFaviconImage).toHaveBeenCalledTimes(calls);
   });
 
-  it("hands the decoded agent image to the compositor and retires it when the source changes", async () => {
-    const decoded = createDeferred();
-    vi.mocked(resolveAvatarImageUrl).mockReturnValue("blob:protected-avatar");
-    vi.stubGlobal(
-      "Image",
-      class {
-        src = "";
-        naturalWidth = 64;
-        naturalHeight = 32;
-        decode = () => decoded.promise;
-      },
-    );
-    const fixture = setup("agent");
-    await Promise.resolve();
-    decoded.resolve();
-    await decoded.promise;
-    await Promise.resolve();
-    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        src: "blob:protected-avatar",
-        naturalWidth: 64,
-        naturalHeight: 32,
-      }),
-    );
-    fixture.theme.settings.tabIcon = "default";
-    fixture.publish();
-    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
-  });
+  it.each([
+    ["agent", "square"],
+    ["agent:rounded", "rounded"],
+    ["agent:circle", "circle"],
+  ] as const)(
+    "hands %s artwork to the compositor and retires it when the source changes",
+    async (preference, shape) => {
+      const decoded = createDeferred();
+      vi.mocked(resolveAvatarImageUrl).mockReturnValue("blob:protected-avatar");
+      vi.stubGlobal(
+        "Image",
+        class {
+          src = "";
+          naturalWidth = 64;
+          naturalHeight = 32;
+          decode = () => decoded.promise;
+        },
+      );
+      const fixture = setup(preference);
+      await Promise.resolve();
+      decoded.resolve();
+      await decoded.promise;
+      await Promise.resolve();
+      expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          src: "blob:protected-avatar",
+          naturalWidth: 64,
+          naturalHeight: 32,
+        }),
+        shape,
+      );
+      fixture.theme.settings.tabIcon = "default";
+      fixture.publish();
+      expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+    },
+  );
 
   it("retries the same source after a failed protected-avatar load", async () => {
     const missing = createDeferred<string | null>();

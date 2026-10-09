@@ -207,13 +207,6 @@ const MODEL_SELECTION_SCOPE_LABELS = new Map([
   ["global", "chat.modelControls.selectionScopeGlobal"],
 ]);
 
-function resolveModelSelectionScopeDescription(
-  target: SessionsListResult["defaults"]["modelSelectionTarget"],
-): string | undefined {
-  const label = MODEL_SELECTION_SCOPE_LABELS.get(target ?? "");
-  return label ? t(label) : undefined;
-}
-
 function resolveCatalogTriggerStatus(
   state: ChatModelCatalogState,
   optionCount: number,
@@ -241,6 +234,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const retired = catalogState.retired === true;
   const uninitialized = catalogState.initialized === false;
   const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
+  const catalogModelValue = (value: string) =>
+    !catalogOwnsChoices || (!retired && catalog.entry(value)) ? value : "";
+  const selectionScopeLabel = MODEL_SELECTION_SCOPE_LABELS.get(props.modelSelectionTarget ?? "");
   const providerAuth = new Map<string, ModelProviderAuthLabel>();
   const headingKey = (id: string) =>
     normalizeChatModelProviderGroupId(
@@ -279,10 +275,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     catalogRetired: retired,
     catalogInitialized: catalogState.initialized,
   });
-  const currentOverride =
-    !catalogOwnsChoices || (!retired && catalog.entry(rawCurrentOverride))
-      ? rawCurrentOverride
-      : "";
+  const currentOverride = catalogModelValue(rawCurrentOverride);
   const thinking = resolveChatThinkingSelectState({
     catalog: props.modelCatalog,
     defaults: props.thinkingDefaults,
@@ -343,10 +336,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           activeSession?.activeModelProvider,
           props.modelCatalog,
         );
-  const activeModelValue =
-    !catalogOwnsChoices || (!retired && catalog.entry(observedActiveModelValue))
-      ? observedActiveModelValue
-      : "";
+  const activeModelValue = catalogModelValue(observedActiveModelValue);
   const modelPending = executionPending && !activeModelValue;
   // A pending execution does not erase the saved choice or reuse the previous
   // turn's fallback. Keep the choice visible until this run identifies its model.
@@ -628,7 +618,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelSelectionLocked: props.modelSelectionLocked === true,
         selectionScopeDescription: policy?.restricted
           ? t("chat.modelControls.restrictedModelsHelp")
-          : resolveModelSelectionScopeDescription(props.modelSelectionTarget),
+          : selectionScopeLabel
+            ? t(selectionScopeLabel)
+            : undefined,
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,

@@ -644,16 +644,13 @@ export function reconcileChatRunFromSessionRow(
     historyRun?: ChatHistoryRunObservation | null;
   } = {},
 ): boolean {
-  if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
-    return false;
-  }
-  if (!host.chatRunId && host.chatStream == null) {
-    return false;
-  }
-  if (row.hasActiveRun === true || isSessionRunActive(row)) {
-    return false;
-  }
-  if (row.hasActiveRun !== false && row.status === undefined) {
+  if (
+    !uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId) ||
+    (!host.chatRunId && host.chatStream == null) ||
+    row.hasActiveRun === true ||
+    isSessionRunActive(row) ||
+    (row.hasActiveRun !== false && row.status === undefined)
+  ) {
     return false;
   }
   const runId = host.chatRunId;

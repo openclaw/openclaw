@@ -91,7 +91,7 @@ describe("update run ledger", () => {
       expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
       expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
       const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(`Admission: ${owner}`);
+      expect(report).toContain(`Update safety checks ran in the ${owner} updater`);
       expect(report).toContain(
         owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
       );

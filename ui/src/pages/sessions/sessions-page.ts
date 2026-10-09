@@ -880,12 +880,6 @@ class SessionsPage extends OpenClawLightDomElement {
     return sessionCategoryNames(this.result, this.context?.sessions.state.groups ?? []);
   }
 
-  private setGroupBy(mode: SessionsGroupBy) {
-    this.groupBy = mode;
-    this.page = 0;
-    saveStoredGroupBy(mode);
-  }
-
   private async rememberCustomGroup(
     name: string,
     scope: SessionsPageRequestScope | null = this.captureRequestScope(),
@@ -1463,7 +1457,11 @@ class SessionsPage extends OpenClawLightDomElement {
             this.sortDir = direction;
             this.page = 0;
           },
-          onGroupByChange: (mode) => this.setGroupBy(mode),
+          onGroupByChange: (mode) => {
+            this.groupBy = mode;
+            this.page = 0;
+            saveStoredGroupBy(mode);
+          },
           onAssignCategory: (key, category) => this.assignCategory(key, category),
           onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
           onLoadMore: () => {

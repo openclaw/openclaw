@@ -251,11 +251,28 @@ Schemas, stored bytes, retention, and update behavior are unchanged. Released
 synchronous binding selectors and the transport SDK's current-conversation session
 selector retain their compatibility contract, including synchronous command guards.
 
-Session target discovery and exact entry reads use the existing projection worker
-so chat authority and run admission do not queue behind unrelated transcript
-history. Ordered reads still retain the database writer FIFO and revalidate their
-physical source and current permissions. Transcript queries retain their selected
-worker owner; schemas, stored data, configuration, and update behavior are unchanged.
+Session target discovery and inventory refreshes use their reserved read-only lane,
+independently of descriptive entry and list materialization in the projection pool.
+Ordered reads retain the database writer FIFO and use the reserved lane through
+failure and eviction cleanup, while revalidating their physical source and current
+permissions. Transcript queries retain their selected worker owner; schemas,
+stored data, configuration, and update behavior are unchanged.
+
+Usage refresh retains its single-worker limit independently of the shared compute
+budget: its host writes must not occupy the last compute slot while an admitted
+writer waits for a memory reader. Host cache writes and cold restoration carry the
+request's cancellation through queued admission; already admitted writes still
+settle before releasing custody. Development and test runtimes reject cleanup of
+independent transcript, usage, and shared-state reader pools while holding the
+agent database writer queue; unrelated logical session locks remain valid.
+Ordered delivery and Board reads, assistant-mirror validation and correction,
+bounded transcript cohorts, and writer-held SessionManager reload, suffix,
+rewrite, and branch preparation use the existing reserved target-discovery lane
+so error cleanup cannot drain independent readers while holding FIFO admission.
+That lane preserves its reentrant host-write contract. Ordinary manager opens and
+independent retargets keep their foreground history-reader concurrency.
+These scheduling changes require no schema, stored-data, configuration, or update
+migration.
 
 Worker read-only agent connections load existing file-bound canonical validation receipts
 at admission, before a read transaction begins. Reopening a reader then validates

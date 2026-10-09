@@ -63,6 +63,7 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import {
   maintenanceLane,
   projectionLane,
+  targetDiscoveryLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -90,6 +91,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     owner: SessionEntryReadWorkerOwner,
   ) => Promise<T>,
   prepareSource?: SessionEntryReadSourcePreparation,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
@@ -156,7 +158,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     },
     {
       backing: true,
-      lane: projectionLane,
+      lane: lane ?? projectionLane,
       dataOnly: true,
       logical: { assertCurrent: assertCallerCurrent, onReadError },
       prepareSource,
@@ -169,16 +171,23 @@ export function readSessionEntryReadOnlyInWorker(
   input: SessionEntryReadScope,
   assertCallerCurrent: () => void = () => {},
   reader?: SessionEntryCohortReader,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<SessionEntry | undefined> {
   if (reader) {
     return readAdmittedSessionEntry(reader, input, assertCallerCurrent);
   }
-  return withSessionEntryReadOnlyInWorker(input, assertCallerCurrent, async (read) => {
-    if (!read.ok) {
-      throw read.error;
-    }
-    return read.value;
-  });
+  return withSessionEntryReadOnlyInWorker(
+    input,
+    assertCallerCurrent,
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return read.value;
+    },
+    undefined,
+    lane,
+  );
 }
 
 /** Envelope timestamps are descriptive reads; missing stores remain absent. */
@@ -303,7 +312,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
-          lane: projectionLane,
+          lane: targetDiscoveryLane,
           prepareSource: options.prepareSource?.bind(
             options,
             originalInputs[capturedInputs.indexOf(input)]!,
@@ -607,7 +616,6 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
-        { lane: readLane },
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

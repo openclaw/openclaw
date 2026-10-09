@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -6,7 +7,7 @@ import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-a
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -193,9 +194,9 @@ it("allows unrelated config reloads while worker authorization reads are pending
         id: client.authenticatedUserProfile!.profileId,
       },
     });
-    const read = projectionLane.pool.run.bind(projectionLane.pool);
+    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
     let reloads = 0;
-    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         reply.ok &&
@@ -315,11 +316,12 @@ it.each([
     if (!authorization) {
       throw new Error("expected session authorization");
     }
-    const read = projectionLane.pool.run.bind(projectionLane.pool);
+    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
     let revoked = false;
     let inventories = 0;
     let closing: Promise<void> | undefined;
-    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+    const runExternalClose = AsyncLocalStorage.snapshot();
+    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         reply.ok &&
@@ -341,7 +343,7 @@ it.each([
       ) {
         revoked = true;
         if (boundary === "owner-before-consume") {
-          closing = closeOpenClawAgentDatabasesAsync();
+          closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
         } else {
           // Raw SDK DML has no sessionChanges publication and cannot join the held writer FIFO.
           database.db
@@ -412,13 +414,14 @@ it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as cons
       expect(result.error).toBeNull();
       const authorization = result.authorization!;
       let closing: Promise<void> | undefined;
+      const runExternalClose = AsyncLocalStorage.snapshot();
       let checked = false;
       const outcome = authorization.withCurrent!(() => {
         authorization.assertCurrent();
         if (change === "membership") {
           removeSessionMemberSync(scope, client.authenticatedUserProfile!.profileId);
         } else if (change === "owner") {
-          closing = closeOpenClawAgentDatabasesAsync();
+          closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
         } else if (change === "policy") {
           const roles = cfg.gateway!.roles!;
           cfg = {

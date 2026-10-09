@@ -560,7 +560,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       personActivity,
       catalog,
       catalogColor: this.catalogSession?.color,
-      editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
+      editing: Boolean(this.headerRenameSession && this.headerRenameSession.key === row?.key),
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,

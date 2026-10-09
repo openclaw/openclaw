@@ -27,11 +27,16 @@ import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
+export type GatewayHttpRequestLifetime = Pick<
+  GatewayRequestContext,
+  "trackExecution" | "requestEntryLifetime"
+>;
+
 /** Replaces startup custody with the live Gateway and one disconnect-aware request scope. */
 export function runGatewayHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  context: GatewayRequestContext | undefined,
+  context: GatewayHttpRequestLifetime | undefined,
   handle: () => Promise<"failed" | undefined>,
 ): Promise<void> {
   const run = async () => {

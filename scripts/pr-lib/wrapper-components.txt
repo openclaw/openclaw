@@ -1694,6 +1694,7 @@ src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-admission.ts
+src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
 src/state/openclaw-database-preflight-cleanup.ts
 src/state/openclaw-database-preflight-state-path.ts

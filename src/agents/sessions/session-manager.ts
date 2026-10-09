@@ -24,6 +24,7 @@ import {
 } from "../../config/sessions/session-entry-codec.js";
 import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import {
   sameSessionTranscriptTargetBinding,
@@ -268,7 +269,7 @@ export class SessionManager extends SessionManagerBranching {
           throw new Error("Session transcript changed before rewrite publication");
         }
       };
-      const reader = prepareSessionManagerHydration(target);
+      const reader = prepareSessionManagerHydration(target, { lane: targetDiscoveryLane });
       const facts = await reader.readMaintenance({ operation: "version" });
       reader.assertCurrent();
       assertCurrent();
@@ -463,7 +464,7 @@ export class SessionManager extends SessionManagerBranching {
         signal,
       });
     }
-    const hydration = prepareSessionManagerHydration(target, undefined, signal);
+    const hydration = prepareSessionManagerHydration(target, { signal });
     const cwd = cwdOverride ?? process.cwd();
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     assertOwned();

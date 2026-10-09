@@ -8,7 +8,7 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isActiveStoreWriter } from "../../shared/store-writer-queue.js";
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 const managerBindings = resolveGlobalSingleton(

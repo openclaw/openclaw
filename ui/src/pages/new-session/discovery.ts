@@ -232,17 +232,13 @@ export function defaultCloudMachine(
   return machines.find((machine) => machine.default) ?? machines[0];
 }
 
-const ENVIRONMENT_STATUSES = new Set<EnvironmentStatus>([
+const ENVIRONMENT_STATUSES: readonly EnvironmentStatus[] = [
   "available",
   "unavailable",
   "starting",
   "stopping",
   "error",
-]);
-
-function isEnvironmentStatus(value: unknown): value is EnvironmentStatus {
-  return typeof value === "string" && ENVIRONMENT_STATUSES.has(value);
-}
+];
 
 function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
   if (
@@ -273,14 +269,10 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       }
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
-      if (
-        !id ||
-        (type !== "local" && type !== "node" && type !== "worker") ||
-        !isEnvironmentStatus(environment.status)
-      ) {
+      const status = ENVIRONMENT_STATUSES.find((candidate) => candidate === environment.status);
+      if (!id || (type !== "local" && type !== "node" && type !== "worker") || !status) {
         return [];
       }
-      const status = environment.status;
       const label = normalizeOptionalString(environment.label);
       const platform = normalizeOptionalString(environment.platform);
       const trust: DraftEnvironment["trust"] =

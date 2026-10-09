@@ -1,9 +1,10 @@
 import fs from "node:fs";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "../../state/openclaw-agent-board-schema.js";
 import {
   openOpenClawAgentDatabase,
@@ -13,6 +14,7 @@ import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { prepareComparisonClaimsFromStores } from "./legacy-main-session-key-scan.js";
 import { readClaim, readComparisonClaim } from "./legacy-main-session-migration-claims.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
@@ -28,6 +30,7 @@ import {
   captureSessionRetirementReader,
   withSessionRetirementReaders,
 } from "./session-retirement-read.js";
+import { maintenanceLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
 
@@ -205,3 +208,69 @@ it("refuses retirement facts after a native write bypasses the held FIFO", async
     }),
   ).rejects.toBeInstanceOf(SessionEntryChangedDuringReadError);
 });
+
+it.each(["refusal", "eviction"] as const)(
+  "settles an ordered retirement %s without waiting on its following writer",
+  async (settlement) => {
+    const fixture = createFixture();
+    const pathname = databasePath(fixture.stateDir, "ops");
+    const key = "agent:ops:retirement";
+    seedClaim({ databaseAgentId: "ops", databasePath: pathname, key });
+    const options = { agentId: "ops", path: pathname, env: fixture.env };
+    const cleanupEntered = createDeferredCore();
+    const releaseCleanup = createDeferredCore();
+    const writerSettled = createDeferredCore();
+    const readFailure = new Error("Retirement reader failed after dispatch");
+    let following: Promise<string> | undefined;
+    const cleanup = vi.spyOn(maintenanceLane.pool, "rotate").mockImplementation(() => {
+      cleanupEntered.resolve();
+      return Promise.race([writerSettled.promise, releaseCleanup.promise]);
+    });
+    const pools = [maintenanceLane, targetDiscoveryLane].flatMap(({ pool }) => {
+      const run = pool.run.bind(pool);
+      return [
+        vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false),
+        vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind !== "session-retirement-read") {
+            return run(request, controls);
+          }
+          following = runOpenClawAgentWriteAdmission(options, () => {
+            writerSettled.resolve();
+            return "following writer";
+          });
+          if (settlement === "refusal") {
+            throw readFailure;
+          }
+          return {
+            ok: true,
+            value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
+            closedHistoryDatabase: request.database,
+          };
+        }),
+      ];
+    });
+    const reading = listSessionEntryKeysReadOnly({ ...options, storePath: pathname });
+    try {
+      const outcome = await Promise.race([
+        reading.catch((error: unknown) => error),
+        cleanupEntered.promise.then(
+          () => new Error("Retirement cleanup waits on its own queued writer"),
+        ),
+      ]);
+      if (settlement === "refusal") {
+        expect(outcome).toBe(readFailure);
+      } else {
+        expect(outcome).toEqual([key]);
+      }
+      await expect(following).resolves.toBe("following writer");
+    } finally {
+      releaseCleanup.resolve();
+      await Promise.allSettled([reading, following]);
+      cleanup.mockRestore();
+      for (const spy of pools) {
+        spy.mockRestore();
+      }
+    }
+  },
+);

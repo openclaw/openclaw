@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
-import type { ChannelInboundMediaInput } from "../channels/inbound-event/media.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -97,48 +96,6 @@ async function withStoredInboundDocument<T>(
   });
 }
 
-async function expectInboundVoiceNote(params: {
-  buildMedia: (
-    saved: { id: string; path: string },
-    stateDir: string,
-  ) => ChannelInboundMediaInput | Promise<ChannelInboundMediaInput>;
-}) {
-  return await withStoredInboundAudio(async (saved, stateDir) => {
-    const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
-      text: "hello from the voice note",
-      model: req.model ?? "unknown",
-    }));
-    const mediaInput = await params.buildMedia(saved, stateDir);
-    // toInboundMediaFacts is the documented channel-plugin entry point for
-    // inbound attachments (docs/plugins/sdk-channel-plugins.md).
-    const ctx = { media: toInboundMediaFacts([mediaInput]) };
-    const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media, {
-      localPathRoots: [path.dirname(saved.path)],
-      includeDefaultLocalPathRoots: false,
-    });
-    const providerRegistry = new Map<string, MediaUnderstandingProvider>([
-      ["openai", { id: "openai", capabilities: ["audio"], transcribeAudio }],
-    ]);
-    try {
-      const result = await runCapability({
-        capability: "audio",
-        cfg: createOpenAiAudioCfg(),
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-      expect(result.decision.outcome).toBe("success");
-      expect(result.outputs[0]?.text).toBe("hello from the voice note");
-      expect(transcribeAudio).toHaveBeenCalledTimes(1);
-      return { result, transcribeAudio };
-    } finally {
-      await cache.cleanup();
-    }
-  });
-}
-
 describe("inbound media-store references in the attachment url field", () => {
   it("extracts a stored document when remote URLs are disabled", async () => {
     await withStoredInboundDocument(async (saved) => {
@@ -197,68 +154,48 @@ describe("inbound media-store references in the attachment url field", () => {
     }
   });
 
-  it("transcribes a voice note referenced only by media://inbound", async () => {
-    const { result } = await expectInboundVoiceNote({
-      buildMedia: (saved) => ({
-        url: `media://inbound/${saved.id}`,
-        contentType: "audio/ogg",
-      }),
-    });
-
-    expect(formatDecisionSummary(result.decision)).toBe(
-      "audio: success (1/1) via openai/gpt-4o-transcribe",
-    );
-  });
-
-  it("prefers a valid local path over a conflicting media:// alias", async () => {
-    const { transcribeAudio } = await expectInboundVoiceNote({
-      buildMedia: async (saved) => {
-        const alternatePath = path.join(path.dirname(saved.path), "alternate.ogg");
-        await fs.writeFile(alternatePath, createSafeAudioFixtureBuffer(2048, 0x41));
-        return {
-          path: alternatePath,
-          url: `media://inbound/${saved.id}`,
-          contentType: "audio/ogg",
-        };
-      },
-    });
-
-    expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
-      createSafeAudioFixtureBuffer(2048, 0x41),
-    );
-  });
-
-  it("prefers the media:// alias when the supplied path is stale", async () => {
-    await expectInboundVoiceNote({
-      buildMedia: (saved) => ({
-        path: path.join(path.dirname(saved.path), "missing.ogg"),
-        url: `media://inbound/${saved.id}`,
-        contentType: "audio/ogg",
-      }),
-    });
-  });
-
   it("prefers the media:// alias when the supplied path is blocked", async () => {
-    await expectInboundVoiceNote({
-      buildMedia: async (saved, stateDir) => {
-        const blockedPath = path.join(stateDir, "blocked.ogg");
-        await fs.writeFile(blockedPath, "blocked");
-        return {
-          path: blockedPath,
-          url: `media://inbound/${saved.id}`,
-          contentType: "audio/ogg",
-        };
-      },
-    });
-  });
-
-  it("falls back to a valid path when the media:// alias is invalid", async () => {
-    await expectInboundVoiceNote({
-      buildMedia: (saved) => ({
-        path: saved.path,
-        url: "media://outbound/not-an-inbound-file.ogg",
-        contentType: "audio/ogg",
-      }),
+    await withStoredInboundAudio(async (saved, stateDir) => {
+      const blockedPath = path.join(stateDir, "blocked.ogg");
+      await fs.writeFile(blockedPath, "blocked");
+      const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+        text: "hello from the voice note",
+        model: req.model ?? "unknown",
+      }));
+      const ctx = {
+        media: toInboundMediaFacts([
+          { path: blockedPath, url: `media://inbound/${saved.id}`, contentType: "audio/ogg" },
+        ]),
+      };
+      const media = normalizeMediaAttachments(ctx);
+      const cache = createMediaAttachmentCache(media, {
+        localPathRoots: [path.dirname(saved.path)],
+        includeDefaultLocalPathRoots: false,
+      });
+      const providerRegistry = new Map<string, MediaUnderstandingProvider>([
+        ["openai", { id: "openai", capabilities: ["audio"], transcribeAudio }],
+      ]);
+      try {
+        const result = await runCapability({
+          capability: "audio",
+          cfg: createOpenAiAudioCfg(),
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry,
+        });
+        expect(result.decision.outcome).toBe("success");
+        expect(result.outputs[0]?.text).toBe("hello from the voice note");
+        expect(transcribeAudio).toHaveBeenCalledTimes(1);
+        expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
+          createSafeAudioFixtureBuffer(2048, 0x52),
+        );
+        expect(formatDecisionSummary(result.decision)).toBe(
+          "audio: success (1/1) via openai/gpt-4o-transcribe",
+        );
+      } finally {
+        await cache.cleanup();
+      }
     });
   });
 

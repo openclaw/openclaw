@@ -57,6 +57,7 @@ import {
 import {
   finishGatewayHttpAuthorityError,
   runGatewayHttpRequest,
+  type GatewayHttpRequestLifetime,
 } from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
@@ -154,6 +155,7 @@ export function createGatewayHttpServer(opts: {
   getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  httpRequestLifetime?: GatewayHttpRequestLifetime;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
@@ -186,7 +188,7 @@ export function createGatewayHttpServer(opts: {
     expectation?: "continue" | "reject",
   ) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runGatewayHttpRequest(req, res, opts.getGatewayRequestContext?.(), () =>
+    void runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
       runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
         handleRequest(req, res, expectation),
       ),

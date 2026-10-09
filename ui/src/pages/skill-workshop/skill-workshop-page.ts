@@ -221,11 +221,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     this.requestUpdate();
   };
 
-  private readonly setSort = (sort: WorkshopSort) => {
-    this.sort = sort;
-    this.requestUpdate();
-  };
-
   private readonly setTab = (tab: WorkshopTab) => {
     this.tab = tab;
     const target = this.viewer?.target;
@@ -435,7 +430,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       onModeChange: (mode) => void this.setMode(mode),
       onLearn: () => void this.learn(),
       onFilter: this.setFilter,
-      onSort: this.setSort,
+      onSort: (sort) => {
+        this.sort = sort;
+        this.requestUpdate();
+      },
       onTab: this.setTab,
     });
   }

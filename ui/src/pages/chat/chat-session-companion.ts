@@ -24,6 +24,13 @@ import { formatChatSelectionAnnotation } from "./components/chat-selection-attac
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
 const COMPANION_ASK_TIMEOUT_MS = 70_000;
+const COMPANION_FAILURE_HINTS = new Map([
+  ["context-unavailable", "history-unavailable"],
+  ["session-missing", "missing"],
+  ["rate-limited", "rate-limited"],
+  ["image-input-unsupported", "image-unsupported"],
+  ["utility-model-unavailable", "model-unavailable"],
+]);
 
 export type ChatSessionCompanionTurn = {
   question: string;
@@ -296,17 +303,7 @@ export class ChatSessionCompanionThreads {
       const hint =
         details.code === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
-          : reason === "context-unavailable"
-            ? "history-unavailable"
-            : reason === "session-missing"
-              ? "missing"
-              : reason === "rate-limited"
-                ? "rate-limited"
-                : imageUnsupported
-                  ? "image-unsupported"
-                  : reason === "utility-model-unavailable"
-                    ? "model-unavailable"
-                    : "unavailable";
+          : (COMPANION_FAILURE_HINTS.get(reason ?? "") ?? "unavailable");
       Object.assign(turn, {
         status: "failed",
         hint,

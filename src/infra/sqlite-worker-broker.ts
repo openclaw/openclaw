@@ -67,6 +67,10 @@ const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
 
+function waitForSqliteOpen<T>(pending: Promise<T>, signal?: AbortSignal) {
+  return racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+}
+
 export class SqliteWorkerBroker {
   private readonly explicitSqliteCloseReleasesNativeResources = captureSqliteWorkerClosePolicy();
   // WAL readers on independent actors can progress on separate threads without blocking writers.
@@ -173,9 +177,8 @@ export class SqliteWorkerBroker {
     options: PreparedSqliteWorkerOpen,
     client: object,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
+    // Cached client callbacks share this scope; never capture the opening options in it.
     const { maintenanceScope } = options;
-    const wait = <T>(pending: Promise<T>) =>
-      racePromiseWithAbortSignal(pending, options.signal, (signal) => signal.reason);
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
@@ -203,14 +206,14 @@ export class SqliteWorkerBroker {
     let actor = this.actors.get(key);
     if (actor?.retirementRequested) {
       if (actor.retirement) {
-        await wait(actor.retirement);
+        await waitForSqliteOpen(actor.retirement, options.signal);
         return this.openAdmitted(options, client);
       }
       throw new SqliteWorkerError("SQLite actor retirement must finish before reopening", "closed");
     }
     if (actor?.cleanupState === "pending") {
       if (actor.closing) {
-        await wait(actor.closing);
+        await waitForSqliteOpen(actor.closing, options.signal);
         return this.openAdmitted(options, client);
       }
       throw new SqliteWorkerError(
@@ -223,7 +226,7 @@ export class SqliteWorkerBroker {
         const unused = await this.lifecycle.consumeRuntimePreparation(options, moduleUrl);
         if (unused) {
           unused.pendingOpens -= 1;
-          await wait(this.lifecycle.retireEmpty(unused));
+          await waitForSqliteOpen(this.lifecycle.retireEmpty(unused), options.signal);
         }
         // Another opener won; reread identity and authority after retiring the unused carrier.
         return this.openAdmitted({ ...options, runtimePreparation: undefined }, client);
@@ -320,14 +323,14 @@ export class SqliteWorkerBroker {
         }
       });
     }
-    const admittedActor = actor;
+    const owned = actor;
     try {
       retainSqliteWorkerAdmissionCleanup(
-        admittedActor,
+        owned,
         options.retainCleanup,
-        this.lifecycle.closeActor.bind(this.lifecycle, admittedActor, maintenanceScope),
+        this.lifecycle.closeActor.bind(this.lifecycle, owned, maintenanceScope),
       );
-      options.onNativeStopped?.(actor.nativeStopped, () => admittedActor.closeReceipt);
+      options.onNativeStopped?.(owned.nativeStopped, () => owned.closeReceipt);
       await actor.opened;
       options.assertCurrent?.();
       if (actor.retirementRequested) {
@@ -371,7 +374,6 @@ export class SqliteWorkerBroker {
       }
       throw error;
     }
-    const owned = actor;
     const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
     let referenceReleased = false;
     const { store, client: storeClient } = createSqliteWorkerClient<Operations>({
