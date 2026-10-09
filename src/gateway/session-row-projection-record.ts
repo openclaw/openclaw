@@ -205,7 +205,7 @@ export function changesSessionRowDependents(before: Row["storedEntry"], after: R
 }
 
 /** Mark resident logical owners without changing stored entries, relatives, or backfill. */
-export function markPresentation(
+export function markAutomation(
   rows: Iterable<Row>,
   agentId: string | undefined,
   dirty: Set<string>,

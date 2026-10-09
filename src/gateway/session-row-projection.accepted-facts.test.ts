@@ -92,7 +92,7 @@ it("rematerializes activity state from accepted facts without reading the databa
         sessionKey: query.key,
         agentId: query.agentId,
         storePath: suffix.storeTarget.storePath,
-        scope: "activity-summary",
+        scope: "runtime",
         factsInvalidated: true,
       });
       await projection.ensureMaterialized();

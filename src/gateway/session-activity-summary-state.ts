@@ -56,7 +56,8 @@ export function setSessionActivitySummaryState(
   sessionChanges.emit({
     sessionKey: target.key,
     agentId: target.agentId,
-    scope: "activity-summary",
+    scope: "runtime",
+    facts: { kind: "unchanged" },
   });
   return true;
 }

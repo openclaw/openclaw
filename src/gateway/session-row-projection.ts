@@ -347,12 +347,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
       }
-    } else if (
-      (change.scope === "automation" || change.scope === "activity-summary") &&
-      !change.factsInvalidated
-    ) {
+    } else if (!change.factsInvalidated && (change.scope === "automation" || presentationOnly)) {
       const affected = matching({ key: change.sessionKey }).filter((row) => !isCold(row));
-      records.markPresentation(affected, change.agentId, dirty);
+      records.markAutomation(affected, change.agentId, dirty);
     } else if (!presentationOnly) {
       rowScope.visitSessionRowPublicationTargets(change, {
         matching,

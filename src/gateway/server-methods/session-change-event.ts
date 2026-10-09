@@ -416,7 +416,9 @@ export function emitSessionsChanged(
         ? {
             sessionKey: payload.sessionKey,
             ...(payload.agentId ? { agentId: payload.agentId } : {}),
-            ...(options.rowScope ? { scope: options.rowScope } : {}),
+            ...(options.rowScope
+              ? { scope: options.rowScope, facts: { kind: "unchanged" as const } }
+              : {}),
           }
         : { all: true, scope: "sessions" },
     );

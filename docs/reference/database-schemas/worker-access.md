@@ -2120,15 +2120,18 @@ lifetime; they never advance a database reader's foreign-commit baseline or
 authorize a later effect. New unpinned database reads still check freshness.
 Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
 
-Activity recap status and automation membership publish their exact presentation
-scope after updating their in-memory owner. Resident rows rematerialize those
+Activity recap status and automation membership publish their presentation
+scope and certify unchanged stored facts after updating their in-memory owner.
+Resident rows rematerialize those
 fields from retained database facts without another agent or shared-state read.
 These notifications cannot certify missing facts or clear a prior storage
 invalidation; transcript, entry, ACP, and physical-store changes retain their
 own invalidation contracts. New database reads and final authority checks do not
 use these presentation facts as freshness evidence. Input settlement publishes
 runtime liveness after its persistence and cleanup owners finish, retaining the
-existing coalesced event preparation and any pending storage refresh.
+existing coalesced event preparation and any pending storage refresh. These
+certificates preserve pending Inbox dismissal authority; real sharing or identity
+changes still revoke it before the existing writer's transaction admission.
 
 Transcript notifications retain complete resident metadata when the committed
 entry has no activity summary. They still revoke in-flight reads and refresh
