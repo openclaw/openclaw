@@ -361,6 +361,22 @@ describe("cron tool creator cap", () => {
     expect(partial.payload.toolsAllow).toEqual(["read"]);
   });
 
+  it("keeps symbolic group requests on the empty-cap base behavior when nothing matches", () => {
+    const creator: CronCreatorToolAllowlistEntry[] = [];
+    replaceWithEffectiveCronCreatorToolAllowlist(creator, [testTool("read")]);
+
+    for (const requested of [["group:plugins"], ["group:plugins", "future__tool"]]) {
+      const job = {
+        trigger: { script: "return { fire: false }" },
+        payload: { kind: "systemEvent", text: "wake", toolsAllow: [...requested] },
+      };
+      // Symbolic selectors resolve at runtime; an empty plugin expansion must not
+      // trip the finite-only refusal, so the add keeps the base empty-cap result.
+      capCronJobToolsAllowOnCreate(job, creator);
+      expect(job.payload.toolsAllow).toEqual([]);
+    }
+  });
+
   it("treats an alias-name finite request as already covered by creator authority", () => {
     const alias = gatewayExecAlias(testTool("exec"));
     const creator: CronCreatorToolAllowlistEntry[] = [];

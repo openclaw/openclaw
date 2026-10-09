@@ -344,10 +344,16 @@ function capCronJobToolsAllow(params: {
       (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
     )
     .map((tool) => tool.name);
-  if (cappedToolsAllow.length === 0 && params.refuseUnmatchedFiniteRequest) {
+  if (
+    cappedToolsAllow.length === 0 &&
+    params.refuseUnmatchedFiniteRequest &&
+    classifyExplicitToolsAllow(params.payload) === "finite"
+  ) {
     // A complete capture proves the requested names are outside the creator's
     // surface. Persisting `[]` would report the add as accepted and then run the
-    // job without those tools, so refuse instead and name them.
+    // job without those tools, so refuse instead and name them. Symbolic
+    // selectors (`*`, `group:*`) resolve at runtime, so an empty intersection
+    // there keeps the base behavior of an empty cap.
     throw new Error(
       `Cron add requested tools outside this turn's captured tool surface (${formatRequestedToolsAllow(requestedToolsAllow)}). ${CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE}`,
     );
