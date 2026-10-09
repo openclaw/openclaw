@@ -935,4 +935,60 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       });
     });
   });
+
+  it("lights up the Claude CLI sign-in wildcard only for models the Claude CLI catalog lists", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          { id: "claude-cli", modelProvider: "anthropic", pluginId: "anthropic", config: {} },
+          { id: "google-gemini-cli", modelProvider: "google", pluginId: "google", config: {} },
+        ],
+      });
+      const owner = createModelCatalogDecisions({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+                "anthropic/claude-pinned": { agentRuntime: { id: "claude-cli" } },
+                "anthropic/claude-http": { agentRuntime: { id: "openclaw" } },
+                "anthropic/claude-typed": {},
+                "google/*": { agentRuntime: { id: "google-gemini-cli" } },
+              },
+            },
+          },
+        },
+        agentId: "main",
+        workspaceDir: state.workspaceDir,
+        snapshot: {
+          entries: [
+            { provider: "claude-cli", id: "claude-listed", name: "Listed" },
+            { provider: "google-gemini-cli", id: "gemini-listed", name: "Listed" },
+          ],
+          routeVariants: [],
+        },
+        metadataSnapshot: cliMetadata,
+        preparedAuthStore: { version: 1, profiles: {} },
+        preparedRuntimeAuthModes: { "claude-cli": "oauth", "google-gemini-cli": "oauth" },
+        preparedSyntheticAuthComplete: true,
+      });
+      const availability = (provider: string, id: string) =>
+        owner.evaluateEntry({ provider, id }).availability;
+
+      expect(availability("anthropic", "claude-listed")).toBe(true);
+      // API-only rows stay out of a Claude CLI picker without a sign-in prompt.
+      const apiOnly = owner.evaluateEntry({ provider: "anthropic", id: "claude-api-only" });
+      expect(apiOnly.availability).toBe(false);
+      expect(apiOnly.unavailableReason).toBeUndefined();
+      expect(availability("anthropic", "claude-pinned")).toBe(true);
+      expect(availability("anthropic", "claude-typed")).toBe(true);
+      // An exact override to another runtime stays with ordinary provider auth, not Claude CLI.
+      expect(owner.evaluateEntry({ provider: "anthropic", id: "claude-http" }).evidence).not.toBe(
+        "runtime",
+      );
+      // User-authored wildcards to other CLI backends are unchanged.
+      expect(availability("google", "gemini-unlisted")).toBe(true);
+    });
+  });
 });

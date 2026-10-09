@@ -34,6 +34,7 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
 import {
   createModelCatalogView,
   prepareModelCatalogView,
@@ -310,6 +311,11 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const runtimeOverride = params.runtimeOverride;
   const normalizeAuthProvider = (provider: string) =>
     resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
+  const isUnlistedWildcardCliModel = createUnlistedClaudeCliWildcardCheck({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entries: () => snapshot.entries,
+  });
   const evaluateStoredEntry = (
     entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
     routeVariants?: readonly ModelCatalogEntry[],
@@ -353,6 +359,12 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
     };
     const provider = normalizeProviderId(entry.provider);
+    const listed =
+      !requestedRuntimeId &&
+      resolved.availability === true &&
+      isUnlistedWildcardCliModel(provider, identity?.id ?? entry.id)
+        ? { ...resolved, availability: false }
+        : resolved;
     // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
     // profile discovery tested; widening it would hide routes backed by another valid profile.
     const evaluation: ModelAuthAvailabilityEvaluation = providerOutcomes.some(
@@ -368,7 +380,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           unavailableReason: "auth-failed",
           unavailableUntil: undefined,
         }
-      : resolved;
+      : listed;
     evaluations.set(cacheKey, evaluation);
     return evaluation;
   };
