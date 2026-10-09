@@ -517,10 +517,9 @@ async function collectSessionIngestionBatches(params: {
     for (const entry of corpus) {
       knownStateKeys.add(sessionIngestionStateKeyFromCorpus(entry));
       const source = sessionIngestionSourceFromCorpus(entry, "dreaming");
-      if (!source) {
-        continue;
+      if (source) {
+        selectedSources.push(source);
       }
-      selectedSources.push(source);
     }
     const excludedReasons = sessionExclusionReasons(
       selectedSources,
@@ -559,8 +558,7 @@ async function collectSessionIngestionBatches(params: {
     return a.sessionPath.localeCompare(b.sessionPath);
   });
 
-  const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
-  let remaining = totalCap;
+  let remaining = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
   const perFileCap = resolveSessionIngestionFileCap(sortedSources.length);
   for (const source of sortedSources) {
     if (remaining <= 0) {
