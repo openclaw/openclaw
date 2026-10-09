@@ -68,6 +68,11 @@ stored agent lists cannot establish the current role’s discovery permissions. 
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
 
+Exact conversation links also wait for the scoped cached roster before presenting
+their header. Dashboard layouts restore before the pane renders, and embedded
+HTML widgets keep one loading surface while their board metadata and document
+arrive. Widget requests still require the current Gateway connection.
+
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
