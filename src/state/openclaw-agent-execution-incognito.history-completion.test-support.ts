@@ -17,6 +17,7 @@ import { runWithSessionTranscriptReadFence } from "../config/sessions/session-tr
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { HistoryWiringFixture } from "./openclaw-agent-execution-incognito.history-visibility.test-support.js";
+import type { IncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 
 type CompletionFixture = Pick<HistoryWiringFixture, "actor" | "authority" | "env" | "targetInput">;
 
@@ -117,7 +118,10 @@ export async function createIncognitoCompletionSource(
   return { claim, session, target, scope, anchor };
 }
 
-export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
+export function registerIncognitoCompletionTests(
+  fixture: CompletionFixture,
+  probe: IncognitoActorProbe,
+) {
   const { authority } = fixture;
   it("requires committed input before retaining cold original-run completion custody", async () => {
     const { actor } = fixture;
@@ -228,8 +232,7 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const order: string[] = [];
-    const accepted = actor.run({ assertCurrent: source.assertCurrent }, async (native) => {
-      await native.execute({ type: "database.incognito.memory", input: undefined });
+    const accepted = probe.read(actor, { assertCurrent: source.assertCurrent }, async () => {
       entered.resolve();
       await resume.promise;
       order.push("native-settled");
@@ -381,12 +384,12 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
       };
       const queued = createDeferredCore();
       const resume = createDeferredCore();
-      let held: Promise<void> | undefined;
+      let held: Promise<unknown> | undefined;
       let mutation: Promise<IncognitoEntryPatchResult> | undefined;
       const history = actor.sessions.history;
       const observer = vi.spyOn(actor.sessions, "history").mockImplementation((...args) => {
         // All three operations reserve this actor's FIFO before the barrier opens.
-        held = actor.run(authority, () => resume.promise);
+        held = probe.read(actor, authority, () => resume.promise);
         mutation = actor.sessions.entry(authority, {
           type: "session.entry.patch.commit",
           input: {

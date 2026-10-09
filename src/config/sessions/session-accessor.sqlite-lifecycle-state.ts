@@ -7,7 +7,6 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -23,6 +22,7 @@ import type {
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
@@ -221,33 +221,6 @@ export function readReferencedSessionIdsAfterTargetMutation(
     uniqueStrings([target.canonicalKey, ...target.storeKeys].map((key) => key.trim())),
   );
   return readReferencedSessionIds(database, removedKeys, candidateSessionIds);
-}
-
-export function planSessionStateDeleteIfUnreferenced(params: {
-  archiveTranscript?: boolean;
-  archiveDirectory: string;
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
-  reason?: "deleted" | "reset";
-  referencedSessionIds: ReadonlySet<string>;
-  sessionId: string;
-}): SessionStateDeletePlan | null {
-  if (
-    params.referencedSessionIds.has(params.sessionId) ||
-    readSessionColdTranscript(params.database.db, params.sessionId)
-  ) {
-    return null;
-  }
-  return {
-    agentId: params.database.agentId,
-    archiveDirectory: params.archiveDirectory,
-    archiveTranscript:
-      params.archiveTranscript !== false &&
-      typeof readOpenClawAgentDatabaseIdentity(params.database).identity === "string",
-    databasePath: params.database.path,
-    reason: params.reason ?? "deleted",
-    sessionId: params.sessionId,
-    snapshot: readSessionStateDeleteSnapshot(params.database.db, params.sessionId),
-  };
 }
 
 export function deleteMaterializedSessionStatePlans(

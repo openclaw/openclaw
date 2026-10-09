@@ -12,7 +12,6 @@ import {
   type SqliteWorkerTransferFrame,
   type SqliteWorkerTransferHandle,
 } from "../../infra/sqlite-worker-transfer.js";
-import type { AgentDatabaseIncognitoOperations } from "../../state/openclaw-agent-execution-contract.js";
 import type {
   IncognitoSessionAuthority,
   IncognitoSessionFacts,
@@ -153,7 +152,7 @@ export function isIncognitoEntryValidationGrant(
   );
 }
 
-type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
+type Scope = Pick<SqliteWorkerStore<IncognitoSessionOperations>, "execute">;
 
 export type IncognitoSessionRunner = <T>(
   authority: IncognitoSessionAuthority,

@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionRowChange, SessionRowFacts } from "../../sessions/session-row-changes.js";
+import {
+  sessionRowChangeSource,
+  type SessionRowChange,
+  type SessionRowFacts,
+} from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -19,6 +23,7 @@ import {
   type SessionEntryReplacementPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
+import { isSessionEntryReplacementFactKnown } from "./session-accessor.sqlite-entry-receipt.js";
 import { stageIncognitoSharingPublication } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   projectSessionEntryPredicateChange,
@@ -52,22 +57,29 @@ export function stageSessionSharingPublication(
     : undefined;
   const reads = [...(retainedSharingReads(database, sessionKey) ?? [])];
   const token = {};
-  for (const read of reads) {
-    read.pending.add(token);
-    const predicate = read.predicate;
-    const postimage = predicate && change && projectSessionEntryPredicateChange(predicate, change);
-    // A known partial assignment may leave this reader's selected metadata unchanged.
-    if (predicate && (!postimage || !predicate.matches(postimage))) {
-      predicate.pending.add(token);
-    }
-  }
-  return () => {
+  const release = () => {
     releaseIncognito?.();
     for (const read of reads) {
       read.pending.delete(token);
       read.predicate?.pending.delete(token);
     }
   };
+  try {
+    for (const read of reads) {
+      read.pending.add(token);
+      const predicate = read.predicate;
+      const postimage =
+        predicate && change && projectSessionEntryPredicateChange(predicate, change);
+      // A known partial assignment may leave this reader's selected metadata unchanged.
+      if (predicate && (!postimage || !predicate.matches(postimage))) {
+        predicate.pending.add(token);
+      }
+    }
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return release;
 }
 
 export function recordCommittedSessionEntryPublication(
@@ -141,7 +153,8 @@ export function readCurrentSessionEntryProjection(
 ) {
   return !owner.superseded.has(sessionKey) &&
     !owner.metadataSuperseded.has(sessionKey) &&
-    !owner.projectionSuperseded.has(sessionKey)
+    !owner.projectionSuperseded.has(sessionKey) &&
+    (!replacement?.receipt || replacement.receipt.facts.get(sessionKey)?.kind === "postimage")
     ? replacement?.projection?.get(sessionKey)
     : undefined;
 }
@@ -174,7 +187,8 @@ export function prepareSessionEntryReplacementChanges(
   if (replacement.source?.identity !== databaseIdentity) {
     return undefined;
   }
-  const current = (key: string) => !owner.superseded.has(key);
+  const current = (key: string) =>
+    !owner.superseded.has(key) && isSessionEntryReplacementFactKnown(replacement, key);
   return {
     source: replacement.source,
     entries: new Map(
@@ -208,6 +222,8 @@ export function applyPendingSessionEntryOwnerChanges(
   if (!replacement || ownerChanges.size === 0) {
     return replacement;
   }
+  // The receipt stays immutable evidence of its own COMMIT. Only the existing
+  // owner's installation view incorporates subsequent native field assignments.
   const current = new Map(replacement.current);
   for (const [sessionKey, change] of ownerChanges) {
     const entry = current.get(sessionKey);
@@ -487,7 +503,7 @@ export function readPreparedSessionSharingChange(change: object) {
 
 /** Physical publication facts are captured by the writer, never resolved by observers. */
 export function readPreparedSessionEntryPublicationSource(change: object) {
-  const record = preparedSharingChanges.changes.get(change);
+  const record = preparedSharingChanges.changes.get(sessionRowChangeSource(change));
   const source = record?.kind === "metadata" ? record.prepared.source : undefined;
   return {
     identity: record?.databaseIdentity ?? source?.identity,

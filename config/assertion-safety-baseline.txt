@@ -1712,7 +1712,7 @@ src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
-src/cli/plugins-authoring-command.ts	5
+src/cli/plugins-authoring-command.ts	4
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	6
 src/cli/program/action-reparse.ts	1
