@@ -6,6 +6,44 @@ const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix } =
   createMergeOutcomeFixtureHarness();
 
 describePosix("native merge completion", () => {
+  it("retires the workflow binding only after verified native cleanup", () => {
+    const f = fixture();
+    f.bindWorkflow();
+    f.save({ ...f.state(), cleanup: "absent" });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.record().phase).toBe("complete");
+    expect(
+      f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-workflow-bindings/123"]),
+    ).toBe("");
+    const repeated = f.run();
+    expect(repeated.status, repeated.output).toBe(0);
+    expect(
+      f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-workflow-bindings/123"]),
+    ).toBe("");
+    expect(f.state().mutations).toBe(1);
+  });
+
+  it("retains an unfinished workflow and retires it on explicit delayed completion", () => {
+    const f = reconciledMergeAfterCleanup();
+    f.bindWorkflow();
+    f.save({ ...f.state(), comment: "rejected" });
+    const first = f.complete(f.git(["rev-parse", outcomeRef]));
+    expect(first.status, first.output).toBe(1);
+    const ref = "refs/openclaw/pr-workflow-bindings/123";
+    const binding = f.git(["rev-parse", ref]);
+    expect(f.git(["rev-parse", `${binding}^`])).toBe(f.base);
+    f.recover();
+    f.save({
+      ...f.state(),
+      comments: [{ body: `<!-- openclaw-merge:${f.record().attempt} -->`, html_url: "fixture" }],
+    });
+    const completed = f.complete(f.git(["rev-parse", outcomeRef]));
+    expect(completed.status, completed.output).toBe(0);
+    expect(f.record().phase).toBe("complete");
+    expect(f.git(["for-each-ref", "--format=%(refname)", ref])).toBe("");
+  });
+
   it.each([
     ["explicit", "rejected"],
     ["explicit", "lost"],

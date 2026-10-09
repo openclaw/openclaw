@@ -1153,6 +1153,13 @@ merge_outcome_require_cleanup_absent() {
   [ "$ref_status" -eq 2 ] || { echo "Completion requires authoritative remote branch absence; no deletion attempted." >&2; return 1; }
 }
 
+retire_pr_workflow_binding() {
+  [ -n "${PR_WORKFLOW_BINDING_OID:-}" ] || return 0
+  [ "$PR_WORKFLOW_PR" = "$1" ] || return 1
+  pr_batch_wrapper_git workflow-retire "$canonical_repo_root" "$1" "$PR_WORKFLOW_BINDING_OID" || return 1
+  PR_WORKFLOW_BINDING_OID=""
+}
+
 merge_complete() {
   local pr="$1" expected_oid="$2" phase body="" audit
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
@@ -1167,6 +1174,7 @@ merge_complete() {
   merge_outcome_reconcile "$pr" || return 1
   phase=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase) || return 1
   if [ "$phase" = complete ]; then
+    retire_pr_workflow_binding "$pr" || return 1
     echo "merge-complete already complete for PR #$pr; no side effects."
     return 0
   fi
@@ -1201,6 +1209,7 @@ merge_complete() {
   merge_outcome_require_cleanup_absent "$pr" || return 1
   merge_outcome_stable "$pr" || return 1
   merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+  retire_pr_workflow_binding "$pr" || return 1
   echo "merge-complete complete for PR #$pr"
   echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
 }
@@ -1219,6 +1228,7 @@ merge_outcome_resume() {
   fi
   if [ "$phase" = complete ]; then
     echo "merge-run already complete for PR #$pr; no side effects."
+    retire_pr_workflow_binding "$pr" || return 1
   else
     echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
     echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"

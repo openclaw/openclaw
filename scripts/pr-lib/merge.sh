@@ -1229,6 +1229,7 @@ merge_run() {
   cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
   if [ "$cleanup_complete" = true ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+    retire_pr_workflow_binding "$pr" || return 1
     echo "merge-run complete for PR #$pr"
   else
     echo "Merge confirmed; completion pending: inspect cleanup warnings. Recovery will not delete branches or worktrees."

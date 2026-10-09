@@ -19,6 +19,11 @@ export function createMergeOutcomeFixtureHarness() {
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
   let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
   const scripts = join(process.cwd(), "scripts");
+  const wrapper = readFileSync(join(scripts, "pr"), "utf8");
+  const workflowGitOwner = wrapper.slice(
+    wrapper.indexOf("pr_batch_wrapper_git() {"),
+    wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
+  );
   const nodeExecutable = requireNodeTool("node");
   const nodeArgs = resolveVitestNodeArgs();
   const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
@@ -739,6 +744,7 @@ save();
       `#!/usr/bin/env bash
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
+${workflowGitOwner}
 source "$script_parent_dir/lib/plain-gh.sh"
 source "$script_parent_dir/pr-lib/worktree.sh"
 source "$script_parent_dir/pr-lib/operation-lock.sh"
@@ -815,6 +821,15 @@ pr_git() {
 export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
+if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
+  GIT_EXEC=$(command -v git)
+  canonical_repo_root="$FIXTURE_REPO"
+  PR_WORKFLOW_PR=123
+  binding=$(pr_batch_wrapper_git workflow-read "$canonical_repo_root" 123)
+  IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+  PR_WORKFLOW_SOURCE_REVISION="\${PR_WORKFLOW_SOURCE_REVISION:-$FIXTURE_BASE}"
+  PR_WORKFLOW_BINDING_OID=$(pr_batch_wrapper_git workflow-admit "$canonical_repo_root" 123 "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID")
+fi
 if [ "\${9:-}" = verify ]; then
   merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
 elif [ -n "\${5:-}" ]; then
@@ -850,6 +865,8 @@ fi
       FIXTURE_GH: gh,
       FIXTURE_GH_BIN: join(bin, "gh"),
       FIXTURE_NODE: nodeExecutable,
+      FIXTURE_BASE: base,
+      FIXTURE_WORKFLOW_BINDING: "false",
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
       // Only partial-clone cases consume trace evidence to reject implicit hydration.
@@ -996,6 +1013,9 @@ fi
       state,
       save,
       run,
+      bindWorkflow: () => {
+        env.FIXTURE_WORKFLOW_BINDING = "true";
+      },
       verifyPriorCi: (path: string) => {
         const result = spawnSync(
           nodeExecutable,
