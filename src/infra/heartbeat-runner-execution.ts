@@ -241,20 +241,32 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   );
   // Lane depth is a process-wide counter with no owner attribution on the lane task
   // itself, so discount the runs this process can positively attribute to *other*
-  // agents before comparing against this agent's depth. Each admitted cron run holds
-  // exactly one Cron lane slot for its duration, so the foreign run count is the
-  // discount. Markers with no recorded agent are excluded from that count and stay in
-  // the global depth: unattributed lane work keeps suppressing every agent rather than
-  // letting a heartbeat fire into cron work this process cannot name.
-  const cronLaneDepth = Math.max(
-    0,
-    getSize(CommandLane.Cron) - countActiveCronJobsForOtherAgents(agentId),
-  );
+  // agents before comparing against this agent's depth. Markers with no recorded agent
+  // are excluded from that count and stay in the global depth: unattributed lane work
+  // keeps suppressing every agent rather than letting a heartbeat fire into cron work
+  // this process cannot name.
+  const rawCronLaneDepth = getSize(CommandLane.Cron);
+  const foreignCronRuns = countActiveCronJobsForOtherAgents(agentId);
+  // Fail closed. A cron marker exists from admission until the run settles, but a Cron
+  // lane slot is held only while that task is queued or running, so the foreign-run count
+  // can exceed the observed lane depth. When the two disagree this process cannot tell
+  // which lane entries are foreign, so keep counting the lane globally: clamping with
+  // Math.max(0, ...) would report a busy lane as idle and let a heartbeat fire into cron
+  // work this process cannot account for.
+  const cronLaneDepth =
+    foreignCronRuns > rawCronLaneDepth ? rawCronLaneDepth : rawCronLaneDepth - foreignCronRuns;
   // HookDispatch is included so moving hook agent runs off `cron-nested` onto
   // their own lane does not silently stop them from suppressing heartbeats.
   // They are still active agent work; only the lane they occupy changed.
-  // CronNested and HookDispatch carry no run attribution at all, so they keep counting
-  // process-wide (the conservative default).
+  //
+  // CronNested and HookDispatch keep counting process-wide by design. They carry no run
+  // attribution and are not reachable from cron markers alone: gateway hook dispatch
+  // (gateway/server/hooks.ts) and the reply-runner fallback enqueue into these lanes
+  // with no owning cron marker, so "every cron run belongs to another agent" would not
+  // prove the work is foreign. The residual starvation this leaves is pinned by
+  // heartbeat-runner.cron-gate-agent-scope.test.ts; fixing it requires agentId on
+  // CommandLaneTaskMarker, i.e. src/process/command-queue.ts, which is outside this
+  // card's allowed_files.
   const cronLaneBusy =
     cronLaneDepth > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
