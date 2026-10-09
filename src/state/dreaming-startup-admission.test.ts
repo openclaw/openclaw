@@ -1,8 +1,20 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  buildFileEntry,
+  buildMultimodalChunkForIndexing,
+  listMemoryFiles,
+} from "../../packages/memory-host-sdk/src/host/internal.js";
+import { readMemoryFile } from "../../packages/memory-host-sdk/src/host/read-file.js";
+import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
+import { registerAgentWorkspaceAccess } from "../plugin-sdk/agent-workspace-runtime.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "../plugin-sdk/plugin-entry.js";
 import {
   createTestPluginApi,
@@ -15,7 +27,7 @@ import {
 } from "../plugin-sdk/session-store-runtime.js";
 import { readSessionTranscriptEvents } from "../plugin-sdk/session-transcript-runtime.js";
 import { appendSqliteSessionTranscriptEventForTest } from "../plugin-sdk/sqlite-runtime-testing.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance, getPluginOriginalValue } from "../plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -330,6 +342,169 @@ it("keeps the identity guard for creation outside startup preparation", async ()
         removedEntries: 0,
         archivedTranscriptArtifacts: 0,
       });
+    },
+  );
+});
+
+it.for([
+  { phase: "inspection" as const, outcome: "watch" },
+  { phase: "preparation" as const, outcome: "watch" },
+  { phase: "preparation" as const, outcome: "failed" },
+  { phase: "preparation" as const, outcome: "dispose" },
+])("activates indexes after pending $phase ($outcome)", async ({ phase, outcome }, { signal }) => {
+  await withOpenClawTestState(
+    { label: "memory-index-admission", layout: "state-only" },
+    async (state) => {
+      const config: OpenClawConfig = {
+        cron: { enabled: false },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        memory: {
+          search: {
+            provider: "none",
+            sources: ["memory"],
+            store: { vector: { enabled: false } },
+          },
+        },
+      };
+      const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
+      const memoryFiles: MemoryWorkspaceFiles = {
+        assertCurrent() {},
+        listFiles: listMemoryFiles,
+        inspectFile: buildFileEntry,
+        readFile: readMemoryFile,
+        readForIndexing: async (file) => ({
+          content: await fs.promises.readFile(file, "utf8"),
+          canonicalRelativePath: path.relative(state.workspaceDir, file),
+        }),
+        buildMultimodalChunk: buildMultimodalChunkForIndexing,
+        watch: async (_request, onChange, watchSignal) => {
+          subscriptions.push({
+            notify: AsyncLocalStorage.bind(() => onChange("change")),
+            signal: watchSignal,
+          });
+          await new Promise<void>((resolve) => {
+            watchSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+      };
+      const unused = async (): Promise<never> => {
+        throw new Error("Unexpected document bridge operation");
+      };
+      const releaseWorkspace = registerAgentWorkspaceAccess(state.workspaceDir, {
+        memoryFiles,
+        bridge: { readFile: unused, writeFile: unused, stat: unused },
+      });
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const owner = createManagedMemoryCore(config, logger);
+      const instance = getPluginInstance(owner.registry.plugins[0]!)!;
+      const registeredRuntime = owner.registry.memoryCapabilities[0]?.capability.runtime;
+      const service = owner.registry.services.find(
+        (entry) => entry.service.id === "memory-core-index",
+      )?.service;
+      if (!registeredRuntime || !service || service.apiVersion === 2) {
+        throw new Error("Memory Core did not register its indexing lifecycle");
+      }
+      const runtime = (getPluginOriginalValue(registeredRuntime, instance) ??
+        registeredRuntime) as typeof registeredRuntime;
+      const getManager = runtime.getMemorySearchManager.bind(runtime);
+      const acquired = createDeferredCore<Awaited<ReturnType<typeof getManager>>>();
+      const acquisition = vi
+        .spyOn(runtime, "getMemorySearchManager")
+        .mockImplementation((params) => {
+          const result = getManager(params);
+          acquired.resolve(result);
+          return result;
+        });
+      const context = { config, stateDir: state.stateDir, logger };
+      try {
+        await withPendingPreparation(
+          state,
+          async (admission, activate) => {
+            const joined = createDeferredCore();
+            const wait = admission.waitForAgentPreparation.bind(admission);
+            let joinedPreparation = false;
+            vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+              const preparation = wait(...args);
+              joinedPreparation ||= preparation !== undefined;
+              joined.resolve();
+              return preparation;
+            });
+            owner.bindGateway();
+            try {
+              // Gateway releases preparationReady only after plugin services return.
+              await withinTest(Promise.resolve(service.start(context)), signal);
+              await withinTest(Promise.race([joined.promise, acquired.promise]), signal);
+              expect(joinedPreparation).toBe(true);
+              expect(subscriptions).toHaveLength(0);
+              const disposing = outcome === "dispose" ? owner.dispose() : undefined;
+              activate(
+                outcome === "failed"
+                  ? () => {
+                      throw new Error("synthetic index preparation failure");
+                    }
+                  : undefined,
+              );
+              const result = await withinTest(acquired.promise, signal);
+              if (outcome === "dispose") {
+                await expect(withinTest(disposing!, signal)).resolves.toEqual({ errors: [] });
+                expect(subscriptions.every((subscription) => subscription.signal.aborted)).toBe(
+                  true,
+                );
+                return;
+              }
+              if (outcome === "failed") {
+                await service.stop?.(context);
+                expect(result.manager).toBeNull();
+                expect(logger.warn).toHaveBeenCalledTimes(1);
+                expect(logger.warn).toHaveBeenCalledWith(
+                  expect.stringContaining("memory-core: index startup failed for main:"),
+                );
+                expect(logger.warn).toHaveBeenCalledWith(
+                  expect.stringContaining("synthetic index preparation failure"),
+                );
+                expect(subscriptions).toHaveLength(0);
+                return;
+              }
+              const manager = result.manager;
+              if (!manager?.sync) {
+                throw new Error(result.error ?? "Startup did not acquire a memory manager");
+              }
+              expect(logger.warn).not.toHaveBeenCalled();
+              expect(subscriptions).toHaveLength(1);
+              const indexed = createDeferredCore();
+              const sync = manager.sync.bind(manager);
+              vi.spyOn(manager, "sync").mockImplementation((params) => {
+                const work = sync(params);
+                if (params?.reason === "watch") {
+                  indexed.resolve(work);
+                }
+                return work;
+              });
+              await fs.promises.mkdir(state.workspaceDir, { recursive: true });
+              await fs.promises.writeFile(
+                path.join(state.workspaceDir, "MEMORY.md"),
+                "Violet cranes nest beside the lagoon.",
+              );
+              subscriptions[0]!.notify();
+              await withinTest(indexed.promise, signal);
+              expect(manager.status().chunks).toBeGreaterThan(0);
+              expect(acquisition).toHaveBeenCalledTimes(1);
+              await service.stop?.(context);
+              expect(subscriptions[0]!.signal.aborted).toBe(true);
+            } finally {
+              activate();
+              if (outcome !== "dispose") {
+                await service.stop?.(context);
+              }
+            }
+          },
+          phase,
+        );
+      } finally {
+        await owner.dispose();
+        releaseWorkspace();
+        vi.restoreAllMocks();
+      }
     },
   );
 });
