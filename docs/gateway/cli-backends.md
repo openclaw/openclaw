@@ -31,6 +31,8 @@ openclaw agent --agent main --message "hi"
 
 The login keeps canonical `anthropic/*` model refs and sets `agentRuntime: { id: "claude-cli" }` on Claude model entries that do not already name a runtime, so `--model anthropic/claude-sonnet-5` also runs through Claude Code. It also adds an `"anthropic/*"` entry with the same runtime, so Claude models that are published after sign-in or typed by ID run through Claude Code too. An entry for a specific model that names another runtime still wins. Choosing **Claude CLI** in `openclaw onboard` writes the same config. Legacy `claude-cli/*` refs still work as compatibility input, and `openclaw doctor --fix` rewrites persisted ones to this canonical form.
 
+Deprecated catalog models are not added at sign-in; an existing entry for one is kept and runs through Claude CLI. Configs from an earlier Claude CLI sign-in lack the `"anthropic/*"` entry, so Claude models that sign-in did not add fail with a missing Anthropic API key. `openclaw doctor --fix` and `openclaw update` add it when the default model is an Anthropic model pinned to `claude-cli`, no `"anthropic/*"` entry exists, and no Anthropic credential is configured (an Anthropic auth profile, provider API key, or `ANTHROPIC_API_KEY`/`ANTHROPIC_OAUTH_TOKEN`). With a credential or an API default model, other Claude models keep their current route.
+
 `main` is the default agent id when no explicit agent list is configured. Swap in your own agent id otherwise.
 
 The gateway service must have the CLI on its `PATH`. If a deployment needs a
