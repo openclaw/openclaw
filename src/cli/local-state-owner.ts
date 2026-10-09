@@ -39,6 +39,9 @@ export async function runWithLocalStateOwner<T>(params: {
   target: string;
   recoveryCommand?: string;
   requiredCapabilities?: readonly string[];
+  scopes?: readonly string[];
+  timeoutMs?: number;
+  expectFinal?: boolean;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
   onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
   assertTargetCurrent?: () => void;
@@ -162,9 +165,10 @@ export async function runWithLocalStateOwner<T>(params: {
           GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
           ...(params.requiredCapabilities ?? []),
         ],
-        timeoutMs: 600_000,
+        timeoutMs: params.timeoutMs ?? 600_000,
+        expectFinal: params.expectFinal,
         signal: controller.signal,
-        scopes: ["operator.admin"],
+        scopes: [...(params.scopes ?? ["operator.admin"])],
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         prepareDispatchCurrent: async () => {

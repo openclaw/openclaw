@@ -119,6 +119,7 @@
   "websocket-runtime",
   "cli-argv",
   "cli-runtime",
+  "cli-state-owner",
   "node-cli-runtime",
   "cli-backend",
   "claude-model-runtime",
