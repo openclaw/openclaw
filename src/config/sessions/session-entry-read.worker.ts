@@ -407,6 +407,7 @@ export function readExactSessionEntriesWithLifecycle(
               const selectedById = request.selection
                 ? readSessionEntryByIdInDatabase(database, {
                     sessionId: request.selection.sessionId,
+                    orderBy: request.selection.orderBy,
                     projection: request.projection === "sharing" ? "list" : "full",
                   })
                 : undefined;

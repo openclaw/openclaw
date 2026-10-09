@@ -79,7 +79,7 @@ export type SessionExactEntriesWorkerSelection =
     }
   | {
       sessionKeys?: never;
-      selection: { kind: "session-id"; sessionId: string };
+      selection: { kind: "session-id"; sessionId: string; orderBy?: "updatedAt" };
       projection: "sharing" | "full";
     };
 

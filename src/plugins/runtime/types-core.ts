@@ -411,7 +411,11 @@ export type PluginRuntimeCore = {
       ) => Promise<RuntimeSessionEntry | undefined>;
       /** Complete public entry for a visible current ID in the selected physical store. */
       getSessionEntryByIdAsync: (
-        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & { sessionId: string },
+        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & {
+          sessionId: string;
+          /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+          orderBy?: "updatedAt";
+        },
       ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,

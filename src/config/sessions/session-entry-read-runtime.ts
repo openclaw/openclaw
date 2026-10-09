@@ -206,7 +206,10 @@ export function readSessionEntryReadOnlyInWorker(
 
 /** Resolve a current transcript identity in the selected store without loading its siblings. */
 export async function readSessionEntryByIdReadOnlyInWorker(
-  input: Omit<SessionEntryReadScope, "sessionKey"> & { sessionId: string },
+  input: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionId: string;
+    orderBy?: "updatedAt";
+  },
 ): Promise<SessionEntrySummary | undefined> {
   const sessionId = input.sessionId;
   const ambient = input.storePath ? undefined : captureIncognitoSessionSource();
@@ -232,7 +235,7 @@ export async function readSessionEntryByIdReadOnlyInWorker(
     const selected = await source.actor.sessions.withSharedState(async () => {
       const read = await source.actor.sessions.readById(
         { assertCurrent },
-        { sessionId },
+        { sessionId, orderBy: input.orderBy },
         source.admissionSignal,
       );
       assertSnapshot = read.snapshot.assertCurrent;
@@ -244,7 +247,7 @@ export async function readSessionEntryByIdReadOnlyInWorker(
   }
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   if (isNativeSessionEntryRead(scope, agentId)) {
-    return loadSessionEntryByIdReadOnly({ ...scope, sessionId });
+    return loadSessionEntryByIdReadOnly({ ...scope, sessionId, orderBy: input.orderBy });
   }
   const storePath =
     scope.storePath || (agentId && resolveOpenClawAgentSqlitePath({ agentId, env: scope.env }));
@@ -255,7 +258,7 @@ export async function readSessionEntryByIdReadOnlyInWorker(
     { ...scope, agentId, storePath },
     async ({ reader, database, continuation, assertCurrent }) => {
       const read = await reader.readExactEntries({
-        selection: { kind: "session-id", sessionId },
+        selection: { kind: "session-id", sessionId, orderBy: input.orderBy },
         projection: "full",
         env: database.env,
         continuation,

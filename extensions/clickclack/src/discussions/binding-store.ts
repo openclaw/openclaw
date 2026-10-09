@@ -46,7 +46,12 @@ export function bindingMatchesActiveSessionIncarnation(
 }
 
 export async function readDiscussionSessionEntry(runtime: PluginRuntime, sessionKey: string) {
-  return runtime.agent.session.getSessionEntryAsync({ sessionKey, readConsistency: "latest" });
+  const params = { sessionKey, readConsistency: "latest" } as const;
+  // Released hosts predate the worker companion. Select their native contract
+  // before reading; a failed worker read never falls back to native storage.
+  return runtime.agent.session.getSessionEntryAsync
+    ? await runtime.agent.session.getSessionEntryAsync(params)
+    : runtime.agent.session.getSessionEntry(params);
 }
 
 /**

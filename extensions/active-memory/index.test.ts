@@ -341,12 +341,19 @@ describe("active-memory plugin", () => {
           getSessionEntryAsync: vi.fn(
             async (params: { sessionKey: string }) => hoisted.sessionStore[params.sessionKey],
           ),
-          getSessionEntryByIdAsync: vi.fn(async (params: { sessionId: string }) => {
-            const match = Object.entries(hoisted.sessionStore)
-              .filter(([, entry]) => entry.sessionId === params.sessionId)
-              .toSorted(([, a], [, b]) => Number(b.updatedAt) - Number(a.updatedAt))[0];
-            return match ? { sessionKey: match[0], entry: match[1] } : undefined;
-          }),
+          getSessionEntryByIdAsync: vi.fn(
+            async (params: { sessionId: string; orderBy?: "updatedAt" }) => {
+              const matches = Object.entries(hoisted.sessionStore)
+                .filter(([, entry]) => String(entry.sessionId).trim() === params.sessionId)
+                .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+              const match =
+                params.orderBy === "updatedAt"
+                  ? matches.toSorted(([, a], [, b]) => Number(b.updatedAt) - Number(a.updatedAt))[0]
+                  : (matches.find(([, entry]) => entry.sessionId === params.sessionId) ??
+                    matches[0]);
+              return match ? { sessionKey: match[0], entry: match[1] } : undefined;
+            },
+          ),
           patchSessionEntry: vi.fn(
             async (params: {
               sessionKey: string;
@@ -2239,6 +2246,11 @@ describe("active-memory plugin", () => {
           },
         };
         expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode = false;
+        hoisted.sessionStore["agent:main:a-old"] = {
+          sessionId: "s-main",
+          updatedAt: -1,
+          fastMode: true,
+        };
       }
       const parent = expectDefined(hoisted.sessionStore["agent:main:main"], "parent session");
       parent.delivery = {

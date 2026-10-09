@@ -65,7 +65,7 @@ export type IncognitoSessionOperations = {
     output: { entries: SessionEntrySummary[]; facts: IncognitoSessionFacts[] };
   };
   "session.entry.readById": {
-    input: { sessionId: string };
+    input: { sessionId: string; orderBy?: "updatedAt" };
     output: { selected: SessionEntrySummary | undefined; facts: IncognitoSessionFacts[] };
   };
   "session.entry.read": { input: IncognitoSessionRead; output: IncognitoSessionSnapshot };

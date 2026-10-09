@@ -45,6 +45,7 @@ export async function prepareActiveMemorySession(params: {
           agentId: params.agentId,
           sessionId,
           storePath: params.storePath,
+          orderBy: "updatedAt",
         })
       : undefined;
     return {

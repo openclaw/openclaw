@@ -235,6 +235,7 @@ function extractRecentConversationText(
 
 async function readRecentUserAssistantTextFromSqliteTranscript(
   scope: SessionTranscriptReadScope,
+  assertCurrent: () => void,
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
   const limit = normalizeRecentTranscriptLimit(options.limit);
@@ -242,28 +243,35 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   try {
     const { readSessionTranscriptBoundedMessageTailPageAsync } =
       await import("../../gateway/session-transcript-readers.js");
-    const recent: SessionRecentConversationText[] = [];
-    for (let offset = 0; recent.length < limit; offset += pageSize) {
-      const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
-        maxMessages: pageSize,
-        // Preserve the existing message-count-only bound for this text projection.
-        maxBytes: Number.MAX_SAFE_INTEGER,
-        offset,
-      });
-      if (page.events.length === 0) {
-        break;
-      }
-      for (const event of page.events.toReversed()) {
-        const entry = extractRecentConversationText(event.event, options);
-        if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
-          recent.push(entry);
-          if (recent.length >= limit) {
+    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
+    return await readRestoredSessionTranscript(
+      scope,
+      async () => {
+        const recent: SessionRecentConversationText[] = [];
+        for (let offset = 0; recent.length < limit; offset += pageSize) {
+          const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
+            maxMessages: pageSize,
+            // Preserve the existing message-count-only bound for this text projection.
+            maxBytes: Number.MAX_SAFE_INTEGER,
+            offset,
+          });
+          if (page.events.length === 0) {
             break;
           }
+          for (const event of page.events.toReversed()) {
+            const entry = extractRecentConversationText(event.event, options);
+            if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
+              recent.push(entry);
+              if (recent.length >= limit) {
+                break;
+              }
+            }
+          }
         }
-      }
-    }
-    return recent.toReversed();
+        return recent.toReversed();
+      },
+      { assertCurrent },
+    );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return [];
@@ -309,6 +317,7 @@ export async function readRecentUserAssistantTextForSession(
           storePath: owner.incognito?.actor.path ?? owner.scope?.storePath ?? storePath,
           env: owner.scope?.env,
         },
+        owner.assertCurrent,
         params,
       );
       owner.assertCurrent();

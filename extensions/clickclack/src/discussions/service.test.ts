@@ -155,47 +155,63 @@ describe("ClickClack discussion service", () => {
     },
   );
 
-  it("opens a managed channel once and returns stable info URLs", async () => {
-    const harness = createHarness({ label: "Release Planning", category: "Projects" });
-    harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
-    const sessionKey = "agent:main:main";
+  it.each(["current", "released"])(
+    "opens one channel with stable URLs on %s hosts",
+    async (host) => {
+      const harness = createHarness({ label: "Release Planning", category: "Projects" });
+      if (host === "released") {
+        Reflect.deleteProperty(harness.runtime.agent.session, "getSessionEntryAsync");
+      }
+      harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
+      const sessionKey = "agent:main:main";
 
-    expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
-    const [opened, reopened] = await Promise.all([
-      harness.service.open(sessionKey),
-      harness.service.open(sessionKey),
-    ]);
+      expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
+      const [opened, reopened] = await Promise.all([
+        harness.service.open(sessionKey),
+        harness.service.open(sessionKey),
+      ]);
 
-    expect(opened).toEqual({
-      state: "open",
-      embedUrl:
-        "https://clickclack.example/embed/channel/team-route/discussion-route?openclawHostTheme=1",
-      openUrl: "https://clickclack.example/app/team-route/discussion-route",
-    });
-    expect(reopened).toEqual(opened);
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: "discussion-binding-generations",
-        overflowPolicy: "reject-new",
-      }),
-    );
-    expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: "discussion-revoked-channels",
-        overflowPolicy: "reject-new",
-      }),
-    );
-    expect(harness.createChannel).toHaveBeenCalledWith("wsp_team", {
-      name: "release-planning",
-      kind: "public",
-      external_managed: true,
-      external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat/main",
-      sidebar_section: "Projects",
-      display_title: "Release Planning",
-    });
+      expect(opened).toEqual({
+        state: "open",
+        embedUrl:
+          "https://clickclack.example/embed/channel/team-route/discussion-route?openclawHostTheme=1",
+        openUrl: "https://clickclack.example/app/team-route/discussion-route",
+      });
+      expect(reopened).toEqual(opened);
+      expect(harness.createChannel).toHaveBeenCalledTimes(1);
+      expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+      expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          namespace: "discussion-binding-generations",
+          overflowPolicy: "reject-new",
+        }),
+      );
+      expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          namespace: "discussion-revoked-channels",
+          overflowPolicy: "reject-new",
+        }),
+      );
+      expect(harness.createChannel).toHaveBeenCalledWith("wsp_team", {
+        name: "release-planning",
+        kind: "public",
+        external_managed: true,
+        external_ref: testExternalRef(sessionKey),
+        external_url: "https://control.example/control/chat/main",
+        sidebar_section: "Projects",
+        display_title: "Release Planning",
+      });
+    },
+  );
+
+  it("propagates worker session read failures before creating a discussion", async () => {
+    const harness = createHarness({ label: "Unavailable session" });
+    const failure = new Error("Session worker unavailable");
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockRejectedValue(failure);
+
+    await expect(harness.service.open("agent:main:worker-unavailable")).rejects.toBe(failure);
+    expect(harness.runtime.agent.session.getSessionEntry).not.toHaveBeenCalled();
+    expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
   it("clears display_title for fallback labels", async () => {

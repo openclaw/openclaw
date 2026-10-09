@@ -34,11 +34,16 @@ export async function getSessionEntryAsync(
 
 /** Looks up a visible current session ID in one selected store. */
 export async function getSessionEntryByIdAsync(
-  params: Omit<SessionStoreReadParams, "sessionKey"> & { sessionId: string },
+  params: Omit<SessionStoreReadParams, "sessionKey"> & {
+    sessionId: string;
+    /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+    orderBy?: "updatedAt";
+  },
 ): Promise<SessionStoreEntrySummary | undefined> {
   const selected = await readSessionEntryByIdReadOnlyInWorker({
     ...toSessionAccessScope({ ...params, sessionKey: "" }),
     sessionId: params.sessionId,
+    orderBy: params.orderBy,
   });
   return selected
     ? { sessionKey: selected.sessionKey, entry: projectPluginSessionEntry(selected.entry) }

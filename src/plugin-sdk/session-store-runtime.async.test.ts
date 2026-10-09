@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, expectTypeOf, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -9,6 +9,7 @@ import {
   withIncognitoSessionBinding,
 } from "../config/sessions/session-incognito-binding.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -48,6 +49,61 @@ const completeEntry: InternalSessionEntry = {
     writerRunId: "synthetic-writer",
   },
 };
+
+it.each(["durable", "incognito"] as const)(
+  "selects the most recently updated duplicate ID only when requested in %s sessions",
+  async (mode) => {
+    expectTypeOf<
+      PluginRuntime["agent"]["session"]["getSessionEntryByIdAsync"]
+    >().parameters.toEqualTypeOf<Parameters<typeof getSessionEntryByIdAsync>>();
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make(`sdk-id-order-${mode}-`) };
+    const scope = { agentId: "main", env };
+    const actor = mode === "incognito" ? await openIncognitoTestActor(env, authority) : undefined;
+    const prefix = actor ? "agent:main:dashboard:incognito-" : "agent:main:";
+    try {
+      for (const [suffix, sessionId, updatedAt] of [
+        ["a-old", "duplicate", 1],
+        ["z-new", "duplicate", 20],
+        ["m-tied", "duplicate", 20],
+        ["n-trimmed", "\t legacy \n", 30],
+        ["b-exact", "legacy", 1],
+      ] as const) {
+        const sessionKey = `${prefix}${suffix}`;
+        const entry: InternalSessionEntry = {
+          sessionId,
+          updatedAt,
+          ...(actor ? { incognito: true } : {}),
+        };
+        if (actor) {
+          await actor.sessions.create(authority, { sessionKey, entry });
+        } else {
+          replaceSessionEntrySync({ ...scope, sessionKey }, entry);
+        }
+      }
+      const verify = async () => {
+        await expect(
+          getSessionEntryByIdAsync({ ...scope, sessionId: "duplicate" }),
+        ).resolves.toMatchObject({ sessionKey: `${prefix}a-old` });
+        await expect(
+          getSessionEntryByIdAsync({ ...scope, sessionId: "duplicate", orderBy: "updatedAt" }),
+        ).resolves.toMatchObject({ sessionKey: `${prefix}m-tied` });
+        await expect(
+          getSessionEntryByIdAsync({ ...scope, sessionId: "legacy" }),
+        ).resolves.toMatchObject({ sessionKey: `${prefix}b-exact` });
+        await expect(
+          getSessionEntryByIdAsync({ ...scope, sessionId: "legacy", orderBy: "updatedAt" }),
+        ).resolves.toMatchObject({ sessionKey: `${prefix}n-trimmed` });
+      };
+      if (actor) {
+        await withIncognitoSessionActor(actor, verify);
+      } else {
+        await verify();
+      }
+    } finally {
+      await actor?.close();
+    }
+  },
+);
 
 it("keeps the complete public projection for durable and explicitly bound actor entry reads", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-entry-") };
