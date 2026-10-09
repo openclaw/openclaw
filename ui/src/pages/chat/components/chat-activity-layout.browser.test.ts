@@ -113,6 +113,18 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
         );
       };
       draw();
+      const headlineIcon = container.querySelector<SVGElement>(".chat-activity-group__icon svg")!;
+      const rowIcon = container.querySelector<SVGElement>(".chat-tool-msg-summary__icon svg")!;
+      expect(getComputedStyle(headlineIcon).strokeWidth).toBe(
+        getComputedStyle(rowIcon).strokeWidth,
+      );
+      const headlineText = container.querySelector<HTMLElement>(
+        ".chat-activity-group__summary .chat-tool-disclosure__content",
+      )!;
+      const rowText = container.querySelector<HTMLElement>(
+        ".chat-tool-row .chat-tool-disclosure__content",
+      )!;
+      expect(headlineText.getBoundingClientRect().left).toBe(rowText.getBoundingClientRect().left);
       const body = container.querySelector<HTMLElement>(".chat-activity-group__body")!;
       const compactHeight = body.getBoundingClientRect().height;
       expect(body.querySelectorAll(":scope > .chat-bubble")).toHaveLength(4);
