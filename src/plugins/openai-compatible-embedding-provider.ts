@@ -1,14 +1,10 @@
-// Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
-import {
-  MEMORY_SEARCH_DEADLINE_CONTROL,
-  type MemorySearchDeadlineControl,
-} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import {
   createProviderHttpError,
   readProviderJsonObjectResponse,
@@ -18,13 +14,12 @@ import type {
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service-target.js";
 import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
-import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
-  EmbeddingBatchDetailedResult,
   EmbeddingInput,
   EmbeddingProvider,
   EmbeddingProviderAdapter,
@@ -55,13 +50,9 @@ type OpenAICompatibleEmbeddingClient = {
   acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
-type ConfiguredEmbeddingProvider = {
-  api?: string;
-  baseUrl?: string;
-  apiKey?: unknown;
-  headers?: Record<string, unknown>;
-  localService?: ModelProviderLocalServiceConfig;
-};
+type ConfiguredEmbeddingProvider = Partial<
+  Pick<ModelProviderConfig, "api" | "baseUrl" | "apiKey" | "headers" | "localService">
+>;
 
 type ResolvedConfiguredEmbeddingProvider = {
   providerId: string;
@@ -106,10 +97,7 @@ function normalizeModel(value: string | undefined, providerId: string | undefine
   return model;
 }
 
-function normalizeDimensions(value: number | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+function normalizeDimensions(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }
@@ -230,9 +218,7 @@ function isOpenAICompatibleProviderConfig(
 function resolveConfiguredProvider(
   options: EmbeddingProviderCreateOptions,
 ): ResolvedConfiguredEmbeddingProvider | undefined {
-  const providers = options.config.models?.providers as
-    | Record<string, ConfiguredEmbeddingProvider>
-    | undefined;
+  const providers = options.config.models?.providers;
   if (!providers) {
     return undefined;
   }
@@ -308,12 +294,11 @@ async function createEmbeddingHttpError(
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
-  signal?: AbortSignal;
-  inputType?: EmbeddingProviderCallOptions["inputType"];
-  deadlineControl?: MemorySearchDeadlineControl;
-}): Promise<EmbeddingBatchDetailedResult> {
-  const { client, input, deadlineControl } = params;
-  const inputType = resolveRequestInputType(client, params.inputType);
+  callOptions?: EmbeddingProviderCallOptions;
+}): Promise<number[][]> {
+  const { client, input, callOptions } = params;
+  const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+  const inputType = resolveRequestInputType(client, callOptions?.inputType);
   const body = {
     model: client.model,
     input,
@@ -332,7 +317,7 @@ async function postEmbeddingRequest(params: {
                 }
               : {}),
           },
-          params.signal,
+          callOptions?.signal,
         )
       : undefined;
   try {
@@ -343,7 +328,7 @@ async function postEmbeddingRequest(params: {
         headers: client.headers,
         body: JSON.stringify(body),
       },
-      signal: params.signal,
+      signal: callOptions?.signal,
       ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
@@ -354,14 +339,13 @@ async function postEmbeddingRequest(params: {
           response,
           "openai-compatible embeddings failed",
         );
-        return {
-          embeddings: readEmbeddingVectors(
-            payload.data,
-            input.length,
-            "openai-compatible embeddings failed",
-          ),
-          usage: extractEmbeddingUsage(payload),
-        };
+        const vectors = readEmbeddingVectors(
+          payload.data,
+          input.length,
+          "openai-compatible embeddings failed",
+        );
+        callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+        return vectors;
       },
     });
   } finally {
@@ -436,59 +420,37 @@ async function createOpenAICompatibleEmbeddingClient(
   };
 }
 
-/** Creates an OpenAI-compatible embedding provider and its backing client. */
-async function createOpenAICompatibleEmbeddingProvider(
-  options: EmbeddingProviderCreateOptions,
-): Promise<{
-  provider: EmbeddingProvider;
-  client: OpenAICompatibleEmbeddingClient;
-}> {
-  const client = await createOpenAICompatibleEmbeddingClient(options);
-  const embedBatchDetailed: NonNullable<EmbeddingProvider["embedBatchDetailed"]> = async (
-    inputs,
-    callOptions,
-  ) => {
-    if (inputs.length === 0) {
-      return { embeddings: [] };
-    }
-    return await postEmbeddingRequest({
-      client,
-      input: inputs.map(embeddingInputToText),
-      signal: callOptions?.signal,
-      inputType: callOptions?.inputType,
-      deadlineControl: callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
-    });
-  };
-  const embedBatch: EmbeddingProvider["embedBatch"] = async (inputs, callOptions) =>
-    (await embedBatchDetailed(inputs, callOptions)).embeddings;
-  return {
-    provider: {
-      id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
-      model: client.model,
-      ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
-      embed: async (input, callOptions) => {
-        const [embedding] = await embedBatch([input], callOptions);
-        if (!embedding) {
-          throw new Error("openai-compatible embeddings failed: malformed JSON response");
-        }
-        return embedding;
-      },
-      embedBatch,
-      embedBatchDetailed,
-    },
-    client,
-  };
-}
-
 /** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",
   create: async (options) => {
-    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(options);
+    const client = await createOpenAICompatibleEmbeddingClient(options);
+    const embedBatch: EmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
+      if (inputs.length === 0) {
+        return [];
+      }
+      return await postEmbeddingRequest({
+        client,
+        input: inputs.map(embeddingInputToText),
+        callOptions,
+      });
+    };
     const cacheHeaders = sanitizeCacheHeaders(client.headers);
     return {
-      provider,
+      provider: {
+        id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+        model: client.model,
+        ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+        embed: async (input, callOptions) => {
+          const [embedding] = await embedBatch([input], callOptions);
+          if (!embedding) {
+            throw new Error("openai-compatible embeddings failed: malformed JSON response");
+          }
+          return embedding;
+        },
+        embedBatch,
+      },
       runtime: {
         id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
         inlineBatchTimeoutMs: 10 * 60_000,

@@ -2,26 +2,30 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, vi } from "vitest";
 import {
   assertManagedHandoffTestConsumer,
   createManagedHandoffTestBinding,
 } from "../../test/helpers/managed-handoff-isolation.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { finishUpdateRun } from "../infra/update-run-write.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db-cache.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-support.js";
 
 export function setupDoctorAdmissionFixture() {
   const directories = createTempDirTracker();
   useDoctorMaintenanceRuntimeDirectory(() => directories.make("doctor-admission-custody-"));
-  afterEach(() => {
+  afterEach(async () => {
     try {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       directories.cleanup();
     } finally {
@@ -47,6 +51,10 @@ export function setupDoctorAdmissionFixture() {
       import sqlite from 'node:sqlite';
       import { syncBuiltinESMExports } from 'node:module';
       import { fileURLToPath } from 'node:url';
+      if (process.versions.bun) {
+        const { ensureSqliteLibrarySelected } = await import(${JSON.stringify(new URL("../infra/bun-sqlite-library.js", import.meta.url).href)});
+        ensureSqliteLibrarySelected();
+      }
       const root = ${JSON.stringify(root)};
       const expected = ${JSON.stringify(binding.databasePath)};
       const NativeDatabase = sqlite.DatabaseSync;
@@ -76,10 +84,12 @@ export function setupDoctorAdmissionFixture() {
         JSON.stringify({ pid: process.pid, entry: process.argv[1], databasePath: expected }));
     `,
     );
-    vi.stubEnv(
-      "NODE_OPTIONS",
-      `${process.env.NODE_OPTIONS ?? ""} ${binding.nodeOption} --import=${pathToFileURL(guard).href}`.trim(),
+    const childEnv = withRuntimePreload(
+      withRuntimePreload(process.env, binding.preloadPath),
+      guard,
     );
+    vi.stubEnv("NODE_OPTIONS", childEnv.NODE_OPTIONS);
+    vi.stubEnv("BUN_OPTIONS", childEnv.BUN_OPTIONS);
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
     expect(binding.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(binding.databasePath);
     // Compiled runtime modules use native builtin exports, outside Vitest's facade.
@@ -161,7 +171,10 @@ export function setupDoctorAdmissionFixture() {
           guardedWorkers++;
         }
       }
-      expect(guardedWorkers).toBeGreaterThan(0);
+      // A warm admitted source can serve current rows without launching an inspection child.
+      if (!keepWriter) {
+        expect(guardedWorkers).toBeGreaterThan(0);
+      }
       binding.assertPath(resolveManagedUpdateLeaseDatabasePath());
     };
     const admitted = resolveDoctorUpdateAdmission(env);

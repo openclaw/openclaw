@@ -10,8 +10,8 @@ For a checksum-locked, reproducible setup:
 
 ```bash
 cd apps/android
-gem install bundler -v 4.0.21
-bundle _4.0.21_ install
+gem install bundler -v 4.0.22
+bundle _4.0.22_ install
 ```
 
 The expected reproducible runtime is recorded in `apps/android/.ruby-version`.
@@ -70,7 +70,7 @@ cd apps/android
 fastlane android auth_check
 ```
 
-Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane android auth_check`
+Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane android auth_check`
 when reproducing the protected CI toolchain exactly.
 
 Archive locally without upload:
@@ -108,7 +108,7 @@ pnpm android:release:upload
 
 ## GitHub Actions release
 
-Run **Android Store Release** from `main` in GitHub Actions without input parameters. The workflow
+Run **Android Store Release** from `main` in GitHub Actions with the default `release` operation. The workflow
 plans a release from the root Gateway version, selects the Android public
 revision and sequential phone/Wear codes, and generates OpenAI release notes
 from source changes since each form factor's public production release. It keeps tracked version
@@ -116,6 +116,12 @@ defaults and notes unchanged and passes the saved plan through
 `OPENCLAW_ANDROID_RELEASE_PLAN` to select the build version and codes at runtime.
 `OPENCLAW_MOBILE_RELEASE_NOTES` selects the saved generated notes artifact. The
 local CLI uses the same flow. Android preparation is independent of iOS.
+
+Choose `operation=internal`, or use `pnpm android:release:upload -- --destination internal`
+locally, to distribute phone and Wear builds without screenshot capture or store
+listing updates. The same path supports daily runs at 7:00 AM Pacific; see
+[daily Internal testing](../VERSIONING.md#daily-internal-testing) for environment
+setup and enablement.
 
 Public versions append a single revision digit to the Gateway patch: Gateway
 `2026.9.4`, revision `0` becomes `2026.9.40`. Candidates keep that revision until
@@ -133,8 +139,9 @@ The environment supplies these secrets:
 - `OPENAI_API_KEY`
 
 The workflow uses the locked Fastlane bundle and the existing signing assets.
-The upload lane commits phone and Wear bundles, metadata, and screenshots in one
-Play edit to `internal` and `wear:internal`, then records the release commit at
+Both operations commit phone and Wear bundles and generated notes in one Play
+edit to `internal` and `wear:internal`; `release` also uploads listing metadata
+and screenshots. They then record the release commit at
 `refs/openclaw/mobile-releases/android/v2/<G>/<R>/<buildNumber>/<phoneCode>-<wearCode>`.
 Before the first new-format upload, it records the immutable
 `android/cutover-v2/<legacyMaxCode>` marker under the same mobile-release ref prefix.
@@ -155,7 +162,7 @@ The Fastlane planner can be inspected without publishing:
 
 ```bash
 cd apps/android
-bundle _4.0.21_ exec fastlane android release_plan output_path:/tmp/android-release-plan.json
+bundle _4.0.22_ exec fastlane android release_plan output_path:/tmp/android-release-plan.json
 ```
 
 It lists uploaded APK and AAB version codes in a temporary edit and always aborts
@@ -181,7 +188,7 @@ fastlane android release_upload
 For the exact protected-CI toolchain:
 
 ```bash
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane android release_upload
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane android release_upload
 ```
 
 Use these direct Fastlane entry points only for maintainer debugging when
@@ -210,7 +217,7 @@ Release rules:
   apps, launches deterministic screenshot scenes, and writes Play-ready JPEGs
   to the matching `phoneScreenshots` and `wearScreenshots` metadata folders.
 - `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses pinned defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit; replay also requires the saved `OPENCLAW_MOBILE_RELEASE_NOTES` artifact.
-- `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:internal`.
+- `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:internal`. With `--destination internal`, it uses those Internal testing tracks and generated notes without screenshot capture or listing updates.
 - Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
 - Production promotion remains manual in Google Play Console.
 - If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.
@@ -221,5 +228,7 @@ Screenshots:
 - Android screenshot capture writes Play screenshots under
   `apps/android/fastlane/metadata/android/<locale>/images/phoneScreenshots/`
   and `apps/android/fastlane/metadata/android/<locale>/images/wearScreenshots/`.
+- Store release runs retain emulator startup diagnostics, per-scene UI dumps, and
+  activity startup results for 30 days, including after a screenshot failure.
 - Set `SUPPLY_UPLOAD_SCREENSHOTS=1` to include those screenshots in `fastlane android metadata`.
 - Do not commit generated screenshot captures unless they become intentional store metadata assets.

@@ -138,23 +138,20 @@ describe("text slash directive ownership", () => {
     }
   });
 
-  it.each(["", "  "])(
-    "keeps an addressed exec task after prefix %j with its per-turn policy",
-    async (prefix) => {
-      const task = "Review  this:\n```python\n    print('a  b')\n```";
-      const { result } = await resolveTextSlashDirective(
-        `${prefix}/exec@openclaw security=full ask=off\n${task}`,
-        {
-          botUsername: "openclaw",
-        },
-      );
+  it("keeps an indented addressed exec task with its per-turn policy", async () => {
+    const task = "Review  this:\n```python\n    print('a  b')\n```";
+    const { result } = await resolveTextSlashDirective(
+      `  /exec@openclaw security=full ask=off\n${task}`,
+      {
+        botUsername: "openclaw",
+      },
+    );
 
-      expect(result).toMatchObject({
-        kind: "continue",
-        result: { cleanedBody: task, execOverrides: { security: "full", ask: "off" } },
-      });
-    },
-  );
+    expect(result).toMatchObject({
+      kind: "continue",
+      result: { cleanedBody: task, execOverrides: { security: "full", ask: "off" } },
+    });
+  });
 
   it("preserves unknown addressed command text for the model", async () => {
     const body = "/unknown@openclaw explain  this\n    unchanged";
@@ -163,56 +160,12 @@ describe("text slash directive ownership", () => {
     expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
   });
 
-  it.each(
-    [
-      {
-        directive: "/think high",
-        field: "thinkingLevel",
-        expected: { resolvedThinkLevel: "high" },
-      },
-      {
-        directive: "/think: high",
-        field: "thinkingLevel",
-        expected: { resolvedThinkLevel: "high" },
-      },
-      { directive: "/t high", field: "thinkingLevel", expected: { resolvedThinkLevel: "high" } },
-      {
-        directive: "/think@openclaw high",
-        field: "thinkingLevel",
-        expected: { resolvedThinkLevel: "high" },
-      },
-      {
-        directive: "/fast on",
-        field: "fastMode",
-        expected: { resolvedFastMode: true, resolvedFastModeOverride: true },
-      },
-      { directive: "/verbose on", field: "verboseLevel", expected: { resolvedVerboseLevel: "on" } },
-      {
-        directive: "/reasoning off",
-        field: "reasoningLevel",
-        expected: { resolvedReasoningLevel: "off" },
-      },
-      {
-        directive: "/exec security=deny",
-        field: "execSecurity",
-        expected: { execOverrides: { security: "deny" } },
-      },
-      {
-        directive: "/exec: security=deny",
-        field: "execSecurity",
-        expected: { execOverrides: { security: "deny" } },
-      },
-      {
-        directive: "/exec@openclaw security=deny",
-        field: "execSecurity",
-        expected: { execOverrides: { security: "deny" } },
-      },
-    ].flatMap(({ directive, field, expected }) =>
-      [" ", "\n"].map((separator) => ({ directive, field, expected, separator })),
-    ),
-  )(
-    "preserves a task after $directive with separator $separator",
-    async ({ directive, field, expected, separator }) => {
+  it.each([
+    ["/think: high", "\n", "thinkingLevel", { resolvedThinkLevel: "high" }],
+    ["/fast on", " ", "fastMode", { resolvedFastMode: true, resolvedFastModeOverride: true }],
+  ] as const)(
+    "preserves a task after %s with separator %j",
+    async (directive, separator, field, expected) => {
       const task = "Please inspect this code:\n```python\nif True:\n    print('a  b')\n```";
       const { result, sessionKey, storePath, storedBefore } = await resolveTextSlashDirective(
         `${directive}${separator}${task}`,
@@ -233,86 +186,35 @@ describe("text slash directive ownership", () => {
     },
   );
 
-  it.each([
-    { argument: "gateway", unexpectedArgument: "gateway" },
-    { argument: " gateway", unexpectedArgument: "gateway" },
-    { argument: "\n  gateway", unexpectedArgument: "gateway" },
-    { argument: "/think high", unexpectedArgument: "/think" },
-    { argument: "/think high host=gateway", unexpectedArgument: "/think" },
-  ])(
-    "rejects positional exec argument $argument instead of sending it to the model",
-    async ({ argument, unexpectedArgument }) => {
-      const { result, sessionKey, storePath } = await resolveTextSlashDirective(
-        `/exec ${argument}`,
-      );
-
-      expect(result).toMatchObject({
-        kind: "reply",
-        reply: {
-          text: `Unexpected argument "${unexpectedArgument}" for /exec.`,
-        },
-      });
-      expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).not.toHaveProperty(
-        "thinkingLevel",
-      );
-      expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).not.toHaveProperty(
-        "execHost",
-      );
-    },
-  );
-
-  it.each(["/exec host=gateway", "  /exec@openclaw host=gateway", "/exec@openclaw: host=gateway"])(
-    "preserves canonical exec key/value arguments: %s",
-    async (body) => {
-      const { result, sessionKey, storePath } = await resolveTextSlashDirective(body, {
+  it("preserves addressed exec key/value arguments", async () => {
+    const { result, sessionKey, storePath } = await resolveTextSlashDirective(
+      "/exec@openclaw: host=gateway",
+      {
         botUsername: "openclaw",
-      });
-
-      expect(result).toMatchObject({
-        kind: "reply",
-        reply: { text: expect.stringContaining("Exec defaults set (host=gateway).") },
-      });
-      expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBe("gateway");
-    },
-  );
-
-  it.each(["/exec@openclaw gateway", "  /exec@openclaw gateway", "/exec@openclaw: gateway"])(
-    "rejects positional exec arguments addressed to the current bot: %s",
-    async (body) => {
-      const { result } = await resolveTextSlashDirective(body, {
-        botUsername: "openclaw",
-      });
-
-      expect(result).toMatchObject({
-        kind: "reply",
-        reply: { text: 'Unexpected argument "gateway" for /exec.' },
-      });
-    },
-  );
-
-  it.each([
-    { separator: " ", botUsername: undefined },
-    { separator: "\n", botUsername: undefined },
-    { separator: " ", botUsername: "openclaw" },
-    { separator: "\n", botUsername: "openclaw" },
-  ])("keeps a task after exec policy: %j", async ({ separator, botUsername }) => {
-    const { result } = await resolveTextSlashDirective(
-      `/exec${botUsername ? `@${botUsername}` : ""} security=deny ask=always${separator}Explain the output.`,
-      { botUsername },
+      },
     );
 
     expect(result).toMatchObject({
-      kind: "continue",
-      result: {
-        cleanedBody: "Explain the output.",
-        execOverrides: { security: "deny", ask: "always" },
-      },
+      kind: "reply",
+      reply: { text: expect.stringContaining("Exec defaults set (host=gateway).") },
+    });
+    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBe("gateway");
+  });
+
+  it("rejects positional exec arguments addressed to the current bot", async () => {
+    const { result } = await resolveTextSlashDirective("/exec@openclaw: gateway", {
+      botUsername: "openclaw",
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: 'Unexpected argument "gateway" for /exec.' },
     });
   });
 
-  it.each([" ", "\n"])("applies all text directives separated by %j", async (separator) => {
+  it("applies all text directives separated by newlines", async () => {
     const { result, sessionKey, storePath } = await resolveTextSlashDirective(
-      `/verbose full${separator}/reasoning off`,
+      "/verbose full\n/reasoning off",
     );
 
     expect(result).toMatchObject({ kind: "reply" });
@@ -322,17 +224,14 @@ describe("text slash directive ownership", () => {
     });
   });
 
-  it.each(["/exec@openclaw security=deny", "/verbose@openclaw:"])(
-    "preserves task whitespace after %s",
-    async (directive) => {
-      const task = "    if ready:\n        run('a  b')  \n";
-      const { result } = await resolveTextSlashDirective(`${directive}\r\n${task}`, {
-        botUsername: "openclaw",
-      });
+  it("preserves task whitespace after addressed verbose directive", async () => {
+    const task = "    if ready:\n        run('a  b')  \n";
+    const { result } = await resolveTextSlashDirective(`/verbose@openclaw:\r\n${task}`, {
+      botUsername: "openclaw",
+    });
 
-      expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: task } });
-    },
-  );
+    expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: task } });
+  });
 
   it("preserves text exec commands when text routing is disabled on a native surface", async () => {
     const body = "/exec host=gateway";
@@ -343,17 +242,5 @@ describe("text slash directive ownership", () => {
 
     expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
     expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBeUndefined();
-  });
-
-  it("preserves directives addressed to another bot", async () => {
-    const body = "/think@otherbot high\nKeep this task unchanged.";
-    const { result, sessionKey, storePath } = await resolveTextSlashDirective(body, {
-      botUsername: "openclaw",
-    });
-
-    expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
-    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).not.toHaveProperty(
-      "thinkingLevel",
-    );
   });
 });

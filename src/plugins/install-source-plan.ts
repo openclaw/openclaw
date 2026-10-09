@@ -1,4 +1,3 @@
-// Plugin install planning helpers for bundled, official external, and npm fallback paths.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -347,7 +346,6 @@ export function resolveManagedPluginInstallRequest(
         source: "official",
         spec: primary.spec,
         installSources,
-        pluginId,
         expectedPluginId: resolveDeclaredOfficialPluginId(entry),
         mode,
         ...(request.pin ? { pin: true } : {}),
@@ -402,6 +400,9 @@ export function resolveManagedPluginInstallRequest(
       return {
         source: "clawhub",
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
+        ...(!request.version && !request.expectedIntegrity
+          ? { recordSpec: `clawhub:${packageName}` }
+          : {}),
         mode,
         ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
         expectedPluginId: expectedPluginId ?? request.expectedPluginId,

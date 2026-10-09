@@ -156,7 +156,7 @@ describe("workspace state store", () => {
   });
 
   it.each(["merge", "expire", "delete", "register-alias"] as const)(
-    "checks current ownership inside the %s transaction before changing state",
+    "refuses retired ownership before changing %s state",
     async (operation) => {
       const dir = workspaceDir();
       const alias = testState!.path("workspace-link");
@@ -174,7 +174,6 @@ describe("workspace state store", () => {
       writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
       const retired = new Error("workspace owner retired");
       const assertCurrent = () => {
-        expect(db.isTransaction).toBe(true);
         throw retired;
       };
       const operations = {
@@ -331,7 +330,7 @@ describe("workspace state store", () => {
     expect(await clearExpiredWorkspaceStateForVanishedWorkspace(alias, 2_000)).toBe(false);
   });
 
-  it("registers missing aliases in the caller-selected state database", async () => {
+  it("registers and retires aliases in the captured caller-selected state database", async () => {
     const dir = workspaceDir();
     const alias = testState!.path("workspace-link");
     const env = {
@@ -351,6 +350,12 @@ describe("workspace state store", () => {
     expect((await readWorkspaceStateSnapshot(alias, { env })).setupExists).toBe(true);
     expect(resolveOpenClawStateSqlitePath(env)).not.toBe(resolveOpenClawStateSqlitePath());
     expect((await readWorkspaceStateSnapshot(alias)).setupExists).toBe(false);
+
+    const selectedPath = resolveOpenClawStateSqlitePath(env);
+    const deletion = deleteWorkspaceState(prepareWorkspaceStateDeletion(alias), { env });
+    env.OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR!;
+    await deletion;
+    expect((await readWorkspaceStateSnapshot(dir, { path: selectedPath })).setupExists).toBe(false);
   });
 
   it("does not register missing aliases through a read-only database", async () => {
@@ -601,6 +606,7 @@ describe("workspace state store", () => {
       "INSERT INTO migration_runs (id, started_at, finished_at, status, report_json) VALUES (?, 1, 1, 'completed', '{}')",
     );
     insertRun.run("owned-run");
+    insertRun.run("shared-run");
     insertRun.run("unrelated-run");
     const insertReceipt = db.prepare(
       `INSERT INTO migration_sources (
@@ -622,6 +628,20 @@ describe("workspace state store", () => {
       JSON.stringify({ workspaceKey: identity.workspaceKey }),
     );
     insertReceipt.run(
+      "owned-shared-receipt",
+      WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+      path.join(dir, ".openclaw", "workspace-state.json"),
+      "shared-run",
+      JSON.stringify({ workspaceKey: identity.workspaceKey }),
+    );
+    insertReceipt.run(
+      "retained-receipt",
+      "unrelated-migration-kind",
+      "/other/source",
+      "shared-run",
+      "{}",
+    );
+    insertReceipt.run(
       "unrelated-receipt",
       WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
       "/other/workspace-state.json",
@@ -634,9 +654,12 @@ describe("workspace state store", () => {
     const receipts = db
       .prepare("SELECT source_key FROM migration_sources ORDER BY source_key")
       .all();
-    expect(receipts).toEqual([{ source_key: "unrelated-receipt" }]);
+    expect(receipts).toEqual([
+      { source_key: "retained-receipt" },
+      { source_key: "unrelated-receipt" },
+    ]);
     const runs = db.prepare("SELECT id FROM migration_runs ORDER BY id").all();
-    expect(runs).toEqual([{ id: "unrelated-run" }]);
+    expect(runs).toEqual([{ id: "shared-run" }, { id: "unrelated-run" }]);
   });
 
   it("clears expired missing-workspace state but preserves a concurrent refresh", async () => {

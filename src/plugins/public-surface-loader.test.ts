@@ -50,6 +50,44 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
+  it("loads retained admission checks only from the candidate despite runtime bundle policy", async () => {
+    const candidateRoot = tempDirs.make("openclaw-retained-admission-");
+    const source = path.join(candidateRoot, "dist", "state-retention", "demo.js");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(path.join(candidateRoot, "package.json"), '{"type":"commonjs"}\n');
+    fs.writeFileSync(source, 'module.exports = { marker: "candidate" };\n');
+    const foreign = tempDirs.make("openclaw-foreign-retention-");
+    fs.mkdirSync(path.join(foreign, "demo"));
+    fs.writeFileSync(
+      path.join(foreign, "demo", "state-retention-api.js"),
+      'throw new Error("foreign artifact executed");\n',
+    );
+    const env = {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: foreign,
+    };
+    const loader = await importFreshModule<typeof import("./public-surface-loader.js")>(
+      import.meta.url,
+      "./public-surface-loader.js?scope=retained-admission",
+    );
+    const params = { dirName: "demo", artifactCandidates: ["state-retention-api.js"], env };
+    expect(loader.loadBundledPluginPublicArtifactModuleFromCandidatesSync(params)).toBeNull();
+    expect(
+      loader.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+        ...params,
+        retainedAt: candidateRoot,
+      })?.marker,
+    ).toBe("candidate");
+    expect(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("1");
+    expect(() =>
+      loader.loadBundledPluginPublicArtifactModuleFromCandidatesSync({
+        ...params,
+        retainedAt: candidateRoot,
+        dirName: "../demo",
+      }),
+    ).toThrow("single directory");
+  });
+
   it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
     const tempRoot = tempDirs.make("openclaw-public-surface-env-");
     const createEnvironment = (marker: string) => {

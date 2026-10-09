@@ -112,13 +112,6 @@ export const imageLightboxStyles = css`
   .close svg {
     width: 17px;
     height: 17px;
-    /* Shadow DOM: global icon stroke rules don't reach in here; without a
-         stroke the open-path x icon renders invisible. */
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
   }
 
   .stage {

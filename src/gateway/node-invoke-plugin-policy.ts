@@ -2,7 +2,10 @@
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -157,7 +160,15 @@ export async function applyPluginNodeInvokePolicy(params: {
     });
   };
   // Route metadata comes only from an authenticated or host-bound agent runtime.
-  const trustedTurnSource = callerIdentity ? params.turnSource : undefined;
+  const trustedTurnSource =
+    callerIdentity && params.turnSource
+      ? {
+          channel: normalizeOptionalString(params.turnSource.channel),
+          to: normalizeOptionalString(params.turnSource.to),
+          accountId: normalizeOptionalString(params.turnSource.accountId),
+          threadId: normalizeOptionalThreadValue(params.turnSource.threadId),
+        }
+      : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -372,6 +383,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
       command: params.command,
       params: override.params ?? params.params,
+      ...(trustedTurnSource ? { turnSource: trustedTurnSource } : {}),
       timeoutMs,
       ...(sessionAuthority
         ? {

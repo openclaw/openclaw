@@ -102,11 +102,7 @@ class PortalsPage extends OpenClawLightDomElement {
       )
     ) {
       this.requestGeneration += 1;
-      this.environmentRequestGeneration += 1;
-      this.environmentLoading = false;
-      this.pendingEnvironment = null;
-      this.environmentFailure = null;
-      this.environmentPoll.stop();
+      this.resetPendingEnvironment();
       this.loading = false;
       this.portalProbeGeneration += 1;
       this.portalProbeState = null;
@@ -160,7 +156,13 @@ class PortalsPage extends OpenClawLightDomElement {
   private async loadPendingEnvironment(): Promise<void> {
     const environmentId = this.pendingEnvironmentId;
     const scope = this.gateway.capture();
-    if (!environmentId || !scope || this.environmentLoading || (this.embedded && !this.presented)) {
+    if (
+      !environmentId ||
+      !scope ||
+      !this.canReadPortalState ||
+      this.environmentLoading ||
+      (this.embedded && !this.presented)
+    ) {
       return;
     }
     const generation = ++this.environmentRequestGeneration;
@@ -202,16 +204,29 @@ class PortalsPage extends OpenClawLightDomElement {
     return isGatewayMethodAdvertised(this.gateway.snapshot ?? {}, "portal.list") !== false;
   }
 
+  private get canReadPortalState(): boolean {
+    return canCallGatewayMethod(
+      this.gateway.snapshot,
+      this.pendingEnvironmentId ? "environments.status" : "portal.list",
+      "operator.read",
+      { requireAdvertisement: false },
+    );
+  }
+
   private get canClosePortal(): boolean {
     return canCallGatewayMethod(this.gateway.snapshot, "portal.close", "operator.write");
   }
 
-  private resetGatewayState() {
+  private resetPendingEnvironment() {
     this.environmentRequestGeneration += 1;
     this.environmentLoading = false;
     this.pendingEnvironment = null;
     this.environmentFailure = null;
     this.environmentPoll.stop();
+  }
+
+  private resetGatewayState() {
+    this.resetPendingEnvironment();
     this.requestGeneration += 1;
     this.portalSetRevision += 1;
     this.portals = [];
@@ -295,7 +310,7 @@ class PortalsPage extends OpenClawLightDomElement {
   private async loadPortals() {
     if (
       this.pendingEnvironmentId ||
-      !this.gateway.connected ||
+      !this.canReadPortalState ||
       !this.portalListSupported ||
       this.loading ||
       (this.embedded && !this.presented)
@@ -308,28 +323,21 @@ class PortalsPage extends OpenClawLightDomElement {
     }
     const generation = ++this.requestGeneration;
     const portalSetRevision = this.portalSetRevision;
+    const isCurrent = () => generation === this.requestGeneration && this.gateway.isCurrent(scope);
     this.loading = true;
     this.error = null;
     try {
       const result = await scope.client.request<PortalListResult>("portal.list", {});
-      if (
-        generation === this.requestGeneration &&
-        portalSetRevision === this.portalSetRevision &&
-        this.gateway.isCurrent(scope)
-      ) {
+      if (isCurrent() && portalSetRevision === this.portalSetRevision) {
         this.applyPortalSet(result.portals);
       }
     } catch (error) {
-      if (
-        generation === this.requestGeneration &&
-        this.gateway.isCurrent(scope) &&
-        this.portalListSupported
-      ) {
+      if (isCurrent() && this.portalListSupported) {
         this.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
         this.loaded = true;
       }
     } finally {
-      if (generation === this.requestGeneration && this.gateway.isCurrent(scope)) {
+      if (isCurrent()) {
         this.loading = false;
       }
     }
@@ -363,6 +371,13 @@ class PortalsPage extends OpenClawLightDomElement {
 
   private renderEmptyState() {
     const unsupported = !this.portalListSupported;
+    if (this.gateway.connected && !this.canReadPortalState) {
+      return html`<section class="portals-empty" role="status" aria-live="polite">
+        <div class="portals-empty__note">
+          ${t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
+        </div>
+      </section>`;
+    }
     return html`
       <section class="portals-empty" role="status" aria-live="polite">
         ${
@@ -502,7 +517,7 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.pendingEnvironmentId) {
+    if (this.pendingEnvironmentId && (!this.gateway.connected || this.canReadPortalState)) {
       const environment =
         this.pendingEnvironment?.id === this.pendingEnvironmentId ? this.pendingEnvironment : null;
       const error =

@@ -128,22 +128,14 @@ function wrapProvider(params: {
       throw error;
     }
   };
-  const embedBatchDetailed = params.provider.embedBatchDetailed;
   const wrapped: EmbeddingProvider = {
     id: "local",
     model: params.canonicalModel,
     dimensions: params.provider.dimensions,
     maxInputTokens: params.provider.maxInputTokens,
-    embed: async (input, callOptions) =>
-      await withFacts(async () => await params.provider.embed(input, callOptions)),
-    embedBatch: async (inputs, callOptions) =>
-      await withFacts(async () => await params.provider.embedBatch(inputs, callOptions)),
-    ...(embedBatchDetailed
-      ? {
-          embedBatchDetailed: async (inputs, callOptions) =>
-            await withFacts(async () => await embedBatchDetailed(inputs, callOptions)),
-        }
-      : {}),
+    embed: (input, callOptions) => withFacts(() => params.provider.embed(input, callOptions)),
+    embedBatch: (inputs, callOptions) =>
+      withFacts(() => params.provider.embedBatch(inputs, callOptions)),
     close: params.provider.close,
   };
   Object.defineProperty(wrapped, LOCAL_EMBEDDING_RUNTIME_FACTS, {

@@ -123,8 +123,12 @@ function findFirstPythonScriptArg(tokens: string[]): string | null {
 
 function findNodeScriptArgs(tokens: string[]): string[] {
   const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
-  const preloadScripts: string[] = [];
-  let entryScript: string | null = null;
+  const scripts: string[] = [];
+  const addScript = (value: string | undefined) => {
+    if (value && normalizeLowercaseStringOrEmpty(value).endsWith(".js")) {
+      scripts.push(value);
+    }
+  };
   let hasInlineEvalOrPrint = false;
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens.at(i);
@@ -132,11 +136,8 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       break;
     }
     if (token === "--") {
-      if (!hasInlineEvalOrPrint && !entryScript) {
-        const next = tokens.at(i + 1);
-        if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
-          entryScript = next;
-        }
+      if (!hasInlineEvalOrPrint) {
+        addScript(tokens.at(i + 1));
       }
       break;
     }
@@ -156,10 +157,7 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       continue;
     }
     if (optionsWithSeparateValue.has(token)) {
-      const next = tokens.at(i + 1);
-      if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
-        preloadScripts.push(next);
-      }
+      addScript(tokens.at(i + 1));
       i += 1;
       continue;
     }
@@ -168,31 +166,18 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       token.startsWith("--require=") ||
       token.startsWith("--import=")
     ) {
-      const inlineValue = token.startsWith("-r")
-        ? token.slice(2)
-        : token.slice(token.indexOf("=") + 1);
-      if (normalizeLowercaseStringOrEmpty(inlineValue).endsWith(".js")) {
-        preloadScripts.push(inlineValue);
-      }
+      addScript(token.startsWith("-r") ? token.slice(2) : token.slice(token.indexOf("=") + 1));
       continue;
     }
     if (token.startsWith("-")) {
       continue;
     }
-    if (
-      !hasInlineEvalOrPrint &&
-      !entryScript &&
-      normalizeLowercaseStringOrEmpty(token).endsWith(".js")
-    ) {
-      entryScript = token;
+    if (!hasInlineEvalOrPrint) {
+      addScript(token);
     }
     break;
   }
-  const targets = [...preloadScripts];
-  if (entryScript) {
-    targets.push(entryScript);
-  }
-  return targets;
+  return scripts;
 }
 
 function extractInterpreterScriptTargetFromArgv(

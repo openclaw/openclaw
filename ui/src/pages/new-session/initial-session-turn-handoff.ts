@@ -97,6 +97,7 @@ export async function completeInitialSessionTurn(
       options.onRejectedPrompt(initialRun.error);
     } else {
       const handedOffAttachments = retainInitialSessionTurn(options, retry?.promise);
+      // The confirmed URL must survive closing the tab without restoring the sent draft.
       await options.clearDraft(!handedOffAttachments);
     }
     if (!options.isCurrent() || (instant && !instant.isCurrent())) {

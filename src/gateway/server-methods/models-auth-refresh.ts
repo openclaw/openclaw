@@ -1,7 +1,7 @@
 import { validateModelsAuthRefreshParams } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
-import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -21,7 +21,7 @@ export const modelsAuthRefreshHandlers: GatewayRequestHandlers = {
         : params.agentId,
     );
     if (!scope.ok) {
-      respond(false, undefined, modelAuthAgentScopeError(scope));
+      respond(false, undefined, scope.error);
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {

@@ -65,31 +65,21 @@ function createMatrixExposedActions(params: {
   senderIsOwner?: boolean;
 }) {
   const actions = new Set<ChannelMessageActionName>(["poll", "poll-vote"]);
-  if (params.gate("messages")) {
-    actions.add("send");
-    actions.add("read");
-    actions.add("edit");
-    actions.add("delete");
-  }
-  if (params.gate("reactions")) {
-    actions.add("react");
-    actions.add("reactions");
-    actions.add("emoji-list");
-  }
-  if (params.gate("pins")) {
-    actions.add("pin");
-    actions.add("unpin");
-    actions.add("list-pins");
-  }
+  const addGatedActions = (gate: string, ...names: ChannelMessageActionName[]) => {
+    if (params.gate(gate)) {
+      for (const name of names) {
+        actions.add(name);
+      }
+    }
+  };
+  addGatedActions("messages", "send", "read", "edit", "delete");
+  addGatedActions("reactions", "react", "reactions", "emoji-list");
+  addGatedActions("pins", "pin", "unpin", "list-pins");
   if (params.gate("profile") && params.senderIsOwner === true) {
     actions.add("set-profile");
   }
-  if (params.gate("memberInfo")) {
-    actions.add("member-info");
-  }
-  if (params.gate("channelInfo")) {
-    actions.add("channel-info");
-  }
+  addGatedActions("memberInfo", "member-info");
+  addGatedActions("channelInfo", "channel-info");
   if (params.encryptionEnabled && params.gate("verification") && params.senderIsOwner === true) {
     actions.add("permissions");
   }

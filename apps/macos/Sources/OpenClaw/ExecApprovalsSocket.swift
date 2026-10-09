@@ -15,18 +15,6 @@ struct ExecApprovalPromptRequest: Codable {
     var sessionKey: String?
     var allowedDecisions: [ExecApprovalDecision]?
 
-    private enum CodingKeys: String, CodingKey {
-        case command
-        case cwd
-        case host
-        case security
-        case ask
-        case agentId
-        case resolvedPath
-        case sessionKey
-        case allowedDecisions
-    }
-
     static func allowedDecisions(
         forAsk ask: String?,
         allowAlwaysEligible: Bool = true) -> [ExecApprovalDecision]
@@ -233,10 +221,7 @@ final class ExecApprovalsPromptServer {
     private let maximumRetryDelay: Duration
     private let resolveSocketCredentials: @Sendable () -> (socketPath: String, token: String)
     private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
-    private var server: ExecApprovalsSocketServer?
-    private var retryTask: Task<Void, Never>?
-    private var previousStartupTask: Task<Void, Never>?
-    private var startupGeneration: UInt64 = 0
+    private var startup = LocalSocketServer.Startup<ExecApprovalsSocketServer>()
 
     init(
         retryDelay: Duration = .seconds(1),
@@ -258,23 +243,21 @@ final class ExecApprovalsPromptServer {
     }
 
     func start() {
-        guard self.server == nil, self.retryTask == nil else { return }
-        self.startupGeneration &+= 1
-        let generation = self.startupGeneration
+        guard self.startup.listener == nil, self.startup.task == nil else { return }
+        self.startup.generation &+= 1
+        let generation = self.startup.generation
         let retryDelay = self.retryDelay
         let maximumRetryDelay = self.maximumRetryDelay
         let resolveSocketCredentials = self.resolveSocketCredentials
         let onPrompt = self.onPrompt
-        let previousStartupTask = self.previousStartupTask
+        let previousStartupTask = self.startup.cleanup
         // Keep one lifecycle-owned retry loop. Blocking lock acquisition stays
         // off MainActor, while generation checks prevent post-stop installation.
-        self.retryTask = Task { @MainActor [weak self] in
+        self.startup.task = Task { @MainActor [weak self] in
             // A canceled startup may still be unwinding socket-path cleanup.
             // Never let a replacement generation race that cleanup.
-            if let previousStartupTask {
-                await previousStartupTask.value
-            }
-            guard !Task.isCancelled, self?.startupGeneration == generation else { return }
+            await previousStartupTask?.value
+            guard !Task.isCancelled, self?.startup.generation == generation else { return }
 
             var isFirstAttempt = true
             var retryBackoff = ExecApprovalsPromptRetryBackoff(
@@ -296,7 +279,7 @@ final class ExecApprovalsPromptServer {
                 }.value
                 guard !Task.isCancelled,
                       let self,
-                      self.startupGeneration == generation
+                      self.startup.generation == generation
                 else { return }
 
                 let token = credentials.token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -319,7 +302,7 @@ final class ExecApprovalsPromptServer {
                 } onCancel: {
                     server.stop()
                 }
-                guard !Task.isCancelled, self.startupGeneration == generation else {
+                guard !Task.isCancelled, self.startup.generation == generation else {
                     await server.stop().value
                     return
                 }
@@ -329,8 +312,8 @@ final class ExecApprovalsPromptServer {
                     await server.stop().value
                     continue
                 }
-                self.server = server
-                self.retryTask = nil
+                self.startup.listener = server
+                self.startup.task = nil
                 return
             }
         }
@@ -338,38 +321,24 @@ final class ExecApprovalsPromptServer {
 
     @discardableResult
     func stop() -> Task<Void, Never>? {
-        self.startupGeneration &+= 1
-        let pendingRetry = self.retryTask
-        pendingRetry?.cancel()
-        let serverShutdown = self.server?.stop()
-        self.retryTask = nil
-        self.server = nil
-        guard pendingRetry != nil || serverShutdown != nil else { return self.previousStartupTask }
-        let previousStartup = self.previousStartupTask
-        let cleanup = Task {
-            await previousStartup?.value
-            await pendingRetry?.value
-            await serverShutdown?.value
-        }
-        self.previousStartupTask = cleanup
-        return cleanup
+        self.startup.stop { $0.stop() }
     }
 
     private func handleUnexpectedStop(
         _ stoppedServer: ExecApprovalsSocketServer,
         generation: UInt64)
     {
-        guard self.startupGeneration == generation,
-              self.server === stoppedServer
+        guard self.startup.generation == generation,
+              self.startup.listener === stoppedServer
         else { return }
-        self.previousStartupTask = stoppedServer.stop()
-        self.server = nil
+        self.startup.cleanup = stoppedServer.stop()
+        self.startup.listener = nil
         self.start()
     }
 
     #if DEBUG
     func _testFailActiveSocket() {
-        self.server?.failForTesting()
+        self.startup.listener?.failForTesting()
     }
 
     #endif

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
@@ -12,6 +11,7 @@ import { encodePackageActivationLauncher } from "./package-update-activation-jou
 import { preparePackageActivation } from "./package-update-activation.js";
 import {
   activateStagedNpmPackageRoot,
+  backupNpmPackageRoot,
   capturePackageLaunchers,
   type PackageLauncherBackup,
   discardPackageLauncherBackup,
@@ -25,7 +25,7 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
-  PackageIntegrityTimeoutError,
+  isPackageIntegrityResourceError,
   readPackageVersionIfPresent,
   type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
@@ -42,27 +42,24 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { createPackageSwapResults } from "./package-update-swap-results.js";
-import { retireVerifiedPackageSwap } from "./package-update-swap-retirement.js";
-import { resolveStagedPackageSwapTarget } from "./package-update-swap-target.js";
-import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
 import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "./update-freebsd-pkg-ownership.js";
+  captureLegacyPackageBackupRetirement,
+  retireRefusedPackageSwap,
+  retireVerifiedPackageSwap,
+} from "./package-update-swap-retirement.js";
+import {
+  assertSwapTargetUnowned,
+  resolveStagedPackageSwapTarget,
+} from "./package-update-swap-target.js";
+import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
+import { FreeBsdPkgOwnershipError } from "./update-freebsd-pkg-ownership.js";
 import { verifyPackageUpdateRecovery } from "./update-global.js";
 import {
   finalizeNativePackageStage,
   NativePackageRollbackError,
 } from "./update-native-package-stage.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-
-export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
-export type {
-  PackageUpdateTransaction,
-  StagedPackageInstall,
-} from "./package-update-swap-contract.js";
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
@@ -78,7 +75,8 @@ export async function swapStagedPackageInstall(
   const results = createPackageSwapResults(params, targetLayout, targetPackageRoot, startedAt);
   const { warnings, step } = results;
   if (!targetLayout || !targetPackageRoot || !targetSwapRoot) {
-    return results.invalidLayout(activePackageRoot);
+    const error = "cannot resolve npm global prefix layout";
+    return results.failed(activePackageRoot, error, [error], false);
   }
 
   if (!native) {
@@ -113,16 +111,6 @@ export async function swapStagedPackageInstall(
   let activationRetirementStarted = false;
   let preparationCustody = false;
   let activation: Awaited<ReturnType<typeof preparePackageActivation>>;
-  const assertReplacementUnowned = async () => {
-    // A fresh observation, not an atomic lock against an external pkg writer.
-    const inspection = createFreeBsdPkgOwnershipInspection(
-      params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-    );
-    await inspection.assertUnowned(targetSwapRoot);
-    for (const shim of shims) {
-      await inspection.assertEntryUnowned(shim.destination);
-    }
-  };
   const verifyNpmRecovery = (root: string, fromBackup: boolean) =>
     verifyNpmRootRecovery(
       { root, fromBackup, hadPackage, previousRoot, previousIdentity, targetSwapRoot, shims },
@@ -140,27 +128,29 @@ export async function swapStagedPackageInstall(
         "Preparation custody is retained by the package recovery journal; run its repair command.",
       ];
     }
-    if (activation) {
-      packageBackedUp = await activation.disarmRollback();
-    }
     const messages: string[] = [];
-    if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
-      try {
+    try {
+      if (activation) {
+        const previous = await activation.disarmRollback();
+        packageBackedUp = previous !== false;
+        previousRoot = previous ? { kind: "directory", tree: previous } : previousRoot;
+      }
+      if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
         // Refuse known-bad recovery material before touching the candidate or
         // its launchers, including launchers from a package-absent baseline.
         // This observation does not exclude concurrent writers.
         await verifyNpmRecovery(backupRoot, true);
-      } catch (error) {
-        assertCurrent();
-        packageRollbackVerified = false;
-        return [
-          `${formatErrorMessage(error)}; current package unchanged; recovery evidence retained in ${targetLayout.globalRoot}`,
-        ];
       }
+    } catch (error) {
+      assertCurrent();
+      packageRollbackVerified = false;
+      return [
+        `${results.rollbackError(error)}; current package unchanged; recovery evidence retained in ${targetLayout.globalRoot}`,
+      ];
     }
     if (process.platform === "freebsd" && (packageBackedUp || rollback.length > 0)) {
       try {
-        await assertReplacementUnowned();
+        await assertSwapTargetUnowned(targetSwapRoot, shims, params.timeoutMs);
         assertCurrent();
       } catch (error) {
         assertCurrent();
@@ -225,7 +215,7 @@ export async function swapStagedPackageInstall(
       } catch (error) {
         assertCurrent();
         packageRollbackVerified = false;
-        messages.push(formatErrorMessage(error));
+        messages.push(results.rollbackError(error));
       }
     }
     if (native) {
@@ -295,7 +285,7 @@ export async function swapStagedPackageInstall(
       } catch (error) {
         // Preserve the scan cause if the identity fallback also fails.
         baselineError = new Error("Baseline package scan failed", { cause: error });
-        if (!(error instanceof PackageIntegrityTimeoutError)) {
+        if (!isPackageIntegrityResourceError(error)) {
           throw error;
         }
         // Capture the identity before mutation even when the full walk exhausted its budget.
@@ -307,7 +297,7 @@ export async function swapStagedPackageInstall(
           throw error;
         }
         warnings.push(
-          `baseline package fingerprint incomplete after ${error.budgetMs / 1000} s; rollback will be verified by the retained package copy`,
+          `baseline package fingerprint incomplete (${error.message}); rollback requires the retained directory identity, package version and launchers; full package contents are unverified`,
         );
       }
       baselineError = undefined;
@@ -345,6 +335,12 @@ export async function swapStagedPackageInstall(
     await launcherReader.observe("baseline", () =>
       capturePackageLaunchers(launchers, params, targetLayout, launcherReader),
     );
+    const retireLegacyBackups = params.onTransaction
+      ? await captureLegacyPackageBackupRetirement(
+          targetLayout.globalRoot,
+          params.assertCurrent ?? params.activation?.fence.assertCurrent,
+        )
+      : undefined;
     if (
       params.activation &&
       process.platform !== "freebsd" &&
@@ -368,6 +364,7 @@ export async function swapStagedPackageInstall(
               warnings.push(message);
               params.activation?.onUnavailable?.(message);
             },
+            onWarning: results.activationWarning,
           },
           liveRoot: targetSwapRoot,
           stageRoot: stagedSwapRoot,
@@ -408,7 +405,7 @@ export async function swapStagedPackageInstall(
       ? await finalizeNativePackageStage(native, params.packageName)
       : undefined;
     if (process.platform === "freebsd") {
-      await assertReplacementUnowned();
+      await assertSwapTargetUnowned(targetSwapRoot, shims, params.timeoutMs);
     }
     try {
       await params.beforeActivate?.();
@@ -422,7 +419,7 @@ export async function swapStagedPackageInstall(
     if (process.platform === "freebsd") {
       // Draining and project validation may outlive package ownership. Refuse
       // before registering a transaction or replacing any live entry.
-      await assertReplacementUnowned();
+      await assertSwapTargetUnowned(targetSwapRoot, shims, params.timeoutMs);
       params.assertCurrent?.();
     }
     if (params.onTransaction) {
@@ -532,6 +529,7 @@ export async function swapStagedPackageInstall(
             backupRoot,
             // Rollback snapshots remain recovery evidence even after successful restoration.
             databaseBackupRoot: rollbackResult ? undefined : databaseBackupRoot,
+            retireLegacyBackups: rollbackResult ? undefined : retireLegacyBackups,
             launchers,
             packageBackedUp,
             globalRoot: targetLayout.globalRoot,
@@ -607,7 +605,11 @@ export async function swapStagedPackageInstall(
       params.onLiveMutation?.();
       liveMutationStarted = true;
       packageRollbackVerified = false;
-      await activation.publish(false, async () => {
+      await activation.publish(false, async (previous, copied) => {
+        if (copied) {
+          warnings.push("EXDEV during package backup rename; using a verified rollback copy.");
+        }
+        previousRoot = { kind: "directory", tree: previous };
         packageBackedUp = true;
         activePackageRoot = null;
         activation!.assertCurrent();
@@ -619,7 +621,6 @@ export async function swapStagedPackageInstall(
       });
       activePackageRoot = targetPackageRoot;
       projectActivated = true;
-      activationCompleted = true;
     } else {
       await rootLink?.assertLiveUnchanged();
       if (process.platform === "freebsd") {
@@ -649,7 +650,7 @@ export async function swapStagedPackageInstall(
             throw new Error(acquisition.error);
           }
         } else {
-          await fs.rename(targetSwapRoot, backupRoot);
+          await backupNpmPackageRoot(targetSwapRoot, backupRoot, params.assertCurrent, warnings);
         }
         activePackageRoot = null;
         packageBackedUp = true;
@@ -668,8 +669,8 @@ export async function swapStagedPackageInstall(
         rollback.push(restoreShim(shim));
         await copyPathEntry(shim.source, shim.destination);
       }
-      activationCompleted = true;
     }
+    activationCompleted = true;
     const postVerifyStep = params.postVerifyStep
       ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
       : null;
@@ -686,7 +687,7 @@ export async function swapStagedPackageInstall(
       // Retirement may remove the previous generation before its final acknowledgement.
       // From here, preserve the resumable receipt instead of starting compensation.
       activationRetirementStarted = true;
-      await activation.retire();
+      results.activationWarning(await activation.retireVerified());
     }
     const cleanup = activation
       ? []
@@ -707,14 +708,17 @@ export async function swapStagedPackageInstall(
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError
     ) {
-      if (!activation && !preparationCustody) {
+      if (activation && !retained && !liveMutationStarted) {
+        const refusal = error instanceof PackageUpdateActivationError ? error.cause : error;
+        await retireRefusedPackageSwap(activation, refusal, results.activationWarning);
+      } else if (!activation && !preparationCustody) {
         await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
       }
       throw error instanceof PackageUpdateActivationError
         ? error
         : new PackageUpdateActivationError(error);
     }
-    const errors = [formatErrorMessage(baselineError ?? error)];
+    const errors = [results.rollbackError(baselineError ?? error)];
     if (!retained && !liveMutationStarted && !activation && !preparationCustody) {
       // Preparation can fail before a baseline exists. There is nothing to
       // restore; the caller independently verifies the untouched runtime.

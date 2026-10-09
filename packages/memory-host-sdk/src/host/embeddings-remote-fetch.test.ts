@@ -1,6 +1,6 @@
 // Memory Host SDK tests cover embeddings remote fetch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { extractEmbeddingUsage, fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
+import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 
 const postJsonMock = vi.hoisted(() => vi.fn());
 
@@ -29,6 +29,32 @@ function requirePostJsonParams(): {
 describe("fetchRemoteEmbeddingVectors", () => {
   beforeEach(() => {
     postJsonMock.mockReset();
+  });
+
+  it.each([
+    { usage: { prompt_tokens: 7, total_tokens: 9 }, expected: { promptTokens: 7, totalTokens: 9 } },
+    { usage: { prompt_tokens: 3 }, expected: { promptTokens: 3, totalTokens: 3 } },
+    { usage: { total_tokens: 0 }, expected: { promptTokens: 0, totalTokens: 0 } },
+    { usage: undefined, expected: undefined },
+    { usage: { prompt_tokens: -1 }, expected: undefined },
+    { usage: { prompt_tokens: 1.5 }, expected: undefined },
+    { usage: { prompt_tokens: "7" }, expected: undefined },
+    { usage: { prompt_tokens: Infinity }, expected: undefined },
+  ])("reports validated usage for $usage without changing vectors", async ({ usage, expected }) => {
+    postJsonMock.mockImplementationOnce(async (params) =>
+      params.parse({ data: [{ embedding: [0.1] }], usage }),
+    );
+    const onUsage = vi.fn();
+    await expect(
+      fetchRemoteEmbeddingVectors({
+        url: "https://memory.example/v1/embeddings",
+        headers: {},
+        body: { input: ["one"] },
+        errorPrefix: "embedding fetch failed",
+        onUsage,
+      }),
+    ).resolves.toEqual([[0.1]]);
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(expected);
   });
 
   it("maps remote embedding response data to vectors", async () => {
@@ -242,21 +268,5 @@ describe("fetchRemoteEmbeddingVectors", () => {
         errorPrefix: "embedding fetch failed",
       }),
     ).rejects.toThrow("embedding fetch failed: malformed JSON response");
-  });
-});
-
-describe("extractEmbeddingUsage", () => {
-  it("normalizes OpenAI-style usage and tolerates partial or invalid shapes", () => {
-    expect(extractEmbeddingUsage({ usage: { prompt_tokens: 7, total_tokens: 9 } })).toEqual({
-      promptTokens: 7,
-      totalTokens: 9,
-    });
-    expect(extractEmbeddingUsage({ usage: { prompt_tokens: 3 } })).toEqual({
-      promptTokens: 3,
-      totalTokens: 3,
-    });
-    expect(extractEmbeddingUsage({})).toBeUndefined();
-    expect(extractEmbeddingUsage({ usage: { prompt_tokens: -1 } })).toBeUndefined();
-    expect(extractEmbeddingUsage({ usage: "unexpected" })).toBeUndefined();
   });
 });

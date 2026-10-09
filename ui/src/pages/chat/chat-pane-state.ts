@@ -1,12 +1,13 @@
-import { downloadArtifact } from "../../api/artifact-download.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
@@ -32,7 +33,6 @@ export function applySelectedSessionProjection(
 }
 
 const MAX_TRACKED_SESSION_ROWS = 256;
-const CHAT_ARTIFACT_IMAGE_MIME = /^image\/(?:png|jpeg|gif|webp|avif)$/u;
 
 export class SessionParticipationTracker {
   private readonly lastBlocked = new Map<string, boolean>();
@@ -57,7 +57,14 @@ export class SessionParticipationTracker {
           : params.session.visibility !== undefined &&
             params.session.visibility !== "shared" &&
             params.session.sharingRole === "viewer";
-      this.remember(params.sessionKey, blocked);
+      this.lastBlocked.delete(params.sessionKey);
+      this.lastBlocked.set(params.sessionKey, blocked);
+      if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {
+        const oldest = this.lastBlocked.keys().next().value;
+        if (oldest) {
+          this.lastBlocked.delete(oldest);
+        }
+      }
       return blocked;
     }
     // The selected session has no row. Absence is NOT a revocation signal:
@@ -68,74 +75,36 @@ export class SessionParticipationTracker {
     // session does not flicker enabled; a completed absence never blocks. The
     // redaction case (a session hidden from a non-owner) is handled once the
     // explicit revocation signal lands (openclaw/openclaw#112760).
-    if (params.listLoading) {
-      return this.lastBlocked.get(params.sessionKey) === true;
-    }
-    return false;
-  }
-
-  private remember(sessionKey: string, blocked: boolean): void {
-    this.lastBlocked.delete(sessionKey);
-    this.lastBlocked.set(sessionKey, blocked);
-    if (this.lastBlocked.size <= MAX_TRACKED_SESSION_ROWS) {
-      return;
-    }
-    const oldest = this.lastBlocked.keys().next().value;
-    if (oldest) {
-      this.lastBlocked.delete(oldest);
-    }
+    return params.listLoading && this.lastBlocked.get(params.sessionKey) === true;
   }
 }
 
-export async function resolveChatArtifactDownload(
-  state: Parameters<typeof downloadArtifact>[0],
-  params: { sessionKey: string; artifactId: string },
-  signal?: AbortSignal,
-): Promise<{ url: string; expiresAt?: string; blob?: Blob } | null> {
-  const result = await downloadArtifact(state, params, signal);
-  if (
-    result?.blob &&
-    (result.artifact.type !== "image" ||
-      !CHAT_ARTIFACT_IMAGE_MIME.test(result.blob.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""))
-  ) {
-    return null;
-  }
-  if (
-    result?.encoding === "base64" &&
-    result.artifact.type === "image" &&
-    CHAT_ARTIFACT_IMAGE_MIME.test(result.artifact.mimeType ?? "") &&
-    result.data
-  ) {
-    return { url: `data:${result.artifact.mimeType};base64,${result.data}` };
-  }
-  const url = typeof result?.url === "string" ? result.url.trim() : "";
-  if (!url) {
-    return null;
-  }
-  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
-  return {
-    url,
-    ...(expiresAt ? { expiresAt } : {}),
-    ...(result?.blob ? { blob: result.blob } : {}),
-  };
-}
-
-export function dismissChatError(state: {
-  chatError?: string | null;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-}) {
+export function dismissChatError(state: { chatError?: string | null; lastError: string | null }) {
   state.lastError = null;
-  state.lastErrorCode = null;
   state.chatError = null;
 }
 
-export function initialHistorySubmitState(state: ChatState, unavailable: boolean) {
+export function chatSubmitState(
+  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange">,
+  unavailable: boolean,
+  nativeChat: boolean,
+) {
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
+  const pendingReason = nativeChat ? chatSendPendingReason(state, state.sessionKey) : null;
+  const controlCommand = isChatControlCommand(state.chatMessage);
   return {
-    submitDisabledReason: unavailable ? (failure ?? t("chat.thread.loading")) : null,
-    submitPending: unavailable && historyLoad.phase !== "failed",
+    ...(pendingReason && !controlCommand ? { canSend: false } : {}),
+    submitDisabledReason:
+      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+    onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
+      state.handleChatDraftChange(...args);
+      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
+      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
+        state.requestUpdate?.();
+      }
+    },
   };
 }
 

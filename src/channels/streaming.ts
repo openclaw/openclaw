@@ -6,6 +6,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   formatToolDetail,
   isCommandBearingToolCall,
+  isShellToolDisplayName,
   resolveToolDisplay,
 } from "../agents/tool-display.js";
 import { formatToolAggregate, formatToolAggregateParts } from "../auto-reply/tool-meta.js";
@@ -280,7 +281,6 @@ function buildNamedProgressLine(
     kind,
     text,
     label: display.label,
-    icon: display.emoji,
     ...(detail ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,
@@ -315,22 +315,13 @@ export function copyProgressDraftLineMetadata(
   );
 }
 
-function itemKindToToolName(kind: string | undefined): string | undefined {
-  switch (normalizeOptionalLowercaseString(kind)) {
-    case "command":
-      return "exec";
-    case "patch":
-      return "apply_patch";
-    case "search":
-      return "web_search";
-    case "api":
-      return "api";
-    case "tool":
-      return "tool_call";
-    default:
-      return undefined;
-  }
-}
+const PROGRESS_ITEM_TOOL_NAMES = new Map([
+  ["command", "exec"],
+  ["patch", "apply_patch"],
+  ["search", "web_search"],
+  ["api", "api"],
+  ["tool", "tool_call"],
+]);
 
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
@@ -470,7 +461,9 @@ export function buildChannelProgressDraftLine(
       );
     }
     case "item": {
-      const name = input.name ?? itemKindToToolName(input.itemKind);
+      const name =
+        input.name ??
+        PROGRESS_ITEM_TOOL_NAMES.get(normalizeOptionalLowercaseString(input.itemKind) ?? "");
       if (isAgentPlanProgressToolName(name)) {
         const status = normalizeOptionalLowercaseString(input.status);
         return status === "failed" || status === "error" || status === "blocked"
@@ -611,9 +604,6 @@ export function createChannelProgressDraftGate(params: {
   const start = (): Promise<void> => {
     if (disposed || started) {
       return startPromise ?? Promise.resolve();
-    }
-    if (startPromise) {
-      return startPromise;
     }
     clearTimer();
     started = true;
@@ -982,15 +972,6 @@ export function compactChannelProgressDraftLine(line: string, maxChars: number):
     }
   }
 
-  const compactCommandPrefixMatch = normalized.match(/^🛠️\s+/u);
-  if (compactCommandPrefixMatch) {
-    const prefix = compactCommandPrefixMatch[0];
-    const compact = compactWithPrefix(prefix, normalized.slice(prefix.length));
-    if (compact) {
-      return compact;
-    }
-  }
-
   return repairCompactedProgressMarkdown(compactProgressText(normalized, maxChars, chars));
 }
 
@@ -1040,21 +1021,12 @@ export function formatPlanChecklistLines(
   },
 ): string[] {
   const selected = selectPlanChecklistSteps(steps, options);
-  const marker = (status: AgentPlanStepStatus) =>
-    options.plain
-      ? status === "completed"
-        ? "Completed:"
-        : status === "in_progress"
-          ? "In progress:"
-          : "Pending:"
-      : status === "completed"
-        ? "✅"
-        : status === "in_progress"
-          ? "▸"
-          : "▢";
+  const markers = options.plain
+    ? { completed: "Completed:", in_progress: "In progress:", pending: "Pending:" }
+    : { completed: "✅", in_progress: "▸", pending: "▢" };
   return [
     ...(selected.summary ? [`${options.plain ? "" : "✅ "}${selected.summary}`] : []),
-    ...selected.steps.map((entry) => `${marker(entry.status)} ${entry.step}`),
+    ...selected.steps.map((entry) => `${markers[entry.status]} ${entry.step}`),
   ].map((line) => compactChannelProgressDraftLine(line, options.maxLineChars));
 }
 
@@ -1298,10 +1270,15 @@ function formatProgressDraftText(
                 : undefined;
         return text ? formatLine(compactChannelProgressDraftLine(text, maxLineChars)) : undefined;
       }
-      const text = compactChannelProgressDraftLine(
-        typeof line === "string" ? line : getProgressDraftLineText(line),
-        maxLineChars,
-      );
+      const lineText = typeof line === "string" ? line : getProgressDraftLineText(line);
+      const text =
+        typeof line !== "string" &&
+        isShellToolDisplayName(line.toolName) &&
+        lineText.indexOf(": ") <= 0
+          ? repairCompactedProgressMarkdown(
+              compactProgressLineDetail(lineText.replace(/\s+/g, " ").trim(), maxLineChars),
+            )
+          : compactChannelProgressDraftLine(lineText, maxLineChars);
       if (!text) {
         return undefined;
       }

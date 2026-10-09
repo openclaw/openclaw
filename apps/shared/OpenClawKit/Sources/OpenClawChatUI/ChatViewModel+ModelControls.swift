@@ -391,9 +391,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
                 let accepted = clearsOverride ? nil : (Self.normalizedVerboseLevel(result?.verboseLevel) ?? next)
                 self.acceptedVerboseLevelsByTarget[target] = accepted.map(VerboseLevelState.value)
                     ?? VerboseLevelState.none
@@ -479,9 +479,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
                 let acceptedOverride = next == nil ? nil : (result?.fastMode ?? next)
                 let acceptedEffective = result?.effectiveFastMode
                     ?? result?.fastMode
@@ -599,10 +599,8 @@ extension OpenClawChatViewModel {
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        let index = exactMatchOnly
-            ? self.sessions.firstIndex(where: { $0.key == sessionKey })
-            : self.sessionIndexForModelState(sessionKey: sessionKey)
-        guard let index else { return }
+        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        else { return }
         self.sessions[index].verboseLevel = level
     }
 
@@ -612,10 +610,8 @@ extension OpenClawChatViewModel {
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        let index = exactMatchOnly
-            ? self.sessions.firstIndex(where: { $0.key == sessionKey })
-            : self.sessionIndexForModelState(sessionKey: sessionKey)
-        guard let index else { return }
+        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        else { return }
         self.sessions[index].fastMode = mode
         self.sessions[index].effectiveFastMode = effective
     }

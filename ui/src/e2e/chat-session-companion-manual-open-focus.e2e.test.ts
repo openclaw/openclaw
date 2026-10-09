@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -13,78 +14,23 @@ import {
 const suite = createControlUiE2eSuite({ name: "Manual Side chat opening focus" });
 
 suite.define(() => {
-  it.each([false, true])(
-    "respects newer main-composer intent after a delayed manual opening: %s",
-    async (newerMainIntent) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const artifacts = createControlUiE2eArtifactDir(
-          newerMainIntent ? "companion-manual-newer-main" : "companion-manual-autofocus-control",
-        );
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(error.message));
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
-        try {
-          const gateway = await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await openChatSidePanelType(page, "Side chat");
-          await held.request;
-          const main = page.locator(".agent-chat__composer-shell textarea");
-          const side = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-          expect(await side.count()).toBe(0);
-          if (newerMainIntent) {
-            await main.click();
-            await page.keyboard.type("Keep typing here");
-            expect(await main.inputValue()).toBe("Keep typing here");
-            expect(await main.evaluate((element) => document.activeElement === element)).toBe(true);
-          }
-          await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
-          held.release();
-          await side.waitFor();
-          const afterMount = {
-            mainFocused: await main.evaluate((element) => document.activeElement === element),
-            sideFocused: await side.evaluate((element) => document.activeElement === element),
-            mainDraft: await main.inputValue(),
-            sideDraft: await side.inputValue(),
-          };
-          await page.keyboard.type(" continued");
-          const afterTyping = {
-            mainDraft: await main.inputValue(),
-            sideDraft: await side.inputValue(),
-          };
-          await page.screenshot({ path: path.join(artifacts, "after-rail-and-continuation.png") });
-          const requests = (await gateway.getRequests()).map(({ method }) => method);
-          await writeFile(
-            path.join(artifacts, "receipt.json"),
-            JSON.stringify(
-              { newerMainIntent, afterMount, afterTyping, requests, pageErrors },
-              null,
-              2,
-            ),
-          );
-          expect.soft(afterMount.mainFocused).toBe(newerMainIntent);
-          expect.soft(afterMount.sideFocused).toBe(!newerMainIntent);
-          expect
-            .soft(afterTyping.mainDraft)
-            .toBe(newerMainIntent ? "Keep typing here continued" : "");
-          expect.soft(afterTyping.sideDraft).toBe(newerMainIntent ? "" : " continued");
-          expect.soft(pageErrors).toEqual([]);
-          expect.soft(requests.filter((method) => method === "sessions.companion.ask")).toEqual([]);
-          expect.soft(requests.filter((method) => method === "chat.send")).toEqual([]);
-        } finally {
-          held.release();
-        }
-      });
-    },
-  );
-
-  it.each(["another pane", "command palette"])(
-    "preserves newer focus in %s while a manually opened Side chat loads",
+  it.each(["side chat", "main composer", "another pane", "command palette"])(
+    "honors focus intent in %s while a manually opened Side chat loads",
     async (target) => {
-      await suite.withPage({ viewport: { width: 2200, height: 1000 } }, async ({ page }) => {
+      const viewport =
+        target === "another pane" || target === "command palette"
+          ? { width: 2200, height: 1000 }
+          : { width: 1440, height: 900 };
+      await suite.withPage({ viewport }, async ({ page }) => {
         const artifacts = createControlUiE2eArtifactDir(
           `companion-manual-${target.replaceAll(" ", "-")}`,
         );
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -92,25 +38,40 @@ suite.define(() => {
           await held.request;
           let side = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           expect(await side.count()).toBe(0);
-          let foreground;
+          const main = page.locator(".agent-chat__composer-shell textarea").first();
+          let foreground = main;
           if (target === "another pane") {
             await page.getByRole("button", { name: "Open split view", exact: true }).click();
             const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
             await expect.poll(() => panes.count()).toBe(2);
             foreground = panes.last().locator(".agent-chat__composer-shell textarea");
             side = panes.first().getByRole("textbox", { name: "Ask in side chat", exact: true });
-          } else {
+          } else if (target === "command palette") {
             await page.keyboard.press("ControlOrMeta+k");
             foreground = page
               .locator("openclaw-command-palette")
               .getByRole("textbox", { name: "Search or start a task…" });
           }
-          await foreground.click();
-          await page.keyboard.type("Keep typing here");
-          expect(await foreground.inputValue()).toBe("Keep typing here");
+          if (target !== "side chat") {
+            await foreground.click();
+            await page.keyboard.type("Keep typing here");
+            expect(await foreground.inputValue()).toBe("Keep typing here");
+            expect(await foreground.evaluate((element) => document.activeElement === element)).toBe(
+              true,
+            );
+          }
           await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
           held.release();
           await side.waitFor();
+          if (target === "side chat") {
+            foreground = side;
+          }
+          expect
+            .soft(await main.evaluate((element) => document.activeElement === element))
+            .toBe(target === "main composer");
+          expect
+            .soft(await side.evaluate((element) => document.activeElement === element))
+            .toBe(target === "side chat");
           const foregroundFocused = await foreground.evaluate(
             (element) => document.activeElement === element,
           );
@@ -131,17 +92,36 @@ suite.define(() => {
           await writeFile(
             path.join(artifacts, "receipt.json"),
             JSON.stringify(
-              { target, foregroundFocused, foregroundDraft, mainDrafts, sideDrafts, requests },
+              {
+                target,
+                foregroundFocused,
+                foregroundDraft,
+                mainDrafts,
+                sideDrafts,
+                requests,
+                pageErrors,
+              },
               null,
               2,
             ),
           );
           expect.soft(foregroundFocused).toBe(true);
-          expect.soft(foregroundDraft).toBe("Keep typing here continued");
+          expect
+            .soft(foregroundDraft)
+            .toBe(target === "side chat" ? " continued" : "Keep typing here continued");
           expect
             .soft(mainDrafts)
-            .toEqual(target === "another pane" ? ["", "Keep typing here continued"] : [""]);
-          expect.soft(sideDrafts).toEqual(target === "another pane" ? ["", ""] : [""]);
+            .toEqual(
+              target === "another pane"
+                ? ["", "Keep typing here continued"]
+                : [target === "main composer" ? "Keep typing here continued" : ""],
+            );
+          expect
+            .soft(sideDrafts)
+            .toEqual(
+              target === "another pane" ? ["", ""] : [target === "side chat" ? " continued" : ""],
+            );
+          expect.soft(pageErrors).toEqual([]);
           expect.soft(requests.filter((method) => method === "sessions.companion.ask")).toEqual([]);
           expect.soft(requests.filter((method) => method === "chat.send")).toEqual([]);
         } finally {
@@ -159,7 +139,10 @@ suite.define(() => {
         );
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}settings/appearance`);

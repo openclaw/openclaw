@@ -148,11 +148,32 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-Managed startup uses Windows Scheduled Tasks when available. The task keeps
-the readable `gateway.cmd` script in the OpenClaw state dir but launches it
-through a generated `gateway.vbs` WScript wrapper, so the background Gateway
-does not open a visible console window. If task creation is denied, OpenClaw
-falls back to a per-user Startup-folder login item.
+**New workspace** also works with a native Windows Gateway. Install Git for
+Windows and make it available on `PATH`. Each empty workspace starts from a
+separate Git repository initialized without your global Git configuration.
+Workspace creation also avoids Git for Windows' `'$GIT_DIR' too big` error for
+deeply nested source repositories.
+Worker result staging, reads, and cleanup enable Git's Windows long-path support
+for each command. Other Git clients accessing the same deeply nested repository
+may need `core.longpaths=true` in their own configuration, for example with
+`git -C "<repository>" config core.longpaths true`.
+
+Managed Gateway startup uses a Scheduled Task with the current user's S4U
+principal, boot and logon triggers, and a direct `cmd.exe` action for the readable
+`gateway.cmd` script. It can run before login without storing a password.
+S4U does not provide Windows network credentials or access to encrypted files;
+installations that need those capabilities can retain an operator-configured
+Password task. Reinstall refreshes its launcher files without replacing its
+account, credentials, action, or triggers.
+
+The installer reports the selected startup mode. Node hosts retain per-user
+interactive tasks for desktop access. If the account cannot be identified or
+task creation is denied, the desktop task or Startup-folder fallback requires
+interactive logon; it cannot provide unattended boot startup. Run installation
+from an elevated terminal as the intended service user to register boot tasks.
+`openclaw doctor --fix` migrates recognized older Gateway definitions from
+interactive logon to unattended startup, backing up the definition and launcher
+before repair. Custom definitions remain operator-owned.
 
 If you append output redirection to the `gateway.cmd` launch line, quote the
 entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.
@@ -161,11 +182,35 @@ Unquoted environment expansions can leave filename fragments in the Gateway's
 arguments; OpenClaw preserves ambiguous launcher commands and refuses to terminate
 a listener whose ownership cannot be verified. Quote the target before retrying.
 
-The hidden launcher owns the supervised Gateway process tree. Ending the task
+The task launcher owns the supervised Gateway process tree. Ending the task
 with `schtasks /end /tn "OpenClaw Gateway"`, `Stop-ScheduledTask`, or Task
 Scheduler's **End** action terminates the Gateway and its descendants. After
 updating an older installation, run `openclaw gateway install --force` to
 regenerate the launcher if the update did not refresh it.
+
+For pnpm global installs, new launchers use the verified stable
+`node_modules/openclaw` link so package replacement does not invalidate them.
+If an older launcher already points at a deleted package generation, run
+`openclaw gateway install --force` from the current installation to rewrite
+`gateway.cmd`. Without `--force`, a registered task can be left unchanged.
+
+Reinstalling a managed Scheduled Task stops and settles its previous process
+before publishing and starting the replacement. This also applies when both
+installations use Node or only the service arguments change. Status verifies
+the running process against the registered command; an older process with the
+same task name and port does not prove the replacement is running.
+
+Installation preserves the existing service lock and runtime-pin checks. A
+changed task or launcher blocks replacement. Ordinary installation failures use
+the service owner's existing recovery to restore the previous definition and
+running policy when ownership can still be verified. During an update, the
+updater retains recovery ownership. If recovery cannot be confirmed, inspect the
+reported Task Scheduler state before retrying.
+
+Status reports the effective task working directory while checking runtime intent
+against the generated launcher. The standard unattended task directory does not
+invalidate an unchanged runtime pin. Inspection does not reinstall the service
+or rewrite its pin; custom task directories remain operator-owned overrides.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
@@ -193,22 +238,22 @@ Doctor compares task definitions using Task Scheduler's defaults. An omitted
 export differences do not cause drift warnings or failed refresh verification.
 Explicitly disabled tasks and triggers are still reported.
 
-The task probe allows Windows PowerShell to inherit or create a console because
+The task check allows Windows PowerShell to inherit or create a console because
 some PowerShell 5.1 hosts fail inspection when console creation is disabled.
 Invoking it from an app without a console can briefly display a console window.
-Without an explicit caller deadline, each probe allows up to 60 seconds for
-PowerShell's cold startup. Registration inspection uses the same native probe
+Without an explicit caller deadline, each check allows up to 60 seconds for
+PowerShell's cold startup. Registration inspection uses the same native check
 and shares its budget with any Startup-folder checks. Explicit inspection
 budgets replace the default allowance. Direct lifecycle commands retain their
 existing limits. Access-denied and timeout results remain inspection failures,
 not proof that a task is absent.
-If inspection fails, Doctor and update refusals include the underlying probe
+If inspection fails, Doctor and update refusals include the underlying check
 detail; an empty response identifies the exit code and reports that PowerShell
 produced no output.
 
-During previous-Gateway readiness verification, each Scheduled Task runtime probe allows at most five seconds, or the shorter remaining budget. Other service inspections retain their caller's budget, including the longer allowance for verifying that a runtime rebuild is safe.
+During previous-Gateway readiness verification, each Scheduled Task runtime check allows at most five seconds, or the shorter remaining budget. Other service inspections retain their caller's budget, including the longer allowance for verifying that a runtime rebuild is safe.
 
-During update preflight, Scheduled Task inspection uses the update's `--timeout` budget. A registration or runtime timeout retries the complete strict inspection once. If inspection remains unavailable, the update reports the enforced budget and probe detail, preserves the recorded service definition, and skips automatic service restart. Inspect the service with `openclaw gateway status --deep`, then restart it manually after the update. Losing verified ownership after admission blocks the service mutation.
+During update preflight, Scheduled Task inspection uses the update's `--timeout` budget. A registration or runtime timeout retries the complete strict inspection once. If inspection remains unavailable, the update reports the enforced budget and check detail, preserves the recorded service definition, and skips automatic service restart. Inspect the service with `openclaw gateway status --deep`, then restart it manually after the update. Losing verified ownership after admission blocks the service mutation.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,
 without compiling C# or launching PowerShell for their permissions. The owner,
@@ -230,6 +275,26 @@ For CLI-only use without a managed Gateway service:
 openclaw onboard --non-interactive --accept-risk --skip-health
 openclaw gateway run
 ```
+
+### Updating from 2026.9.4
+
+The published 2026.9.4 Windows updater retains an old database reader in its
+service handoff. A target that migrates shared state beyond schema 17 can make
+that callback fail after activation. During a running 9.4 update, the candidate's
+package lifecycle asks Doctor's read-only preflight to refuse this migration
+while an updater driver has not been confirmed stopped. A failed npm stage leaves
+the original package and Gateway in place, before the old updater enters repair.
+The CLI preflight also retains this check when package scripts were skipped;
+that later refusal can be masked by a cleanup error in the old repair path.
+This containment does not complete the automatic update.
+
+Wait for the updater to exit and review its result. To upgrade, create a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+and use the existing [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+from an independent shell. Keep the original service account, package prefix,
+profile, and state/config overrides. Stop the Gateway through its owner before
+replacing the package, run the newly installed Doctor, then start and verify the
+Gateway. Do not lower schema markers or run an older build against migrated data.
 
 ## WSL2 Gateway
 
@@ -345,6 +410,16 @@ Notes:
 - Use `listenaddress=0.0.0.0` for LAN access, `127.0.0.1` for local-only access.
 
 ## Troubleshooting
+
+### The Gateway Scheduled Task is disabled
+
+`openclaw gateway status` and Doctor name a registered but **DISABLED** task and
+show the recovery command. Run `openclaw gateway start` or `openclaw doctor --fix`
+to re-enable and start the managed Gateway. Use the same profile and state/config
+overrides as the installation. Recovery verifies the registered launcher and
+task ownership before enabling it; a foreign or unverifiable task is left
+unchanged with an explanation. A disabled task cannot start automatically after
+login or reboot until it is re-enabled.
 
 ### The Scheduled Task stops before the Gateway is ready
 

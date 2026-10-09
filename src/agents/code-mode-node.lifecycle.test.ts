@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
@@ -75,23 +78,129 @@ const input = {
     maxSnapshotBytes: 1024,
   },
 };
-const run = () => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 });
+let host: LegacyPluginSdkResourceHost;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+const run = () => host.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+
+beforeEach(() => {
+  host = new LegacyPluginSdkResourceHost();
+  scheduler = createTestGatewayScheduler("fake-timers");
+  host.bindScheduler(scheduler);
+});
 
 afterEach(async () => {
-  fixture.workerUrl += ".next";
-  await run();
+  await host.close();
+  await scheduler.stop();
 });
 
 describe("Node Code Mode worker custody", () => {
-  it("reuses idle workers within five minutes and expires each after inactivity", async () => {
+  it("joins its native workers at host close without retiring a sibling host", async () => {
+    const sibling = new LegacyPluginSdkResourceHost();
+    const siblingScheduler = createTestGatewayScheduler();
+    sibling.bindScheduler(siblingScheduler);
+    const released = createDeferred();
+    const retiring = createDeferred();
+    try {
+      await run();
+      const owned = fixture.pools.at(-1)!;
+      await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+      const survivor = fixture.pools.at(-1)!;
+      expect(survivor).not.toBe(owned);
+      owned.close.mockImplementationOnce(async () => {
+        retiring.resolve();
+        await released.promise;
+        owned.isClosed = true;
+      });
+      const completed = vi.fn();
+      const closing = host.close().then(completed);
+      await retiring.promise;
+      expect(completed).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(survivor.isClosed).toBe(false);
+      released.resolve();
+      await closing;
+      const count = fixture.pools.length;
+      await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+      expect(fixture.pools).toHaveLength(count);
+      expect(survivor.isClosed).toBe(false);
+      await expect(run()).rejects.toThrow("Plugin SDK resource host is closed");
+    } finally {
+      released.resolve();
+      await sibling.close();
+      await siblingScheduler.stop();
+    }
+  });
+
+  it.each(["standalone", "runtime changed"] as const)(
+    "closes a completed worker when %s prevents idle retention",
+    async (reason) => {
+      let previous: (typeof fixture.pools)[number] | undefined;
+      if (reason === "runtime changed") {
+        await run();
+        previous = fixture.pools.at(-1)!;
+        previous.run.mockImplementationOnce(async () => {
+          fixture.workerUrl += ".updated";
+          return fixture.completed;
+        });
+      }
+      expect(
+        await (reason === "standalone"
+          ? nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 })
+          : run()),
+      ).toMatchObject({ status: "completed" });
+      expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
+    },
+  );
+
+  it.each(["host", "idle"] as const)(
+    "joins failed %s retirement before acquiring a successor",
+    async (reason) => {
+      const previous = reason === "host" ? new LegacyPluginSdkResourceHost() : host;
+      const previousScheduler = reason === "host" ? createTestGatewayScheduler() : scheduler;
+      if (reason === "host") {
+        previous.bindScheduler(previousScheduler);
+      }
+      await previous.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+      const retired = fixture.pools.at(-1)!;
+      const count = fixture.pools.length;
+      retired.close.mockRejectedValueOnce(new Error("native exit uncertain"));
+      if (reason === "host") {
+        await expect(previous.close()).rejects.toThrow(
+          "Plugin SDK resources could not all be disposed",
+        );
+      } else {
+        fixture.workerUrl += ".updated";
+        await expect(run()).rejects.toThrow("native exit uncertain");
+      }
+      expect(retired.isClosed).toBe(false);
+      expect(fixture.pools).toHaveLength(count);
+      expect(await run()).toMatchObject({ status: "completed" });
+      expect(retired.close).toHaveBeenCalledTimes(2);
+      expect(retired.isClosed).toBe(true);
+      expect(fixture.pools).toHaveLength(count + 1);
+      if (reason === "host") {
+        await previousScheduler.stop();
+      }
+    },
+  );
+
+  it("reuses idle workers and expires them without retaining completed caller context", async () => {
+    const caller = new AsyncLocalStorage<string>();
+    const retiredContexts: Array<string | undefined> = [];
     vi.useFakeTimers();
     try {
-      await Promise.all([run(), run()]);
+      await caller.run("completed-turn", () => Promise.all([run(), run()]));
       const count = fixture.pools.length;
       const previous = fixture.pools.at(-1)!;
       const reused = fixture.pools.at(-2)!;
+      for (const pool of [previous, reused]) {
+        pool.close.mockImplementation(async () => {
+          retiredContexts.push(caller.getStore());
+          pool.isClosed = true;
+        });
+      }
       await vi.advanceTimersByTimeAsync(70_000);
-      expect(await run()).toMatchObject({ status: "completed" });
+      expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
       expect(fixture.pools).toHaveLength(count);
       expect(previous.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
@@ -99,7 +208,9 @@ describe("Node Code Mode worker custody", () => {
       expect(reused.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reused.isClosed).toBe(true);
+      expect(retiredContexts).toEqual([undefined, undefined]);
     } finally {
+      caller.disable();
       vi.useRealTimers();
     }
   });
@@ -135,8 +246,10 @@ describe("Node Code Mode worker custody", () => {
       fixture.workerUrl += ".updated";
       const controller = new AbortController();
       let observed: unknown;
-      const execution = nodeCodeModeExecutor
-        .execute(input, { timeoutMs: 3000, signal: controller.signal })
+      const execution = host
+        .run(() =>
+          nodeCodeModeExecutor.execute(input, { timeoutMs: 3000, signal: controller.signal }),
+        )
         .then((result) => {
           observed = result;
           return result;
@@ -206,9 +319,8 @@ describe("Node Code Mode worker custody", () => {
           previous.isClosed = true;
         });
         fixture.workerUrl += ".updated";
-        const result = await nodeCodeModeExecutor.execute(
-          { ...input, executionTimeoutMs: 300 },
-          { timeoutMs: 3000 },
+        const result = await host.run(() =>
+          nodeCodeModeExecutor.execute({ ...input, executionTimeoutMs: 300 }, { timeoutMs: 3000 }),
         );
         if (retirementMs < input.config.timeoutMs) {
           expect(result.status).toBe("completed");
@@ -251,30 +363,6 @@ describe("Node Code Mode worker custody", () => {
     expect(previous.run).toHaveBeenCalledTimes(previousExecutions);
     expect(sibling.isClosed).toBe(true);
     expect(fixture.pools.at(-1)?.url).toBe(fixture.workerUrl);
-  });
-
-  it("retains failed idle retirement and joins its native retry before allocating a successor", async () => {
-    await run();
-    const previous = fixture.pools.at(-1)!;
-    const count = fixture.pools.length;
-    previous.close.mockRejectedValueOnce(new Error("native exit uncertain"));
-    fixture.workerUrl += ".updated";
-    await expect(run()).rejects.toThrow("native exit uncertain");
-    expect(fixture.pools).toHaveLength(count);
-    expect(await run()).toMatchObject({ status: "completed" });
-    expect(previous.close).toHaveBeenCalledTimes(2);
-    expect(fixture.pools).toHaveLength(count + 1);
-  });
-
-  it("retires a completing worker when its runtime entry changed during execution", async () => {
-    await run();
-    const previous = fixture.pools.at(-1)!;
-    previous.run.mockImplementationOnce(async () => {
-      fixture.workerUrl += ".updated";
-      return fixture.completed;
-    });
-    expect(await run()).toMatchObject({ status: "completed" });
-    expect(previous.isClosed).toBe(true);
   });
 
   it("does not release an excess completed pool after native cleanup fails", async () => {

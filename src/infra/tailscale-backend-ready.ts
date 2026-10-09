@@ -50,18 +50,21 @@ export async function waitForTailscaleBackendReady(params: {
   exec?: typeof runExec;
   deadlineMs?: number;
   pollMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const exec = params.exec ?? runExec;
   const pollMs = params.pollMs ?? TAILSCALE_BACKEND_READY_POLL_MS;
   const deadline = Date.now() + (params.deadlineMs ?? TAILSCALE_BACKEND_READY_WAIT_MS);
   let announced: string | undefined;
   for (;;) {
+    params.signal?.throwIfAborted();
     let pending: string;
     try {
       const { stdout } = await exec(params.bin, [...(params.prefix ?? []), "status", "--json"], {
         timeoutMs: 5000,
-        maxBuffer: 400_000,
+        maxBuffer: 16 * 1024 * 1024,
         logOutput: false,
+        signal: params.signal,
       });
       const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
       const state = typeof parsed.BackendState === "string" ? parsed.BackendState : undefined;
@@ -70,6 +73,7 @@ export async function waitForTailscaleBackendReady(params: {
       }
       pending = state;
     } catch (error) {
+      params.signal?.throwIfAborted();
       if (!isTransientTailscaleStatusError(error)) {
         return;
       }
@@ -82,6 +86,8 @@ export async function waitForTailscaleBackendReady(params: {
       params.info(`waiting for the local Tailscale daemon (${pending})`);
       announced = pending;
     }
-    await sleep(pollMs);
+    await sleep(pollMs, undefined, { signal: params.signal }).finally(() =>
+      params.signal?.throwIfAborted(),
+    );
   }
 }

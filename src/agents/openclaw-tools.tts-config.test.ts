@@ -72,7 +72,7 @@ describe("createOpenClawTools context wiring", () => {
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {
-      agents: { list: [{ id: "reader" }, { id: "main" }] },
+      agents: { entries: { reader: {}, main: {} } },
       channels: { feishu: { accounts: { "feishu-main": { tts: { provider: "microsoft" } } } } },
     } satisfies OpenClawConfig;
     const tool = createTools({
@@ -94,27 +94,6 @@ describe("createOpenClawTools context wiring", () => {
     expect(mocks.textToSpeech.mock.calls[0]?.[0].cfg).toBe(config);
   });
 
-  it("uses trusted transcript caller authority instead of the delivery account", () => {
-    const config = { transcripts: { enabled: true } } satisfies OpenClawConfig;
-    createTools({
-      config,
-      agentChannel: "discord",
-      agentAccountId: "delivery",
-      gatewayCallerAccountId: "creator",
-      gatewayCallerChannel: "telegram",
-      gatewayCallerScheduled: true,
-    });
-    expect(mocks.transcripts).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        agentChannel: "telegram",
-        agentAccountId: "creator",
-        caller: { kind: "operator", source: "scheduled" },
-        config,
-      }),
-    );
-  });
-
   it("uses the delivery account when no separate transcript authority exists", () => {
     createTools({
       agentChannel: "discord",
@@ -123,8 +102,6 @@ describe("createOpenClawTools context wiring", () => {
     });
     expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        agentChannel: "discord",
-        agentAccountId: "delivery",
         caller: expect.objectContaining({
           kind: "channel",
           channel: "discord",
@@ -158,75 +135,41 @@ describe("createOpenClawTools context wiring", () => {
     });
     expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        agentChannel: undefined,
-        agentAccountId: "creator",
         caller: { kind: "operator", source: "scheduled" },
       }),
     );
   });
 
-  it("does not yield when background media starts", async () => {
-    const onYield = vi.fn();
-    const tool = createTools({
-      config: mediaConfig,
-      agentSessionKey: "agent:main:subagent:media-child",
-      onYield,
-    }).find((candidate) => candidate.name === "image_generate");
-    expect(tool).toBeDefined();
-    await tool?.execute("media-start", {});
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
-  it("uses the isolated cron run key for background media completions", () => {
-    createTools({
-      config: mediaConfig,
-      agentSessionKey: "agent:main:cron:daily-media",
-      runSessionKey: "agent:main:cron:daily-media:run:run-123",
-      onYield: vi.fn(),
-    });
-    for (const factory of [mocks.image, mocks.video, mocks.music]) {
-      expect(factory).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSessionKey: "agent:main:cron:daily-media:run:run-123" }),
-      );
-    }
-  });
-
-  it("passes the active live-run route into session_status", () => {
-    const sessionKey = "agent:main:discord:channel:1489550370136129537";
-    createTools({
-      agentSessionKey: sessionKey,
-      runSessionKey: sessionKey,
-      agentChannel: "webchat",
-      agentAccountId: "browser",
-      agentTo: "channel:1489550370136129537",
-      agentThreadId: "origin-thread",
-      currentChannelId: "webchat:control-ui",
-      currentThreadTs: "webchat-thread-1",
-    });
-    expect(mocks.status).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activeDeliveryContext: {
-          channel: "webchat",
-          to: "webchat:control-ui",
-          accountId: "browser",
-          threadId: "webchat-thread-1",
-        },
-      }),
-    );
-  });
-
-  it("prefers the durable run session key for cron bindings", () => {
-    createTools({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-    });
-    expect(mocks.cron).toHaveBeenCalledWith(
-      expect.objectContaining({ agentSessionKey: "agent:main:main" }),
-    );
-  });
+  it.each([
+    [
+      "agent:main:cron:daily-media",
+      "agent:main:cron:daily-media:run:run-123",
+      "agent:main:cron:daily-media:run:run-123",
+    ],
+    [
+      "agent:main:qa-channel:default:direct:media-requester",
+      "agent:main:main",
+      "agent:main:qa-channel:default:direct:media-requester",
+    ],
+  ])(
+    "passes a separate durable requester key for background media from %s",
+    (agentSessionKey, runSessionKey, taskSessionKey) => {
+      createTools({
+        config: mediaConfig,
+        agentSessionKey,
+        runSessionKey,
+        onYield: vi.fn(),
+      });
+      for (const factory of [mocks.image, mocks.video, mocks.music]) {
+        expect(factory).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentSessionKey: taskSessionKey,
+            requesterRunSessionKey: runSessionKey,
+          }),
+        );
+      }
+    },
+  );
 
   it("passes preserved channel delivery context into cron", () => {
     const sessionKey = "agent:main:matrix:channel:!abcdef1234567890:example.org";

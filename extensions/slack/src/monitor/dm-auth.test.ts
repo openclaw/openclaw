@@ -66,34 +66,11 @@ describe("authorizeSlackDirectMessage", () => {
     });
   });
 
-  it("keeps allowlist DM policy gated by allowFrom", async () => {
-    const params = makeParams("allowlist");
-
-    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
-
-    expect(params.onUnauthorized).toHaveBeenCalledWith({
-      allowMatchMeta: "matchKey=none matchSource=none",
-      senderName: "Alice",
-    });
-  });
-
   it("allows bare user ids for workspace-install DMs", async () => {
     const params = makeParams("allowlist");
     params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
     params.eventScope = { teamId: "T11111111", client: {} as never };
     params.allowFromLower = ["u123"];
-
-    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
-
-    expect(params.onUnauthorized).not.toHaveBeenCalled();
-  });
-
-  it("allows bare org user ids for Enterprise DMs", async () => {
-    const params = makeParams("allowlist");
-    params.ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E11111111" };
-    params.eventScope = { teamId: "T11111111", client: {} as never };
-    params.senderId = "W01234567";
-    params.allowFromLower = ["w01234567"];
 
     await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
 

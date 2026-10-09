@@ -297,28 +297,6 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     });
   });
 
-  it("preserves account legacy scalar streaming overrides", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            streaming: { mode: "progress", progress: { label: "Shelling" } },
-            accounts: {
-              work: {
-                botToken: "xoxb-work",
-                appToken: "xapp-work",
-                streaming: "off",
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      accountId: "work",
-    });
-
-    expect(resolved.config.streaming).toBe("off");
-  });
-
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
     const resolved = resolveSlackAccount({
       cfg: slackConfig({

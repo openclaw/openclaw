@@ -17,10 +17,6 @@ type RegisteredDiagnosticTracePropagationBridge = DiagnosticTracePropagationBrid
   unknown
 >;
 
-type DiagnosticTracePropagationResolution =
-  | { active: false }
-  | { active: true; traceContext: DiagnosticTraceContext | undefined };
-
 type DiagnosticTracePropagationState = {
   marker: symbol;
   bridges: Set<RegisteredDiagnosticTracePropagationBridge>;
@@ -29,13 +25,6 @@ type DiagnosticTracePropagationState = {
 const DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY = Symbol.for(
   "openclaw.diagnosticTracePropagation.state.v1",
 );
-
-function createDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
-  return {
-    marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
-    bridges: new Set(),
-  };
-}
 
 function isDiagnosticTracePropagationState(
   value: unknown,
@@ -55,7 +44,10 @@ function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
   if (isDiagnosticTracePropagationState(existing)) {
     return existing;
   }
-  const state = createDiagnosticTracePropagationState();
+  const state: DiagnosticTracePropagationState = {
+    marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
+    bridges: new Set(),
+  };
   Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY, {
     configurable: true,
     enumerable: false,
@@ -121,26 +113,6 @@ export function prepareDiagnosticTracePropagation(
   }
 }
 
-function resolveDiagnosticTraceContextForPropagation(
-  traceContext: DiagnosticTraceContext,
-): DiagnosticTracePropagationResolution {
-  const bridge = activeDiagnosticTracePropagationBridge();
-  if (!bridge) {
-    return { active: false };
-  }
-  try {
-    return {
-      active: true,
-      traceContext: bridge.resolveTraceContext(traceContext),
-    };
-  } catch (error) {
-    // An active exporter owns propagation. Falling back to diagnostic ids here
-    // would name a parent span that the exporter never created.
-    console.error(`[diagnostic-trace-propagation] resolve error: ${String(error)}`);
-    return { active: true, traceContext: undefined };
-  }
-}
-
 /** Formats the exporter-owned context when one is active, suppressing unresolved identities. */
 export function formatPropagatedDiagnosticTraceparent(
   traceContext: DiagnosticTraceContext | undefined,
@@ -148,8 +120,20 @@ export function formatPropagatedDiagnosticTraceparent(
   if (!traceContext) {
     return undefined;
   }
-  const resolution = resolveDiagnosticTraceContextForPropagation(traceContext);
-  return formatDiagnosticTraceparent(resolution.active ? resolution.traceContext : traceContext);
+  const bridge = activeDiagnosticTracePropagationBridge();
+  if (!bridge) {
+    return formatDiagnosticTraceparent(traceContext);
+  }
+  let propagated: DiagnosticTraceContext | undefined;
+  try {
+    propagated = bridge.resolveTraceContext(traceContext);
+  } catch (error) {
+    // An active exporter owns propagation. Falling back to diagnostic ids here
+    // would name a parent span that the exporter never created.
+    console.error(`[diagnostic-trace-propagation] resolve error: ${String(error)}`);
+    return undefined;
+  }
+  return formatDiagnosticTraceparent(propagated);
 }
 
 export function resetDiagnosticTracePropagationForTest(): void {

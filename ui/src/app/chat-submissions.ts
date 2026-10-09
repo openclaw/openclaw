@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
 
@@ -108,10 +109,7 @@ export function createChatSubmissions() {
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.message
         : null,
-    subscribeCreate: (listener: () => void) => {
-      createListeners.add(listener);
-      return () => createListeners.delete(listener);
-    },
+    subscribeCreate: (listener: () => void) => registerListener(createListeners, listener),
     readInitial,
     observeInitialSession: (sessionKey: string, owner: object | null, sessionId: string | null) => {
       const submission = readInitial(sessionKey, owner);

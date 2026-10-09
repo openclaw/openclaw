@@ -1,36 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
-import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
+import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
 import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
-
-const { runDuckDuckGoSearch } = vi.hoisted(() => ({
-  runDuckDuckGoSearch: vi.fn(async (params: Record<string, unknown>) => params),
-}));
-
-vi.mock("./ddg-client.js", () => ({
-  runDuckDuckGoSearch,
-}));
+import { runDuckDuckGoSearch } from "./ddg-client.js";
 
 describe("duckduckgo web search provider", () => {
-  let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let runActualDuckDuckGoSearch: typeof import("./ddg-client.js").runDuckDuckGoSearch;
-
-  afterAll(() => {
-    vi.doUnmock("./ddg-client.js");
-    vi.resetModules();
-  });
-
   beforeAll(async () => {
-    ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ runDuckDuckGoSearch: runActualDuckDuckGoSearch } =
-      await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
-  });
-
-  beforeEach(() => {
-    runDuckDuckGoSearch.mockReset();
-    runDuckDuckGoSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -53,7 +30,7 @@ describe("duckduckgo web search provider", () => {
         headers: { "content-type": "text/html" },
       }),
     );
-    return await runActualDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
+    return await runDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
   }
 
   function readSearchResults(payload: Record<string, unknown>) {
@@ -68,49 +45,9 @@ describe("duckduckgo web search provider", () => {
     }>;
   }
 
-  it("exposes keyless metadata and enables the plugin in config", () => {
-    const provider = createDuckDuckGoWebSearchProvider();
-    if (!provider.applySelectionConfig) {
-      throw new Error("Expected applySelectionConfig to be defined");
-    }
-    const applied = provider.applySelectionConfig({});
-
-    expect(provider.id).toBe("duckduckgo");
-    expect(provider.label).toBe("DuckDuckGo Search (experimental)");
-    expect(provider.onboardingScopes).toEqual(["text-inference"]);
-    expect(createDuckDuckGoWebSearchContractProvider().onboardingScopes).toEqual([
-      "text-inference",
-    ]);
-    expect(provider.requiresCredential).toBe(false);
-    expect(provider.credentialPath).toBe("");
-    expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);
-  });
-
-  it("maps generic tool arguments into DuckDuckGo search params", async () => {
-    const config = pluginConfig({ region: "de-de" });
-    const tool = createSearchTool(config);
-    const response = { results: [{ url: "https://example.com" }] };
-    runDuckDuckGoSearch.mockResolvedValueOnce(response);
-
-    const result = await tool.execute({
-      query: "openclaw docs",
-      count: 4,
-      region: "us-en",
-      safeSearch: "off",
-    });
-
-    expect(runDuckDuckGoSearch).toHaveBeenCalledWith({
-      config,
-      query: "openclaw docs",
-      count: 4,
-      region: "us-en",
-      safeSearch: "off",
-    });
-    expect(result).toEqual(response);
-  });
-
   it("rejects fractional and out-of-range counts before searching", async () => {
     const tool = createSearchTool();
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected search"));
 
     await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
@@ -118,26 +55,19 @@ describe("duckduckgo web search provider", () => {
     await expect(tool.execute({ query: "openclaw docs", count: 11 })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
     );
-    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("forwards caller cancellation without starting an already canceled search", async () => {
+  it("rejects an already canceled search without fetching", async () => {
     const tool = createSearchTool();
-    const active = new AbortController();
-
-    await tool.execute({ query: "duckduckgo cancellation forwarding" }, { signal: active.signal });
-
-    expect(runDuckDuckGoSearch).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: active.signal }),
-    );
-    runDuckDuckGoSearch.mockClear();
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected search"));
     const canceled = new AbortController();
     canceled.abort(new Error("DuckDuckGo caller canceled"));
 
     await expect(
       tool.execute({ query: "duckduckgo pre-canceled" }, { signal: canceled.signal }),
     ).rejects.toThrow("DuckDuckGo caller canceled");
-    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
@@ -154,10 +84,11 @@ describe("duckduckgo web search provider", () => {
         }),
     );
     const controller = new AbortController();
-    const result = runActualDuckDuckGoSearch({
-      query: "duckduckgo in-flight cancellation",
-      signal: controller.signal,
-    });
+    const tool = createSearchTool();
+    const result = tool.execute(
+      { query: "duckduckgo in-flight cancellation" },
+      { signal: controller.signal },
+    );
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     controller.abort(new Error("DuckDuckGo request canceled in flight"));
@@ -169,7 +100,7 @@ describe("duckduckgo web search provider", () => {
       }),
     );
 
-    await runActualDuckDuckGoSearch({ query: "duckduckgo in-flight cancellation" });
+    await tool.execute({ query: "duckduckgo in-flight cancellation" });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -178,7 +109,7 @@ describe("duckduckgo web search provider", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("rate limited", { status: 429 }));
 
     await expect(
-      runActualDuckDuckGoSearch({ query: "duckduckgo rate limited", cacheTtlMinutes: 0 }),
+      runDuckDuckGoSearch({ query: "duckduckgo rate limited", cacheTtlMinutes: 0 }),
     ).rejects.toMatchObject({
       status: 429,
       statusCode: 429,
@@ -197,7 +128,7 @@ describe("duckduckgo web search provider", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(streamed.response);
 
     await expect(
-      runActualDuckDuckGoSearch({
+      runDuckDuckGoSearch({
         query: "duckduckgo bounded response",
         cacheTtlMinutes: 0,
       }),
@@ -220,49 +151,14 @@ describe("duckduckgo web search provider", () => {
     expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "off" }))).toBe("off");
   });
 
-  it("keeps invalid numeric entities intact in returned results", async () => {
-    const payload = await runHtmlSearch(
-      "duckduckgo invalid numeric entities",
-      `
-        <a class="result__a" href="https://example.com/entities">
-          Result &#99999999; Hex &#x110000; Smile &#128512;
-        </a>
-        <a class="result__snippet">Bad &#55296; &#xD800; &#xDFFF;</a>
-      `,
-    );
-    const [result] = readSearchResults(payload);
-
-    expect(result?.title).toContain("Result &#99999999; Hex &#x110000; Smile 😀");
-    // Surrogate-range entities would become lone UTF-16 surrogates; preserve their source text.
-    expect(result?.snippet).toContain("Bad &#55296; &#xD800; &#xDFFF;");
-  });
-
-  it("does not double-decode escaped entities in returned results", async () => {
-    const payload = await runHtmlSearch(
-      "duckduckgo escaped entities",
-      `
-        <a class="result__a" href="https://example.com/escaping">
-          How to escape &amp;lt; in HTML
-        </a>
-        <a class="result__snippet">a&amp;#39;b and a&#x26;amp;b</a>
-      `,
-    );
-    const [result] = readSearchResults(payload);
-
-    // Decoding &amp; first would turn the literal "&lt;" into "<" and corrupt the result.
-    expect(result?.title).toContain("How to escape &lt; in HTML");
-    expect(result?.title).not.toContain("How to escape < in HTML");
-    expect(result?.snippet).toContain("a&#39;b and a&amp;b");
-  });
-
-  it("returns results when href appears before class", async () => {
+  it("parses href-before-class results without splitting highlighted words", async () => {
     const payload = await runHtmlSearch(
       "duckduckgo href ordering",
       `
         <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
-          Example &amp; Co
+          Example &#38; Co Caf<b>é</b> guide
         </a>
-        <a class="result__snippet">Fast&nbsp;search &hellip; with details</a>
+        <a class="result__snippet">Fast&nbsp;search &hellip; with caf<b>é</b> details</a>
         <a class="result__a" href="https://example.org/direct">Direct result</a>
         <a class="result__snippet">Second snippet</a>
       `,
@@ -271,30 +167,15 @@ describe("duckduckgo web search provider", () => {
 
     expect(results).toHaveLength(2);
     expect(results[0]).toMatchObject({ url: "https://example.com", siteName: "example.com" });
-    expect(results[0]?.title).toContain("Example & Co");
-    expect(results[0]?.snippet).toContain("Fast search ... with details");
+    expect(results[0]?.title).toContain("Example & Co Café guide");
+    expect(results[0]?.title).not.toContain("Caf é");
+    expect(results[0]?.snippet).toContain("Fast search ... with café details");
     expect(results[1]).toMatchObject({
       url: "https://example.org/direct",
       siteName: "example.org",
     });
     expect(results[1]?.title).toContain("Direct result");
     expect(results[1]?.snippet).toContain("Second snippet");
-  });
-
-  it("keeps inline result markup from splitting returned words", async () => {
-    const payload = await runHtmlSearch(
-      "duckduckgo inline result markup",
-      `
-        <a class="result__a" href="https://example.com/cafe">Caf<b>é</b> guide</a>
-        <a class="result__snippet">Find the best caf<b>é</b> near you.</a>
-      `,
-    );
-    const [result] = readSearchResults(payload);
-
-    expect(result?.title).toContain("Café guide");
-    expect(result?.title).not.toContain("Caf é");
-    expect(result?.url).toBe("https://example.com/cafe");
-    expect(result?.snippet).toContain("Find the best café near you.");
   });
 
   it("rejects bot challenge pages without flagging ordinary result snippets", async () => {
@@ -312,5 +193,76 @@ describe("duckduckgo web search provider", () => {
     expect(result?.url).toBe("https://example.com/challenge");
     expect(result?.title).toContain("Coding Challenge");
     expect(result?.snippet).toContain("A fun coding challenge for interview prep.");
+  });
+
+  it.each([0, 1])(
+    "applies the current %s-minute TTL to cached results",
+    async (cacheTtlMinutes) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      let requests = 0;
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        requests += 1;
+        return new Response(
+          `<a class="result__a" href="https://example.com/${requests}">Result ${requests}</a>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      });
+      const search = async (ttl: number) => {
+        const searchConfig = { cacheTtlMinutes: ttl };
+        const tool = createSearchTool({ tools: { web: { search: searchConfig } } });
+        return await tool.execute({ query: `DuckDuckGo current TTL ${cacheTtlMinutes}` });
+      };
+
+      const original = await search(15);
+      expect(await search(15)).toEqual({ ...original, cached: true });
+      expect(fetch).toHaveBeenCalledTimes(1);
+
+      if (cacheTtlMinutes > 0) {
+        clock.mockReturnValue(Date.now() + 60_000);
+      }
+      const fresh = await search(cacheTtlMinutes);
+      expect(fresh.cached).toBeUndefined();
+      expect(fresh.results).toEqual([expect.objectContaining({ url: "https://example.com/2" })]);
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        const next = await search(0);
+        expect(next.cached).toBeUndefined();
+        expect(next.results).toEqual([expect.objectContaining({ url: "https://example.com/3" })]);
+        expect(await search(15)).toEqual({ ...original, cached: true });
+        expect(fetch).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await search(1)).toEqual({ ...fresh, cached: true });
+        expect(fetch).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("returns the first two valid results with their own snippets", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        `
+          <a class="result__a" href="https://example.com/empty-title"></a>
+          <a class="result__snippet">Discarded empty-title snippet</a>
+          <a class="result__a" href="https://example.com/first">First</a>
+          <a class="result__snippet">First snippet</a>
+          <a class="result__a" href="">Missing URL</a>
+          <a class="result__snippet">Discarded missing-URL snippet</a>
+          <a class="result__a" href="https://example.com/second">Second</a>
+          <a class="result__a" href="https://example.com/third">Third</a>
+          <a class="result__snippet">Third snippet</a>
+        `,
+        { headers: { "content-type": "text/html" } },
+      ),
+    );
+    const tool = createSearchTool({ tools: { web: { search: { cacheTtlMinutes: 0 } } } });
+    const result = await tool.execute({ query: "DuckDuckGo valid result count", count: 2 });
+
+    const expected = [
+      { url: "https://example.com/first", snippet: expect.stringContaining("First snippet") },
+      { url: "https://example.com/second", snippet: "" },
+    ];
+    expect(result).toMatchObject({ count: expected.length, results: expected });
+    expect(JSON.stringify(result)).not.toContain("Discarded");
   });
 });

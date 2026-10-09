@@ -1,18 +1,12 @@
 import type { ChannelApprovalAdapter, ChannelApprovalCapability } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-/**
- * Returns the approval capability exposed by a channel plugin.
- */
 export function resolveChannelApprovalCapability(
   plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): ChannelApprovalCapability | undefined {
   return plugin?.approvalCapability;
 }
 
-/**
- * Projects a channel approval capability into the runtime approval adapter shape.
- */
 export function resolveChannelApprovalAdapter(
   plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): ChannelApprovalAdapter | undefined {

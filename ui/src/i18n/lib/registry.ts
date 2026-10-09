@@ -34,11 +34,7 @@ const LAZY_LOCALES = Object.keys(LAZY_LOCALE_REGISTRY) as LazyLocale[];
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
-  return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
-}
-
-function isLazyLocale(locale: Locale): locale is LazyLocale {
-  return LAZY_LOCALES.includes(locale as LazyLocale);
+  return SUPPORTED_LOCALES.some((locale) => locale === value);
 }
 
 export function resolveNavigatorLocale(browserLanguage: string): Locale {
@@ -62,7 +58,7 @@ export function resolveNavigatorLocale(browserLanguage: string): Locale {
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
-  if (!isLazyLocale(locale)) {
+  if (locale === DEFAULT_LOCALE) {
     return null;
   }
   const module: LocaleModule = await LAZY_LOCALE_REGISTRY[locale]();

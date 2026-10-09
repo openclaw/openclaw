@@ -1,9 +1,12 @@
 /** Module-level session MCP runtime manager entry APIs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { logWarn } from "../logger.js";
 import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  peekSessionMcpRuntimeManager,
+  releaseSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager-cleanup.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
@@ -30,20 +33,9 @@ export function setSessionMcpRuntimeScheduler(scheduler: GatewayScheduler): Prom
   ).setScheduler(scheduler);
 }
 
-function peekSessionMcpRuntimeManager():
-  | ReturnType<typeof createSessionMcpRuntimeManager>
-  | undefined {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  return Object.hasOwn(globalStore, SESSION_MCP_RUNTIME_MANAGER_KEY)
-    ? (globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] as ReturnType<
-        typeof createSessionMcpRuntimeManager
-      >)
-    : undefined;
-}
-
-export async function acquireSessionMcpRuntime(
-  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
-): Promise<SessionMcpRuntimeLease> {
+async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefined>(
+  acquire: (manager: SessionMcpRuntimeManager) => Promise<T>,
+): Promise<T> {
   const host = getBoundLegacyPluginSdkResourceHost();
   const scheduler = host?.scheduler;
   if (scheduler) {
@@ -51,32 +43,7 @@ export async function acquireSessionMcpRuntime(
     host?.assertOpen();
     scheduler.signal.throwIfAborted();
   }
-  const lease = await getSessionMcpRuntimeManager().acquire(params);
-  try {
-    host?.assertOpen();
-    scheduler?.signal.throwIfAborted();
-    return lease;
-  } catch (error) {
-    await releaseSessionMcpRuntime(lease);
-    throw error;
-  }
-}
-
-/**
- * Requester-scoped MCP runtime only (no static partition).
- * Shared-thread harnesses use this so static MCP stays harness-native.
- */
-export async function acquireRequesterScopedMcpRuntime(
-  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0],
-): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
-  const host = getBoundLegacyPluginSdkResourceHost();
-  const scheduler = host?.scheduler;
-  if (scheduler) {
-    await setSessionMcpRuntimeScheduler(scheduler);
-    host?.assertOpen();
-    scheduler.signal.throwIfAborted();
-  }
-  const lease = await getSessionMcpRuntimeManager().acquireRequesterScoped(params);
+  const lease = await acquire(getSessionMcpRuntimeManager());
   try {
     host?.assertOpen();
     scheduler?.signal.throwIfAborted();
@@ -87,6 +54,22 @@ export async function acquireRequesterScopedMcpRuntime(
     }
     throw error;
   }
+}
+
+export function acquireSessionMcpRuntime(
+  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
+): Promise<SessionMcpRuntimeLease> {
+  return acquireManagedRuntime((manager) => manager.acquire(params));
+}
+
+/**
+ * Requester-scoped MCP runtime only (no static partition).
+ * Shared-thread harnesses use this so static MCP stays harness-native.
+ */
+export function acquireRequesterScopedMcpRuntime(
+  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0],
+): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
+  return acquireManagedRuntime((manager) => manager.acquireRequesterScoped(params));
 }
 
 export function rememberAdvertisedScopedMcpCatalog(
@@ -143,39 +126,6 @@ export async function retireSessionMcpRuntime(params: {
     params.onError?.(error, sessionId, params.reason);
     return false;
   }
-}
-
-/** Releases an acquisition after its consumer has taken ownership, or after failure. */
-export async function releaseSessionMcpRuntime(
-  lease: Pick<SessionMcpRuntimeLease, "runtime" | "retireUnusedServers"> & {
-    releaseLease?: () => void;
-  },
-  retainedServerNames?: ReadonlySet<string>,
-): Promise<void> {
-  lease.releaseLease?.();
-  try {
-    if (retainedServerNames) {
-      await lease.retireUnusedServers?.(retainedServerNames);
-    }
-  } catch (error) {
-    logWarn(`bundle-mcp: unused server cleanup failed: ${String(error)}`);
-  } finally {
-    await completeDeferredSessionMcpRuntimeRetirement(lease.runtime).catch((error: unknown) => {
-      logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
-    });
-  }
-}
-
-/** Completes deferred retirement after its final run, view, or request lease releases. */
-export async function completeDeferredSessionMcpRuntimeRetirement(
-  runtime: SessionMcpRuntime,
-): Promise<boolean> {
-  return (
-    (await peekSessionMcpRuntimeManager()?.completeDeferredRetirement(
-      runtime.sessionId,
-      runtime,
-    )) ?? false
-  );
 }
 
 export async function retireSessionMcpRuntimeForSessionKey(params: {

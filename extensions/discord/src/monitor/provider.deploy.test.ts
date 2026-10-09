@@ -2,7 +2,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
-import { formatDiscordDeployErrorDetails } from "./provider.deploy-errors.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 
 type RestFn = (path: string, data?: unknown, query?: unknown) => Promise<unknown>;
@@ -111,17 +110,5 @@ describe("discord slash-command deploy REST logging", () => {
     expect(warnings[0]).toContain("(message send/receive unaffected)");
     // Per-request rest:error lines are verbose-only diagnostics.
     expect(error).not.toHaveBeenCalled();
-  });
-});
-
-describe("formatDiscordDeployErrorDetails", () => {
-  it("omits bodies that only repeat the message and code", () => {
-    expect(
-      formatDiscordDeployErrorDetails({
-        status: 400,
-        discordCode: 30032,
-        rawBody: { message: "Maximum number of application commands reached (100).", code: 30032 },
-      }),
-    ).toBe(" (status=400, code=30032)");
   });
 });

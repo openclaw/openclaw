@@ -1,7 +1,3 @@
-/**
- * Resolves Codex filesystem sandbox policy payloads into OpenClaw path/glob
- * checks for sandbox exec-server filesystem operations.
- */
 import { posix as pathPosix } from "node:path";
 import type { JsonObject } from "../protocol.js";
 import { requireObject, requireString } from "./json-rpc.js";
@@ -13,14 +9,7 @@ import type {
   ResolvedFsSandboxPolicy,
 } from "./types.js";
 
-/** Resolves request-local sandbox policy and asserts each requested path has the needed access. */
-export function assertFsSandboxAccess(
-  execServer: OpenClawExecServer,
-  record: JsonObject,
-  requests: Array<{ path: string; access: "read" | "write" }>,
-): void {
-  assertResolvedFsSandboxAccess(resolveFsSandboxPolicy(execServer, record), requests);
-}
+const FS_ACCESS_RANK = { read: 0, write: 1, none: 2 } satisfies Record<FsAccessMode, number>;
 
 /** Parses a Codex managed filesystem sandbox context into normalized access entries. */
 export function resolveFsSandboxPolicy(
@@ -78,21 +67,17 @@ function resolveFsSandboxEntry(entry: JsonObject, cwd: string): ResolvedFsSandbo
   const access = readFsAccessMode(entry.access);
   const pathSpec = requireObject(entry.path, "fs sandbox entry path");
   const pathType = requireString(pathSpec.type, "fs sandbox entry path type");
-  if (pathType === "path") {
-    return {
-      kind: "path",
-      path: normalizeSandboxAbsolutePath(
-        resolveExecServerPath(requireString(pathSpec.path, "fs sandbox path"), "fs sandbox path"),
-        "fs sandbox path",
-      ),
-      access,
-    };
-  }
-  if (pathType === "special") {
-    const path = resolveFsSpecialPath(
-      requireObject(pathSpec.value, "fs sandbox special path"),
-      cwd,
-    );
+  if (pathType === "path" || pathType === "special") {
+    const path =
+      pathType === "path"
+        ? normalizeSandboxAbsolutePath(
+            resolveExecServerPath(
+              requireString(pathSpec.path, "fs sandbox path"),
+              "fs sandbox path",
+            ),
+            "fs sandbox path",
+          )
+        : resolveFsSpecialPath(requireObject(pathSpec.value, "fs sandbox special path"), cwd);
     return path === undefined ? undefined : { kind: "path", path, access };
   }
   if (pathType === "glob_pattern") {
@@ -153,29 +138,26 @@ export function assertResolvedFsSandboxAccess(
   if (!policy?.unrestricted && policy) {
     for (const request of requests) {
       const access = resolveFsAccess(policy, request.path);
-      if (request.access === "read" && access === "none") {
-        throw new Error(`Codex fs sandbox denied read access to ${request.path}`);
-      }
-      if (request.access === "write" && access !== "write") {
-        throw new Error(`Codex fs sandbox denied write access to ${request.path}`);
+      if (request.access === "read" ? access === "none" : access !== "write") {
+        throw new Error(`Codex fs sandbox denied ${request.access} access to ${request.path}`);
       }
     }
   }
 }
 
 function resolveFsAccess(policy: ResolvedFsSandboxPolicy, rawPath: string): FsAccessMode {
-  if (policy.unrestricted) {
-    return "write";
-  }
   const target = normalizeSandboxAbsolutePath(rawPath, "fs path");
   let selected: { specificity: number; rank: number; access: FsAccessMode } | undefined;
   for (const entry of policy.entries) {
-    if (!fsSandboxEntryMatches(entry, target)) {
+    const matches =
+      entry.kind === "path" ? pathContains(entry.path, target) : entry.matcher.test(target);
+    if (!matches) {
       continue;
     }
+    const prefix = entry.kind === "path" ? entry.path : entry.literalPrefix;
     const candidate = {
-      specificity: fsSandboxEntrySpecificity(entry),
-      rank: fsAccessRank(entry.access),
+      specificity: prefix.split("/").filter(Boolean).length,
+      rank: FS_ACCESS_RANK[entry.access],
       access: entry.access,
     };
     if (
@@ -200,14 +182,19 @@ export function assertNoReadOnlyDescendant(
   }
   const target = normalizeSandboxAbsolutePath(rawPath, "fs path");
   const protectedDescendant = policy.entries.find((entry) => {
-    if (entry.access === "write" || !fsSandboxEntryCanAffectDescendant(entry, target)) {
+    if (entry.access === "write") {
       return false;
     }
     if (entry.kind === "glob") {
-      return true;
+      return pathContains(target, entry.literalPrefix) || pathContains(entry.literalPrefix, target);
     }
     const protectedPath = entry.path;
-    return protectedPath && resolveFsAccess(policy, protectedPath) !== "write";
+    return (
+      pathContains(target, protectedPath) &&
+      target !== protectedPath &&
+      protectedPath &&
+      resolveFsAccess(policy, protectedPath) !== "write"
+    );
   });
   if (protectedDescendant) {
     const protectedPath =
@@ -223,45 +210,11 @@ export function normalizeSandboxAbsolutePath(rawPath: string, label: string): st
   if (!rawPath || rawPath.includes("\0") || !rawPath.startsWith("/")) {
     throw new Error(`${label} must be an absolute sandbox path.`);
   }
-  const normalized = pathPosix.normalize(rawPath);
-  return normalized === "//" ? "/" : normalized;
+  return pathPosix.normalize(rawPath);
 }
 
-/** Returns true when target is root itself or a descendant of root. */
 export function pathContains(root: string, target: string): boolean {
   return root === "/" || target === root || target.startsWith(`${root}/`);
-}
-
-function fsSandboxEntryMatches(entry: ResolvedFsSandboxEntry, target: string): boolean {
-  if (entry.kind === "path") {
-    return pathContains(entry.path, target);
-  }
-  return entry.matcher.test(target);
-}
-
-function fsSandboxEntryCanAffectDescendant(entry: ResolvedFsSandboxEntry, target: string): boolean {
-  if (entry.kind === "path") {
-    return pathContains(target, entry.path) && target !== entry.path;
-  }
-  return pathContains(target, entry.literalPrefix) || pathContains(entry.literalPrefix, target);
-}
-
-function fsSandboxEntrySpecificity(entry: ResolvedFsSandboxEntry): number {
-  return pathSpecificity(entry.kind === "path" ? entry.path : entry.literalPrefix);
-}
-
-function pathSpecificity(filePath: string): number {
-  return filePath === "/" ? 0 : filePath.split("/").filter(Boolean).length;
-}
-
-function fsAccessRank(access: FsAccessMode): number {
-  if (access === "none") {
-    return 2;
-  }
-  if (access === "write") {
-    return 1;
-  }
-  return 0;
 }
 
 function normalizeSandboxGlobPattern(pattern: string): string {
@@ -325,19 +278,10 @@ function compileSandboxGlobCharacterClass(
     if (!char || char === "/") {
       throw new Error("fs sandbox glob character class cannot match path separators.");
     }
-    body += escapeSandboxGlobCharacterClassChar(char, body.length === 0);
+    body +=
+      char === "\\" || char === "]" || (body.length === 0 && char === "^") ? `\\${char}` : char;
   }
   throw new Error("fs sandbox glob character class must be closed.");
-}
-
-function escapeSandboxGlobCharacterClassChar(char: string, first: boolean): string {
-  if (char === "\\" || char === "]") {
-    return `\\${char}`;
-  }
-  if (first && char === "^") {
-    return "\\^";
-  }
-  return char;
 }
 
 function sandboxGlobLiteralPrefix(pattern: string): string {

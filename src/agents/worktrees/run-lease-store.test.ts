@@ -23,7 +23,7 @@ afterEach(async () => {
 it("settles exact lease deletions without host SQL or fsync and refuses a retired store", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-release-worker-") };
   const database = openOpenClawStateDatabase({ env });
-  insertRegistryWorktree(env, {
+  await insertRegistryWorktree(env, {
     id: "synthetic",
     name: "synthetic",
     repoFingerprint: "0123456789abcdef",

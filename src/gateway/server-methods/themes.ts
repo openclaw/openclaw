@@ -67,14 +67,12 @@ function requestOwner(options: ThemeRequest) {
     if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
       throw new Error("Theme request authority is no longer active.");
     }
-    if (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) {
-      throw new Error("The requesting profile changed. Ask again from your current profile.");
-    }
     if (
-      !runtimeIdentity &&
-      !participant &&
-      !client?.internal?.syntheticClient &&
-      client?.authenticatedUserProfile?.profileId !== capturedProfile
+      (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) ||
+      (!runtimeIdentity &&
+        !participant &&
+        !client?.internal?.syntheticClient &&
+        client?.authenticatedUserProfile?.profileId !== capturedProfile)
     ) {
       throw new Error("The requesting profile changed. Ask again from your current profile.");
     }
@@ -191,7 +189,7 @@ async function readThemes(
     ...(theme.definition ? { definition: theme.definition } : {}),
     ...(theme.artwork ? { artwork: theme.artwork } : {}),
   };
-  return { owner, entries, catalog, result };
+  return { entries, catalog, result };
 }
 
 async function writeThemes(
@@ -227,14 +225,12 @@ async function writeThemes(
     throw new Error(`Theme could not be saved: ${written.error.code}.`);
   }
   publishUserPreferencesChanged(options.context, written.value.profileId, Object.keys(entries));
-  return owner;
 }
 
-function failed(options: ThemeRequest, error: unknown) {
-  options.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, error instanceof Error ? error.message : String(error)),
+function themeError(error: unknown) {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    error instanceof Error ? error.message : String(error),
   );
 }
 
@@ -243,159 +239,143 @@ export const themeHandlers: GatewayRequestHandlers = {
     "themes.list",
     validateThemesListParams,
     async (options) => {
-      try {
-        const { catalog, result } = await readThemes(options, requestOwner(options));
-        options.respond(true, { ...result, themes: catalog.map(descriptor) });
-      } catch (error) {
-        failed(options, error);
-      }
+      const { catalog, result } = await readThemes(options, requestOwner(options));
+      options.respond(true, { ...result, themes: catalog.map(descriptor) });
     },
+    themeError,
   ),
   "themes.get": defineValidatedGatewayMethod(
     "themes.get",
     validateThemesGetParams,
     async (options) => {
-      try {
-        options.respond(
-          true,
-          (await readThemes(options, requestOwner(options), options.params.id)).result,
-        );
-      } catch (error) {
-        failed(options, error);
-      }
+      options.respond(
+        true,
+        (await readThemes(options, requestOwner(options), options.params.id)).result,
+      );
     },
+    themeError,
   ),
   "themes.set": defineValidatedGatewayMethod(
     "themes.set",
     validateThemesSetParams,
     async (options) => {
-      try {
-        const { id, mode, appearance } = options.params;
-        const appearanceEntries: Record<string, unknown> = {};
-        for (const key of ["accent", "fontUi", "fontChat"] as const) {
-          const value = appearance?.[key];
-          if (value === undefined) {
-            continue;
-          }
-          const prefKey = UI_APPEARANCE_PREFERENCE_KEYS[key];
-          const normalized =
-            value === null ? null : normalizeUiAppearancePreference(prefKey, value);
-          if (normalized === undefined) {
-            throw new Error(`Unsupported appearance preference: ${key}.`);
-          }
-          appearanceEntries[prefKey] = normalized;
+      const { id, mode, appearance } = options.params;
+      const appearanceEntries: Record<string, unknown> = {};
+      for (const key of ["accent", "fontUi", "fontChat"] as const) {
+        const value = appearance?.[key];
+        if (value === undefined) {
+          continue;
         }
-        if (id === undefined && mode === undefined) {
-          throw new Error("Set a theme id or mode; use null to restore its default.");
+        const prefKey = UI_APPEARANCE_PREFERENCE_KEYS[key];
+        const normalized = value === null ? null : normalizeUiAppearancePreference(prefKey, value);
+        if (normalized === undefined) {
+          throw new Error(`Unsupported appearance preference: ${key}.`);
         }
-        const owner = requestOwner(options);
-        const { catalog, result, entries } = await readThemes(options, owner);
-        const target = id == null ? undefined : catalog.find((theme) => theme.id === id);
-        if (id != null && !target) {
-          throw new Error(`Theme ${id} is unavailable. List themes to choose an installed theme.`);
-        }
-        const resetId = options.context.getRuntimeConfig().ui?.prefs?.theme ?? "claw";
-        const selected =
-          target ??
-          catalog.find((theme) => theme.id === (id === null ? resetId : result.current.id));
-        const nextMode = selected
-          ? selectionMode(
-              selected.modes,
-              mode,
-              result.current.mode,
-              normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ??
-                "system",
-            )
-          : mode;
-        await writeThemes(
-          options,
-          owner,
-          {
-            ...appearanceEntries,
-            ...(id !== undefined ? { "ui.theme": id } : {}),
-            ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
-          },
-          {
-            expectedEntries: {
-              "ui.theme": entries["ui.theme"] ?? null,
-              "ui.themeMode": entries["ui.themeMode"] ?? null,
-              ...(selected?.source === "user"
-                ? {
-                    [`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`]:
-                      entries[`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`] ?? null,
-                  }
-                : {}),
-            },
-            assertCatalog:
-              selected?.source === "plugin"
-                ? () => {
-                    const current = listPluginThemes().find((theme) => theme.id === selected.id);
-                    if (!current || current.definition !== selected.definition) {
-                      throw new Error(
-                        "The theme plugin changed before selection was saved. List themes and try again.",
-                      );
-                    }
-                  }
-                : undefined,
-          },
-        );
-        options.respond(true, {
-          ...(await readThemes(options, owner)).result,
-          application: "saved",
-        });
-      } catch (error) {
-        failed(options, error);
+        appearanceEntries[prefKey] = normalized;
       }
+      if (id === undefined && mode === undefined) {
+        throw new Error("Set a theme id or mode; use null to restore its default.");
+      }
+      const owner = requestOwner(options);
+      const { catalog, result, entries } = await readThemes(options, owner);
+      const target = id == null ? undefined : catalog.find((theme) => theme.id === id);
+      if (id != null && !target) {
+        throw new Error(`Theme ${id} is unavailable. List themes to choose an installed theme.`);
+      }
+      const resetId = options.context.getRuntimeConfig().ui?.prefs?.theme ?? "claw";
+      const selected =
+        target ?? catalog.find((theme) => theme.id === (id === null ? resetId : result.current.id));
+      const nextMode = selected
+        ? selectionMode(
+            selected.modes,
+            mode,
+            result.current.mode,
+            normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ?? "system",
+          )
+        : mode;
+      await writeThemes(
+        options,
+        owner,
+        {
+          ...appearanceEntries,
+          ...(id !== undefined ? { "ui.theme": id } : {}),
+          ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
+        },
+        {
+          expectedEntries: {
+            "ui.theme": entries["ui.theme"] ?? null,
+            "ui.themeMode": entries["ui.themeMode"] ?? null,
+            ...(selected?.source === "user"
+              ? {
+                  [`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`]:
+                    entries[`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`] ?? null,
+                }
+              : {}),
+          },
+          assertCatalog:
+            selected?.source === "plugin"
+              ? () => {
+                  const current = listPluginThemes().find((theme) => theme.id === selected.id);
+                  if (!current || current.definition !== selected.definition) {
+                    throw new Error(
+                      "The theme plugin changed before selection was saved. List themes and try again.",
+                    );
+                  }
+                }
+              : undefined,
+        },
+      );
+      options.respond(true, {
+        ...(await readThemes(options, owner)).result,
+        application: "saved",
+      });
     },
+    themeError,
   ),
   "themes.import": defineValidatedGatewayMethod(
     "themes.import",
     validateThemesImportParams,
     async (options) => {
-      try {
-        const { id, apply, mode } = options.params;
-        const owner = requestOwner(options);
-        const definition = normalizeThemeDefinition(options.params.definition);
-        if (mode && mode !== "system" && !definition[mode]) {
-          throw new Error(`The imported theme does not provide ${mode} mode.`);
-        }
-        if (mode && !apply) {
-          throw new Error("Use apply: true when importing with a mode.");
-        }
-        const snapshot = await readThemes(options, owner);
-        const current = snapshot.result.current;
-        const affectsSelection = apply || (current.requestedId ?? current.id) === `user/${id}`;
-        const nextMode = affectsSelection
-          ? selectionMode(
-              (["light", "dark"] as const).filter((palette) => Boolean(definition[palette])),
-              mode,
-              current.mode,
-              normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ??
-                "system",
-            )
-          : undefined;
-        await writeThemes(
-          options,
-          owner,
-          {
-            [`${DEFINITION_PREFIX}${id}`]: definition,
-            ...(apply ? { "ui.theme": `user/${id}` } : {}),
-            ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
-          },
-          {
-            expectedEntries: {
-              "ui.theme": snapshot.entries["ui.theme"] ?? null,
-              "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null,
-            },
-          },
-        );
-        options.respond(true, {
-          ...(await readThemes(options, owner, `user/${id}`)).result,
-          application: "saved",
-        });
-      } catch (error) {
-        failed(options, error);
+      const { id, apply, mode } = options.params;
+      const owner = requestOwner(options);
+      const definition = normalizeThemeDefinition(options.params.definition);
+      if (mode && mode !== "system" && !definition[mode]) {
+        throw new Error(`The imported theme does not provide ${mode} mode.`);
       }
+      if (mode && !apply) {
+        throw new Error("Use apply: true when importing with a mode.");
+      }
+      const snapshot = await readThemes(options, owner);
+      const current = snapshot.result.current;
+      const affectsSelection = apply || (current.requestedId ?? current.id) === `user/${id}`;
+      const nextMode = affectsSelection
+        ? selectionMode(
+            (["light", "dark"] as const).filter((palette) => Boolean(definition[palette])),
+            mode,
+            current.mode,
+            normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ?? "system",
+          )
+        : undefined;
+      await writeThemes(
+        options,
+        owner,
+        {
+          [`${DEFINITION_PREFIX}${id}`]: definition,
+          ...(apply ? { "ui.theme": `user/${id}` } : {}),
+          ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
+        },
+        {
+          expectedEntries: {
+            "ui.theme": snapshot.entries["ui.theme"] ?? null,
+            "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null,
+          },
+        },
+      );
+      options.respond(true, {
+        ...(await readThemes(options, owner, `user/${id}`)).result,
+        application: "saved",
+      });
     },
+    themeError,
   ),
 };

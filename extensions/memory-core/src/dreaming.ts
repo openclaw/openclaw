@@ -18,7 +18,7 @@ import {
   resolveCronServiceFromGatewayContext,
 } from "./dreaming-cron.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
-import type { NarrativePhaseData } from "./dreaming-narrative.js";
+import type { DreamNarrativeRequest, NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
   formatRecallRepairDetails,
@@ -82,7 +82,7 @@ function hasPendingManagedDreamingCronEvent(sessionKey?: string, agentId?: strin
 }
 
 async function runShortTermDreamingPromotion(params: {
-  trigger: "heartbeat" | "cron";
+  runInBackground?: DreamNarrativeRequest["runInBackground"];
   /** Agent whose heartbeat/cron turn triggered the sweep. */
   agentId?: string;
   workspaceDir?: string;
@@ -100,44 +100,26 @@ async function runShortTermDreamingPromotion(params: {
   // Each completion uses its workspace owner's model and credentials. The triggering
   // agent owns whatever the roster cannot attribute.
   const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
-  const seenWorkspaces = new Set<string>();
-  const workspaces: Array<{ agentId?: string; agentIds: readonly string[]; workspaceDir: string }> =
-    [];
-  const addWorkspace = (
-    workspaceDir: string,
-    agentId: string,
-    agentIds: readonly string[] = [agentId],
-  ): void => {
-    if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
-      return;
-    }
-    seenWorkspaces.add(workspaceDir);
-    workspaces.push({ ...(agentId ? { agentId } : {}), agentIds, workspaceDir });
-  };
-  // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
-  // several agents always resolves the same owner across sweeps.
-  const resolveWorkspaceOwnerAgentId = (agentIds: readonly string[]): string => {
-    if (triggerAgentId && agentIds.includes(triggerAgentId)) {
-      return triggerAgentId;
-    }
-    return agentIds.toSorted()[0] ?? triggerAgentId;
-  };
-  if (params.cfg) {
-    for (const entry of resolveMemoryDreamingWorkspaces(params.cfg, {
-      primaryWorkspaceDir: fallbackWorkspaceDir,
-      // Attribute the hook's own workspace to the agent whose turn triggered the sweep;
-      // the host falls back to the roster default agent when the turn has no id.
-      ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
-    })) {
-      addWorkspace(
-        entry.workspaceDir,
-        resolveWorkspaceOwnerAgentId(entry.agentIds),
-        entry.agentIds,
-      );
-    }
-  }
+  const workspaces = params.cfg
+    ? resolveMemoryDreamingWorkspaces(params.cfg, {
+        primaryWorkspaceDir: fallbackWorkspaceDir,
+        ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
+      }).map(({ workspaceDir, agentIds }) => {
+        // The host deduplicates workspaces. Prefer their triggering agent,
+        // otherwise select a stable owner among agents sharing the workspace.
+        const agentId =
+          triggerAgentId && agentIds.includes(triggerAgentId)
+            ? triggerAgentId
+            : (agentIds.toSorted()[0] ?? triggerAgentId);
+        return agentId ? { agentId, agentIds, workspaceDir } : { agentIds, workspaceDir };
+      })
+    : [];
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
-    addWorkspace(fallbackWorkspaceDir, triggerAgentId);
+    workspaces.push({
+      ...(triggerAgentId ? { agentId: triggerAgentId } : {}),
+      agentIds: [triggerAgentId],
+      workspaceDir: fallbackWorkspaceDir,
+    });
   }
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -162,7 +144,6 @@ async function runShortTermDreamingPromotion(params: {
   let degradedNarratives = 0;
   let pendingNarratives = 0;
   const pluginConfig = params.cfg ? resolveMemoryDreamingPluginConfig(params.cfg) : undefined;
-  const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
     { appendFallbackNarrativeEntry, runDreamNarrative },
@@ -188,7 +169,7 @@ async function runShortTermDreamingPromotion(params: {
         cfg: params.cfg,
         logger: params.logger,
         subagent: params.subagent,
-        detachNarratives,
+        runInBackground: params.runInBackground,
         nowMs: sweepNowMs,
       });
       degradedNarratives += phaseResult.degradedPhases;
@@ -330,7 +311,7 @@ async function runShortTermDreamingPromotion(params: {
             timezone: params.config.timezone,
             model: params.config.execution?.model,
             logger: params.logger,
-            detached: detachNarratives,
+            runInBackground: params.runInBackground,
           });
           if (narrativeOutcome.status === "degraded") {
             degradedNarratives += 1;
@@ -451,7 +432,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       return;
     }
     runtimeCronReconcileTimer = setInterval(() => {
-      void trackDreamingTask(reconcileManagedDreamingCron({ reason: "runtime" })).catch(
+      void trackDreamingTask(() => reconcileManagedDreamingCron({ reason: "runtime" })).catch(
         (err: unknown) => {
           api.logger.error(
             `memory-core: dreaming cron reconcile failed: ${formatErrorMessage(err)}`,
@@ -462,13 +443,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     runtimeCronReconcileTimer.unref?.();
   };
 
-  const trackDreamingTask = <T>(task: Promise<T>): Promise<T> => {
+  const trackDreamingTask = async <T>(run: () => Promise<T>): Promise<T> => {
+    const task = api.lifecycle.runInBackgroundContext
+      ? api.lifecycle.runInBackgroundContext(run)
+      : run();
     dreamingTasks.add(task);
-    void task.then(
-      () => dreamingTasks.delete(task),
-      () => dreamingTasks.delete(task),
-    );
-    return task;
+    try {
+      return await task;
+    } finally {
+      dreamingTasks.delete(task);
+    }
   };
 
   const startDreamingSessionCleanup = async (
@@ -529,16 +513,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       startupDreamingCleanupTimer = null;
       // Keep the cutoff strictly before startup: equal-millisecond sessions may have
       // started after the hook and must survive even when this timer runs late.
-      void trackDreamingTask(
+      void trackDreamingTask(() =>
         scrubConfiguredAgents(
           resolveCurrentConfig(),
           startupStartedAtMs + DREAMING_ORPHAN_MIN_AGE_MS - 1,
-        ).catch((error: unknown) => {
-          api.logger.warn(
-            `memory-core: deferred dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
-          );
-        }),
-      );
+        ),
+      ).catch((error: unknown) => {
+        api.logger.warn(
+          `memory-core: deferred dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
+        );
+      });
     }, DREAMING_ORPHAN_MIN_AGE_MS);
     startupDreamingCleanupTimer = cleanupTimer;
     startupDreamingCleanupTimer.unref?.();
@@ -553,20 +537,20 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       serviceStartedAtMs = Date.now();
       disposed = false;
       resolveServiceCron = () => resolveCronServiceFromGatewayContext(ctx);
-      try {
-        await trackDreamingTask(
-          reconcileManagedDreamingCron({
+      await trackDreamingTask(async () => {
+        try {
+          await reconcileManagedDreamingCron({
             reason: "startup",
             startupConfig: ctx.config,
-          }),
-        );
-      } catch (err) {
-        api.logger.error(
-          `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
-        );
-      } finally {
-        startRuntimeCronReconcileTimer();
-      }
+          });
+        } catch (err) {
+          api.logger.error(
+            `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
+          );
+        } finally {
+          startRuntimeCronReconcileTimer();
+        }
+      });
     },
     async stop() {
       // Plugin replacement stops services, not Gateway hooks. Fence timers and
@@ -577,7 +561,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   });
 
   api.on("gateway_start", async (_event, ctx) => {
-    if (disposed || serviceStartedAtMs === undefined) {
+    const startupStartedAtMs = serviceStartedAtMs;
+    if (disposed || startupStartedAtMs === undefined) {
       return;
     }
     if (startupDreamingCleanupTimer) {
@@ -585,8 +570,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       startupDreamingCleanupTimer = null;
     }
     const generation = ++gatewayLifecycleGeneration;
-    await trackDreamingTask(
-      startDreamingSessionCleanup(ctx.config ?? api.config, generation, serviceStartedAtMs),
+    await trackDreamingTask(() =>
+      startDreamingSessionCleanup(ctx.config ?? api.config, generation, startupStartedAtMs),
     ).catch((error: unknown) => {
       api.logger.warn(`memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`);
     });
@@ -614,7 +599,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           cfg: currentConfig,
         });
         return await runShortTermDreamingPromotion({
-          trigger: ctx.trigger,
+          runInBackground: ctx.trigger === "cron" ? trackDreamingTask : undefined,
           agentId: ctx.agentId,
           workspaceDir: ctx.workspaceDir,
           cfg: currentConfig,

@@ -202,7 +202,7 @@ openclaw doctor --json
 - **Stop container:** `podman stop openclaw`
 - **Remove container:** `podman rm -f openclaw`
 - **Open dashboard URL from host CLI:** `openclaw dashboard --no-open`
-- **Health/status via host CLI:** `openclaw gateway status --deep` (RPC probe + extra service scan)
+- **Health/status via host CLI:** `openclaw gateway status --deep` (RPC check + extra service scan)
 
 ## Troubleshooting
 

@@ -1,4 +1,3 @@
-// Channels page renders WhatsApp status.
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { html, nothing } from "lit";
 import type { WhatsAppStatus } from "../../api/types.ts";
@@ -13,7 +12,7 @@ import {
   renderChannelActionRow,
   renderChannelErrorRow,
   renderChannelFacts,
-  resolveChannelConfigured,
+  resolveChannelDisplayState,
 } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -23,13 +22,18 @@ export function renderWhatsAppCard(params: {
   accountCount?: number;
 }) {
   const { props, whatsapp, accountCount } = params;
-  const configured = resolveChannelConfigured("whatsapp", props);
+  const { configured } = resolveChannelDisplayState("whatsapp", props);
   const linked = whatsapp?.linked === true;
   const hasQr = props.channels.whatsappLoginQrDataUrl != null;
   const rawPhoneNumber = whatsapp?.self?.e164;
   const phoneNumber = rawPhoneNumber
     ? (formatInternationalPhoneNumberForDisplay(rawPhoneNumber, i18n.getLocale()) ?? rawPhoneNumber)
     : undefined;
+  const booleanFact = (field: "linked" | "running" | "connected") => ({
+    label: t(`common.${field}`),
+    value: whatsapp?.[field] ? t("common.yes") : t("common.no"),
+    kind: boolStatusKind(whatsapp?.[field]),
+  });
 
   return renderSettingsSection(
     {
@@ -44,11 +48,7 @@ export function renderWhatsAppCard(params: {
           value: formatNullableBoolean(configured),
           kind: boolStatusKind(configured),
         },
-        {
-          label: t("common.linked"),
-          value: whatsapp?.linked ? t("common.yes") : t("common.no"),
-          kind: boolStatusKind(whatsapp?.linked),
-        },
+        booleanFact("linked"),
         ...(phoneNumber
           ? [
               {
@@ -57,28 +57,17 @@ export function renderWhatsAppCard(params: {
               },
             ]
           : []),
-        {
-          label: t("common.running"),
-          value: whatsapp?.running ? t("common.yes") : t("common.no"),
-          kind: boolStatusKind(whatsapp?.running),
-        },
-        {
-          label: t("common.connected"),
-          value: whatsapp?.connected ? t("common.yes") : t("common.no"),
-          kind: boolStatusKind(whatsapp?.connected),
-        },
-        {
-          label: t("common.lastConnect"),
-          value: whatsapp?.lastConnectedAt
-            ? formatRelativeTimestamp(whatsapp.lastConnectedAt)
-            : t("common.na"),
-        },
-        {
-          label: t("common.lastMessage"),
-          value: whatsapp?.lastMessageAt
-            ? formatRelativeTimestamp(whatsapp.lastMessageAt)
-            : t("common.na"),
-        },
+        booleanFact("running"),
+        booleanFact("connected"),
+        ...(
+          [
+            ["lastConnect", "lastConnectedAt"],
+            ["lastMessage", "lastMessageAt"],
+          ] as const
+        ).map(([label, field]) => ({
+          label: t(`common.${label}`),
+          value: whatsapp?.[field] ? formatRelativeTimestamp(whatsapp[field]) : t("common.na"),
+        })),
         {
           label: t("common.authAge"),
           value:
@@ -113,23 +102,13 @@ export function renderWhatsAppCard(params: {
           : nothing
       }
       ${renderChannelActionRow(html`
-        ${
-          linked
-            ? html`<button
-                class="btn"
-                ?disabled=${props.channels.whatsappBusy}
-                @click=${() => props.onWhatsAppStart(true)}
-              >
-                ${t("common.relink")}
-              </button>`
-            : html`<button
-                class="btn primary"
-                ?disabled=${props.channels.whatsappBusy}
-                @click=${() => props.onWhatsAppStart(false)}
-              >
-                ${props.channels.whatsappBusy ? t("common.working") : t("common.showQr")}
-              </button>`
-        }
+        <button
+          class=${linked ? "btn" : "btn primary"}
+          ?disabled=${props.channels.whatsappBusy}
+          @click=${() => props.onWhatsAppStart(linked)}
+        >
+          ${t(linked ? "common.relink" : props.channels.whatsappBusy ? "common.working" : "common.showQr")}
+        </button>
         ${
           hasQr
             ? html`<button

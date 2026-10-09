@@ -14,9 +14,10 @@ import {
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
-import { admitQueuedMessageForSession, updateQueuedMessage } from "./chat-queue.ts";
+import { updateQueuedMessage } from "./chat-queue.ts";
 import {
   moveQueuedChatMessage,
   retryQueuedChatMessage,
@@ -304,7 +305,11 @@ describe("queued message edit round-trip", () => {
         host.sessionKey = "agent:main:elsewhere";
         expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
       }
-      const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
+      const stalePane = makeChatHost({
+        client: host.client,
+        connected: false,
+        sessionKey: SESSION_KEY,
+      });
       if (mutation === "remove") {
         chatOutboxOwner(stalePane).remove(stalePane as never, "queued-1");
       } else {
@@ -544,7 +549,12 @@ describe("queued message edit round-trip", () => {
   });
 
   it("cannot retire a row in the outbox a global agent switch left behind", async () => {
-    const host = makeChatHost({ assistantAgentId: "lily", connected: false, sessionKey: "global" });
+    const host = makeChatHost({
+      assistantAgentId: "lily",
+      connected: false,
+      requestHandlers: {},
+      sessionKey: "global",
+    });
     const unsubscribe = trackOutboxProjection(host as never);
     expect(
       admitQueuedMessageForSession(

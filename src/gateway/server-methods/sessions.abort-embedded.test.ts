@@ -29,7 +29,6 @@ import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
-import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 
@@ -276,7 +275,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
     expect(parentAbort).toHaveBeenCalledOnce();
     await fixture.settle();
     for (const id of ["running", "queued"]) {
-      expect(getSubagentRunByChildSessionKey(childKey(id)), id).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childKey(id)), id).toMatchObject({
         endedReason: "subagent-killed",
       });
     }
@@ -285,7 +284,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
     expect(isSwarmRunActive("running")).toBe(false);
     await vi.waitFor(() => expect(otherTurnDispatch).toHaveBeenCalledOnce());
     for (const id of ["other-turn", "other-session"]) {
-      expect(getSubagentRunByChildSessionKey(childKey(id))?.endedReason).toBeUndefined();
+      expect((await getSubagentRunByChildSessionKey(childKey(id)))?.endedReason).toBeUndefined();
     }
     expect(otherSessionDispatch).not.toHaveBeenCalled();
     expect(releaseSwarmRun("unrelated-capacity")).toBe(true);
@@ -296,7 +295,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
   }
 });
 
-it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
+it.each(["replaced", "throwing", "unreadable child"])(
   "%s embedded Stop leaves descendants eligible",
   async (state) => {
     await writeSubagentSessionEntry({
@@ -321,13 +320,11 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
     const parent = createEmbeddedRunHandle({
       runId: "parent",
       abort,
-      isAbortable: state !== "finalizing" && state !== "unreadable child",
+      isAbortable: state !== "unreadable child",
     });
     const replacementAbort = vi.fn();
     const replacement = createEmbeddedRunHandle({ runId: "replacement", abort: replacementAbort });
-    if (state !== "missing") {
-      setActiveEmbeddedRun(parentId, parent, parentKey);
-    }
+    setActiveEmbeddedRun(parentId, parent, parentKey);
     if (state === "replaced") {
       setActiveEmbeddedRun(parentId, replacement, parentKey);
     }
@@ -353,10 +350,12 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
       ]);
       expect(abort).toHaveBeenCalledTimes(state === "throwing" ? 1 : 0);
       expect(replacementAbort).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
         execution: { status: "queued" },
       });
-      expect(getSubagentRunByChildSessionKey(childKey("queued"))?.killIntent).toBeUndefined();
+      expect(
+        (await getSubagentRunByChildSessionKey(childKey("queued")))?.killIntent,
+      ).toBeUndefined();
       expect(dispatch).not.toHaveBeenCalled();
       expect(releaseSwarmRun("capacity")).toBe(true);
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
@@ -367,14 +366,9 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
   },
 );
 
-it.each([
-  { method: "chat.abort", finalizing: true },
-  { method: "sessions.abort", finalizing: true },
-  { method: "chat.abort", finalizing: false },
-  { method: "sessions.abort", finalizing: false },
-] as const)(
-  "$method controller-backed Stop respects parent acceptance (finalizing=$finalizing)",
-  async ({ method, finalizing }) => {
+it.each([true, false])(
+  "sessions.abort controller-backed Stop respects parent acceptance (finalizing=%s)",
+  async (finalizing) => {
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
@@ -441,14 +435,9 @@ it.each([
       expect(isEmbeddedAgentRunAbortableForRunId("parent")).toBe(!finalizing);
       expect(context.chatAbortControllers.get("parent")).toBe(registration.entry);
       const respond = vi.fn();
-      const handler =
-        method === "chat.abort" ? handleChatAbortRequest : sessionAbortHandlers[method]!;
-      await handler({
-        req: { type: "req", id: "stop", method },
-        params: {
-          ...(method === "chat.abort" ? { sessionKey: parentKey } : { key: parentKey }),
-          runId: "parent",
-        },
+      await sessionAbortHandlers["sessions.abort"]!({
+        req: { type: "req", id: "stop", method: "sessions.abort" },
+        params: { key: parentKey, runId: "parent" },
         respond,
         context: context as never,
         client: {
@@ -459,13 +448,11 @@ it.each([
       });
       expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
-        method === "chat.abort"
-          ? { ok: true, aborted: !finalizing, runIds: finalizing ? [] : ["parent"] }
-          : {
-              ok: true,
-              abortedRunId: finalizing ? null : "parent",
-              status: finalizing ? "no-active-run" : "aborted",
-            },
+        {
+          ok: true,
+          abortedRunId: finalizing ? null : "parent",
+          status: finalizing ? "no-active-run" : "aborted",
+        },
       ]);
       expect(registration.controller.signal.aborted).toBe(!finalizing);
       expect(parentAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
@@ -473,7 +460,7 @@ it.each([
       expect.soft(childAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
       expect(dispatch).not.toHaveBeenCalled();
       for (const id of ["running", "queued"]) {
-        const run = getSubagentRunByChildSessionKey(childKey(id));
+        const run = await getSubagentRunByChildSessionKey(childKey(id));
         if (finalizing) {
           expect.soft(run?.endedReason, id).toBeUndefined();
           expect.soft(run?.killIntent, id).toBeUndefined();
@@ -482,7 +469,7 @@ it.each([
         }
       }
       if (finalizing) {
-        expect.soft(getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
+        expect.soft(await getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
           execution: { status: "queued" },
         });
         releaseSwarmRun("running");

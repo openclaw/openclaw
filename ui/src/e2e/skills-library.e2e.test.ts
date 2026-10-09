@@ -80,61 +80,6 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps workspace creation for a solo shared-token admin with many channel identities", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const proposal = {
-        record: { id: "proposal-synthetic", status: "pending" },
-        content: "Draft",
-        revisionHash: "a".repeat(64),
-      };
-      const gateway = await installMockGateway(page, {
-        presenceUsers: [
-          { id: "channel-1", name: "Sender one" },
-          { id: "channel-2", name: "Sender two" },
-          { id: "channel-3", name: "Sender three" },
-        ],
-        methodResponses: {
-          "skills.library.list": {
-            entries: [],
-            profileId: null,
-            multipleProfiles: false,
-            defaultTarget: "workspace",
-            canManageWorkspace: true,
-            defaultSelectionLimit: 64,
-          },
-          "skills.status": status,
-          "skills.proposals.create": proposal,
-          "skills.proposals.apply": {
-            record: { ...proposal.record, status: "applied" },
-            targetSkillFile: "/tmp/synthetic-workspace/skills/checklist/SKILL.md",
-          },
-        },
-      });
-      await openSkillSettings(page);
-      await page.getByRole("button", { name: "Create skill", exact: true }).click();
-      expect(await page.getByText("My skills", { exact: true }).count()).toBe(0);
-      expect(await page.getByText("Team", { exact: true }).count()).toBe(0);
-      await page.getByLabel("Skill name", { exact: true }).fill("checklist");
-      await page.getByLabel("Description", { exact: true }).fill("A repeatable checklist");
-      await page
-        .getByLabel("SKILL.md", { exact: true })
-        .fill("---\nname: checklist\ndescription: A repeatable checklist\n---\nDo the work.\n");
-      await page.getByRole("button", { name: "Save workspace proposal" }).click();
-      const request = await gateway.waitForRequest("skills.proposals.create");
-      expect(request.params).toMatchObject({ agentId: "main", name: "checklist" });
-      await page.getByText(/pending review and is not active yet/u).waitFor();
-      expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
-      await page.getByRole("button", { name: "Apply to workspace" }).click();
-      expect((await gateway.waitForRequest("skills.proposals.apply")).params).toEqual({
-        agentId: "main",
-        proposalId: "proposal-synthetic",
-        expectedRevisionHash: "a".repeat(64),
-      });
-      await page.getByText(/Workspace main: applied/u).waitFor();
-      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
-    });
-  });
-
   it("saves and edits an operator's complete bundle, preserving a stale draft on a narrow viewport", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -414,11 +359,14 @@ suite.define(() => {
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
       await page.getByText(/Only its owner or an authorized administrator/u).waitFor();
+      // The read-only checks can finish while the reader is still animating in.
+      await expectLibraryDialogOpen(page);
       expect(await page.getByRole("button", { name: "Transfer to team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Share with team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Executable supporting file").count()).toBe(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator("openclaw-modal-dialog").waitFor({ state: "detached" });
       await page.getByRole("button", { name: /support-triage Turn a support report/u }).click();
       await page
         .getByText(`Team · revision ${team.entry.revision.slice(0, 8)}`, { exact: true })

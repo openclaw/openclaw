@@ -16,6 +16,7 @@ import type { ConfigWriteOptions } from "../config/io.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export type ConfigSnapshotForInstallPersist = {
@@ -230,10 +231,7 @@ export function selectInstallMutationWriteOptions(
   // Install work may outlive its config read. Keep only mutation-start ownership
   // and conflict facts; plugin metadata must come from the commit-time read.
   const assertConfigPathForWrite = beforePersistentApply
-    ? () => {
-        writeOptions.assertConfigPathForWrite?.();
-        beforePersistentApply();
-      }
+    ? composeConfigWriteAssertions(writeOptions.assertConfigPathForWrite, beforePersistentApply)
     : writeOptions.assertConfigPathForWrite;
   return {
     inputBase: "source",

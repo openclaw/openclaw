@@ -1,16 +1,8 @@
+import { hasGatewayToolRoutingContext, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
-import {
-  getRuntimeConfig,
-  hasGatewayToolRoutingContext,
-  listNodes,
-  resolveBrowserConfig,
-  resolveProfile,
-  getBrowserProfileCapabilities,
-} from "./browser-tool.runtime.js";
-
-export type BrowserNodeTarget = NonNullable<
-  Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>>
->;
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;

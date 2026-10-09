@@ -259,7 +259,6 @@
   }
 }
 
-/* Message images (sent images displayed in chat) */
 .chat-message-images {
   display: flex;
   flex-direction: column;
@@ -270,6 +269,7 @@
 }
 
 .chat-message-image-button {
+  position: relative;
   display: inline-flex;
   max-width: 100%;
   padding: 0;
@@ -279,19 +279,51 @@
   cursor: zoom-in;
 }
 
+/* Keep the edge above hover-zoomed pixels without changing image layout. */
+.chat-message-image-button:not(.chat-attachment-image-button)::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: inherit;
+  corner-shape: inherit;
+  content: "";
+  pointer-events: none;
+}
+
 .chat-image-frame {
   position: relative;
   display: inline-flex;
-  max-width: min(100%, 400px);
-  overflow: hidden;
+  max-width: min(100%, calc(400px + var(--chat-image-gutter, 0px)));
   border-radius: var(--radius-xl);
+}
+
+.chat-image-surface {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  corner-shape: inherit;
+}
+
+.chat-image-frame--managed {
+  --chat-image-gutter: 52px;
+
+  min-height: 44px;
+  padding-right: var(--chat-image-gutter);
 }
 
 .chat-image-frame--image {
   display: block;
   flex: none;
   /* A definite intrinsic width keeps fit-content user grids from collapsing. */
-  width: var(--chat-image-width);
+  width: calc(var(--chat-image-width) + var(--chat-image-gutter, 0px));
+}
+
+.chat-image-frame--image > .chat-image-surface {
+  display: block;
   aspect-ratio: var(--chat-image-ratio);
   background: color-mix(in srgb, var(--bg-muted) 45%, var(--bg));
 }
@@ -303,9 +335,7 @@
 }
 
 .chat-image-frame--managed:not(.chat-image-frame--image) {
-  min-width: min(100%, var(--chat-image-min-width));
-  /* Intrinsic previews still need room for 28px actions and both 8px insets. */
-  min-height: 44px;
+  min-width: min(100%, calc(var(--chat-image-min-width) + var(--chat-image-gutter)));
 }
 
 .chat-image-skeleton.skeleton {
@@ -319,7 +349,7 @@
   pointer-events: none;
 }
 
-.chat-image-frame--image > .chat-message-image-button {
+.chat-image-frame--image > .chat-image-surface > .chat-message-image-button {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -333,84 +363,53 @@
   max-height: none;
 }
 
-.chat-image-frame--managed::after {
-  position: absolute;
-  z-index: 1;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: min(100%, 72px);
-  background: linear-gradient(to bottom, transparent, rgb(4 8 18 / 56%));
-  content: "";
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 140ms ease-out;
-}
-
 .chat-image-actions {
+  display: block;
   position: absolute;
   z-index: 2;
-  right: 8px;
-  bottom: 8px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(2px);
-  transition:
-    opacity 120ms ease-out,
-    transform 120ms ease-out;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
 }
 
-.chat-image-frame:hover .chat-image-actions,
-.chat-image-frame:focus-within .chat-image-actions {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-.chat-image-frame--managed:hover::after,
-.chat-image-frame--managed:focus-within::after {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .chat-image-actions {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-  }
-
-  .chat-image-frame--managed::after {
-    opacity: 1;
-  }
+.chat-image-actions::part(menu) {
+  min-width: 164px;
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
 }
 
 .chat-image-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 0;
-  border-radius: 0;
-  color: var(--media-foreground);
+  border-radius: var(--radius-md);
+  color: var(--muted);
   background: transparent;
   cursor: var(--cursor-action);
 }
 
-.chat-image-action:hover {
-  color: rgb(255 255 255 / 72%);
-  background: transparent;
+.chat-image-action:hover,
+.chat-image-actions[open] .chat-image-action {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
-.chat-image-action:focus-visible {
+.chat-image-action:focus-visible,
+.chat-assistant-attachment-card__action:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.chat-image-action svg {
+.chat-image-action svg,
+.chat-assistant-attachment-card__action svg {
   width: 15px;
   height: 15px;
 }
@@ -519,8 +518,7 @@
   }
 }
 
-.chat-image-frame:hover .chat-message-image,
-.chat-assistant-attachments > .chat-message-image-button:hover .chat-message-image {
+.chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
 }
 
@@ -567,6 +565,10 @@
   object-fit: cover;
 }
 
+.chat-group.user .chat-message-images--gallery .chat-image-surface {
+  height: 100%;
+}
+
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-thread
     .chat-group.user
@@ -588,10 +590,30 @@
     .chat-image-frame {
     height: auto;
 
-    &:not(.chat-image-frame--compact) {
+    &:not(.chat-image-frame--compact, .chat-image-frame--managed) {
       aspect-ratio: 1;
     }
   }
+}
+
+.chat-group.user .chat-message-images--gallery > .chat-image-frame--managed {
+  height: auto;
+  aspect-ratio: auto;
+}
+
+.chat-group.user .chat-message-images--gallery .chat-image-frame--managed > .chat-image-surface {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.chat-group.user
+  .chat-message-images--gallery
+  .chat-image-frame--managed
+  .chat-message-image-button,
+.chat-group.user .chat-message-images--gallery .chat-image-frame--managed .chat-message-image {
+  width: 100%;
+  height: 100%;
 }
 
 .chat-group.user .chat-message-images--gallery > .chat-image-frame--compact {
@@ -881,16 +903,6 @@
 .chat-assistant-attachment-card__action:hover {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
-}
-
-.chat-assistant-attachment-card__action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.chat-assistant-attachment-card__action svg {
-  width: 15px;
-  height: 15px;
 }
 
 .chat-assistant-attachment-card__expand--icon svg {

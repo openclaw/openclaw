@@ -3,12 +3,11 @@ import {
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
-import { fetchRemoteEmbeddingVectorsDetailed } from "./embeddings-remote-fetch.js";
+import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type {
-  EmbeddingBatchDetailedResult,
   EmbeddingProvider,
+  EmbeddingProviderCallOptions,
   EmbeddingProviderOptions,
-  EmbeddingUsage,
 } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 
@@ -37,38 +36,28 @@ export function createRemoteEmbeddingProvider(params: {
   const { client } = params;
   const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
-  const embedManyDetailed = async (
+  const embedMany = async (
     input: string[],
-    signal?: AbortSignal,
-    kind: "query" | "document" = "document",
-  ): Promise<EmbeddingBatchDetailedResult> => {
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
-      return { embeddings: [] };
+      return [];
     }
-    const { vectors, usage } = await fetchRemoteEmbeddingVectorsDetailed({
+    return await fetchRemoteEmbeddingVectors({
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
-      signal,
+      signal: options?.signal,
+      onUsage: options?.onUsage,
       body: {
-        ...params.buildRequestFields?.(kind),
+        ...params.buildRequestFields?.(options?.inputType === "query" ? "query" : "document"),
         model: client.model,
         input,
       },
       errorPrefix: params.errorPrefix,
     });
-    return { embeddings: vectors, usage };
   };
-
-  const embedMany = async (
-    input: string[],
-    signal?: AbortSignal,
-    kind: "query" | "document" = "document",
-  ): Promise<number[][]> => (await embedManyDetailed(input, signal, kind)).embeddings;
-
-  const resolveKind = (options?: { inputType?: string }): "query" | "document" =>
-    options?.inputType === "query" ? "query" : "document";
 
   return {
     id: params.id,
@@ -76,51 +65,19 @@ export function createRemoteEmbeddingProvider(params: {
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
     embed: async (input, options) => {
       const text = typeof input === "string" ? input : input.text;
-      const [vec] = await embedMany(
-        [text],
-        options?.signal,
-        options?.inputType === "query" ? "query" : "document",
-      );
+      const [vec] = await embedMany([text], options);
       return vec ?? [];
     },
     embedBatch: async (inputs, options) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (options?.inputType === "query" && params.batchQueryInputs !== true) {
         return await Promise.all(
-          texts.map(async (text) => (await embedMany([text], options.signal, "query"))[0] ?? []),
+          texts.map(async (text) => (await embedMany([text], options))[0] ?? []),
         );
       }
-      return await embedMany(texts, options?.signal, resolveKind(options));
-    },
-    embedBatchDetailed: async (inputs, options) => {
-      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
-      if (options?.inputType === "query" && params.batchQueryInputs !== true) {
-        const results = await Promise.all(
-          texts.map(async (text) => await embedManyDetailed([text], options.signal, "query")),
-        );
-        return {
-          embeddings: results.map((result) => result.embeddings[0] ?? []),
-          usage: sumEmbeddingUsage(results.map((result) => result.usage)),
-        };
-      }
-      return await embedManyDetailed(texts, options?.signal, resolveKind(options));
+      return await embedMany(texts, options);
     },
   };
-}
-
-function sumEmbeddingUsage(usages: Array<EmbeddingUsage | undefined>): EmbeddingUsage | undefined {
-  let promptTokens = 0;
-  let totalTokens = 0;
-  for (const usage of usages) {
-    if (!usage) {
-      // A batch total from partial per-request counts would silently undercount;
-      // report the batch usage as unavailable instead.
-      return undefined;
-    }
-    promptTokens += usage.promptTokens;
-    totalTokens += usage.totalTokens;
-  }
-  return usages.length > 0 ? { promptTokens, totalTokens } : undefined;
 }
 
 /** Resolve a normalized remote embedding client from provider config and model options. */

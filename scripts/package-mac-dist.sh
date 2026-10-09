@@ -366,13 +366,7 @@ elif [[ "$SKIP_DSYM" != "1" ]]; then
         fi
         DWARF_INPUTS+=("$DWARF_INPUT")
       done
-      if [[ "${#DWARF_INPUTS[@]}" -gt 1 ]]; then
-        if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then
-          cleanup_tmp_dsym
-          exit 1
-        fi
-      else
-        echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
+      if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then
         cleanup_tmp_dsym
         exit 1
       fi

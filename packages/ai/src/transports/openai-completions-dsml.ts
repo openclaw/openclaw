@@ -220,9 +220,21 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
     }
     const rawValue = parameterMatch[3] ?? "";
     if (rawValue.length === 0) {
-      continue;
+      const stringAttribute = Array.from(
+        (parameterMatch[2] ?? "").matchAll(
+          /(?:^|\s)([^\s=]+)=(?:"([^"]*)"|'([^']*)'|([^\s"']+))(?=\s|$)/g,
+        ),
+      ).find((attribute) => attribute[1] === "string");
+      if ((stringAttribute?.[2] ?? stringAttribute?.[3] ?? stringAttribute?.[4]) !== "true") {
+        continue;
+      }
     }
-    args[name] = decodeDeepSeekDsmlText(rawValue);
+    Object.defineProperty(args, name, {
+      value: decodeDeepSeekDsmlText(rawValue),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   if (Object.keys(args).length > 0) {
     return args;

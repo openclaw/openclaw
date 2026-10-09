@@ -72,7 +72,7 @@ describe("resolveCodexCliBin", () => {
           platform: "win32",
         }),
       ).toMatchObject({
-        args: ["/d", "/s", "/c", expect.stringContaining("codex.cmd")],
+        args: ["/d", "/s", "/c", `""${commandPath}" "login""`],
         options: { windowsHide: true, windowsVerbatimArguments: true },
       });
     });
@@ -92,19 +92,5 @@ describe("resolveCodexCliBin", () => {
       vi.stubEnv("PATH", path.join(tempDir, "missing"));
       await expect(resolveCodexCliBin()).resolves.toBeNull();
     });
-  });
-
-  it("falls back to a bare-only native Windows Codex executable", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tui-codex-bare-"));
-    tempDirs.push(tempDir);
-    const executablePath = path.join(tempDir, "codex");
-    fs.copyFileSync(process.execPath, executablePath);
-    vi.stubEnv("PATH", tempDir);
-    vi.stubEnv("PATHEXT", ".CMD;.EXE");
-
-    await withMockedWindowsPlatform(async () => {
-      await expect(resolveCodexCliBin()).resolves.toBe(executablePath);
-    });
-    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 });

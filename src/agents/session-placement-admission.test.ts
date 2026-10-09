@@ -6,10 +6,16 @@ import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
 import { closeAdmittedRunDelegatedAuthority } from "./admitted-run-context.js";
 import { isSessionPlacementSettlementClosedError } from "./run-termination.js";
 
-const settleRequesterAfterSessionSpawns = vi.hoisted(() => vi.fn(() => true));
+const settleRequesterAfterSessionSpawns = vi.hoisted(() =>
+  vi
+    .fn<
+      typeof import("./subagents/registry/subagent-registry.js").settleRequesterAfterSessionSpawns
+    >()
+    .mockResolvedValue(true),
+);
 vi.mock("./subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns,
-  markRequesterTurnYielded: vi.fn(() => 1),
+  markRequesterTurnYielded: vi.fn(async () => 1),
 }));
 
 import {
@@ -21,11 +27,11 @@ import { hasModelFallbackStop, resolveModelFallbackError } from "./failover-erro
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
-  type LocalTurnPlacementClaim,
   type SessionPlacementAdmissionProvider,
   withLocalSessionPlacementTurnSettlement,
   withSessionPlacementTurnAdmission,
 } from "./session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "./session-placement-admission.types.js";
 
 let uninstallProvider: (() => void) | undefined;
 const assertCompactionSuccessorAllowed = () => {};
@@ -38,7 +44,7 @@ afterEach(() => {
   uninstallProvider?.();
   uninstallProvider = undefined;
   settleRequesterAfterSessionSpawns.mockReset();
-  settleRequesterAfterSessionSpawns.mockReturnValue(true);
+  settleRequesterAfterSessionSpawns.mockResolvedValue(true);
 });
 
 describe("captured compaction placement owner", () => {
@@ -262,7 +268,7 @@ describe("local turn placement admission", () => {
     await withTestRunAdmission(turnParams, async (admittedRunContext) => {
       const activeParams = { ...turnParams, admittedRunContext };
       const events: string[] = [];
-      settleRequesterAfterSessionSpawns.mockImplementation(() => {
+      settleRequesterAfterSessionSpawns.mockImplementation(async () => {
         events.push("settle");
         return true;
       });
@@ -430,7 +436,7 @@ describe("local turn placement admission", () => {
   it.each([true, false])(
     "acknowledges CLI continuation only after successful settlement (%s)",
     async (settled) => {
-      settleRequesterAfterSessionSpawns.mockReturnValueOnce(settled).mockReturnValueOnce(false);
+      settleRequesterAfterSessionSpawns.mockResolvedValueOnce(settled).mockResolvedValueOnce(false);
       const claim = {
         sessionId: "continuation",
         sessionKey: "agent:main:continuation",
@@ -509,6 +515,7 @@ describe("local turn placement admission", () => {
                   requesterTurnRunId: "fallback-parent",
                   requesterYielded: yielded,
                   acceptedSessionSpawns: [accepted],
+                  assertCurrent: expect.any(Function),
                 });
                 expect(result.requesterContinuationSettled).toBe(yielded ? true : undefined);
               } else {
@@ -555,7 +562,7 @@ describe("local turn placement admission", () => {
     "settles only standalone CLI ownership after placement releases (candidate marker=%s)",
     async (isFinalFallbackAttempt) => {
       const events: string[] = [];
-      settleRequesterAfterSessionSpawns.mockImplementation(() => {
+      settleRequesterAfterSessionSpawns.mockImplementation(async () => {
         events.push("settle");
         return true;
       });

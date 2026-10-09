@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import type { BundleMcpConfig } from "../../plugins/bundle-mcp.types.js";
 import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
 import { withOpenClawMcpCaptureHeader } from "./bundle-mcp-runtime.js";
 

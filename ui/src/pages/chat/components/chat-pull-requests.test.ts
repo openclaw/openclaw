@@ -12,6 +12,7 @@ import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../ap
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import {
+  chatBranchId,
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -204,7 +205,9 @@ describe("renderChatPullRequests", () => {
       expect(chip?.getAttribute("data-state")).toBe("merged");
       expect(chip?.querySelector(".chat-pr__state")?.textContent?.trim()).toBe("Merged");
       expect(chip?.querySelector(".chat-pr__diff")).toBeNull();
-      expect(chip?.querySelector(".chat-pr__checks")).toBeNull();
+      expect(chip?.querySelector(".chat-pr__checks")?.getAttribute("data-checks")).toBe("none");
+      expect(chip?.querySelector("openclaw-chat-ci-automation")).not.toBeNull();
+      expect(chip?.querySelector("openclaw-chat-ci-details")).toBeNull();
       // Merged is terminal, so the stale-data warning stays off merged chips.
       expect(chip?.querySelector(".chat-pr__warning")).toBeNull();
       expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
@@ -235,6 +238,92 @@ describe("renderChatPullRequests", () => {
       expect(container.querySelector(".chat-pr__number")).toBeNull();
       expect(container.querySelector(".chat-pr__branch")?.textContent).toBe(branch);
       expect(container.querySelector(".chat-pr__create")?.textContent).toContain("Publish PR");
+    },
+  );
+
+  it("does not attach a failed session publication to any PR when live and settled rows reorder", () => {
+    const failedPublication = publication({
+      result: {
+        requestId: "failed-session-attempt",
+        status: "failed",
+        code: "unavailable",
+        message: "GitHub publication failed.",
+        nextAction: "Check repository read access before retrying publication.",
+        publisher: { source: "agent-override", accountId: 3, login: "agent-bot" },
+      },
+      onNewAction: vi.fn(),
+    });
+    const merged = pullRequest({ state: "merged" });
+    const unrelated = pullRequest({
+      number: 42,
+      owner: "synthetic",
+      repo: "another-project",
+      branch: "feature/unrelated",
+      url: "https://github.com/synthetic/another-project/pull/42",
+    });
+    for (const state of ["open", "merged"] as const) {
+      paint({ pullRequests: [merged, { ...unrelated, state }], publication: failedPublication });
+      const rows = [...container.querySelectorAll("article.chat-pr")];
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.textContent).not.toContain("Check repository read access");
+        expect(row.querySelector("[data-publication-account]")).toBeNull();
+        expect(row.querySelector(".chat-pr__create")).toBeNull();
+      }
+      const history = container.querySelector<HTMLDetailsElement>(
+        "details.chat-pr__publication-history",
+      );
+      expect(history?.closest("article")).toBeNull();
+      expect(history?.querySelector("summary")?.textContent?.trim()).toBe(
+        "Publication attempt failed",
+      );
+      expect(history?.open).toBe(false);
+      expect(history?.textContent).toContain("Check repository read access before retrying");
+    }
+  });
+
+  it.each(["requested", "publishing", "needs_confirmation"] as const)(
+    "keeps %s publication recovery exposed beside merged history",
+    (status) => {
+      const onRefresh = vi.fn();
+      const onConfirm = vi.fn();
+      paint({
+        pullRequests: [pullRequest({ state: "merged" })],
+        publication: publication({
+          locked: true,
+          result: {
+            requestId: "active-publication",
+            status,
+            message: "The original publication still needs attention.",
+            publisher: { source: "personal", accountId: 2, login: "alice-tools" },
+          },
+          confirmation:
+            status === "needs_confirmation"
+              ? {
+                  requestDigest: "a".repeat(64),
+                  generation: "personal-generation",
+                  account: { accountId: 2, login: "alice-tools" },
+                  repository: "synthetic/publication-demo",
+                  pushRepository: "alice-tools/publication-demo",
+                  branch: "feature/original",
+                  baseBranch: "main",
+                  sourceHeadCommit: "1".repeat(40),
+                  sourceIndexTree: "2".repeat(40),
+                  workspaceTree: "3".repeat(40),
+                }
+              : null,
+          onRefresh,
+          onConfirm: status === "needs_confirmation" ? onConfirm : undefined,
+        }),
+      });
+      const outcome = container.querySelector(".chat-pr__publication-outcome");
+      expect(outcome?.textContent).toContain("The original publication still needs attention.");
+      expect(outcome?.closest("details:not([open])")).toBeNull();
+      expect(container.querySelector(".chat-pr__publication-history")).toBeNull();
+      const action = container.querySelector<HTMLButtonElement>(".chat-pr__create");
+      expect(action?.disabled).toBe(false);
+      action?.click();
+      expect(status === "needs_confirmation" ? onConfirm : onRefresh).toHaveBeenCalledOnce();
     },
   );
 
@@ -269,7 +358,7 @@ describe("renderChatPullRequests", () => {
   });
 
   it.each([false, true])(
-    "keeps publication recovery inside the PR row after publication completed: %s",
+    "keeps publication recovery separate and expanded after publication completed: %s",
     (completed) => {
       const onPublish = vi.fn();
       const onRefresh = vi.fn();
@@ -300,9 +389,14 @@ describe("renderChatPullRequests", () => {
       expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
       expect(container.textContent).toContain("#103469");
       expect(container.textContent).toContain("Response lost.");
-      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) =>
-          button.textContent?.trim() === (completed ? "Refresh publication" : "Retry publication"),
+      const recovery = container.querySelector(".chat-pr__publication-outcome");
+      expect(recovery?.closest("article")).toBeNull();
+      expect(recovery?.closest("details:not([open])")).toBeNull();
+      expect(container.querySelectorAll(".chat-pr__create")).toHaveLength(completed ? 0 : 1);
+      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+        completed
+          ? button.getAttribute("aria-label") === "Refresh publication"
+          : button.textContent?.trim() === "Retry publication",
       );
       expect(action).toBeDefined();
       action?.click();
@@ -425,8 +519,15 @@ describe("renderChatPullRequests", () => {
       }),
     });
     const failure = container.querySelector('.chat-pr__publication-outcome[data-state="failed"]');
-    expect(failure?.textContent).toContain("GitHub publication failed.");
+    expect(failure?.textContent).toContain("Publication failed");
     expect(failure?.textContent).toContain("Check repository write access and retry.");
+    expect(failure?.closest("details:not([open])")).toBeNull();
+    const status = failure?.querySelector<HTMLDetailsElement>(
+      "details.chat-pr__publication-status",
+    );
+    expect(status?.open).toBe(false);
+    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Publication failed");
+    expect(failure?.closest("article")?.getAttribute("data-state")).toBe("branch");
     expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
       "Choose a new publication",
     );
@@ -472,6 +573,59 @@ describe("renderChatPullRequests", () => {
   });
 });
 
+describe("branch row dismissal", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.append(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("hides the branch row and its idle publish offer once dismissed", () => {
+    const onDismissBranch = vi.fn();
+    const props = {
+      pullRequests: [],
+      branch: sessionBranch(),
+      status: "ready" as const,
+      onDismiss: () => {},
+      onDismissBranch,
+      publication: publication({
+        canPublishPersonal: false,
+        options: {
+          shared: { source: "system-configured", accountId: 1, login: "system-bot" },
+          personal: null,
+          pendingPersonal: null,
+          latestShared: null,
+        },
+      }),
+    };
+    render(renderChatPullRequests(props), container);
+    container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();
+    expect(onDismissBranch).toHaveBeenCalledWith(sessionBranch());
+
+    render(renderChatPullRequests({ ...props, branchDismissed: true }), container);
+    expect(container.querySelector(".chat-pr")).toBeNull();
+  });
+
+  it("keeps PR chips visible when only the branch row is dismissed", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [pullRequest()],
+        branch: sessionBranch(),
+        branchDismissed: true,
+        status: "ready",
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-pr")?.getAttribute("data-state")).toBe("open");
+  });
+});
+
 describe("dismissed pull request storage", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", window.localStorage);
@@ -488,7 +642,7 @@ describe("dismissed pull request storage", () => {
       false,
     );
 
-    const ids = dismissChatPullRequest("agent:main:main", chip);
+    const ids = dismissChatPullRequest("agent:main:main", chatPullRequestId(chip));
 
     expect(ids.has(chatPullRequestId(chip))).toBe(true);
     expect(listDismissedChatPullRequests("agent:main:main").has(chatPullRequestId(chip))).toBe(
@@ -500,10 +654,22 @@ describe("dismissed pull request storage", () => {
   it("drops the oldest sessions once the store limit is reached", () => {
     const chip = pullRequest();
     for (let index = 0; index < 21; index += 1) {
-      dismissChatPullRequest(`agent:main:${index}`, chip);
+      dismissChatPullRequest(`agent:main:${index}`, chatPullRequestId(chip));
     }
     expect(listDismissedChatPullRequests("agent:main:0").size).toBe(0);
     expect(listDismissedChatPullRequests("agent:main:20").size).toBe(1);
+  });
+
+  it("keeps branches that differ only in case distinct", () => {
+    const ids = dismissChatPullRequest(
+      "agent:main:main",
+      chatBranchId(sessionBranch({ owner: "OpenClaw", branch: "Feature" })),
+    );
+
+    expect(ids.has(chatBranchId(sessionBranch({ owner: "openclaw", branch: "Feature" })))).toBe(
+      true,
+    );
+    expect(ids.has(chatBranchId(sessionBranch({ branch: "feature" })))).toBe(false);
   });
 
   it("ignores malformed stored payloads", () => {

@@ -15,6 +15,19 @@ async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
 
 describe("applyPatch context byte preservation", () => {
   it.each([
+    ...["\u2000", "\u2001"].map((space) => ({
+      name: `an internal U+${space.charCodeAt(0).toString(16)} quad space`,
+      files: { "source.txt": `# wait${space}30 seconds\nold\n` },
+      patch: `*** Begin Patch
+*** Update File: source.txt
+@@
+ # wait 30 seconds
+-old
++new\u2000value\u2001
+*** End Patch`,
+      expected: { "source.txt": `# wait${space}30 seconds\nnew\u2000value\u2001\n` },
+      missing: [],
+    })),
     {
       name: "an end-of-file replacement",
       files: { "source.txt": "head\nlast context  \nold\n" },

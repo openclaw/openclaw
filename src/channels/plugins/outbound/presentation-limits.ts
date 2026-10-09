@@ -15,6 +15,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { chunkItems } from "../../../utils/chunk-items.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -161,7 +162,7 @@ function buttonCapacity(budget: ActionBudget): number | undefined {
   return budget.remainingActions ?? rowCapacity;
 }
 
-function consumeButtonBudget(budget: ActionBudget, count: number): void {
+function consumeActionBudget(budget: ActionBudget, count = 1, actionsPerRow = 1): void {
   if (count <= 0) {
     return;
   }
@@ -169,37 +170,12 @@ function consumeButtonBudget(budget: ActionBudget, count: number): void {
     budget.remainingActions = Math.max(0, budget.remainingActions - count);
   }
   if (budget.remainingRows !== undefined) {
-    const perRow = budget.maxActionsPerRow ?? count;
-    budget.remainingRows = Math.max(0, budget.remainingRows - Math.ceil(count / perRow));
+    budget.remainingRows = Math.max(0, budget.remainingRows - Math.ceil(count / actionsPerRow));
   }
-}
-
-function chunkButtons(
-  buttons: readonly MessagePresentationButton[],
-  maxActionsPerRow: number | undefined,
-): MessagePresentationButton[][] {
-  const rowSize = positiveInteger(maxActionsPerRow);
-  if (!rowSize) {
-    return buttons.length > 0 ? [[...buttons]] : [];
-  }
-  const rows: MessagePresentationButton[][] = [];
-  for (let index = 0; index < buttons.length; index += rowSize) {
-    rows.push(buttons.slice(index, index + rowSize));
-  }
-  return rows;
 }
 
 function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
-}
-
-function consumeSelectBudget(budget: ActionBudget, count = 1): void {
-  if (budget.remainingActions !== undefined) {
-    budget.remainingActions = Math.max(0, budget.remainingActions - count);
-  }
-  if (budget.remainingRows !== undefined) {
-    budget.remainingRows = Math.max(0, budget.remainingRows - count);
-  }
 }
 
 function adaptControl<Control extends MessagePresentationButton | MessagePresentationOption>(
@@ -267,7 +243,7 @@ function adaptButtonsBlock(
   const droppedLabels = candidates
     .filter((candidate) => !candidate.adapted || !selected.has(candidate))
     .map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original));
-  consumeButtonBudget(budget, buttons.length);
+  consumeActionBudget(budget, buttons.length, budget.maxActionsPerRow ?? buttons.length);
   const fallback = fallbackListBlocks({
     blockType: fallbackBlockType,
     heading: "Actions",
@@ -278,10 +254,9 @@ function adaptButtonsBlock(
     return fallback;
   }
   return [
-    ...chunkButtons(buttons, limits?.maxActionsPerRow).map((row): MessagePresentationBlock => ({
-      type: "buttons",
-      buttons: row,
-    })),
+    ...chunkItems(buttons, positiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+      (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
+    ),
     ...fallback,
   ];
 }
@@ -327,7 +302,7 @@ function adaptSelectBlock(
   if (!canRenderSelect) {
     return fallback;
   }
-  consumeSelectBudget(budget);
+  consumeActionBudget(budget);
   return [
     {
       type: "select",
@@ -368,7 +343,7 @@ function createGlobalButtonSelection(params: {
     return undefined;
   }
   const reservationBudget = createActionBudget(params.limits);
-  consumeSelectBudget(
+  consumeActionBudget(
     reservationBudget,
     countRenderableSelectBlocks(
       params.presentation.blocks,

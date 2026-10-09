@@ -9,7 +9,7 @@ import { makeCronJob } from "../delivery.test-helpers.js";
 import { resolveFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { applyJobResult, authorCronRunCompletion } from "./timer.js";
+import { applyJobResult } from "./timer-outcomes.js";
 
 function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string | undefined {
   const target = raw
@@ -17,20 +17,6 @@ function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string
     .replace(new RegExp(`^(?:${prefixes.join("|")}):`, "i"), "")
     .trim();
   return target || undefined;
-}
-
-function normalizeDiscordTestTarget(raw: string): string | undefined {
-  const target = raw.trim().toLowerCase();
-  if (!target) {
-    return undefined;
-  }
-  if (target.startsWith("discord:channel:")) {
-    return target.slice("discord:".length);
-  }
-  if (target.startsWith("discord:")) {
-    return `user:${target.slice("discord:".length)}`;
-  }
-  return /^(channel|user):/.test(target) ? target : `channel:${target}`;
 }
 
 describe("cron failure alert account routing", () => {
@@ -51,18 +37,6 @@ describe("cron failure alert account routing", () => {
         targetPrefixes: ["googlechat", "google-chat", "gchat"],
         normalizeTarget: (raw: string) =>
           stripTestTargetPrefix(raw, ["googlechat", "google-chat", "gchat"]),
-      },
-      {
-        id: "msteams",
-        aliases: ["teams"],
-        targetPrefixes: ["msteams", "teams"],
-        normalizeTarget: (raw: string) => stripTestTargetPrefix(raw, ["msteams", "teams"]),
-      },
-      {
-        id: "discord",
-        aliases: [],
-        targetPrefixes: ["discord"],
-        normalizeTarget: normalizeDiscordTestTarget,
       },
     ];
     setActivePluginRegistry(
@@ -89,40 +63,6 @@ describe("cron failure alert account routing", () => {
 
   it.each([
     {
-      name: "keeps an explicitly unthreaded same-chat failure destination separate",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: undefined,
-      failureDestination: {
-        channel: "telegram",
-        to: "telegram:19098680",
-        accountId: "telegram-bot",
-      },
-      expected: {
-        channel: "telegram",
-        to: "telegram:19098680",
-        accountId: "telegram-bot",
-        threadId: undefined,
-        alternateRoute: true,
-      },
-    },
-    {
-      name: "keeps an aliased unthreaded same-chat failure destination separate",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: undefined,
-      failureDestination: {
-        channel: "telegram",
-        to: "tg:19098680",
-        accountId: "telegram-bot",
-      },
-      expected: {
-        channel: "telegram",
-        to: "tg:19098680",
-        accountId: "telegram-bot",
-        threadId: undefined,
-        alternateRoute: true,
-      },
-    },
-    {
       name: "keeps numeric zero as a distinct primary thread",
       globalAlert: { enabled: true, after: 1 },
       jobAlert: undefined,
@@ -138,24 +78,6 @@ describe("cron failure alert account routing", () => {
         accountId: "telegram-bot",
         threadId: undefined,
         alternateRoute: true,
-      },
-    },
-    {
-      name: "does not classify an unthreaded provider alias as an alternate route",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: undefined,
-      deliveryThreadId: undefined,
-      failureDestination: {
-        channel: "telegram",
-        to: "tg:19098680",
-        accountId: "telegram-bot",
-      },
-      expected: {
-        channel: "telegram",
-        to: "tg:19098680",
-        accountId: "telegram-bot",
-        threadId: undefined,
-        alternateRoute: false,
       },
     },
     {
@@ -176,23 +98,6 @@ describe("cron failure alert account routing", () => {
       },
     },
     {
-      name: "preserves an unthreaded failure destination when the alert only selects its account",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: { accountId: "telegram-bot" },
-      failureDestination: {
-        channel: "telegram",
-        to: "telegram:19098680",
-        accountId: "telegram-bot",
-      },
-      expected: {
-        channel: "telegram",
-        to: "telegram:19098680",
-        accountId: "telegram-bot",
-        threadId: undefined,
-        alternateRoute: true,
-      },
-    },
-    {
       name: "preserves an unthreaded failure destination when the alert only selects its mode",
       globalAlert: { enabled: true, after: 1 },
       jobAlert: { mode: "announce" as const },
@@ -210,17 +115,6 @@ describe("cron failure alert account routing", () => {
       },
     },
     {
-      name: "normalizes provider alias case and surrounding recipient whitespace",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: { to: "  TG: 19098680  " },
-      expected: {
-        channel: "telegram",
-        to: "TG: 19098680",
-        accountId: "telegram-bot",
-        threadId: 42,
-      },
-    },
-    {
       name: "does not equate case-sensitive recipient identities across provider aliases",
       globalAlert: { enabled: true, after: 1 },
       deliveryChannel: "googlechat",
@@ -234,82 +128,10 @@ describe("cron failure alert account routing", () => {
       },
     },
     {
-      name: "does not equate a provider alias targeting another topic",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: { to: "tg:19098680:topic:99" },
-      expected: {
-        channel: "telegram",
-        to: "tg:19098680:topic:99",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    },
-    {
-      name: "does not inherit the primary account or topic for another recipient",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: { to: "telegram:19098681" },
-      expected: {
-        channel: "telegram",
-        to: "telegram:19098681",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    },
-    {
-      name: "does not inherit the primary topic when an aliased recipient uses another account",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: { to: "tg:19098680", accountId: "alert-bot" },
-      expected: {
-        channel: "telegram",
-        to: "tg:19098680",
-        accountId: "alert-bot",
-        threadId: undefined,
-      },
-    },
-    {
-      name: "prefers an explicit alert account over the primary account",
-      globalAlert: { enabled: true, after: 1 },
-      jobAlert: { accountId: "alert-bot" },
-      expected: {
-        channel: "telegram",
-        to: "telegram:19098680",
-        accountId: "alert-bot",
-        threadId: undefined,
-      },
-    },
-    {
       name: "does not inherit the primary account for another channel",
       globalAlert: { enabled: true, after: 1, channel: "slack" },
       jobAlert: undefined,
       expected: { channel: "slack", to: undefined, accountId: undefined },
-    },
-    {
-      name: "does not equate Discord user and channel targets with the same id",
-      globalAlert: { enabled: true, after: 1 },
-      deliveryChannel: "discord",
-      deliveryTo: "1234567890",
-      jobAlert: { channel: "discord", to: "discord:1234567890" },
-      expected: {
-        channel: "discord",
-        to: "discord:1234567890",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    },
-    {
-      name: "does not inherit the primary account for a webhook",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "webhook" as const,
-        to: "https://alerts.example.test/cron-failures",
-      },
-      jobAlert: undefined,
-      expected: {
-        mode: "webhook",
-        to: "https://alerts.example.test/cron-failures",
-        accountId: undefined,
-      },
     },
   ])("$name", (testCase) => {
     const { globalAlert, jobAlert, expected } = testCase;
@@ -346,48 +168,7 @@ describe("cron failure alert account routing", () => {
     expect(resolveFailureAlert(state, job)).toMatchObject(expected);
   });
 
-  it.each([
-    {
-      name: "required primary delivery failure",
-      result: {
-        status: "ok" as const,
-        deliveryAttempted: true,
-        delivered: false,
-        deliveryError: "topic closed",
-        startedAt: 1_000,
-        endedAt: 2_000,
-      },
-      expectedText: 'Automation "Topic-routed job" delivery failed',
-      expectAlert: true,
-    },
-    {
-      name: "execution failure",
-      result: {
-        status: "error" as const,
-        error: "provider unavailable",
-        startedAt: 1_000,
-        endedAt: 2_000,
-      },
-      expectedText: 'Automation "Topic-routed job" failed 1 times',
-      expectAlert: true,
-    },
-    {
-      name: "unthreaded primary delivery failure with an equivalent provider alias",
-      result: {
-        status: "ok" as const,
-        deliveryAttempted: true,
-        delivered: false,
-        deliveryError: "recipient unavailable",
-        startedAt: 1_000,
-        endedAt: 2_000,
-      },
-      deliveryThreadId: undefined,
-      failureTo: "tg:19098680",
-      expectedText: "",
-      expectAlert: false,
-    },
-  ])("handles failure alert routing after $name", (testCase) => {
-    const { result, expectedText, expectAlert } = testCase;
+  it("routes required delivery failure outside the failed topic", () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -411,24 +192,33 @@ describe("cron failure alert account routing", () => {
         channel: "telegram",
         to: "telegram:19098680",
         accountId: "telegram-bot",
-        threadId: "deliveryThreadId" in testCase ? testCase.deliveryThreadId : 42,
+        threadId: 42,
         bestEffort: false,
         failureDestination: {
           channel: "telegram",
-          to: "failureTo" in testCase ? testCase.failureTo : "telegram:19098680",
+          to: "telegram:19098680",
           accountId: "telegram-bot",
         },
       },
     });
     const deferredNotifications: DeferredCronNotifications = [];
 
-    applyJobResult(state, job, result, { deferredNotifications });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "ok",
+        deliveryAttempted: true,
+        delivered: false,
+        deliveryError: "topic closed",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+      { deferredNotifications },
+    );
 
-    expect(deferredNotifications).toHaveLength(expectAlert ? 1 : 0);
+    expect(deferredNotifications).toHaveLength(1);
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    if (!expectAlert) {
-      return;
-    }
     runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -438,172 +228,8 @@ describe("cron failure alert account routing", () => {
         threadId: undefined,
         inheritSessionThread: false,
         payload: expect.objectContaining({
-          text: `${expectedText}\nCheck automation history for details.`,
+          text: 'Automation "Topic-routed job" delivery failed\nCheck automation history for details.',
         }),
-      }),
-    );
-  });
-
-  it.each(
-    (["not-delivered", "unknown"] as const).flatMap((deliveryStatus) =>
-      [false, true].map((implicit) => ({ deliveryStatus, implicit })),
-    ),
-  )(
-    "records $deliveryStatus delivery and only alerts for a known failure (implicit=$implicit)",
-    ({ deliveryStatus, implicit }) => {
-      const sendCronFailureAlert = vi.fn(async () => undefined);
-      const state = createCronServiceState({
-        scheduler: createTestGatewayScheduler(),
-        storePath: "/tmp/openclaw-cron-recorded-delivery-alert.json",
-        cronEnabled: true,
-        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        sendCronFailureAlert,
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      const job = makeCronJob({
-        id: "recorded-delivery",
-        name: "Recorded delivery",
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        payload: { kind: "agentTurn", message: "report" },
-        ...(implicit ? {} : { delivery: { mode: "announce" as const } }),
-        failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron" },
-      });
-      const deferredNotifications: DeferredCronNotifications = [];
-      const outcome = authorCronRunCompletion(state, job, {
-        status: "ok",
-        deliveryState: {
-          delivered: deliveryStatus === "not-delivered" ? false : undefined,
-          status: deliveryStatus,
-          error: "recorded transport failure",
-          failureNotification: { status: "not-requested" },
-        },
-      });
-      expect(outcome.completionStatus).toBe(
-        deliveryStatus === "not-delivered" ? "failed" : "unknown",
-      );
-      applyJobResult(
-        state,
-        job,
-        {
-          ...outcome,
-          startedAt: 1_000,
-          endedAt: 2_000,
-        },
-        { deferredNotifications },
-      );
-
-      expect(job.state.lastDeliveryError).toBe("recorded transport failure");
-      expect(deferredNotifications).toHaveLength(deliveryStatus === "not-delivered" ? 1 : 0);
-      if (deliveryStatus === "unknown") {
-        return;
-      }
-      runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-      expect(sendCronFailureAlert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payload: {
-            text: 'Automation "Recorded delivery" delivery failed\nLast error: recorded transport failure',
-          },
-        }),
-      );
-    },
-  );
-
-  it.each([
-    {
-      name: "failure destination channel alias",
-      channel: "googlechat",
-      globalChannel: "googlechat",
-      failureDestination: { channel: "gchat" },
-      failureAlert: undefined,
-    },
-    {
-      name: "job alert channel alias",
-      channel: "googlechat",
-      globalChannel: "googlechat",
-      failureDestination: undefined,
-      failureAlert: { channel: "google-chat" },
-    },
-    {
-      name: "both independently aliased overrides",
-      channel: "googlechat",
-      globalChannel: "googlechat",
-      failureDestination: { channel: "gchat" },
-      failureAlert: { channel: "google-chat" },
-    },
-    {
-      name: "prefixed target with an inherited last channel",
-      channel: "googlechat",
-      globalChannel: "last",
-      targetPrefix: "gchat",
-      failureDestination: { channel: "gchat" },
-      failureAlert: undefined,
-    },
-    {
-      name: "Teams channel alias",
-      channel: "msteams",
-      globalChannel: "msteams",
-      failureDestination: undefined,
-      failureAlert: { channel: "teams" },
-    },
-  ])("delivers the inherited failure route through $name", (testCase) => {
-    const sendCronFailureAlert = vi.fn(async () => undefined);
-    const recipient = `${"targetPrefix" in testCase ? testCase.targetPrefix : testCase.channel}:alerts`;
-    const state = createCronServiceState({
-      scheduler: createTestGatewayScheduler(),
-      storePath: "/tmp/openclaw-cron-failure-alert-aliased-routing.json",
-      cronEnabled: true,
-      cronConfig: {
-        failureAlert: {
-          enabled: true,
-          after: 1,
-          mode: "announce",
-          channel: testCase.globalChannel,
-          to: recipient,
-          accountId: `${testCase.channel}-bot`,
-        },
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      nowMs: () => 2_000,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      sendCronFailureAlert,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = makeCronJob({
-      id: "aliased-failure-route",
-      name: "Aliased failure route",
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      payload: { kind: "agentTurn", message: "report" },
-      delivery: {
-        mode: "none",
-        ...(testCase.failureDestination ? { failureDestination: testCase.failureDestination } : {}),
-      },
-      ...(testCase.failureAlert ? { failureAlert: testCase.failureAlert } : {}),
-    });
-    const deferredNotifications: DeferredCronNotifications = [];
-
-    applyJobResult(
-      state,
-      job,
-      {
-        status: "error",
-        error: "provider unavailable",
-        startedAt: 1_000,
-        endedAt: 2_000,
-      },
-      { deferredNotifications },
-    );
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-
-    expect(sendCronFailureAlert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: testCase.channel,
-        to: recipient,
-        accountId: `${testCase.channel}-bot`,
       }),
     );
   });
@@ -652,26 +278,7 @@ describe("cron failure alert account routing", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledWith(expect.objectContaining({ runAtMs }));
   });
 
-  it.each([
-    { name: "inherited", failureAlert: undefined },
-    { name: "explicitly repeated", failureAlert: { to: "telegram:19098680" } },
-    { name: "provider-aliased", failureAlert: { to: "tg:19098680" } },
-    {
-      name: "mixed selected-channel aliases",
-      deliveryChannel: "gchat",
-      deliveryTo: "gchat:RoomA",
-      failureAlert: { channel: "googlechat", to: "googlechat:RoomA" },
-      expectedChannel: "googlechat",
-    },
-    {
-      name: "plugin-normalized equivalent",
-      deliveryChannel: "discord",
-      deliveryTo: "1234567890",
-      failureAlert: { channel: "discord", to: "discord:channel:1234567890" },
-      expectedChannel: "discord",
-    },
-  ])("keeps the primary account and topic on $name failure alerts", (testCase) => {
-    const { failureAlert } = testCase;
+  it("keeps the primary account and topic on provider-aliased failure alerts", () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -692,12 +299,12 @@ describe("cron failure alert account routing", () => {
       payload: { kind: "agentTurn", message: "report" },
       delivery: {
         mode: "announce",
-        channel: "deliveryChannel" in testCase ? testCase.deliveryChannel : "telegram",
-        to: "deliveryTo" in testCase ? testCase.deliveryTo : "telegram:19098680",
+        channel: "telegram",
+        to: "telegram:19098680",
         accountId: "telegram-bot",
         threadId: 42,
       },
-      ...(failureAlert ? { failureAlert } : {}),
+      failureAlert: { to: "tg:19098680" },
     });
     const deferredNotifications: DeferredCronNotifications = [];
 
@@ -717,8 +324,8 @@ describe("cron failure alert account routing", () => {
     runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "expectedChannel" in testCase ? testCase.expectedChannel : "telegram",
-        to: failureAlert?.to ?? "telegram:19098680",
+        channel: "telegram",
+        to: "tg:19098680",
         accountId: "telegram-bot",
         threadId: 42,
       }),

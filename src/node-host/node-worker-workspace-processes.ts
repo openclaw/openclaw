@@ -13,14 +13,20 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import type { NodeWorkerEnvironmentStopInput } from "../worker/node-supervisor-protocol.js";
 import {
+  NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 
 const MAX_PROCESSES_PER_WORKSPACE = 32;
 const MAX_OUTPUT_CHARS = 4_096;
+
+type WorkspaceProcessStop = { epoch: number; open: boolean; settled?: Promise<void> };
 
 type ProcessOwner = {
   key: string;
@@ -51,27 +57,60 @@ type WorkspaceProcess = {
   releaseWorkspace: () => void;
 };
 
+async function joinWorkspaceCleanup(operations: Promise<void>[]): Promise<void> {
+  const failures = (await Promise.allSettled(operations)).flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : [],
+  );
+  throwNodeHostCleanupErrors(failures, "Workspace process cleanup failed");
+}
+
 /** A workspace owns preview processes across tool calls and joins their trees before retirement. */
 export class NodeWorkerWorkspaceProcesses {
   private readonly supervisor = getProcessSupervisor();
   private readonly owners = new Map<string, ProcessOwner>();
-  private readonly stopped = new Map<string, number>();
+  private readonly stopped = new Map<string, WorkspaceProcessStop>();
+  private readonly stopping = new Set<Promise<void>>();
   private closed = false;
 
   hasActiveWork(): boolean {
-    return [...this.owners.values()].some((owner) =>
-      [...owner.processes.values()].some((process) => !process.settled),
+    return (
+      this.stopping.size > 0 ||
+      [...this.stopped.values()].some((marker) => !marker.open) ||
+      [...this.owners.values()].some((owner) =>
+        [...owner.processes.values()].some((process) => !process.settled),
+      )
     );
+  }
+
+  /** Capture before workspace lookup can yield; stop revokes this admission, not the directory. */
+  captureAdmission(
+    input: Pick<NodeWorkerWorkspaceExecInput, "gatewayNamespace" | "environmentId">,
+    generation: number,
+  ): () => void {
+    const key = JSON.stringify([input.gatewayNamespace, input.environmentId]);
+    const admitted = this.stopped.get(key);
+    const refused = admitted !== undefined && admitted.epoch >= generation && !admitted.open;
+    return () => {
+      const current = this.stopped.get(key);
+      if (
+        this.closed ||
+        refused ||
+        (current &&
+          current.epoch >= generation &&
+          (current !== admitted || current.epoch > generation || !current.open))
+      ) {
+        throw new Error("INVALID_REQUEST: workspace process owner has retired");
+      }
+    };
   }
 
   async executeForeground(params: {
     input: NodeWorkerWorkspaceExecInput;
+    assertCurrent: () => void;
     workspaceDir: string;
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     timeoutMs: number;
-    stdoutLimit: number;
-    stderrLimit: number;
     retainWorkspace: () => () => void;
   }): Promise<NodeWorkerWorkspaceExecResult> {
     // Legacy callers retain their shipped executor, including detached lease helpers.
@@ -84,7 +123,10 @@ export class NodeWorkerWorkspaceProcesses {
         ...(params.signal ? { signal: params.signal } : {}),
         killProcessTree: true,
         requireProcessTreeExtinction: true,
-        maxOutputBytes: { stdout: params.stdoutLimit, stderr: params.stderrLimit },
+        maxOutputBytes: {
+          stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+          stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
+        },
         terminateOnOutputLimit: true,
       });
       return projectNodeWorkerWorkspaceExecResult(params.workspaceDir, result);
@@ -95,25 +137,21 @@ export class NodeWorkerWorkspaceProcesses {
         ...params.input,
         process: { action: "start", processId: "foreground-" + randomUUID() },
       },
-      foreground: {
-        timeoutMs: params.timeoutMs,
-        stdoutLimit: params.stdoutLimit,
-        stderrLimit: params.stderrLimit,
-      },
+      foregroundTimeoutMs: params.timeoutMs,
     });
   }
 
   async execute(params: {
     input: NodeWorkerWorkspaceExecInput;
+    assertCurrent: () => void;
     workspaceDir: string;
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     retainWorkspace: () => () => void;
-    foreground?: { timeoutMs: number; stdoutLimit: number; stderrLimit: number };
+    foregroundTimeoutMs?: number;
   }): Promise<NodeWorkerWorkspaceExecResult> {
     const { input, workspaceDir, signal } = params;
     const operation = input.process!;
-    const environmentKey = JSON.stringify([input.gatewayNamespace, input.environmentId]);
     const key = JSON.stringify([
       input.gatewayNamespace,
       input.environmentId,
@@ -122,9 +160,7 @@ export class NodeWorkerWorkspaceProcesses {
     ]);
     const assertCurrent = () => {
       signal?.throwIfAborted();
-      if (this.closed || (this.stopped.get(environmentKey) ?? -1) >= input.generation) {
-        throw new Error("INVALID_REQUEST: workspace process owner has retired");
-      }
+      params.assertCurrent();
     };
     assertCurrent();
     let owner = this.owners.get(key);
@@ -164,7 +200,7 @@ export class NodeWorkerWorkspaceProcesses {
           this.owners.set(key, owner);
         }
         if (
-          !params.foreground &&
+          params.foregroundTimeoutMs === undefined &&
           [...owner.processes.values()].filter((entry) => !entry.output).length >=
             MAX_PROCESSES_PER_WORKSPACE
         ) {
@@ -187,7 +223,7 @@ export class NodeWorkerWorkspaceProcesses {
           settled: false,
           started: Promise.resolve(),
           releaseWorkspace: params.retainWorkspace(),
-          ...(params.foreground
+          ...(params.foregroundTimeoutMs !== undefined
             ? {
                 output: {
                   stdout: createCapturedOutputBuffers(),
@@ -201,13 +237,20 @@ export class NodeWorkerWorkspaceProcesses {
         created.started = (async () => {
           const runId = randomUUID();
           const abortStartup = () => this.supervisor.cancel(runId);
+          const append = (stream: "stdout" | "stderr", chunk: string) => {
+            if (!created.output) {
+              created[stream] = (created[stream] + chunk).slice(-MAX_OUTPUT_CHARS);
+            }
+          };
           const capture = (stream: "stdout" | "stderr", bytes: Buffer) => {
             const output = created.output;
-            const limit =
-              stream === "stdout" ? params.foreground?.stdoutLimit : params.foreground?.stderrLimit;
-            if (!output || limit === undefined) {
+            if (!output) {
               return;
             }
+            const limit =
+              stream === "stdout"
+                ? NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES
+                : NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES;
             appendCapturedOutput(output[stream], bytes, limit, "tail");
             if (output[stream].truncatedBytes > 0) {
               this.supervisor.cancel(runId);
@@ -225,23 +268,15 @@ export class NodeWorkerWorkspaceProcesses {
               exactEnv: true,
               ...(input.input === undefined ? {} : { input: input.input }),
               captureOutput: false,
-              ...(params.foreground
+              ...(params.foregroundTimeoutMs !== undefined
                 ? {
-                    timeoutMs: params.foreground.timeoutMs,
+                    timeoutMs: params.foregroundTimeoutMs,
                     onStdoutRaw: (bytes: Buffer) => capture("stdout", bytes),
                     onStderrRaw: (bytes: Buffer) => capture("stderr", bytes),
                   }
                 : {}),
-              onStdout: (chunk) => {
-                if (!created.output) {
-                  created.stdout = (created.stdout + chunk).slice(-MAX_OUTPUT_CHARS);
-                }
-              },
-              onStderr: (chunk) => {
-                if (!created.output) {
-                  created.stderr = (created.stderr + chunk).slice(-MAX_OUTPUT_CHARS);
-                }
-              },
+              onStdout: (chunk) => append("stdout", chunk),
+              onStderr: (chunk) => append("stderr", chunk),
               assertCurrent: () => {
                 assertCurrent();
                 if (!boundOwner.accepting) {
@@ -288,7 +323,7 @@ export class NodeWorkerWorkspaceProcesses {
       throw new Error("INVALID_REQUEST: unknown workspace process");
     }
     await process.started;
-    if (params.foreground) {
+    if (params.foregroundTimeoutMs !== undefined) {
       const accepted = process;
       const cancelAccepted = () => accepted.run!.cancel();
       signal?.addEventListener("abort", cancelAccepted, { once: true });
@@ -304,14 +339,12 @@ export class NodeWorkerWorkspaceProcesses {
         signal?.removeEventListener("abort", cancelAccepted);
       }
       if (process.output) {
-        process.stdout = decodeWindowsOutputBuffer({
-          buffer: finalizeCapturedOutput(process.output.stdout, "tail"),
-          windowsEncoding: process.output.windowsEncoding,
-        });
-        process.stderr = decodeWindowsOutputBuffer({
-          buffer: finalizeCapturedOutput(process.output.stderr, "tail"),
-          windowsEncoding: process.output.windowsEncoding,
-        });
+        for (const stream of ["stdout", "stderr"] as const) {
+          process[stream] = decodeWindowsOutputBuffer({
+            buffer: finalizeCapturedOutput(process.output[stream], "tail"),
+            windowsEncoding: process.output.windowsEncoding,
+          });
+        }
       }
       if (process.settled) {
         owner?.processes.delete(operation.processId);
@@ -344,7 +377,7 @@ export class NodeWorkerWorkspaceProcesses {
         : completion?.reason === "manual-cancel" || completion?.reason === "signal"
           ? "signal"
           : "exit",
-      ...(params.foreground
+      ...(params.foregroundTimeoutMs !== undefined
         ? {
             killIssuedByAbort: signal?.aborted === true || undefined,
             stdoutTruncatedBytes: process.output?.stdout.truncatedBytes || undefined,
@@ -364,30 +397,38 @@ export class NodeWorkerWorkspaceProcesses {
     };
   }
 
-  async stopEnvironment(input: {
-    gatewayNamespace: string;
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId?: string;
-  }): Promise<void> {
+  async stopEnvironment(
+    input: NodeWorkerEnvironmentStopInput,
+    stopExecution?: () => Promise<void>,
+  ): Promise<void> {
     const environmentKey = JSON.stringify([input.gatewayNamespace, input.environmentId]);
-    this.stopped.set(
-      environmentKey,
-      Math.max(this.stopped.get(environmentKey) ?? -1, input.ownerEpoch),
-    );
+    const previous = this.stopped.get(environmentKey);
+    const marker: WorkspaceProcessStop = { epoch: input.ownerEpoch, open: false };
+    if (!previous || previous.epoch <= input.ownerEpoch) {
+      this.stopped.set(environmentKey, marker);
+    }
     const owners = [...this.owners.values()].filter(
       (owner) =>
         owner.gatewayNamespace === input.gatewayNamespace &&
         owner.environmentId === input.environmentId &&
         owner.generation <= input.ownerEpoch &&
-        (!input.sessionId || owner.sessionId === input.sessionId),
+        owner.sessionId === input.sessionId,
     );
-    await this.stopOwners(owners);
+    // Failed cleanup keeps admission closed; retries join the exact earlier stop.
+    const stopping = (previous?.settled ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.stopOwners(owners, stopExecution))
+      .then(() => {
+        marker.open = true;
+      });
+    marker.settled = stopping;
+    this.stopping.add(stopping);
+    return stopping.finally(() => this.stopping.delete(stopping));
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    await this.stopOwners([...this.owners.values()]);
+    await joinWorkspaceCleanup([...this.stopping, this.stopOwners([...this.owners.values()])]);
   }
 
   private async joinExtinction(process: WorkspaceProcess): Promise<void> {
@@ -402,32 +443,26 @@ export class NodeWorkerWorkspaceProcesses {
     process.releaseWorkspace();
   }
 
-  private async stopOwners(owners: ProcessOwner[]): Promise<void> {
+  private async stopOwners(
+    owners: ProcessOwner[],
+    stopExecution?: () => Promise<void>,
+  ): Promise<void> {
     for (const owner of owners) {
       owner.accepting = false;
     }
-    const outcomes = await Promise.allSettled(
+    const cleanup = joinWorkspaceCleanup(
       owners.map(async (owner) => {
-        const processOutcomes = await Promise.allSettled(
+        await joinWorkspaceCleanup(
           [...owner.processes.values()].map((process) => process.cleanup()),
         );
-        const errors = processOutcomes.flatMap((outcome) =>
-          outcome.status === "rejected" ? [outcome.reason] : [],
-        );
-        if (errors.length) {
-          throw new AggregateError(errors, "Workspace process cleanup failed");
-        }
         for (const process of owner.processes.values()) {
           process.releaseWorkspace();
         }
         this.owners.delete(owner.key);
       }),
     );
-    const errors = outcomes.flatMap((outcome) =>
-      outcome.status === "rejected" ? [outcome.reason] : [],
-    );
-    if (errors.length) {
-      throw new AggregateError(errors, "Workspace process cleanup failed");
-    }
+    // Worker cleanup still runs after a workspace cleanup failure.
+    await cleanup.catch(() => undefined);
+    await joinWorkspaceCleanup([cleanup, ...(stopExecution ? [stopExecution()] : [])]);
   }
 }

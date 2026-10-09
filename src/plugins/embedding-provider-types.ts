@@ -14,10 +14,18 @@ export type EmbeddingInput =
       >;
     };
 
+/** Provider-reported token counts for one embedding request. */
+export type EmbeddingUsage = {
+  promptTokens: number;
+  totalTokens: number;
+};
+
 /** Per-call options passed to embedding provider calls. */
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
+  /** Report each successful upstream request before resolving; undefined means usage unavailable. */
+  onUsage?: (usage: EmbeddingUsage | undefined) => void;
 } & MemorySearchDeadlineControlOptions;
 
 /** Runtime metadata returned with a created embedding provider. */
@@ -54,30 +62,7 @@ export type EmbeddingProvider = {
     inputs: EmbeddingInput[],
     options?: EmbeddingProviderCallOptions,
   ) => Promise<number[][]>;
-  /**
-   * Optional extension of `embedBatch` that also surfaces provider-reported token usage.
-   * Implementations must return the same vectors as `embedBatch` for the same inputs and
-   * may omit `usage` when the provider does not report it. When usage is reported for
-   * only part of the batch (for example one aggregated query response omits it), the
-   * implementation must omit `usage` rather than report an undercounted total.
-   */
-  embedBatchDetailed?: (
-    inputs: EmbeddingInput[],
-    options?: EmbeddingProviderCallOptions,
-  ) => Promise<EmbeddingBatchDetailedResult>;
   close?: () => Promise<void> | void;
-};
-
-/** Token usage reported by an embedding provider for a batch call. */
-export type EmbeddingUsage = {
-  promptTokens: number;
-  totalTokens: number;
-};
-
-/** Vectors plus optional provider-reported usage returned by `embedBatchDetailed`. */
-export type EmbeddingBatchDetailedResult = {
-  embeddings: number[][];
-  usage?: EmbeddingUsage;
 };
 
 /** Options passed to embedding provider adapters when creating providers. */

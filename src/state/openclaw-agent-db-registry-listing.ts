@@ -2,13 +2,23 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  type AgentDatabaseRegistryChange,
   type OpenClawAgentDatabaseRegistryReadResult,
   type OpenClawAgentDatabaseRegistrationCommit,
   type OpenClawRegisteredAgentDatabase,
@@ -24,31 +34,65 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
   executeExistingOpenClawStateRead,
 } from "./openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
+type AgentDatabaseRegistrySource = {
+  agentId: string;
+  path: string;
+  physicalPath: string;
+  identity: string;
+  schemaVersion: number;
+};
+
+export type AgentDatabaseRegistryMutation = {
+  kind: "upsert" | "remove";
+  sources: readonly AgentDatabaseRegistrySource[];
+};
+
+type RegistryTransition = {
+  operation: symbol;
+  phase: "begin" | "commit" | "finish";
+  mutation?: AgentDatabaseRegistryMutation;
+};
+
 type AgentDatabaseRegistryMemo = {
   pathname: string;
   token: symbol;
   entries?: readonly OpenClawRegisteredAgentDatabase[];
+  next?: { memo: AgentDatabaseRegistryMemo; transition?: RegistryTransition };
 };
 
 // A plugin may first open a hot-created agent; its registration must invalidate
 // native discovery even when subsequent callers reuse the shared connection.
-const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
-  Symbol.for("openclaw.agentDatabaseRegistryMemo"),
-  () => ({}),
-);
+const registry = resolveGlobalSingleton<{
+  memo?: AgentDatabaseRegistryMemo;
+  pending: Map<symbol, RegistryTransition & { pathname: string; settled: Deferred }>;
+  publications: WeakSet<SessionRowChange>;
+}>(Symbol.for("openclaw.agentDatabaseRegistryMemo"), () => ({
+  pending: new Map(),
+  publications: new WeakSet(),
+}));
 
-function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+/** Registry facts retain their owner through deferred COMMIT publication. */
+export function emitOpenClawAgentDatabaseRegistryChange(
+  agentId: string,
+  database?: DatabaseSync,
+): void {
+  const change: SessionRowChange = { all: true, scope: { agentId, topology: true } };
+  registry.publications.add(change);
+  sessionChanges.emit(change, database);
+}
+
+export function isOpenClawAgentDatabaseRegistryChange(change: SessionRowChange): boolean {
+  return registry.publications.has(change);
 }
 
 function activateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): AgentDatabaseRegistryMemo {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   if (registry.memo?.pathname !== pathname) {
     // One active pathname keeps registry metadata process-stable without retaining
     // an unbounded generation map. Switching back creates a fresh generation.
@@ -64,32 +108,165 @@ export function readOpenClawAgentDatabaseRegistryToken(
   return activateRegisteredAgentDatabasesMemo(options).token;
 }
 
-/** An in-process witness from the canonical invalidator, never serialized as authority. */
-export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: symbol }>;
-
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): AgentDatabaseRegistryChange | undefined {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
-  if (registry.memo?.pathname === pathname) {
-    const previous = registry.memo.token;
-    registry.memo = { pathname, token: Symbol(pathname) };
-    return { previous, current: registry.memo.token };
-  }
-  return undefined;
+  return advanceRegisteredAgentDatabasesMemo(resolveDatabasePath(options));
 }
 
-/** Publish only registration witnessed at COMMIT, under its original shared generation. */
+function advanceRegisteredAgentDatabasesMemo(
+  pathname: string,
+  transition?: RegistryTransition,
+): AgentDatabaseRegistryChange | undefined {
+  if (transition?.phase === "begin") {
+    registry.pending.set(transition.operation, {
+      ...transition,
+      pathname,
+      settled: createDeferredCore(),
+    });
+  } else if (transition?.phase === "finish") {
+    finishPendingRegistration(transition.operation);
+  }
+  const previous = registry.memo;
+  if (previous?.pathname !== pathname) {
+    return undefined;
+  }
+  const memo = { pathname, token: Symbol(pathname) };
+  // Only captured readers retain older nodes; the owner never keeps a backward history.
+  previous.next = { memo, transition };
+  registry.memo = memo;
+  return { previous: previous.token, current: memo.token };
+}
+
+function finishPendingRegistration(operation: symbol): void {
+  const pending = registry.pending.get(operation);
+  registry.pending.delete(operation);
+  pending?.settled.resolve();
+}
+
+function captureRegistryMutation(
+  kind: AgentDatabaseRegistryMutation["kind"],
+  sources: readonly { agentId: string; path: string; schemaVersion?: number }[],
+): AgentDatabaseRegistryMutation | undefined {
+  try {
+    const captured: AgentDatabaseRegistrySource[] = [];
+    for (const source of sources) {
+      const identity = inspectDatabasePathIdentitySync(source.path);
+      if (!identity) {
+        return undefined;
+      }
+      captured.push({
+        agentId: source.agentId,
+        path: path.resolve(source.path),
+        physicalPath: identity.canonicalPath,
+        identity: identity.key,
+        schemaVersion: source.schemaVersion ?? OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+    }
+    return { kind, sources: captured };
+  } catch {
+    // An uninspectable publication cannot certify an unrelated selection.
+    return undefined;
+  }
+}
+
+/** Stage exact registry facts at the same native transaction boundary as their rows. */
+export function recordOpenClawAgentDatabaseRegistryMutation(
+  database: { db: DatabaseSync; path: string },
+  kind: AgentDatabaseRegistryMutation["kind"],
+  sources: readonly { agentId: string; path: string; schemaVersion?: number }[],
+): void {
+  const operation = Symbol("agent-registry-mutation");
+  const mutation = captureRegistryMutation(kind, sources);
+  const advance = (phase: RegistryTransition["phase"]) =>
+    advanceRegisteredAgentDatabasesMemo(database.path, { operation, mutation, phase });
+  if (
+    !stageSqliteTransactionState(database.db, {
+      stage: () => advance("begin"),
+      commit: () => {
+        advance("commit");
+        advance("finish");
+      },
+      rollback: () => advance("finish"),
+    })
+  ) {
+    throw new Error("Registry mutation requires its canonical transaction publication scope");
+  }
+}
+
+export type AgentDatabaseRegistration = ReturnType<
+  typeof captureOpenClawAgentDatabaseRegistration
+> & {
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>;
+};
+
+export async function settleAgentRegistration<T>(
+  registration: AgentDatabaseRegistration,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let result: Result<T, unknown>;
+  try {
+    result = { ok: true, value: await operation() };
+  } catch (error) {
+    result = { ok: false, error };
+  }
+  try {
+    // Native exit and queued receipts settle before registration publication.
+    registration.finish(await registration.nativeSettlement);
+  } catch (error) {
+    if (!result.ok) {
+      throw createSqliteLifecycleAggregateError(
+        [result.error, error],
+        "Agent open and registration publication failed",
+        result.error,
+      );
+    }
+    throw error;
+  }
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/** Fence native registry settlement under its original shared generation. */
 export function captureOpenClawAgentDatabaseRegistration(params: {
+  kind?: AgentDatabaseRegistryMutation["kind"];
   agentId: string;
   agentPath: string;
   admission: OpenClawStateDatabaseReadAdmission;
+  assertPublicationCurrent?: () => void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
 }) {
   const options = { path: params.admission.databasePath };
+  const operation = Symbol("agent-registry-registration");
+  const mutation = captureRegistryMutation(params.kind ?? "upsert", [
+    { agentId: params.agentId, path: params.agentPath },
+  ]);
+  const advance = (phase: RegistryTransition["phase"]) => {
+    const change = advanceRegisteredAgentDatabasesMemo(options.path, {
+      operation,
+      mutation,
+      phase,
+    });
+    if (change) {
+      params.onRegistryChange?.(change);
+    }
+  };
   let active = false;
   let committed = false;
   let finished = false;
+  const publishChange = () => {
+    try {
+      (params.assertPublicationCurrent ?? params.admission.assertCurrent)();
+    } catch (error) {
+      if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+        return;
+      }
+      throw error;
+    }
+    emitOpenClawAgentDatabaseRegistryChange(params.agentId);
+  };
   return {
     begin() {
       if (finished) {
@@ -97,10 +274,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
       }
       if (!active) {
         active = true;
-        const change = invalidateRegisteredAgentDatabasesMemo(options);
-        if (change) {
-          params.onRegistryChange?.(change);
-        }
+        advance("begin");
       }
     },
     recordCommitted(receipt: OpenClawAgentDatabaseRegistrationCommit) {
@@ -115,29 +289,57 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
         throw new Error("Agent registration commit differs from its captured owner");
       }
       committed = true;
-    },
-    finish() {
-      if (finished) {
-        return;
-      }
-      finished = true;
       try {
         params.admission.assertCurrent();
       } catch (error) {
+        // A witnessed COMMIT invalidates old readers even when its publication scope has ended.
+        invalidateRegisteredAgentDatabasesMemo(options);
         if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
           return;
         }
         throw error;
       }
+      advance("commit");
+    },
+    finish(settlement?: SqliteWorkerOperationSettlement) {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      const uncertain = active && !committed && settlement?.kind === "unknown";
+      const failures: unknown[] = [];
       try {
-        const change = active ? invalidateRegisteredAgentDatabasesMemo(options) : undefined;
-        if (change) {
-          params.onRegistryChange?.(change);
+        try {
+          if (uncertain) {
+            // Lost native receipts cannot certify rollback, even after the caller's scope ends.
+            const change = invalidateRegisteredAgentDatabasesMemo(options);
+            if (change) {
+              params.onRegistryChange?.(change);
+            }
+          }
+          params.admission.assertCurrent();
+        } catch (error) {
+          if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+            return;
+          }
+          throw error;
+        } finally {
+          finishPendingRegistration(operation);
         }
+        if (active && !uncertain) {
+          advance("finish");
+        }
+      } catch (error) {
+        failures.push(error);
       } finally {
-        if (committed) {
-          sessionChanges.emit({ all: true, scope: { agentId: params.agentId, topology: true } });
+        if (committed || uncertain) {
+          try {
+            publishChange();
+          } catch (error) {
+            failures.push(error);
+          }
         }
+        throwSqliteLifecycleErrors(failures, "Agent registration settlement failed");
       }
     },
   };
@@ -145,8 +347,12 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
 
 function cloneRegisteredAgentDatabases(
   entries: readonly OpenClawRegisteredAgentDatabase[],
+  options: AgentDatabaseRegistryListOptions,
 ): OpenClawRegisteredAgentDatabase[] {
-  return entries.map((entry) => ({ ...entry }));
+  const cloned = entries.map((entry) => ({ ...entry }));
+  return options.includeIncompatibleSchemaVersions
+    ? cloned
+    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
 }
 
 function hasUnavailableMissingSqlitePath(pathname: string): boolean {
@@ -191,9 +397,15 @@ type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
 };
 
 export class AgentDatabaseRegistryChangedError extends Error {
-  constructor() {
-    super("Agent database registry changed during discovery; retry the read.");
+  constructor(message = "Agent database registry changed during discovery; retry the read.") {
+    super(message);
     this.name = "AgentDatabaseRegistryChangedError";
+  }
+}
+
+export class AgentDatabaseRegistryPendingError extends AgentDatabaseRegistryChangedError {
+  constructor(readonly waitForSettlement: () => Promise<void>) {
+    super("Agent database registry ownership is changing during discovery");
   }
 }
 
@@ -209,7 +421,7 @@ export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] | Promise<OpenClawRegisteredAgentDatabase[]> {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   const read = ({ db }: { db: DatabaseSync }) =>
     readRegisteredAgentDatabaseRows(db, pathname, artifactPreserving);
   const finish = (entries: OpenClawRegisteredAgentDatabase[] | undefined) => {
@@ -235,7 +447,6 @@ export async function inspectOpenClawRegisteredAgentDatabases(
   return readRegisteredAgentDatabases(options, true);
 }
 
-/** List agent databases recorded in the shared OpenClaw state registry. */
 export function listOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
@@ -246,18 +457,21 @@ export function listOpenClawRegisteredAgentDatabases(
     { ...options, includeIncompatibleSchemaVersions: true },
     false,
   ));
-  const cloned = cloneRegisteredAgentDatabases(entries);
-  return options.includeIncompatibleSchemaVersions
-    ? cloned
-    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+  return cloneRegisteredAgentDatabases(entries, options);
 }
 
-/** Capture authority now, but activate the canonical memo only if discovery needs it. */
+/** Scoped publication witnesses are immediate; native registry rows remain demand-driven. */
 export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   inputOptions: AgentDatabaseRegistryListOptions = {},
+  unchangedBy?: (
+    mutation: AgentDatabaseRegistryMutation,
+    entries: readonly OpenClawRegisteredAgentDatabase[] | undefined,
+  ) => boolean,
 ): {
+  assertAdmissionCurrent: () => void;
   assertCurrent: () => void;
-  read(): Promise<{
+  followRegistration: (change: AgentDatabaseRegistryChange) => void;
+  read(signal?: AbortSignal): Promise<{
     result: OpenClawAgentDatabaseRegistryReadResult;
     assertCurrent: () => void;
     followRegistration: (change: AgentDatabaseRegistryChange) => void;
@@ -269,47 +483,116 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     const options = {
       ...inputOptions,
       env,
-      path: resolveAgentDatabaseRegistryPath({ ...inputOptions, env }),
+      path: resolveDatabasePath({ ...inputOptions, env }),
     };
     const context = captureOpenClawStateWorkerContext(options);
+    const assertAdmissionCurrent = () => context.admission.assertCurrent();
     const inCapturedScope = AsyncLocalStorage.snapshot();
-    let assertPreparedCurrent = () => context.admission.assertCurrent();
-    return {
-      assertCurrent: () => assertPreparedCurrent(),
-      async read() {
-        context.admission.assertCurrent();
-        let memo = activateRegisteredAgentDatabasesMemo(options);
-        let invalidated = false;
-        const assertCurrent = () => {
-          context.admission.assertCurrent();
-          if (invalidated || registry.memo !== memo) {
+    const captureWitness = () => {
+      const memo = activateRegisteredAgentDatabasesMemo(options);
+      let cursor = memo;
+      let invalidated = false;
+      let referenceEntries = memo.entries;
+      const followedRegistrations = new Set<symbol>();
+      const unchanged = (mutation: AgentDatabaseRegistryMutation | undefined) => {
+        if (!mutation || !unchangedBy) {
+          return false;
+        }
+        return unchangedBy(mutation, referenceEntries);
+      };
+      const assertCurrent = () => {
+        assertAdmissionCurrent();
+        const current = registry.memo;
+        if (invalidated) {
+          throw new AgentDatabaseRegistryChangedError();
+        }
+        const pending = unchangedBy
+          ? [...registry.pending.values()].filter(
+              (registration) =>
+                registration.pathname === options.path &&
+                !followedRegistrations.has(registration.operation) &&
+                !unchanged(registration.mutation),
+            )
+          : [];
+        if (pending.length > 0) {
+          throw new AgentDatabaseRegistryPendingError(async () => {
+            assertAdmissionCurrent();
+            await Promise.all(pending.map((entry) => entry.settled.promise));
+            assertAdmissionCurrent();
+          });
+        }
+        while (cursor !== current) {
+          const next = cursor.next;
+          if (
+            !unchangedBy ||
+            !next?.transition ||
+            (next.transition.phase === "commit" && !unchanged(next.transition.mutation))
+          ) {
             invalidated = true;
             throw new AgentDatabaseRegistryChangedError();
           }
-        };
-        const followRegistration = (change: AgentDatabaseRegistryChange) => {
-          context.admission.assertCurrent();
-          if (
-            invalidated ||
-            memo.token !== change.previous ||
-            registry.memo?.pathname !== memo.pathname ||
-            registry.memo.token !== change.current
-          ) {
-            invalidated = true;
-            throw new Error("Agent registration cannot replace an invalidated registry read");
-          }
-          memo = registry.memo;
-        };
+          cursor = next.memo;
+        }
+      };
+      const followRegistration = (change: AgentDatabaseRegistryChange) => {
+        assertAdmissionCurrent();
+        if (
+          invalidated ||
+          cursor.token !== change.previous ||
+          registry.memo?.pathname !== cursor.pathname ||
+          registry.memo.token !== change.current
+        ) {
+          invalidated = true;
+          throw new Error("Agent registration cannot replace an invalidated registry read");
+        }
+        const operation = cursor.next?.transition?.operation;
+        if (operation) {
+          followedRegistrations.add(operation);
+        }
+        cursor = registry.memo;
+      };
+      return {
+        memo,
+        assertCurrent,
+        followRegistration,
+        acceptEntries(entries: readonly OpenClawRegisteredAgentDatabase[]) {
+          referenceEntries = entries;
+        },
+      };
+    };
+    // Scoped readers retain publication authority even when native discovery needs no registry rows.
+    const scopedWitness = unchangedBy ? captureWitness() : undefined;
+    let preparedWitness = scopedWitness;
+    return {
+      assertAdmissionCurrent,
+      assertCurrent: () => (preparedWitness?.assertCurrent ?? assertAdmissionCurrent)(),
+      followRegistration(change) {
+        if (!preparedWitness) {
+          throw new Error("Agent registration requires a captured registry witness");
+        }
+        preparedWitness.followRegistration(change);
+      },
+      async read(signal) {
+        signal?.throwIfAborted();
+        assertAdmissionCurrent();
+        const witness = scopedWitness ?? captureWitness();
+        const { memo, assertCurrent, followRegistration } = witness;
         // Install the witness before the first await, including a read that later rejects.
-        assertPreparedCurrent = assertCurrent;
+        preparedWitness = witness;
+        assertCurrent();
         if (!memo.entries) {
           const reply = await inCapturedScope(() =>
-            executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
+            executeExistingOpenClawStateRead(
+              options,
+              { type: "agentDatabaseRegistry.read" },
+              { signal },
+            ),
           );
           if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
             throw new Error("Unexpected agent database registry read result");
           }
           const result = reply?.result;
+          witness.acceptEntries(result?.status === "available" ? result.entries : []);
           assertCurrent();
           if (
             result?.status === "unavailable" ||
@@ -319,28 +602,24 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           }
           memo.entries ??= result?.entries ?? [];
         }
-        const entries = cloneRegisteredAgentDatabases(memo.entries);
+        const entries = cloneRegisteredAgentDatabases(memo.entries, options);
         assertCurrent();
         return {
-          result: {
-            status: "available",
-            entries: options.includeIncompatibleSchemaVersions
-              ? entries
-              : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
-          },
+          result: { status: "available", entries },
           assertCurrent,
           followRegistration,
         };
       },
     };
   } catch (error) {
+    const rethrow = () => {
+      throw error;
+    };
     return {
-      assertCurrent() {
-        throw error;
-      },
-      async read() {
-        throw error;
-      },
+      assertAdmissionCurrent: rethrow,
+      assertCurrent: rethrow,
+      followRegistration: rethrow,
+      read: async () => rethrow(),
     };
   }
 }

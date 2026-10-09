@@ -52,7 +52,6 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-import { modelsSetImageCommand } from "./models/set-image.js";
 import { modelsSetCommand } from "./models/set.js";
 
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
@@ -124,27 +123,30 @@ describe("models set + fallbacks", () => {
   });
 
   it.each([
-    ["text", modelsSetCommand],
-    ["image", modelsSetImageCommand],
-  ])("rejects an unknown %s model provider without writing config", async (_kind, command) => {
-    mockConfigSnapshot({});
-    const runtime = makeRuntime();
+    ["text", "model"],
+    ["image", "imageModel"],
+  ] as const)(
+    "rejects an unknown %s model provider without writing config",
+    async (_kind, field) => {
+      mockConfigSnapshot({});
+      const runtime = makeRuntime();
 
-    await expect(command("no-such-provider/no-such-model", runtime)).rejects.toThrow(
-      'Unknown model provider "no-such-provider"',
-    );
+      await expect(
+        modelsSetCommand("no-such-provider/no-such-model", runtime, field),
+      ).rejects.toThrow('Unknown model provider "no-such-provider"');
 
-    expect(mocks.writtenConfig).toBeUndefined();
-  });
+      expect(mocks.writtenConfig).toBeUndefined();
+    },
+  );
 
   it.each([
-    ["text", modelsSetCommand],
-    ["image", modelsSetImageCommand],
-  ])("warns but saves an unknown %s model for a known provider", async (_kind, command) => {
+    ["text", "model"],
+    ["image", "imageModel"],
+  ] as const)("warns but saves an unknown %s model for a known provider", async (_kind, field) => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
 
-    await command("openai/not-in-the-local-catalog", runtime);
+    await modelsSetCommand("openai/not-in-the-local-catalog", runtime, field);
 
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -189,12 +191,7 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("clawrouter/google/gemini-3.5-flash", makeRuntime());
 
     const written = getWrittenConfig();
-    const persisted = stampConfigWriteMetadata(
-      written,
-      "2026-07-18T00:00:00.000Z",
-      "test",
-      mocks.currentConfig,
-    );
+    const persisted = stampConfigWriteMetadata(written, "test", mocks.currentConfig);
     const policy = createModelVisibilityPolicy({
       cfg: persisted,
       catalog: [],

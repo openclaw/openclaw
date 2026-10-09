@@ -25,7 +25,10 @@ import {
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -80,7 +83,8 @@ function migrationParams(state: ReturnType<typeof createState>, cfg: OpenClawCon
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -108,8 +112,9 @@ describe("doctor model catalog credential migration", () => {
       null,
       2,
     )}\n`;
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
+      env: state.env,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("plugin-owner")]: pluginContents,
       },

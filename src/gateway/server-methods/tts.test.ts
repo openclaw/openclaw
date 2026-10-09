@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
+import { ttsHandlers } from "./tts.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -89,7 +90,6 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 async function callTts(method: string, params: Record<string, unknown> = {}) {
-  const { ttsHandlers } = await import("./tts.js");
   const respond = vi.fn();
   await expectDefined(
     ttsHandlers[method],
@@ -159,7 +159,6 @@ describe("ttsHandlers", () => {
     mocks.listSpeechProviders.mockReturnValue(providers);
     mocks.resolveTtsProviderOrder.mockReturnValue(["openai", "google"]);
 
-    const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
     const statusPromise = expectDefined(
       ttsHandlers["tts.status"],

@@ -4,7 +4,7 @@ import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../../llm/types.js";
@@ -19,11 +19,7 @@ import type {
 } from "../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
-import * as replyRunSettle from "./reply-run-finalization-lease.js";
-
-type ReplyRunKey = string;
-
-type ReplyBackendKind = "embedded" | "cli";
+import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
@@ -62,6 +58,12 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Host admission after policy preparation; false leaves the input for follow-up. */
+  canAdmit?: () => boolean;
+  toolAuthorityPreparation?: ReplyToolAuthorityPreparation & {
+    /** Host policy preparation alone does not add a caller-lifetime binding. */
+    authorityKind?: "run" | "source-bound";
+  };
   /** Host-observed audio fact; an owner must preserve its dynamic tool context before accepting. */
   inboundAudio?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
@@ -121,8 +123,15 @@ export type ReplyToolAuthoritySnapshot = Readonly<{
   personalToolOwner?: ReplyTurnParticipantInput;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */
   requestedRoute?: ReplyToolAuthorityRoute;
+  /** @deprecated Use fingerprintAsync for worker-backed preparation. */
   fingerprint(route?: ReplyToolAuthorityRoute): string;
+  /** @deprecated Use projectAsync for worker-backed preparation. */
   project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
+  fingerprintAsync?(route?: ReplyToolAuthorityRoute): Promise<string>;
+  projectAsync?(
+    overlay: ReplyToolAuthorityOverlay,
+    route: ReplyToolAuthorityRoute,
+  ): Promise<string>;
 }>;
 
 export type ReplyTurnParticipant = Readonly<{
@@ -161,30 +170,57 @@ export type ReplyBackendMessageInjection = {
 };
 
 /** V2 sinks invoke the host-owned, per-injection assertion at their final effect. */
+export type ReplyToolAuthorityPreparation = {
+  assertCurrent(this: void): void;
+  prepareCurrent(this: void): Promise<void>;
+  /** Pending-question compatibility still checks mutable policy synchronously. */
+  compatAssertCurrent(this: void): void;
+};
+
 export type ReplyBackendMessageInjectionV2 = {
   readonly version: 2;
   isAvailable(): boolean;
+  /** @deprecated Use queueMessageAsync with fresh policy preparation. */
   queueMessage(
     text: string,
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
   ): Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessageAsync?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    preparation: ReplyToolAuthorityPreparation,
+    authorityKind: "run" | "source-bound",
+  ): Promise<void | ReplyBackendQueueMessageResult>;
+  /** @deprecated Use claimPendingUserInputAnswerAsync with fresh policy preparation. */
   claimPendingUserInputAnswer?(
     text: string,
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
+  claimPendingUserInputAnswerAsync?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    preparation: ReplyToolAuthorityPreparation,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  /** @deprecated Use cancelPendingUserInputAsync with fresh policy preparation. */
   cancelPendingUserInput?(
     resolvedBy: string,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
+  cancelPendingUserInputAsync?(
+    resolvedBy: string,
+    preparation: ReplyToolAuthorityPreparation,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
 };
 
 export type ReplyBackendHandle = {
-  readonly kind: ReplyBackendKind;
+  readonly kind: "embedded" | "cli";
   readonly runId?: string;
   /** Exact authority of this concrete backend attempt, after fallback selection. */
   readonly toolAuthorityFingerprint?: string;
@@ -193,6 +229,8 @@ export type ReplyBackendHandle = {
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
+  /** False keeps inbound steering with the turn owner's profile; omission permits other profiles. */
+  readonly supportsCrossProfileSteering?: boolean;
   claimPendingUserInputAnswer?: (
     text: string,
     options?: ReplyBackendQueueMessageOptions,
@@ -207,10 +245,7 @@ export type ReplyBackendHandle = {
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
-  queueMessage?: (
-    text: string,
-    options?: ReplyBackendQueueMessageOptions,
-  ) => Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -228,14 +263,22 @@ export type ReplyMessageInjectionResolution =
   | {
       backend: ReplyBackendHandle;
       injection: ReplyBackendMessageInjection;
+      /** Internal FIFO preflight for a released synchronous sink. */
+      prepareQueueMessage?: () => Promise<void>;
     };
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
+  readonly backendIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  projectToolAuthorityFingerprintAsync(
+    overlay: ReplyToolAuthorityOverlay,
+  ): Promise<string | undefined>;
   resolve(params: {
+    preparation?: ReplyToolAuthorityPreparation;
     options?: ReplyBackendQueueMessageOptions;
+    personalToolParticipant?: ReplyTurnParticipantInput;
     inboundAudio?: boolean;
     allowPendingUserInputAnswer?: false;
     assertCurrent?: () => void;
@@ -268,7 +311,7 @@ export type ReplyMessageInjectionRejectionReason =
 
 export type ReplyMessageInjectionOutcome =
   | { status: "indeterminate"; errorMessage: string }
-  | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
+  | { status: "accepted" }
   /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
   | { status: "failed"; error: Error }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
@@ -321,7 +364,7 @@ type ReplyOperationResult =
 
 export type ReplyOperation = {
   readonly personalToolParticipants?: ReplyTurnParticipants;
-  readonly key: ReplyRunKey;
+  readonly key: string;
   readonly sessionId: string;
   /** Captured logical owner for session activity, including raw global keys. */
   readonly agentId?: string;
@@ -345,6 +388,8 @@ export type ReplyOperation = {
    * Final delivery reads it because the original dispatch context cannot change.
    */
   readonly acceptedSteeredInboundAudio: boolean;
+  /** Sticky fact: a final message-tool send already answered this turn's source. */
+  readonly sourceReplyDelivered: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
   /** Initial selected model; a concrete attempt must not replace user intent. */
@@ -359,45 +404,40 @@ export type ReplyOperation = {
   readonly staleExpiryReason?: ReplyOperationStaleReason;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
-  /** True when this operation has owned the supplied session ID. */
-  hasOwnedSessionId(sessionId: string): boolean;
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
-  setPhase(
-    next:
-      | "queued"
-      | "waiting_for_deferred_maintenance"
-      | "waiting_for_global_lane"
-      | "preflight_compacting"
-      | "memory_flushing"
-      | "running",
-  ): void;
-  /** Mark this operation as waiting on prior same-session maintenance. */
+  setPhase(next: Exclude<ReplyOperationPhase, "completed" | "failed" | "aborted">): void;
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;
-  /** Mark this operation as waiting for process-global run capacity. */
   markWaitingForGlobalLane(): void;
   /** Return a global-lane-waiting operation to queued once capacity is granted. */
   markGlobalLaneWaitEnded(): void;
-  /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
-  markAcceptedSteeredInboundAudio(): void;
+  /** A steered input joined this operation; any earlier source answer predates it. */
+  markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
+  markSourceReplyDelivered(): void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
+  /** @deprecated Use bindToolAuthoritySnapshotAsync. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
+  bindToolAuthoritySnapshotAsync(snapshot: ReplyToolAuthoritySnapshot): Promise<void>;
   setAutomaticFallbackRoute(route: ReplyToolAuthorityRoute | undefined): void;
   /** Project an inbound turn through the current concrete route; settled owners fail closed. */
+  /** @deprecated Use projectToolAuthorityFingerprintAsync. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  projectToolAuthorityFingerprintAsync(
+    this: void,
+    overlay: ReplyToolAuthorityOverlay,
+  ): Promise<string | undefined>;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */
+  /** @deprecated Use bindToolAuthorityRouteAsync. */
   bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;
+  bindToolAuthorityRouteAsync(route: ReplyToolAuthorityRoute): Promise<string>;
   updateSessionId(nextSessionId: string): void;
   /**
-   * Move this queued operation to another session key's run slot. Native command
-   * turns admit under the slash SOURCE key; when the command continues into a full
-   * agent turn it must own the TARGET session's slot so concurrent target inbounds
-   * queue/steer instead of double-admitting. Throws ReplyRunAlreadyActiveError when
-   * the target slot is owned. Capture the selected agent even when a raw key stays unchanged.
+   * Native commands transfer their queued source reservation to the target session.
+   * An occupied target throws ReplyRunAlreadyActiveError; unchanged keys still adopt agentId.
    */
   updateSessionKey(nextSessionKey: string, agentId?: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
@@ -412,11 +452,6 @@ export type ReplyOperation = {
   /** Settles after the lifecycle owner's final delivery/persistence barrier. */
   readonly ownerSettlement?: Promise<void>;
   complete(): void;
-  /**
-   * Complete the operation, clear active-run state, then run follow-up work.
-   * Use when the follow-up can create another ReplyOperation for this session.
-   */
-  completeThen(afterClear: () => void): void;
   /**
    * Clear active-run state immediately, but delay registered after-clear work
    * until delivery or another external barrier settles.
@@ -462,8 +497,6 @@ export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Terminal results must release the lane even if the owner never resumes.
 // Without this, abort/failure can leave the session wedged until process restart.
 export const REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS = 60_000;
-
-type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {

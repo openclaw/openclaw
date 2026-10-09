@@ -57,7 +57,6 @@ export function renderAgentSelect(params: {
 }
 
 export function renderNewSessionPlaceControls({
-  idPrefix,
   context,
   data,
   gateway,
@@ -69,7 +68,6 @@ export function renderNewSessionPlaceControls({
   onFocusComposer,
   requestUpdate,
 }: {
-  idPrefix?: string;
   context: ApplicationContext | undefined;
   data: NewSessionRouteData | undefined;
   gateway: DraftGatewayState;
@@ -120,7 +118,6 @@ export function renderNewSessionPlaceControls({
   const checkoutState = resolveCheckoutChip({
     destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
-    worktreeAvailable: place.worktreeAvailable(),
     worktreeName: place.worktreeName,
     headBranch: branches?.headBranch,
     baseRef: place.baseRef,
@@ -129,6 +126,14 @@ export function renderNewSessionPlaceControls({
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
     : t("newSession.gateway");
+  const selectCloudOption = (kind: "os" | "machine", id: string) =>
+    place.cloudMachines[kind === "os" ? "selectOs" : "select"](
+      place.cloudProfileId,
+      id,
+      cloudProfiles,
+      submitting || pendingPlacement,
+      requestUpdate,
+    );
   return html`${
     nativeTerminal
       ? renderNewSessionTerminalHost({
@@ -138,7 +143,6 @@ export function renderNewSessionPlaceControls({
           onSelect: (hostId) => place.selectTerminalHost(hostId),
         })
       : renderWhereChip({
-          idPrefix,
           state: whereState,
           environmentQuery: browser.environmentQuery,
           onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
@@ -165,22 +169,8 @@ export function renderNewSessionPlaceControls({
             }
             place.selectCloudProfile(profileId);
           },
-          onSelectCloudOs: (osId) =>
-            place.cloudMachines.selectOs(
-              place.cloudProfileId,
-              osId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onSelectCloudMachine: (machineId) =>
-            place.cloudMachines.select(
-              place.cloudProfileId,
-              machineId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
+          onSelectCloudOs: (osId) => selectCloudOption("os", osId),
+          onSelectCloudMachine: (machineId) => selectCloudOption("machine", machineId),
           onConnectMachine,
           onManageCloudWorkers: () => {
             browser.close();
@@ -202,7 +192,6 @@ export function renderNewSessionPlaceControls({
             }}
         /></label>`
       : renderProjectChip({
-          idPrefix,
           state: projectState,
           browseAvailable: place.browseAvailable(),
           isAdmin: place.isAdmin(),
@@ -252,9 +241,8 @@ export function renderNewSessionPlaceControls({
           onClose: () => browser.close(),
         })
   }${
-    checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
+    place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
-          idPrefix,
           state: checkoutState,
           remotePlacement: place.remotePlacement,
           repository: Boolean(place.remoteRepository),

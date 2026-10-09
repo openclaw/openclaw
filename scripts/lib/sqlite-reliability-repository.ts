@@ -11,25 +11,11 @@ import {
   assertSameCompactionPayload,
   assertSameReliabilityState,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type RepositoryCrashPoint = "after-commit" | "before-pending" | "pending";
-type RepositoryExit =
-  ReliabilityReport["maintenanceProof"]["repositoryInterruption"]["beforePending"]["exit"];
-type CrashPointResult = {
-  crashSnapshotVerifiedAfterCrash: boolean;
-  crashSnapshotVisibleAfterCrash: boolean;
-  exit: RepositoryExit;
-  incompleteEntries: number;
-  payload: CompactionPayloadProof;
-  stagingEntries: number;
-  state: ReliabilityStateProof;
-  visibleSnapshotsAfterCrash: number;
-};
-
 const REPOSITORY_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-repository-worker.ts", import.meta.url),
 );
@@ -56,18 +42,12 @@ function listRepositoryEntries(repositoryPath: string): string[] {
   return fs.existsSync(repositoryPath) ? fs.readdirSync(repositoryPath) : [];
 }
 
-async function runCrashPoint(params: {
-  crashPoint: RepositoryCrashPoint;
-  expectedPayload: CompactionPayloadProof;
-  expectedState: ReliabilityStateProof;
-  identity: SnapshotDatabaseIdentity;
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  repositoryPath: string;
-  sourcePath: string;
-  validationRootPath: string;
-  verifyPayload: (databasePath: string) => CompactionPayloadProof;
-  verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<CrashPointResult> {
+async function runCrashPoint(
+  params: Parameters<typeof runRepositoryInterruptionProof>[0] & {
+    crashPoint: RepositoryCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+) {
   const visibleBefore = await params.provider.list();
   const visiblePathsBefore = new Set(
     visibleBefore.map((snapshot) => path.resolve(snapshot.ref.path)),
@@ -175,7 +155,7 @@ export async function runRepositoryInterruptionProof(params: {
   validationRootPath: string;
   verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<ReliabilityReport["maintenanceProof"]["repositoryInterruption"]> {
+}) {
   const provider = createLocalSqliteSnapshotProvider({
     repositoryPath: params.repositoryPath,
     validationRootPath: params.validationRootPath,

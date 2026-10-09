@@ -2,7 +2,9 @@ import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import createDOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
+import { full as markdownItEmoji } from "markdown-it-emoji";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { icons } from "./icons.ts";
@@ -10,7 +12,6 @@ import { linkReaderAuthorHref } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
@@ -25,6 +26,8 @@ const documentOptions = normalizeMarkdownRenderOptions({
   assistantTranscriptRoleHeaders: false,
 });
 const markdown = createMarkdownParser();
+// Reader documents support named emoji without changing chat or emoticon text.
+markdown.use(markdownItEmoji, { shortcuts: {} });
 // Remote attachments commonly use a standalone HTML img. Only that passive
 // element is admitted; all other authored HTML keeps the shared parser's rules.
 for (const kind of ["html_inline", "html_block"] as const) {
@@ -33,7 +36,7 @@ for (const kind of ["html_inline", "html_block"] as const) {
     const source = tokens[index]?.content ?? "";
     // Reader documents hide comment metadata; code examples never enter these HTML rules.
     if (source.trimStart().startsWith("<!--")) {
-      return escapeMarkdownHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
+      return escapeHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
     }
     return /^<img\s[^<>]*>\s*$/iu.test(source)
       ? source
@@ -179,7 +182,7 @@ function renderMarkdown(body: string, base: string, loadImage?: LoadImage) {
     try {
       rendered = markdown.render(body, documentOptions);
     } catch {
-      rendered = "<pre>" + escapeMarkdownHtml(body) + "</pre>";
+      rendered = "<pre>" + escapeHtml(body) + "</pre>";
     }
     const fragment = purifier.sanitize(rendered, {
       RETURN_DOM_FRAGMENT: true,
@@ -248,6 +251,10 @@ function renderDiff(patch: string, filename: string) {
   })}</code></pre>`;
 }
 
+function renderTruncationNote(truncated: boolean | undefined, label: string) {
+  return truncated ? html`<p class="lr-note">${t(label)}</p>` : nothing;
+}
+
 function renderFile(file: ControlUiLinkReaderFile, expanded: boolean) {
   return html`<details class="lr-file" ?open=${expanded}>
     <summary>
@@ -269,9 +276,7 @@ function renderFile(file: ControlUiLinkReaderFile, expanded: boolean) {
         ? renderDiff(file.patch, file.path)
         : html`<p class="lr-note">${t("linkReader.patchUnavailable")}</p>`
     }
-    ${
-      file.patchTruncated ? html`<p class="lr-note">${t("linkReader.patchTruncated")}</p>` : nothing
-    }
+    ${renderTruncationNote(file.patchTruncated, "linkReader.patchTruncated")}
   </details>`;
 }
 
@@ -323,20 +328,12 @@ function renderComment(comment: ControlUiLinkReaderComment, base: string, loadIm
       context?.diff
         ? html`<details class="lr-file lr-review-diff">
             <summary>${t("linkReader.reviewContext")}</summary>
-            ${renderDiff(context.diff, context.path ?? "")}${
-              context.diffTruncated
-                ? html`<p class="lr-note">${t("linkReader.patchTruncated")}</p>`
-                : nothing
-            }
+            ${renderDiff(context.diff, context.path ?? "")}${renderTruncationNote(context.diffTruncated, "linkReader.patchTruncated")}
           </details>`
         : nothing
     }
     <div class="lr-markdown">${renderMarkdown(comment.body, base, loadImage)}</div>
-    ${
-      comment.bodyTruncated
-        ? html`<p class="lr-note">${t("linkReader.bodyTruncated")}</p>`
-        : nothing
-    }
+    ${renderTruncationNote(comment.bodyTruncated, "linkReader.bodyTruncated")}
   </article>`;
 }
 
@@ -425,7 +422,7 @@ function renderChecks(checks: ReaderChecks, base: string) {
         </li>`;
       })}
     </ul>
-    ${checks.truncated ? html`<p class="lr-note">${t("linkReader.checksTruncated")}</p>` : nothing}
+    ${renderTruncationNote(checks.truncated, "linkReader.checksTruncated")}
     <footer class="lr-checks-footer">
       ${checks.commit ? html`<code title=${t("linkReader.checksCommit", { commit: checks.commit })}>${checks.commit.slice(0, 7)}</code>` : nothing}
       ${source ? html`<a href=${source} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" data-link-reader-external>${t("linkReader.checksSource")}${icons.externalLink}</a>` : nothing}
@@ -532,11 +529,7 @@ export function renderLinkReaderContent(
             : html`<p class="lr-meta">${t("linkReader.noDescription")}</p>`
         }
       </div>
-      ${
-        detail.bodyTruncated
-          ? html`<p class="lr-note">${t("linkReader.bodyTruncated")}</p>`
-          : nothing
-      }
+      ${renderTruncationNote(detail.bodyTruncated, "linkReader.bodyTruncated")}
     </section>
     ${
       detail.files
@@ -554,11 +547,7 @@ export function renderLinkReaderContent(
               >
             </h2>
             ${detail.files.map((file) => renderFile(file, detail.filesExpanded === true))}
-            ${
-              detail.filesTruncated
-                ? html`<p class="lr-note">${t("linkReader.filesTruncated")}</p>`
-                : nothing
-            }
+            ${renderTruncationNote(detail.filesTruncated, "linkReader.filesTruncated")}
             ${
               detail.files.length === 0 && !detail.filesTruncated
                 ? html`<p class="lr-meta">${t("linkReader.noFiles")}</p>`
@@ -582,11 +571,7 @@ export function renderLinkReaderContent(
               >
             </h2>
             ${detail.comments.map((comment) => renderComment(comment, detail.url, loadImage))}
-            ${
-              detail.commentsTruncated
-                ? html`<p class="lr-note">${t("linkReader.commentsTruncated")}</p>`
-                : nothing
-            }
+            ${renderTruncationNote(detail.commentsTruncated, "linkReader.commentsTruncated")}
             ${
               detail.comments.length === 0 && !detail.commentsTruncated
                 ? html`<p class="lr-meta">${t("linkReader.noComments")}</p>`
