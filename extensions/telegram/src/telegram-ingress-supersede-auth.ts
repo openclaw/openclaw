@@ -78,6 +78,7 @@ export type TelegramSupersedeAuthContext = {
   accountId: string;
   /** Bot username for @bot command targeting (from getMe / botInfo). */
   botUsername?: string;
+  botId?: number;
 };
 
 /**

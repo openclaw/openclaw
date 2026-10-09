@@ -324,7 +324,7 @@ describe("registerTelegramNativeCommands /login", () => {
     await exerciseDeferredModelAccess("cancel");
   });
 
-  it("rejects group /login codex without sending the device code publicly", async () => {
+  it("rejects addressed group /login codex without sending the device code publicly", async () => {
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
       await params.prompter.note("URL: https://auth.openai.com/codex/device\nCode: SECRET");
       return createLoginResult("openai:codex");
@@ -335,7 +335,17 @@ describe("registerTelegramNativeCommands /login", () => {
       allowFrom: ["200"],
     });
 
-    await handler(createTelegramGroupCommandContext({ match: "codex", userId: 200 }));
+    const groupContext = createTelegramGroupCommandContext({ match: "codex", userId: 200 });
+    const command = `/login@${telegramBotInfoForTest.username}`;
+    await handler({
+      ...groupContext,
+      me: telegramBotInfoForTest,
+      message: {
+        ...groupContext.message,
+        text: `${command} codex`,
+        entities: [{ type: "bot_command", offset: 0, length: command.length }],
+      },
+    });
 
     expect(loginFlow).not.toHaveBeenCalled();
     const texts = sendMessage.mock.calls.map((call) => String(call[1]));

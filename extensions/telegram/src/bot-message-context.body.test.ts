@@ -77,6 +77,21 @@ async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
 }
 
 describe("Telegram admitted model input", () => {
+  it("gates text /steer in mention-only topics while leaving DMs and always-active topics alone", async () => {
+    const mentionOnly = await createBot(false, true, config({ requireMention: true }));
+    await receive(mentionOnly, textMessage("/steer hello"));
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await receive(mentionOnly, textMessage("/steer@openclaw_bot hello"));
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+
+    const always = await createBot(false, true, config({ requireMention: false }));
+    await receive(always, textMessage("/steer hello"));
+    expect(harness.replySpy).toHaveBeenCalledTimes(2);
+
+    await receive(mentionOnly, textMessage("/steer hello", false));
+    expect(harness.replySpy).toHaveBeenCalledTimes(3);
+  });
+
   it.each([
     {
       name: "allowed named account",

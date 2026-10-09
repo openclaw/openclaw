@@ -475,6 +475,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         getConfig: params.getConfig,
         accountId: params.accountId,
         ...(params.botInfo?.username ? { botUsername: params.botInfo.username } : {}),
+        ...(params.botInfo?.id ? { botId: params.botInfo.id } : {}),
       }),
       deriveLaneKey: (record) => telegramSpooledLaneKey(record.payload.update, params.botInfo),
       reconcileStoredLaneKey: (record, storedLaneKey, derivedLaneKey) =>

@@ -20,7 +20,10 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  readSessionUpdatedAtInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
@@ -159,6 +162,14 @@ export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessi
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
+  return entry ? projectPluginSessionEntry(entry) : undefined;
+}
+
+/** Reads one session entry without blocking the caller's event loop on SQLite. */
+export async function getSessionEntryAsync(
+  params: SessionStoreReadParams,
+): Promise<SessionEntry | undefined> {
+  const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 

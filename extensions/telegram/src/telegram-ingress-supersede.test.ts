@@ -10,16 +10,23 @@ import {
   getRuntimeConfig,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
+import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
+import { recordTopicCreation } from "./topic-name-cache.js";
 
 let openClawState: OpenClawTestState | undefined;
 
-beforeEach(() => setTelegramRuntime(createPluginRuntimeMock()));
+beforeEach(() => {
+  setTelegramRuntime(createPluginRuntimeMock());
+  resetTelegramTopicNameCacheForTest();
+});
 
 afterEach(async () => {
   clearRuntimeConfigSnapshot();
+  resetTelegramTopicNameCacheForTest();
   closeOpenClawStateDatabaseForTest();
   await openClawState?.cleanup();
   openClawState = undefined;
@@ -289,6 +296,128 @@ describe("telegram ingress supersede policy", () => {
     expect(unauthorized).toBe(false);
   });
 
+  it("does not supersede on an untargeted command in a mention-only group", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { identity: { name: "Primary" } },
+          analyst: { identity: { name: "Analyst" } },
+        },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      broadcast: { "telegram:-1001": ["main", "analyst"] },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: [OWNER_ID],
+          groups: { "-1001": { requireMention: true } },
+        },
+      },
+    };
+    const groupAuth = {
+      cfg,
+      accountId: "default",
+      botUsername: "mybot",
+      botId: 1234,
+    };
+    const shouldSupersedeGroup = createShouldSupersedeTelegramSpooledPending(groupAuth);
+    const pending = claim(
+      "1",
+      messageUpdate({
+        updateId: 1,
+        text: "prior",
+        senderId: OWNER_ID,
+        chatId: -1001,
+        chatType: "supergroup",
+      }),
+    );
+    const candidate = (text: string) =>
+      record(
+        "2",
+        messageUpdate({
+          updateId: 2,
+          text,
+          senderId: OWNER_ID,
+          chatId: -1001,
+          chatType: "supergroup",
+          ...(text.includes("@mybot")
+            ? { entities: [{ type: "bot_command", offset: 0, length: text.length }] }
+            : {}),
+        }),
+      );
+    expect(await shouldSupersedeGroup(candidate("/stop"), pending)).toBe(false);
+    expect(await shouldSupersedeGroup(candidate("/stop@mybot"), pending)).toBe(true);
+    expect(await shouldSupersedeGroup(candidate("/stop @Analyst"), pending)).toBe(true);
+  });
+
+  it("reads bot-created topic ownership from the account owner scope", async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-supersede-topic-owner-",
+    });
+    const cfg: OpenClawConfig = {
+      session: { store: openClawState.path("{agentId}", "sessions.json") },
+      agents: { entries: { main: {}, "topic-agent": {} } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: [OWNER_ID],
+          groups: {
+            "-1001": {
+              requireMention: false,
+              requireMentionInBotThreads: true,
+              topics: { "10": { agentId: "topic-agent" } },
+            },
+          },
+        },
+      },
+    };
+    await recordTopicCreation(
+      -1001,
+      10,
+      { name: "Bot topic", creatorUserId: 1234 },
+      resolveStorePath(cfg.session?.store, { agentId: "main" }),
+    );
+    const shouldSupersedeTopic = createShouldSupersedeTelegramSpooledPending({
+      cfg,
+      accountId: "default",
+      botUsername: "mybot",
+      botId: 1234,
+    });
+    const pending = claim(
+      "1",
+      messageUpdate({
+        updateId: 1,
+        text: "prior",
+        senderId: OWNER_ID,
+        chatId: -1001,
+        chatType: "supergroup",
+        messageThreadId: 10,
+        isTopicMessage: true,
+        isForum: true,
+      }),
+    );
+    const command = (text: string) =>
+      record(
+        "2",
+        messageUpdate({
+          updateId: 2,
+          text,
+          senderId: OWNER_ID,
+          chatId: -1001,
+          chatType: "supergroup",
+          messageThreadId: 10,
+          isTopicMessage: true,
+          isForum: true,
+          entities: [{ type: "bot_command", offset: 0, length: text.length }],
+        }),
+      );
+
+    expect(await shouldSupersedeTopic(command("/new"), pending)).toBe(false);
+    expect(await shouldSupersedeTopic(command("/new@mybot"), pending)).toBe(true);
+  });
+
   it.each([
     { senderId: OWNER_ID, messageSenderId: STRANGER_ID, expected: true },
     { senderId: STRANGER_ID, messageSenderId: OWNER_ID, expected: false },
@@ -454,6 +583,7 @@ describe("telegram ingress supersede policy", () => {
             groups: {
               "-1001": {
                 allowFrom: ["*"],
+                requireMention: false,
                 topics: {
                   "10": {
                     allowFrom: [OWNER_ID],

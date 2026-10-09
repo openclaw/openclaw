@@ -344,7 +344,7 @@ describe("registered native command routing through the message pipeline", () =>
     },
   );
 
-  it("treats an authorized native command as a mention even with unsupported arguments", async () => {
+  it("requires group native commands to address the bot when mentions are required", async () => {
     const bot = await createBot(true, true, {
       commands: { native: true },
       channels: {
@@ -359,11 +359,102 @@ describe("registered native command routing through the message pipeline", () =>
       update_id: 1001,
       message: { ...commandMessage("/stop later"), chat: groupChat },
     });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await bot.handleUpdate({
+      update_id: 1002,
+      message: { ...commandMessage("/stop@openclaw_bot later"), chat: groupChat },
+    });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
       CommandSource: "native",
       CommandBody: "/stop later",
       WasMentioned: true,
     });
+  });
+
+  it("preserves group participant mentions in topics while excluding ACP-bound routes", async () => {
+    const conversationId = String(groupChat.id);
+    const topicId = 42;
+    const topicConversationId = `${conversationId}:topic:${topicId}`;
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      agents: {
+        entries: {
+          main: { identity: { name: "Primary" } },
+          analyst: { identity: { name: "Analyst" } },
+        },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      broadcast: { [`telegram:${conversationId}`]: ["main", "analyst"] },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: [String(from.id)],
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    };
+    const bot = await createBot(true, true, cfg);
+    const participantCommand = {
+      ...commandMessage("/status @Analyst"),
+      chat: groupChat,
+      message_thread_id: topicId,
+      is_topic_message: true,
+    };
+    await bot.handleUpdate({ update_id: 1101, message: participantCommand });
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      GroupThread: { mentionedAgentIds: ["analyst"] },
+    });
+
+    harness.replySpy.mockClear();
+    const adapter: SessionBindingAdapter = {
+      channel: "telegram",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (conversation) =>
+        conversation.conversationId === topicConversationId
+          ? {
+              bindingId: "acp-participant",
+              targetSessionKey: "agent:main:acp:bound",
+              targetKind: "session",
+              conversation,
+              status: "active",
+              boundAt: 1,
+            }
+          : null,
+      touch: vi.fn(),
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      await bot.handleUpdate({
+        update_id: 1102,
+        message: { ...participantCommand, message_id: participantCommand.message_id + 1 },
+      });
+      expect(harness.replySpy).not.toHaveBeenCalled();
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
+    }
+  });
+
+  it("keeps bare native commands in always-active groups and DMs", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groupAllowFrom: [String(from.id)],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: { ...commandMessage("/status"), chat: groupChat },
+    });
+    await bot.handleUpdate({ update_id: 1002, message: commandMessage("/status") });
+    expect(harness.replySpy).toHaveBeenCalledTimes(2);
   });
 
   it("does not dispatch the same update twice", async () => {

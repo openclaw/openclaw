@@ -212,7 +212,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: required session cleanup failure preserves native ownership before host reset.
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
-      3641,
+      // +1: worker-backed session entry read for channel command activation.
+      3642,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -225,7 +226,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
-      2111,
+      // +1: worker-backed session entry read for channel command activation.
+      2112,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

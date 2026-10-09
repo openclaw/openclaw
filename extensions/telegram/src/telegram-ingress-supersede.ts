@@ -1,3 +1,4 @@
+import type { Message } from "grammy/types";
 import type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueRecord,
@@ -11,6 +12,7 @@ import {
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isTelegramCommandAddressed } from "./command-mention-gate.js";
 import { isTelegramReadOnlyControlLaneText } from "./sequential-key.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 import {
@@ -93,6 +95,22 @@ function extractUpdateText(update: unknown): string {
   return readStringField(asOptionalObjectRecord(root?.callback_query), "data") ?? "";
 }
 
+function extractUpdateMessage(update: unknown): Message | undefined {
+  if (!update || typeof update !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object check above permits key inspection without assuming a message shape.
+  const root = update as Record<string, unknown>;
+  for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
+    const message = root[key];
+    if (message && typeof message === "object") {
+      // SAFETY: Telegram updates supply Message objects here; the later gate validates chat/sender fields.
+      return message as Message;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Drain-level supersede predicate over raw spooled payloads.
  * Authorization is resolved from the new event's numeric sender via the same
@@ -103,8 +121,21 @@ export function createShouldSupersedeTelegramSpooledPending(
     getConfig: () => TelegramSupersedeAuthContext["cfg"];
   },
 ) {
-  const authorize = async (update: unknown) => {
+  const authorize = async (update: unknown, requireCommandAddressing = false) => {
     const cfg = auth.getConfig();
+    const message = requireCommandAddressing ? extractUpdateMessage(update) : undefined;
+    if (
+      message &&
+      !(await isTelegramCommandAddressed({
+        cfg,
+        accountId: auth.accountId,
+        msg: message,
+        botUsername: auth.botUsername,
+        botId: auth.botId,
+      }))
+    ) {
+      return false;
+    }
     const authorized = await isTelegramSpooledUpdateSenderAuthorized(update, {
       accountId: auth.accountId,
       cfg,
@@ -152,6 +183,6 @@ export function createShouldSupersedeTelegramSpooledPending(
     if (!isAbort && !isCommand) {
       return false;
     }
-    return await authorize(newUpdate);
+    return await authorize(newUpdate, true);
   };
 }
