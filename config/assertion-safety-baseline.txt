@@ -2643,7 +2643,7 @@ src/tui/embedded-backend.ts	2
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
-src/tui/tui-event-handlers.ts	5
+src/tui/tui-event-handlers.ts	1
 src/tui/tui-formatters.ts	2
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
@@ -2847,7 +2847,6 @@ ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
-ui/src/pages/config/config-sections.ts	1
 ui/src/pages/config/language-select.ts	2
 ui/src/pages/config/memory-dreaming.ts	1
 ui/src/pages/config/memory-memories.ts	1
@@ -2856,7 +2855,7 @@ ui/src/pages/config/security.ts	1
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/settings-select-row.ts	1
 ui/src/pages/config/view-appearance-preferences.ts	2
-ui/src/pages/config/view-diff.ts	4
+ui/src/pages/config/view-diff.ts	2
 ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	3
 ui/src/pages/connection/view.ts	3

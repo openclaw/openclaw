@@ -4,6 +4,7 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { normalizeGitPathForFilesystem, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 
@@ -157,6 +158,7 @@ class LocalDefaultBusyError extends Error {}
 
 async function assertWorktreeGitOperationsIdle(
   repoRoot: string,
+  localRef: string,
   options: NonNullable<Parameters<typeof runGit>[2]>,
 ): Promise<void> {
   const commonDir = path.resolve(
@@ -173,22 +175,49 @@ async function assertWorktreeGitOperationsIdle(
       }
       throw error;
     });
-    // Detached rebases/bisects can still reserve branches, including rebase --update-refs.
-    // Inspect Git's operation markers without inventing another branch-ownership map.
-    for (const directory of [
-      commonDir,
-      ...worktrees.map((name) => path.join(worktreesDir, name)),
-    ]) {
-      const names = await fs.readdir(directory);
-      if (
-        names.some(
-          (name) => name === "rebase-merge" || name === "rebase-apply" || name === "BISECT_LOG",
-        )
-      ) {
-        throw new LocalDefaultBusyError(
-          "Local default retained: finish or abort the Git rebase, am, or bisect operation before advancing it.",
-        );
-      }
+    const busy = () =>
+      new LocalDefaultBusyError(
+        "Local default retained: finish or abort the Git rebase, am, or bisect operation reserving it before advancing it.",
+      );
+    const primary = await fs.readdir(commonDir);
+    if (primary.some((name) => ["rebase-merge", "rebase-apply", "BISECT_LOG"].includes(name))) {
+      throw busy();
+    }
+    const read = async (directory: string, name: string) =>
+      await fs.readFile(path.join(directory, name), "utf8").catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+    // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
+    // Read only reservation files, with bounded I/O and no per-worktree directory listing.
+    const checked = await runTasksWithConcurrency({
+      limit: 16,
+      errorMode: "stop",
+      tasks: worktrees.map((name) => async () => {
+        options.signal?.throwIfAborted();
+        options.beforeRun?.();
+        const directory = path.join(worktreesDir, name);
+        for (const file of [
+          "rebase-merge/head-name",
+          "rebase-apply/head-name",
+          "rebase-merge/update-refs",
+        ]) {
+          if ((await read(directory, file))?.trim().split("\n").includes(localRef)) {
+            throw busy();
+          }
+        }
+        const bisect = (await read(directory, "BISECT_START"))?.trim();
+        if (bisect === localRef || bisect === localRef.slice("refs/heads/".length)) {
+          if ((await read(directory, "BISECT_LOG")) !== undefined) {
+            throw busy();
+          }
+        }
+      }),
+    });
+    if (checked.hasError) {
+      throw checked.firstError;
     }
   } catch (error) {
     options.signal?.throwIfAborted();
@@ -239,7 +268,7 @@ async function fastForwardLocalDefault(
           ...options,
           killProcessTree: true,
           startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
-            await assertWorktreeGitOperationsIdle(repoRoot, options);
+            await assertWorktreeGitOperationsIdle(repoRoot, localRef, options);
             const checkouts = (await listGitWorktrees(repoRoot, options)).filter(
               (entry) => entry.branch === localRef,
             );

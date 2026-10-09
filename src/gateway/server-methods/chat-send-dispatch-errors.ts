@@ -70,7 +70,7 @@ type ChatSendJobAdmission = Pick<
 > & {
   sessionBinding: Pick<
     AdmittedChatSend["sessionBinding"],
-    "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration"
+    "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration" | "terminalOutcomeObserved"
   >;
 };
 
@@ -154,6 +154,7 @@ export async function handleChatSendSetupError(params: {
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
   if (!hidden && failureDisposition !== "client-retry") {
     broadcastChatError({
+      terminalEntry: jobSessionBinding,
       context: params.context,
       runId: clientRunId,
       sessionKey,
@@ -323,6 +324,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         });
         if (!hidden) {
           broadcastChatError({
+            terminalEntry: jobSessionBinding,
             context,
             runId: clientRunId,
             sessionKey,

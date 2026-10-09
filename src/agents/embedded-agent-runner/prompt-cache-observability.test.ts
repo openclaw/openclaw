@@ -697,29 +697,29 @@ describe("prompt cache observability", () => {
     });
   });
 
-  it("tracks recurring prompt-cache affinity across rotating session ids", () => {
-    // Cron-style isolated runs use promptCacheKey to carry cache affinity across
-    // new session ids.
-    beginOpenAIObservation({
-      sessionId: "isolated-run-1",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-1",
-    });
-    completePromptCacheObservation({
-      sessionId: "isolated-run-1",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-1",
-      usage: { cacheRead: 8_000 },
-    });
+  it("starts a fresh diagnostic baseline when a cache affinity rotates sessions", () => {
+    const promptCacheKey = scopedKey("openclaw-cron-stable-cache-key");
+    const observe = (sessionId: string, cacheRead: number) => {
+      const identity = { sessionId, promptCacheKey, sessionKey: `agent:cron:run:${sessionId}` };
+      beginOpenAIObservation({
+        ...identity,
+        messages: [{ role: "user", content: sessionId, timestamp: 1 }],
+      });
+      return completePromptCacheObservation({
+        ...identity,
+        usage: { input: 100, cacheRead },
+      });
+    };
 
-    const nextRun = beginOpenAIObservation({
-      sessionId: "isolated-run-2",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-2",
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      expect(observe("isolated-run-1", 8_000)).toBeNull();
+      expect(observe("isolated-run-2", 2_000)).toBeNull();
+      expect(observe("isolated-run-2", 0)).toEqual({
+        previousCacheRead: 2_000,
+        cacheRead: 0,
+        changes: null,
+      });
     });
-
-    expect(nextRun.previousCacheRead).toBe(8_000);
-    expect(nextRun.changes).toBeNull();
   });
 
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {

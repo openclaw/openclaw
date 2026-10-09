@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { clampThinkingLevel } from "openclaw/plugin-sdk/llm";
 import {
   clearLiveCatalogCacheForTests,
@@ -11,12 +12,10 @@ const mocks = vi.hoisted(() => ({
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => mocks);
-// mock-isolation: keep npm Codex version lookups off the network and out of shared cache state.
-vi.mock("./codex-client-version.runtime.js", () => ({
-  resolveOpenAICodexModelsEndpoint: async () =>
-    "https://chatgpt.com/backend-api/codex/models?client_version=0.170.0",
-}));
-const modelsUrl = "https://chatgpt.com/backend-api/codex/models?client_version=0.170.0";
+const codexPackage = JSON.parse(
+  fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
+);
+const modelsUrl = `https://chatgpt.com/backend-api/codex/models?client_version=${codexPackage.dependencies["@openai/codex"]}`;
 
 async function discoverCodexModels(params: {
   discoveryApiKey: string;

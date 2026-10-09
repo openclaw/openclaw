@@ -3,10 +3,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const CODEX_PACKAGE_JSON_URL = new URL("../../extensions/codex/package.json", import.meta.url);
-const OPENAI_CLIENT_VERSION_URL = new URL(
-  "../../extensions/openai/codex-client-version.runtime.ts",
-  import.meta.url,
-);
+const OPENAI_PROVIDER_URL = new URL("../../extensions/openai/base-url.ts", import.meta.url);
 const OPENAI_CODEX_CLIENT_VERSION_PATTERN = /^const OPENAI_CODEX_CLIENT_VERSION = "([^"]+)";$/mu;
 
 function readManagedCodexVersion(): string {
@@ -21,18 +18,16 @@ function readManagedCodexVersion(): string {
 }
 
 function readOpenAICodexClientVersion(): string {
-  const providerSource = fs.readFileSync(OPENAI_CLIENT_VERSION_URL, "utf8");
+  const providerSource = fs.readFileSync(OPENAI_PROVIDER_URL, "utf8");
   const version = OPENAI_CODEX_CLIENT_VERSION_PATTERN.exec(providerSource)?.[1];
   if (!version) {
-    throw new Error(
-      "extensions/openai/codex-client-version.runtime.ts must declare the Codex client version",
-    );
+    throw new Error("extensions/openai/base-url.ts must declare the Codex client version");
   }
   return version;
 }
 
 describe("Codex client version contract", () => {
-  it("matches the OpenAI model discovery fallback to the managed Codex package", () => {
+  it("matches OpenAI model discovery to the managed Codex package", () => {
     expect(readOpenAICodexClientVersion()).toBe(readManagedCodexVersion());
   });
 });

@@ -25,6 +25,14 @@ afterEach(() => vi.restoreAllMocks());
 
 type PatchMethod = "session.visibility.set" | "session.publicShare.set";
 
+// Foreign fixture writes clear canonical certification; inspect their persisted aftermath directly.
+function readRawEntry(database: DatabaseSync, sessionKey: string): unknown {
+  const row = database
+    .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+    .get(sessionKey);
+  return row ? JSON.parse(String(row.entry_json)) : undefined;
+}
+
 async function fixture() {
   const scope = { agentId: "main", sessionKey: "agent:main:sharing-patch-worker" };
   const sessionId = "sharing-patch-worker";
@@ -247,23 +255,24 @@ it.each(["caller", "foreign row", "revoked grant", "deleted row", "replaced gene
       );
       expect(acknowledgedShareId).toEqual(expect.any(String));
       expect(respond).not.toHaveBeenCalled();
-      const entry = (await readSessionMembersInWorker(f.scope)).entry;
+      const entry = readRawEntry(database.db, f.scope.sessionKey);
       if (revoked === "deleted row") {
         expect(entry).toBeUndefined();
       } else if (revoked === "revoked grant") {
-        expect(entry?.sessionId).toBe(f.sessionId);
-        expect(entry?.publicShare).toBeUndefined();
+        expect(entry).toMatchObject({ sessionId: f.sessionId });
+        expect(entry).not.toHaveProperty("publicShare");
       } else if (revoked === "replaced generation") {
-        expect(entry?.sessionId).toBe("replacement-session");
+        expect(entry).toMatchObject({ sessionId: "replacement-session" });
       } else {
-        expect(entry?.publicShare).toMatchObject({
-          id: acknowledgedShareId,
-          sessionId: f.sessionId,
+        expect(entry).toMatchObject({
+          publicShare: { id: acknowledgedShareId, sessionId: f.sessionId },
         });
       }
       if (revoked === "foreign row") {
-        expect(entry?.createdActor?.id).toBe("replacement-owner");
-        expect(entry?.visibility).toBe("draft");
+        expect(entry).toMatchObject({
+          createdActor: { id: "replacement-owner" },
+          visibility: "draft",
+        });
       }
     });
   },
@@ -304,10 +313,10 @@ it.each(["session.visibility.set", "session.publicShare.set"] as const)(
         ),
       ).rejects.toThrow();
       expect(changed).toBe(true);
-      const entry = (await readSessionMembersInWorker(f.scope)).entry;
-      expect(entry?.createdActor?.id).toBe("replacement-owner");
-      expect(entry?.visibility).toBeUndefined();
-      expect(entry?.publicShare).toBeUndefined();
+      const entry = readRawEntry(database.db, f.scope.sessionKey);
+      expect(entry).toMatchObject({ createdActor: { id: "replacement-owner" } });
+      expect(entry).not.toHaveProperty("visibility");
+      expect(entry).not.toHaveProperty("publicShare");
       expect(f.context.broadcast).not.toHaveBeenCalled();
     });
   },

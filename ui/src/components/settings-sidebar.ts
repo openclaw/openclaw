@@ -2,14 +2,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { html, nothing } from "lit";
 import type { AgentsListResult } from "../api/types.ts";
 import {
-  cancelRoutePreload,
   isSettingsNavigationRouteVisible,
   navigationIconForRoute,
-  scheduleRoutePreload,
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
-  settingsNavigationOwnerRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -26,7 +21,13 @@ import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
 import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
+  settingsSearchTextMatches,
+} from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";

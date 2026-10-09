@@ -1,4 +1,5 @@
 /** Process-local registry for SecretRef owners isolated during cold startup. */
+import { formatCliCommand } from "../cli/command-format.js";
 import type { SecretRefSource } from "../config/types.secrets.js";
 import {
   describeSecretResolutionError,
@@ -8,6 +9,7 @@ import {
 
 export type SecretDegradationReason =
   | SecretResolutionFailureReason
+  | "auth profile migration required"
   | "secret provider is not configured"
   | "resolved secret value was invalid"
   | "secret reference is not allowed for this provider"
@@ -59,6 +61,14 @@ type SecretResolutionErrorOwner = DegradedSecretOwner & {
 
 export const SECRET_DEGRADATION_RETRY_HINT = "openclaw secrets reload" as const;
 
+export function formatSecretDegradationRetryHint(reason: string): string {
+  return formatCliCommand(
+    reason === "auth profile migration required"
+      ? "openclaw doctor --fix"
+      : SECRET_DEGRADATION_RETRY_HINT,
+  );
+}
+
 /** Only transient/unavailable resolution failures may enter degraded runtime state. */
 export function isRetryableSecretDegradationReason(reason: string): boolean {
   return reason === "secret provider failed" || reason === "secret reference was not found";
@@ -70,7 +80,7 @@ export type SecretDegradation = {
   id: string;
   reason: string;
   state: "cold" | "stale";
-  retryHint: typeof SECRET_DEGRADATION_RETRY_HINT;
+  retryHint: string;
 };
 
 /** Maps a typed resolution failure to redacted owner warnings when attribution is safe. */
@@ -83,7 +93,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
             id: owner.ownerId,
             reason: owner.reason,
             state: owner.degradationState,
-            retryHint: SECRET_DEGRADATION_RETRY_HINT,
+            retryHint: formatSecretDegradationRetryHint(owner.reason),
           },
         ]
       : [],
@@ -99,7 +109,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
           id: "unmapped",
           reason,
           state: "cold",
-          retryHint: SECRET_DEGRADATION_RETRY_HINT,
+          retryHint: formatSecretDegradationRetryHint(reason),
         },
       ]
     : [];
@@ -108,6 +118,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
 /** Preserves known failure classes while dropping any embedded SecretRef identity. */
 export function redactSecretDegradationReason(reason: string): SecretDegradationReason {
   switch (reason) {
+    case "auth profile migration required":
     case "secret provider failed":
     case "secret provider is not configured":
     case "secret provider policy denied resolution":

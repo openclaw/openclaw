@@ -298,33 +298,19 @@ async function deletePlacementDraft(
   if (!existing.sessionId) {
     return "placement draft session identity is unavailable";
   }
-  return archiveAndDeleteSessionPlacementDraft(client, {
-    key,
-    agentId,
-    sessionId: existing.sessionId,
-  });
-}
-
-async function archiveAndDeleteSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request">,
-  params: { key: string; agentId: string; sessionId: string },
-): Promise<string | undefined> {
+  const target = { key, agentId, expectedSessionId: existing.sessionId };
   try {
     await client.request("sessions.patch", {
-      key: params.key,
-      agentId: params.agentId,
+      ...target,
       archived: true,
-      expectedSessionId: params.sessionId,
     });
   } catch (error) {
     return formatUiError(error);
   }
   try {
     const deleted = await client.request<{ deleted?: boolean }>("sessions.delete", {
-      key: params.key,
-      agentId: params.agentId,
+      ...target,
       deleteTranscript: true,
-      expectedSessionId: params.sessionId,
       archivedOnly: true,
     });
     if (deleted.deleted !== true) {
@@ -335,10 +321,8 @@ async function archiveAndDeleteSessionPlacementDraft(
     const deleteError = formatUiError(error);
     try {
       await client.request("sessions.patch", {
-        key: params.key,
-        agentId: params.agentId,
+        ...target,
         archived: false,
-        expectedSessionId: params.sessionId,
       });
     } catch (restoreError) {
       return `${deleteError}; restoring the placement draft failed: ${formatUiError(restoreError)}`;
