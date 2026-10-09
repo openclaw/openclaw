@@ -16,6 +16,44 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+## Committed facts and completeness
+
+Synchronous compatibility writers and workers share the existing postcommit
+installation boundary. A managed outer transaction installs every owner's facts,
+then projections, then public notifications. Releasing a nested savepoint does
+not publish; nested and outer rollback discard their staged publications. A
+notification failure cannot undo a committed write or suppress later notifications.
+Failed fact installation retires the affected scope before notification. If its
+owner cannot fence that failure, the batch suppresses public notification and
+reports the failure without replaying the mutation.
+
+Private receipt envelopes identify the operation, physical source and connection
+incarnation, domain, and exact affected keys. Each key contains a postimage,
+explicit absence, unchanged facts, or unknown coverage. Missing coverage is never
+absence. Session replacement receipts carry the existing entry and membership
+postimages; their current publication owner still handles newer native writes,
+deletions, unknown successors, and delayed receipts. Transport sequencing does not
+replace that domain supersession logic or compare revisions across connections.
+
+Worker receipt capture precedes fallible observers. Its private transport uses
+operation identity and a monotonically increasing commit sequence, so identical
+successive commits remain distinct and duplicate or older deliveries cannot
+restore prior facts. Native settlement and result delivery remain separate:
+retained commit evidence survives a lost reply, while missing or conflicting
+evidence stays unknown. A confirmed identity mutation still notifies lifecycle
+observers when native settlement is unknown; retained read facts remain fenced.
+Unknown writes are never automatically repeated.
+
+This is a scoped completeness contract, not global writer certification. Session
+transcript/context coverage, conversation and plugin-state writers, approvals,
+placement and workspace writers, raw SQLite handles, and foreign-process refresh
+retain their existing guards until their own coverage is complete. Unmanaged raw
+transactions are not covered by managed savepoint publication. A receipt grants
+neither current permission nor cross-store exclusion through destination commit.
+This foundation adds no SQL, schema validation, persistent storage, SDK
+deprecation, or migration. Admission continues to own validation; receipt
+installation consumes the physical facts already captured by that owner.
+
 Meeting transcript downloads and JSONL artifacts stream through the existing
 shared-state read worker. One private read-only transaction owns the cursor,
 entry metadata, and optional summary until the consumer and cleanup settle.
@@ -2745,7 +2783,7 @@ deprecated compatibility paths until the next Plugin SDK major. Schemas, stored
 data, retention, and update behavior are unchanged. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
-Gateway fork selection prepares its upstream link through the existing shared-state
+Gateway branch listing and fork selection prepare upstream links through the existing shared-state
 reader. Rewind and branch switch need no preliminary link lookup. Local history
 mutations check current link absence at transaction and commit; repository and
 native-harness preparation also retain their effect-boundary checks. These guards
@@ -2756,6 +2794,11 @@ foreign-process writers can change links without publishing complete revocation
 facts. Retiring them requires the next Plugin SDK major's writer cutover and
 complete source-revocation publication. Rollback and accepted-write settlement
 retain their original custody after forward authority is revoked.
+
+The reader connection retains one exact row or absence at the existing admitted
+read revision; foreign commits, local writes, schema changes, and close invalidate
+reuse. Transactions, pinned snapshots, and dynamic authorizers keep querying.
+Each result decodes into caller-owned values.
 
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher check and pruning. Producers await settlement and recheck
@@ -3977,10 +4020,11 @@ before returning or starting another repair. A following repair can immediately
 reopen the same database; the existing journal and retry semantics remain intact.
 This changes no schema, retention, permissions, or update format.
 
-History read routing uses native-handle presence only to select its admission lane.
-It does not acquire a native database or run native admission while preparing a
-worker read. The worker retains physical identity, schema, quarantine, and caller
-authority checks; cold reads still serialize with first creation.
+Known-source history reads skip native admission during worker preparation. Cold
+reads use the existing read-candidate owner to retain any available native handle
+before choosing their lane. The worker retains physical identity, schema,
+quarantine, and caller authority checks; cold reads still serialize with first
+creation.
 
 OAuth peer fencing, restoration, and settlement use the existing auth reader and
 agent writer. Discovery retains each candidate's physical database identity,

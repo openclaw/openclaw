@@ -1001,6 +1001,7 @@ src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts
 src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
+src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
@@ -1914,6 +1915,7 @@ src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.types.ts
+src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
@@ -1932,6 +1934,7 @@ src/config/sessions/session-pin-policy.ts
 src/config/sessions/session-sharing-store.kernel.ts
 src/config/sessions/session-transcript-anchor-read.kernel.ts
 src/config/sessions/store-maintenance.ts
+src/config/sessions/store-maintenance-activity.ts
 src/utils/chunk-items.ts
 src/utils/message-channel-normalize.ts
 src/utils/message-channel.ts

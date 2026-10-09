@@ -309,6 +309,16 @@ describe("connect cli", () => {
       message: "Connect target file is empty.",
     },
     {
+      name: "malformed UTF-8",
+      contents: Buffer.from([0xff]),
+      message: "Connect target file must be valid UTF-8.",
+    },
+    {
+      name: "truncated UTF-8",
+      contents: Buffer.from([0xe2, 0x82]),
+      message: "Connect target file must be valid UTF-8.",
+    },
+    {
       name: "oversized",
       contents: Buffer.alloc(64 * 1024 + 1, 0x61),
       message: "max 65536 bytes",
