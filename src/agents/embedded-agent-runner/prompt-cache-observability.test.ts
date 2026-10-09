@@ -663,63 +663,92 @@ describe("prompt cache observability", () => {
     });
   });
 
-  it("reports visible schema changes even when tool names and count are unchanged", () => {
+  it.each([
+    {
+      change: "schema",
+      override: { parameters: { type: "number" } },
+      detail: '1 -> 1 tools; schema: "read"',
+    },
+    {
+      change: "description",
+      override: { description: "Read a workspace file" },
+      detail: '1 -> 1 tools; description: "read"',
+    },
+    {
+      change: "replacement",
+      override: { name: "write" },
+      detail: '1 -> 1 tools; added: "write"; removed: "read"',
+    },
+    { change: "removal", override: undefined, detail: '1 -> 0 tools; removed: "read"' },
+  ])("attributes a tool $change to the changed definition", ({ override, detail }) => {
     const sessionId = scopedKey("changed-tool-schema");
-    const initialTools = collectPromptCacheTools([
-      {
-        name: "read",
-        description: "Read a file",
-        parameters: { type: "object", properties: { path: { type: "string" } } },
-      },
-    ]);
+    const tool = {
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    };
     beginOpenAIObservation({
       sessionId,
-      tools: initialTools,
+      tools: collectPromptCacheTools([tool]),
     });
     completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
 
     const next = beginOpenAIObservation({
       sessionId,
-      tools: collectPromptCacheTools([
-        {
-          name: "read",
-          description: "Read a file",
-          parameters: { type: "object", properties: { path: { type: "number" } } },
-        },
-      ]),
+      tools: collectPromptCacheTools(override ? [{ ...tool, ...override }] : []),
     });
 
-    expect(next.changes).toEqual([{ code: "tools", detail: "tool set changed with same count" }]);
+    expect(next.changes).toEqual([{ code: "tools", detail }]);
     expect(completePromptCacheObservation({ sessionId, usage: { cacheRead: 0 } })).toEqual({
       previousCacheRead: 8_000,
       cacheRead: 0,
-      changes: [{ code: "tools", detail: "tool set changed with same count" }],
+      changes: [{ code: "tools", detail }],
     });
   });
 
-  it("tracks recurring prompt-cache affinity across rotating session ids", () => {
-    // Cron-style isolated runs use promptCacheKey to carry cache affinity across
-    // new session ids.
-    beginOpenAIObservation({
-      sessionId: "isolated-run-1",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-1",
+  it("bounds and escapes names in tool-change diagnostics without exposing descriptor content", () => {
+    const sessionId = scopedKey("bounded-tool-change");
+    beginOpenAIObservation({ sessionId, tools: [] });
+    const next = beginOpenAIObservation({
+      sessionId,
+      tools: collectPromptCacheTools(
+        Array.from({ length: 6 }, (_, index) => ({
+          name: `${index}\n${"x".repeat(500)}`,
+          description: "private descriptor",
+        })),
+      ),
     });
-    completePromptCacheObservation({
-      sessionId: "isolated-run-1",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-1",
-      usage: { cacheRead: 8_000 },
-    });
+    const detail = next.changes?.[0]?.detail ?? "";
+    expect(detail).toContain('added: "0\\n');
+    expect(detail).toContain("(+1 more)");
+    expect(detail).not.toContain("\n");
+    expect(detail).not.toContain("private descriptor");
+    expect(detail.length).toBeLessThan(500);
+  });
 
-    const nextRun = beginOpenAIObservation({
-      sessionId: "isolated-run-2",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-2",
-    });
+  it("starts a fresh diagnostic baseline when a cache affinity rotates sessions", () => {
+    const promptCacheKey = scopedKey("openclaw-cron-stable-cache-key");
+    const observe = (sessionId: string, cacheRead: number) => {
+      const identity = { sessionId, promptCacheKey, sessionKey: `agent:cron:run:${sessionId}` };
+      beginOpenAIObservation({
+        ...identity,
+        messages: [{ role: "user", content: sessionId, timestamp: 1 }],
+      });
+      return completePromptCacheObservation({
+        ...identity,
+        usage: { input: 100, cacheRead },
+      });
+    };
 
-    expect(nextRun.previousCacheRead).toBe(8_000);
-    expect(nextRun.changes).toBeNull();
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      expect(observe("isolated-run-1", 8_000)).toBeNull();
+      expect(observe("isolated-run-2", 2_000)).toBeNull();
+      expect(observe("isolated-run-2", 0)).toEqual({
+        previousCacheRead: 2_000,
+        cacheRead: 0,
+        changes: null,
+      });
+    });
   });
 
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {

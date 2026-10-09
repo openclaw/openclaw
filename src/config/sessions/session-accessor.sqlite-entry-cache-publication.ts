@@ -45,6 +45,10 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
+  isSessionEntryReplacementFactKnown,
+  isSessionEntryReplacementReceiptUsable,
+} from "./session-accessor.sqlite-entry-receipt.js";
+import {
   commitIncognitoSessionSharingFacts,
   commitIncognitoSessionSharingField,
   publishIncognitoSessionEntryChange,
@@ -122,6 +126,17 @@ function invalidateSessionEntryCaches(databaseIdentity: string): void {
   invalidateOpenClawAgentReadOnlyProjections(databaseIdentity, (database) =>
     sessionEntryCaches.delete(database),
   );
+}
+
+/** Retire all facts in a failed installation, including pending older worker receipts. */
+export function invalidateSessionEntryPublication(
+  database: SessionEntryCacheDatabase,
+  sessionKey: string,
+): void {
+  publishRetainedSessionEntryChange(database, sessionKey, undefined, undefined, false);
+  if (!database.db.location()) {
+    commitIncognitoSessionSharingFacts(database.db, sessionKey, null);
+  }
 }
 
 /** A committed metadata-only worker write invalidates caches without changing retained identity. */
@@ -257,6 +272,7 @@ export function publishSessionEntryPlaceholderInsertion(
       receipt.committed = staged;
     },
     () => stageSessionSharingPublication(database, sessionKey),
+    () => invalidateSessionEntryPublication(database, sessionKey),
   );
   emitPreparedSessionSharingChange(database, sessionKey, database.agentId, undefined, {
     kind: "placeholder",
@@ -305,6 +321,7 @@ function publishSessionSharingFieldChange(
       commitIncognitoSessionSharingField(database.db, sessionKey, change);
     },
     () => stageSessionSharingPublication(database, sessionKey, change),
+    () => invalidateSessionEntryPublication(database, sessionKey),
   );
 }
 
@@ -337,8 +354,12 @@ export function publishSessionSharingEntryChange(
   const incognito = !database.db.location();
   const sharingEntry = update.entry ? projectSessionSharingEntry(update.entry) : undefined;
   if (sharingUnchanged) {
-    publishTrackedCacheUpdate(database, () =>
-      recordCommittedSessionMetadataPublication(database, update.sessionKey, facts, update.entry),
+    publishTrackedCacheUpdate(
+      database,
+      () =>
+        recordCommittedSessionMetadataPublication(database, update.sessionKey, facts, update.entry),
+      undefined,
+      () => invalidateSessionEntryPublication(database, update.sessionKey),
     );
   }
   const previousIdentity = update.previousEntry && {
@@ -359,6 +380,7 @@ export function publishSessionSharingEntryChange(
         );
       },
       !incognito ? () => stageSessionSharingPublication(database, update.sessionKey) : undefined,
+      () => invalidateSessionEntryPublication(database, update.sessionKey),
     );
   }
   if (incognito && !sharingUnchanged) {
@@ -458,18 +480,27 @@ export function retainSessionEntryWorkerPublication(params: {
         | SessionEntryReplacementPublication
         | SessionTranscriptInitializationPublication
         | undefined,
-      unknown: boolean,
+      outcomeUnknown: boolean,
     ) {
       if (!pending) {
         return undefined;
       }
-      const replacement = applyPendingSessionEntryOwnerChanges(
-        receipt?.kind === "session-entry-replacements" ? receipt : undefined,
-        owner.ownerChanges,
-      );
+      let unknown = outcomeUnknown;
+      let replacement = receipt?.kind === "session-entry-replacements" ? receipt : undefined;
+      if (
+        replacement &&
+        !isSessionEntryReplacementReceiptUsable(replacement, keys, params.databaseIdentity)
+      ) {
+        replacement = undefined;
+        unknown = true;
+      }
+      replacement = applyPendingSessionEntryOwnerChanges(replacement, owner.ownerChanges);
       const initialization =
         receipt?.kind === "session-transcript-initialized" ? receipt : undefined;
       const current = (sessionKey: string) => !owner.superseded.has(sessionKey);
+      const hasCommittedFact = (sessionKey: string) =>
+        replacement !== undefined && isSessionEntryReplacementFactKnown(replacement, sessionKey);
+      const known = (sessionKey: string) => !unknown && hasCommittedFact(sessionKey);
       const currentIdentity = (sessionKey: string) =>
         isSessionEntryReplacementIdentityCurrent(owner, replacement, sessionKey);
       // A later native metadata write cannot restore membership omitted by an alias move.
@@ -532,11 +563,7 @@ export function retainSessionEntryWorkerPublication(params: {
           if (placeholder) {
             revokePreparedSessionEntryPredicate(read);
           } else if (current(sessionKey) && !owner.metadataSuperseded.has(sessionKey)) {
-            publishRetainedSessionEntryPredicate(
-              read,
-              entry,
-              !unknown && replacement !== undefined,
-            );
+            publishRetainedSessionEntryPredicate(read, entry, known(sessionKey));
           }
           recordAcquiringSessionEntry(
             read.acquisition,
@@ -546,7 +573,7 @@ export function retainSessionEntryWorkerPublication(params: {
           publishRetainedSessionGeneration(
             read,
             sharingEntry,
-            !unknown && (replacement !== undefined || placeholder !== undefined),
+            known(sessionKey) || (!unknown && placeholder !== undefined),
           );
           const previous = read.facts;
           read.facts =
@@ -568,7 +595,7 @@ export function retainSessionEntryWorkerPublication(params: {
           agentId: params.agentId,
           storePath: ownsCreation ? creationSource.path : params.storePath,
           sessionKey,
-          ...(!unknown &&
+          ...(known(sessionKey) &&
           replacement?.previous.has(sessionKey) &&
           !replacement.current.has(sessionKey)
             ? { facts: { kind: "removed" } as const }
@@ -670,15 +697,27 @@ export function retainSessionEntryWorkerPublication(params: {
           publishSessionEntryMaintenanceAgeChanges(
             params.databaseIdentity,
             replacement.ageChanges.filter(
-              ({ sessionKey }) => current(sessionKey) && !owner.metadataSuperseded.has(sessionKey),
+              ({ sessionKey }) =>
+                known(sessionKey) &&
+                current(sessionKey) &&
+                !owner.metadataSuperseded.has(sessionKey),
             ),
           );
         }
         sessionChanges.emitBatch(changes);
+        // Unknown settlement fences retained facts, not an acknowledged identity mutation.
         return replacement
           ? {
-              previous: new Map([...replacement.previous].filter(([key]) => currentIdentity(key))),
-              current: new Map([...replacement.current].filter(([key]) => currentIdentity(key))),
+              previous: new Map(
+                [...replacement.previous].filter(
+                  ([key]) => hasCommittedFact(key) && currentIdentity(key),
+                ),
+              ),
+              current: new Map(
+                [...replacement.current].filter(
+                  ([key]) => hasCommittedFact(key) && currentIdentity(key),
+                ),
+              ),
               prepared,
             }
           : undefined;

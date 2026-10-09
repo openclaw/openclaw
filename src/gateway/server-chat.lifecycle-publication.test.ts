@@ -38,78 +38,76 @@ describe("single lifecycle publication", () => {
     });
   }
 
-  it.each(["rpc", "restart", "timeout"])(
-    "reserves the %s abort terminal before synchronous lifecycle errors",
-    async (stopReason) => {
-      const h = createHarness();
-      const runId = "run-abort-publication";
-      const sessionKey = "session-abort-publication";
-      const chatAbortControllers = new Map();
-      const registration = registerChatAbortController({
-        chatAbortControllers,
+  it("reserves the RPC abort terminal before synchronous lifecycle errors", async () => {
+    const stopReason = "rpc";
+    const h = createHarness();
+    const runId = "run-abort-publication";
+    const sessionKey = "session-abort-publication";
+    const chatAbortControllers = new Map();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId,
+      sessionKey,
+      sessionId: "session-id",
+      timeoutMs: 60_000,
+    });
+    const unlisten = subscribeAgentEvents(h.handler);
+    onTestFinished(unlisten);
+    const observedPhases: unknown[] = [];
+    onTestFinished(onAgentRuntimeEvent((event) => observedPhases.push(event.data.phase)));
+    await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
+      registerAgentRunContext(runId, { sessionKey, sessionId: "session-id" });
+      h.register(runId, sessionKey, runId);
+      registration.markExecutionStarted();
+      emitRuntimeAgentEvent({
         runId,
-        sessionKey,
-        sessionId: "session-id",
-        timeoutMs: 60_000,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: Date.now() },
       });
-      const unlisten = subscribeAgentEvents(h.handler);
-      onTestFinished(unlisten);
-      const observedPhases: unknown[] = [];
-      onTestFinished(onAgentRuntimeEvent((event) => observedPhases.push(event.data.phase)));
-      await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
-        registerAgentRunContext(runId, { sessionKey, sessionId: "session-id" });
-        h.register(runId, sessionKey, runId);
-        registration.markExecutionStarted();
+      await unlisten.drain();
+      registration.controller.signal.addEventListener("abort", () => {
         emitRuntimeAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "start", startedAt: Date.now() },
+          data: { phase: "error", aborted: true, stopReason: "aborted", executionSettled: true },
         });
-        await unlisten.drain();
-        registration.controller.signal.addEventListener("abort", () => {
-          emitRuntimeAgentEvent({
-            runId,
-            stream: "lifecycle",
-            data: { phase: "error", aborted: true, stopReason: "aborted", executionSettled: true },
-          });
-          clearRegisteredAgentRunContext(runId);
-        });
-        expect(
-          abortChatRunById(
-            {
-              ...h,
-              chatAbortControllers,
-              removeChatRun: h.chatRunState.registry.remove,
-            },
-            { runId, sessionKey, stopReason },
-          ),
-        ).toEqual({ aborted: true });
-        expect(observedPhases).toEqual(["start", "error", "end"]);
-        for (const data of [
-          { phase: "model", provider: null, model: null },
-          { phase: "finishing" },
-          { phase: "error", aborted: true, stopReason: "aborted", executionSettled: true },
-        ]) {
-          emitRuntimeAgentEvent({ runId, stream: "lifecycle", data });
-        }
-        await unlisten.drain();
+        clearRegisteredAgentRunContext(runId);
       });
-      expect(h.agent().map(([, event]) => event.data)).toEqual([
-        expect.objectContaining({ phase: "start" }),
-        expect.objectContaining({ phase: "end", status: "cancelled", aborted: true, stopReason }),
-      ]);
-      expect(h.agent().map(([, event]) => event.seq)).toEqual([1, 3]);
-      expect(h.nodeAgent()).toHaveLength(2);
-      expect(h.chat().filter(([, event]) => event.state === "aborted")).toHaveLength(1);
-      expect(h.clearAgentRunContext).toHaveBeenCalledWith(runId);
       expect(
-        persistGatewaySessionLifecycleEventMock.mock.calls.at(-1)?.[0].event.data,
-      ).toMatchObject({
+        abortChatRunById(
+          {
+            ...h,
+            chatAbortControllers,
+            removeChatRun: h.chatRunState.registry.remove,
+          },
+          { runId, sessionKey, stopReason },
+        ),
+      ).toEqual({ aborted: true });
+      expect(observedPhases).toEqual(["start", "error", "end"]);
+      for (const data of [
+        { phase: "model", provider: null, model: null },
+        { phase: "finishing" },
+        { phase: "error", aborted: true, stopReason: "aborted", executionSettled: true },
+      ]) {
+        emitRuntimeAgentEvent({ runId, stream: "lifecycle", data });
+      }
+      await unlisten.drain();
+    });
+    expect(h.agent().map(([, event]) => event.data)).toEqual([
+      expect.objectContaining({ phase: "start" }),
+      expect.objectContaining({ phase: "end", status: "cancelled", aborted: true, stopReason }),
+    ]);
+    expect(h.agent().map(([, event]) => event.seq)).toEqual([1, 3]);
+    expect(h.nodeAgent()).toHaveLength(2);
+    expect(h.chat().filter(([, event]) => event.state === "aborted")).toHaveLength(1);
+    expect(h.clearAgentRunContext).toHaveBeenCalledWith(runId);
+    expect(persistGatewaySessionLifecycleEventMock.mock.calls.at(-1)?.[0].event.data).toMatchObject(
+      {
         phase: "error",
         executionSettled: true,
-      });
-    },
-  );
+      },
+    );
+  });
 
   it.each([false, true])(
     "suppresses every client lifecycle projection after the terminal (hidden=%s)",

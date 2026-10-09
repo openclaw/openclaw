@@ -44,7 +44,7 @@ type PromptCacheSnapshot = {
   systemPromptSuffixDigest?: string;
   toolDigest: string;
   toolCount: number;
-  toolNames: string[];
+  tools: readonly PromptCacheToolSnapshot[];
 };
 
 type PromptCacheTracker = {
@@ -141,6 +141,46 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
   return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
+function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSnapshot): string {
+  const before = new Map(previous.tools.map((tool) => [tool.name, tool]));
+  const after = new Map(next.tools.map((tool) => [tool.name, tool]));
+  const changed: Record<"added" | "removed" | "description" | "schema", string[]> = {
+    added: [],
+    removed: [],
+    description: [],
+    schema: [],
+  };
+  for (const tool of next.tools) {
+    const prior = before.get(tool.name);
+    if (!prior) {
+      changed.added.push(tool.name);
+    } else {
+      if (prior.descriptionDigest !== tool.descriptionDigest) {
+        changed.description.push(tool.name);
+      }
+      if (prior.schemaDigest !== tool.schemaDigest) {
+        changed.schema.push(tool.name);
+      }
+    }
+  }
+  for (const tool of previous.tools) {
+    if (!after.has(tool.name)) {
+      changed.removed.push(tool.name);
+    }
+  }
+  const details = [`${previous.toolCount} -> ${next.toolCount} tools`];
+  for (const [kind, names] of Object.entries(changed)) {
+    if (names.length > 0) {
+      const sample = names
+        .slice(0, 5)
+        .map((name) => JSON.stringify(name.slice(0, 80)))
+        .join(", ");
+      details.push(`${kind}: ${sample}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`);
+    }
+  }
+  return details.join("; ");
+}
+
 function diffSnapshots(
   previous: PromptCacheSnapshot,
   next: PromptCacheSnapshot,
@@ -179,10 +219,7 @@ function diffSnapshots(
   if (previous.toolDigest !== next.toolDigest) {
     changes.push({
       code: "tools",
-      detail:
-        previous.toolCount === next.toolCount
-          ? "tool set changed with same count"
-          : `${previous.toolCount} -> ${next.toolCount} tools`,
+      detail: describeToolChanges(previous, next),
     });
   }
   return changes.length > 0 ? changes : null;
@@ -248,9 +285,10 @@ export function beginPromptCacheObservation(
       : {}),
     toolDigest: sha256Hex(stableStringify(tools)),
     toolCount: tools.length,
-    toolNames: tools.map((tool) => tool.name),
+    tools,
   };
-  const previous = trackers.get(key);
+  const cached = trackers.get(key);
+  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );
@@ -265,11 +303,9 @@ export function beginPromptCacheObservation(
   for (const code of previous?.declaredRewrites ?? []) {
     changes.push({ code, detail: `${code} changed provider history` });
   }
-  const restarted =
-    previous?.sessionId !== params.sessionId ||
-    changes.some(
-      ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
-    );
+  const restarted = changes.some(
+    ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
+  );
   const divergence =
     previous && !restarted && !previous.declaredRewrites?.size
       ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)

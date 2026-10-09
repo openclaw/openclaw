@@ -37,7 +37,7 @@ import {
   persistChatComposerState as persist,
   removeStoredChatComposerQueueItem as removeItem,
   restoreChatComposerState as restore,
-  updateStoredChatComposerQueueItem as updateItem,
+  updateStoredChatComposerQueueItems as updateItems,
 } from "./composer-persistence.ts";
 
 type ComposerState = Parameters<typeof persist>[0] & {
@@ -201,11 +201,10 @@ it("reviews legacy steer rows as generic mode-bearing sends and never rewrites o
   expect(restored).not.toHaveProperty("steerTargetRunId");
 
   expect(
-    updateItem(
+    updateItems(
       state,
       state.sessionKey,
-      restored!,
-      { ...restored!, text: "updated" },
+      [{ expected: restored!, next: { ...restored!, text: "updated" } }],
       restored?.agentId,
     ),
   ).toBe(true);
@@ -328,10 +327,14 @@ it("rejects stale updates and deletes after an attachment payload replacement", 
   };
   const successor = { ...original, attachmentPayload: { ...reference, key: "replacement" } };
   expect(admitItem(state, original)).toBe(true);
-  expect(updateItem(state, state.sessionKey, original, successor)).toBe(true);
-  expect(updateItem(state, state.sessionKey, original, { ...original, sendAttempts: 2 })).toBe(
-    false,
+  expect(updateItems(state, state.sessionKey, [{ expected: original, next: successor }])).toBe(
+    true,
   );
+  expect(
+    updateItems(state, state.sessionKey, [
+      { expected: original, next: { ...original, sendAttempts: 2 } },
+    ]),
+  ).toBe(false);
   expect(removeItem(state, state.sessionKey, original.id, original)).toBe(false);
   expect(snapshot(state, state.sessionKey)?.queue[0]).toMatchObject(successor);
   expect(removeItem(state, state.sessionKey, successor.id, successor)).toBe(true);
@@ -359,8 +362,12 @@ it("keeps unresolved bare main and raw global independent until their owners res
   expect(listStoredChatOutboxes(resolved)).toEqual([mainBox, globalBox]);
   const attemptedMain = { ...mainBox.queue[0]!, sendAttempts: 1 };
   const attemptedGlobal = { ...globalBox.queue[0]!, sendAttempts: 1 };
-  expect(updateItem(resolved, "global", mainBox.queue[0]!, attemptedMain)).toBe(true);
-  expect(updateItem(resolved, "global", globalBox.queue[0]!, attemptedGlobal)).toBe(true);
+  expect(
+    updateItems(resolved, "global", [{ expected: mainBox.queue[0]!, next: attemptedMain }]),
+  ).toBe(true);
+  expect(
+    updateItems(resolved, "global", [{ expected: globalBox.queue[0]!, next: attemptedGlobal }]),
+  ).toBe(true);
   expect(removeItem(resolved, "global", mainItem.id, attemptedMain)).toBe(true);
   expect(listStoredChatOutboxes(resolved)).toEqual([outbox(attemptedGlobal, "global", "alpha")]);
   expect(removeItem(resolved, "global", globalItem.id, attemptedGlobal)).toBe(true);
@@ -399,7 +406,7 @@ it("reviews shipped selected-agent opaque rows without passively adopting either
   expectDraft(state, "older draft", outbox(expected, sessionKey).queue);
 
   const attempted = { ...restored, sendAttempts: 1 };
-  expect(updateItem(state, sessionKey, restored, attempted)).toBe(true);
+  expect(updateItems(state, sessionKey, [{ expected: restored, next: attempted }])).toBe(true);
   expect(removeItem(state, sessionKey, first.id, attempted)).toBe(true);
   expectDraft(state, "older draft");
   expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
@@ -918,10 +925,15 @@ describe("Incognito composer persistence", () => {
       }),
     );
     expect(
-      updateItem(state, state.sessionKey, queued, {
-        ...queued,
-        text: "Edited submitted message",
-      }),
+      updateItems(state, state.sessionKey, [
+        {
+          expected: queued,
+          next: {
+            ...queued,
+            text: "Edited submitted message",
+          },
+        },
+      ]),
     ).toBe(true);
     const stored = JSON.parse(sessionStorage.getItem(storageKey)!);
     const row = stored.sessions[`${state.sessionKey}\u0000agent:lily`];
@@ -1015,7 +1027,14 @@ describe("chat composer draft presence notifications", () => {
       expect(listener).toHaveBeenCalledTimes(4);
       expect(admitItem(state, original)).toBe(true);
       expect(listener).toHaveBeenCalledTimes(5);
-      expect(updateItem(state, state.sessionKey, original, updated, original.agentId)).toBe(true);
+      expect(
+        updateItems(
+          state,
+          state.sessionKey,
+          [{ expected: original, next: updated }],
+          original.agentId,
+        ),
+      ).toBe(true);
       expect(listener).toHaveBeenCalledTimes(6);
     } finally {
       unsubscribe();

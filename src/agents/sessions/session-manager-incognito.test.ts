@@ -11,6 +11,7 @@ import { readSessionTranscriptModelContextAsync } from "../../config/sessions/se
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
@@ -82,17 +83,12 @@ async function captureCommitRevocation(
   operation: (assertCurrent: () => void) => Promise<unknown>,
 ): Promise<unknown> {
   let current = true;
-  const original = workerAdmission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      original((request, grant) => {
-        admit(request, grant);
-        if (request.stage === "commit") {
-          current = false;
-        }
-      }, attachment),
-    );
+  const spy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (request.stage === "commit") {
+      current = false;
+    }
+  });
   try {
     await operation(() => {
       if (!current) {
@@ -622,22 +618,17 @@ it.each(["registry", "pattern"] as const)(
     applyLoggingConfig({ redactPatterns: patterns });
     resetSecretRedactionRegistryForTest();
     let changed = false;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          if (request.stage === "commit" && !changed) {
-            changed = true;
-            if (policy === "registry") {
-              registerSecretValueForRedaction(marker);
-            } else {
-              patterns.push(marker);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const spy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit" && !changed) {
+        changed = true;
+        if (policy === "registry") {
+          registerSecretValueForRedaction(marker);
+        } else {
+          patterns.push(marker);
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await withIncognitoSessionActor(actor, async () => {
         await expect(appendSessionTranscriptNote(target, note)).rejects.toThrow(

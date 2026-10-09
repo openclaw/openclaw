@@ -27,6 +27,7 @@ const boundary = vi.hoisted(() => {
       signal?.throwIfAborted();
     }),
     cache: {
+      terminal: { peek: () => undefined },
       pending: new Map<string, PendingAgentDatabaseOpen>(),
       activePending: new Set<PendingAgentDatabaseOpen>(),
       databases: new Map<string, OpenClawAgentDatabase>(),

@@ -1,6 +1,10 @@
 import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+import {
+  appearanceSettingsRouteTarget,
+  APPEARANCE_SETTINGS_TARGET_IDS,
+  SETTINGS_ROUTE_TARGETS,
+} from "./route-data.ts";
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -263,10 +267,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "locale translation",
   },
   appearanceTheme: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.theme),
     labelKey: "configView.appearance.theme",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
     searchKeys: [
       "configView.appearance.chooseTheme",
       "configView.appearance.importedTheme",
@@ -277,10 +279,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "tweakcn light dark system",
   },
   appearanceAccent: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.accent),
     labelKey: "configView.appearance.accent",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.accent}`,
     searchKeys: [
       "configView.appearance.accentHint",
       "configView.appearance.customAccent",
@@ -298,10 +298,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "colour swatch palette highlight green purple neutral",
   },
   appearanceTypography: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.typography),
     labelKey: "configView.appearance.typography",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.typography}`,
     searchKeys: [
       "configView.appearance.fonts.ui",
       "configView.appearance.fonts.chat",
@@ -312,10 +310,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "font fonts typeface",
   },
   appearanceTabIcon: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.tabIcon),
     labelKey: "configView.appearance.tabIcon.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.tabIcon}`,
     searchKeys: [
       "configView.appearance.tabIcon.source",
       "configView.appearance.tabIcon.agent",
@@ -324,10 +320,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.textSize),
     labelKey: "configView.appearance.textSize",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
     searchKeys: [
       "configView.textSizes.small",
       "configView.textSizes.default",
@@ -368,10 +362,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",
   },
   appearanceChat: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.chat),
     labelKey: "configView.chatPrefs.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
     searchKeys: [
       "configView.chatPrefs.openLinksExternally",
       "configView.chatPrefs.openLinksExternallyHint",
@@ -405,10 +397,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
   },
   appearanceConnection: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.connection),
     labelKey: "configView.connection.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
     searchKeys: [
       "configView.connection.gateway",
       "configView.connection.status",

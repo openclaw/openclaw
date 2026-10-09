@@ -35,6 +35,7 @@ import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admis
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
@@ -45,6 +46,7 @@ export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
   sessionKeysBySessionId: ReadonlyMap<string, string>;
   transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
+  archivedSessionIds: ReadonlySet<string>;
 };
 
 type ReadOnlySqliteResult<T> = { ok: true; value: T } | { error: unknown; ok: false };
@@ -366,6 +368,7 @@ export function readOnlySqliteValidationSnapshot(
     sessionIdsBySessionKey: new Map(),
     sessionKeysBySessionId: new Map(),
     transcriptEventCountsBySessionId: new Map(),
+    archivedSessionIds: new Set(),
   };
   const result = readSessionDatabase(target, (database) => {
     const projection = resolveSessionIdentityProjection(database);
@@ -402,10 +405,26 @@ export function readOnlySqliteValidationSnapshot(
         }
       }
     }
+    const archivedSessionIds = new Set<string>();
+    const query = getSessionKysely(database);
+    for (const table of [
+      "session_transcript_archives",
+      "session_transcript_cold_archives",
+    ] as const) {
+      if (tableExists(database, table)) {
+        for (const row of executeSqliteQuerySync(
+          database,
+          query.selectFrom(table).select("session_id"),
+        ).rows) {
+          archivedSessionIds.add(row.session_id);
+        }
+      }
+    }
     return {
       sessionIdsBySessionKey,
       sessionKeysBySessionId,
       transcriptEventCountsBySessionId,
+      archivedSessionIds,
     };
   });
   return result.ok ? { ok: true, snapshot: result.value ?? empty } : result;

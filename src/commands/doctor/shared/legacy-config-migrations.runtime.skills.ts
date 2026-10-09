@@ -63,6 +63,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
       message: `skills.workshop.${key} was removed with Skill Workshop proposals. Run "openclaw doctor --fix".`,
     })),
     apply: (raw, changes) => {
+      const workshop = getRecord(getRecord(raw.skills)?.workshop);
+      // Approval-first operators never let agents write skills unreviewed; without this the
+      // mode (explicit or the new auto default) would start writing directly.
+      if (workshop?.approvalPolicy === "pending") {
+        const autonomous = getRecord(workshop.autonomous) ?? {};
+        if (autonomous.mode !== "off") {
+          autonomous.mode = "off";
+          workshop.autonomous = autonomous;
+          changes.push(
+            `Set skills.workshop.autonomous.mode to "off" because approvalPolicy "pending" required approval before skill writes, and approvals were removed. ${ENABLE_AUTO_HINT}`,
+          );
+        }
+      }
       for (const key of ["approvalPolicy", "maxPending"]) {
         if (deleteRetiredPath(raw, ["skills", "workshop", key])) {
           changes.push(`Removed skills.workshop.${key}; Skill Workshop proposals were removed.`);
