@@ -39,11 +39,10 @@ import {
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import {
   deferredPluginSessionStoreIds,
-  prepareDeferredPluginSessionImportReader,
   preserveDeferredPluginSessionSource,
 } from "./deferred-plugin-session-sources.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
+import * as acpMigration from "./state-migrations.acp-session-metadata.js";
 import {
   existsDir,
   migrationFileExists,
@@ -781,7 +780,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
 
-    const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
+    const readVerifiedCoreImport = acpMigration.prepareDeferredPluginSessionImportReader({
       cfg: params.cfg,
       target,
       env,
@@ -814,7 +813,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
           skipCrossAgentRemap: true,
           legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
         });
-        const imported = importLegacyAcpSessionMetadata({
+        const imported = acpMigration.importLegacyAcpSessionMetadata({
           sourcePath: storePath,
           sourceSessionKey: sessionKey,
           preserveSource,

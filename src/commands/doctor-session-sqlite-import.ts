@@ -94,7 +94,7 @@ export async function importLegacySessionRecords(
         .slice(offset, offset + SESSION_IMPORT_BATCH_SIZE)
         .flatMap((record) => {
           // Unreadable history cannot authorize replay of a current node's metadata or generation.
-          record.preserveCurrentSession =
+          record.preserveCurrentSession ||=
             recoveryHistoryUnverified || Boolean(assertRestoredIndexCurrent);
           try {
             const prepared = prepareLegacySessionImport(
