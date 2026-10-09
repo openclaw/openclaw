@@ -149,7 +149,11 @@ describe("OpenAI completions reasoning", () => {
   it.each(["direct", "managed"] as const)(
     "sends custom reasoning controls with conservative off defaults (%s)",
     (mode) => {
-      const cases: [Partial<CompletionsModel>, string, string | undefined][] = [
+      const cases: [
+        Partial<CompletionsModel>,
+        OpenAICompletionsOptions["reasoningEffort"],
+        string | undefined,
+      ][] = [
         [{}, "low", "low"],
         [{}, "high", "high"],
         [{}, "off", undefined],
