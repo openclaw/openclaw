@@ -181,7 +181,6 @@ describe("durable pre-reply run failure", () => {
       onTestFinished(() => h.handler.dispose());
       h.register(runId, target.sessionKey, runId, {
         agentId: target.agentId,
-        sessionId: target.sessionId,
       });
       const deliveries: Promise<void>[] = [];
       const terminal = createAgentLifecycleTerminalBackstop({
