@@ -20,6 +20,12 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { createChatRunState } from "../server-chat-state.js";
+import {
+  createStaticApiKeyProvider,
+  healthProfile,
+  oauthCredential,
+  type HealthProfile,
+} from "./models-auth-health.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
@@ -183,36 +189,6 @@ function createActiveRun(providerId: string, authProviderId?: string, agentId = 
   };
 }
 
-function oauthCredential(
-  provider: string,
-  overrides: Partial<Extract<AuthProfileStore["profiles"][string], { type: "oauth" }>> = {},
-) {
-  return {
-    type: "oauth" as const,
-    provider,
-    access: "access",
-    refresh: "refresh",
-    expires: 1_000_000,
-    ...overrides,
-  };
-}
-
-type HealthProfile = AuthHealthSummary["profiles"][number];
-
-function healthProfile(
-  provider: string,
-  type: HealthProfile["type"],
-  status: HealthProfile["status"],
-  profileId = `${provider}:default`,
-  extra: Partial<HealthProfile> = {},
-): HealthProfile {
-  return { profileId, provider, type, status, source: "store", label: profileId, ...extra };
-}
-
-function createApiKeyProfile(provider: string) {
-  return healthProfile(provider, "api_key", "static");
-}
-
 function expiredOAuthProfile(profileId: string, provider = "claude-cli") {
   return healthProfile(provider, "oauth", "expired", profileId, {
     expiresAt: 1,
@@ -241,14 +217,6 @@ function mockHealthProvider(provider: AuthHealthSummary["providers"][number], no
     profiles: provider.profiles,
     providers: [provider],
   });
-}
-
-function createStaticApiKeyProvider(provider: string) {
-  return {
-    provider,
-    status: "static",
-    profiles: [createApiKeyProfile(provider)],
-  } satisfies AuthHealthSummary["providers"][number];
 }
 
 function createLogoutOptions(
@@ -383,7 +351,11 @@ function resetAuthStatusMocks(): void {
   );
   mocks.resolveDefaultAgentId.mockReturnValue("main");
   setPreparedAuthStore({ version: 1, profiles: {} });
-  setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture());
+  setPreparedMetadataSnapshot(
+    createPluginMetadataSnapshotFixture({
+      plugins: ["deepseek", "kimi"].map((id) => ({ id, contracts: { usageProviders: [id] } })),
+    }),
+  );
   mocks.readPreparedCatalog.mockImplementation(async (_context, agentId: string) =>
     createPreparedOwnerSnapshot(agentId),
   );
@@ -1053,42 +1025,52 @@ describe("models.authStatus", () => {
     expect(readOnlyResult.providers[0]?.usage).not.toHaveProperty("accountEmail");
   });
 
-  it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
-    mockHealthProvider(createStaticApiKeyProvider("deepseek"));
-    mocks.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "deepseek",
-          displayName: "DeepSeek",
-          windows: [],
-          summary: "Balance ¥42.50",
-        },
-      ],
-    });
+  it.each(["deepseek", "kimi"])(
+    "adds manifest-declared %s API-key usage to auth status",
+    async (provider) => {
+      mockHealthProvider(createStaticApiKeyProvider(provider));
+      const usage =
+        provider === "deepseek"
+          ? { windows: [], summary: "Balance ¥42.50" }
+          : {
+              windows: [
+                { label: "5h", usedPercent: 25 },
+                { label: "7d", usedPercent: 50 },
+              ],
+            };
+      mocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 0,
+        providers: [
+          {
+            provider,
+            displayName: provider,
+            ...usage,
+          },
+        ],
+      });
 
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
+      const first = await readAuthStatus();
+      expect(first.providers[0]?.usage).toBeUndefined();
 
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      providers: ["deepseek"],
-      agentDir: "/tmp/agent",
-      authStore: preparedAuthStore,
-      config: expect.any(Object),
-      timeoutMs: 5_000,
-    });
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage).toBeDefined();
-    });
-    const refreshed = expectDefined(result, "refreshed auth status");
-    expect(refreshed.providers[0]?.usage).toEqual({
-      providerId: "deepseek",
-      windows: [],
-      summary: "Balance ¥42.50",
-    });
-  });
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+        providers: [provider],
+        agentDir: "/tmp/agent",
+        authStore: preparedAuthStore,
+        config: expect.any(Object),
+        timeoutMs: 5_000,
+      });
+      let result: ModelAuthStatusResult | undefined;
+      await waitForFast(async () => {
+        result = await readAuthStatus();
+        expect(result.providers[0]?.usage).toBeDefined();
+      });
+      const refreshed = expectDefined(result, "refreshed auth status");
+      expect(refreshed.providers[0]?.usage).toEqual({
+        providerId: provider,
+        ...usage,
+      });
+    },
+  );
 
   it("keeps same-account stale usage visible during an explicit refresh", async () => {
     mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());

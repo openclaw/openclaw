@@ -10,6 +10,7 @@ import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
+import { createUsageModelBaseUrlResolver } from "./provider-usage.models.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
@@ -57,6 +58,13 @@ export async function loadProviderUsageSummary(
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
+  const resolveModelBaseUrls = createUsageModelBaseUrlResolver({
+    config,
+    agentDir: opts.agentDir,
+    workspaceDir: opts.workspaceDir,
+    env: opts.env,
+    providerIds: descriptors.map(({ provider }) => provider),
+  });
   const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
   const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
     provider,
@@ -88,6 +96,7 @@ export async function loadProviderUsageSummary(
             opts.auth?.find((candidate) => candidate.provider === provider) ??
             (
               await resolveProviderAuths({
+                resolveModelBaseUrls,
                 providers: [provider],
                 agentDir: opts.agentDir,
                 config,
@@ -114,6 +123,8 @@ export async function loadProviderUsageSummary(
             workspaceDir: opts.workspaceDir,
             env,
             context: {
+              resolveModelBaseUrls: (providerIds) =>
+                resolveModelBaseUrls(providerIds ?? [auth.provider], signal),
               config,
               agentDir: opts.agentDir,
               workspaceDir: opts.workspaceDir,

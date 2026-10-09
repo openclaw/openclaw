@@ -133,6 +133,10 @@ export type ProviderPreparedRuntimeAuth = {
  * token blob, read a legacy credential file, or pick between aliases).
  */
 export type ProviderResolveUsageAuthContext = {
+  /** Agent-owned effective model routes, shared with the ensuing usage fetch. */
+  resolveModelBaseUrls?: (
+    providerIds?: readonly string[],
+  ) => Promise<readonly string[] | undefined>;
   /** Cancel provider-owned work when the usage collection deadline expires. */
   signal?: AbortSignal;
   config: OpenClawConfig;
@@ -190,6 +194,10 @@ export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true
  * owns the provider-specific HTTP request + response normalization.
  */
 export type ProviderFetchUsageSnapshotContext = ProviderUsageAuthToken & {
+  /** Same effective route snapshot used before resolving usage credentials. */
+  resolveModelBaseUrls?: (
+    providerIds?: readonly string[],
+  ) => Promise<readonly string[] | undefined>;
   /** Custom transports must preserve this signal; fetchFn already includes it. */
   signal?: AbortSignal;
   config: OpenClawConfig;

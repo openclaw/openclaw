@@ -7,6 +7,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { wrapKimiProviderStream } from "./stream.js";
+import { fetchKimiUsage, resolveManagedKimiUsageBaseUrl } from "./usage.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
@@ -87,6 +88,27 @@ export default defineSingleProviderPluginEntry({
     },
     normalizeModelId: ({ modelId }) => normalizeKimiCodingModelId(modelId),
     resolveThinkingProfile,
+    resolveUsageAuth: async (ctx) => {
+      const baseUrl = resolveManagedKimiUsageBaseUrl(
+        await ctx.resolveModelBaseUrls?.([PROVIDER_ID, ...PROVIDER_ALIASES]),
+      );
+      if (!baseUrl) {
+        return { handled: true };
+      }
+      const keys = await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+        providerIds: [PROVIDER_ID, ...PROVIDER_ALIASES],
+        envDirect: [ctx.env.KIMI_API_KEY, ctx.env.KIMICODE_API_KEY],
+      });
+      return keys?.[0] ? { token: keys[0] } : { handled: true };
+    },
+    fetchUsageSnapshot: async (ctx) => {
+      const baseUrl = resolveManagedKimiUsageBaseUrl(
+        await ctx.resolveModelBaseUrls?.([PROVIDER_ID, ...PROVIDER_ALIASES]),
+      );
+      return baseUrl
+        ? await fetchKimiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, { baseUrl })
+        : null;
+    },
     wrapSimpleCompletionStreamFn: (ctx) =>
       isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,
     wrapStreamFn: wrapKimiProviderStream,

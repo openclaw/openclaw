@@ -159,6 +159,15 @@ when authentication shares the request budget, and call its `cleanup` in
     and produces a visible `Timeout` snapshot. Core retains completed siblings and
     tracks unfinished work through cleanup, including auth-owned credential refresh.
 
+    Both hooks may also receive `ctx.resolveModelBaseUrls(providerIds?)`. It
+    resolves the selected agent's effective model endpoints once per collection,
+    using the same snapshot for auth and fetching. Omit `providerIds` for the
+    current provider, or pass the plugin's credential-sharing aliases together.
+    An absent helper or `undefined` result means route information is unavailable.
+    Providers whose credentials are valid only at managed endpoints must check
+    these routes before resolving credentials and again before a request with
+    caller-supplied auth; never infer an official endpoint from missing facts.
+
     `resolveUsageAuth` has three outcomes. Return
     `{ token, accountId?, subscriptionType?, rateLimitTier? }` when the
     provider has a usage/billing credential (the optional fields carry

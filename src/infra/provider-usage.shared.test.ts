@@ -13,6 +13,8 @@ it.each([
   { value: "minimax-cn", expected: "minimax" },
   { value: "minimax-portal-cn", expected: "minimax" },
   { value: " CLAUDE-CLI ", expected: "anthropic" },
+  { value: "kimi-code", expected: "kimi" },
+  { value: "kimi-coding", expected: "kimi" },
   { value: undefined, expected: undefined },
 ])("normalizes provider ids for %j", ({ value, expected }) => {
   expect(resolveUsageProviderId(value)).toBe(expected);

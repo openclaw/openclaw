@@ -20,6 +20,7 @@ Adds Kimi, Kimi Code, Kimi Coding model provider support to OpenClaw.
 ## Surface
 
 - Providers: `kimi`, `kimi-code`, `kimi-coding`
+- Contracts: `usageProviders`
 
 ## Related docs
 

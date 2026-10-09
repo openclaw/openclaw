@@ -514,8 +514,11 @@ Highlights:
 `openclaw status --usage` and the Control UI surface provider usage/quota when
 OAuth/API credentials are available. Data comes directly from provider usage
 endpoints and is normalized to `X% left`. Providers with current usage
-windows: Anthropic, Gemini CLI, GitHub Copilot, MiniMax, OpenAI Codex,
-Xiaomi, and z.ai.
+windows: Anthropic, Gemini CLI, GitHub Copilot, Kimi, MiniMax, OpenAI Codex,
+Xiaomi, and z.ai. Kimi usage polling requires the selected agent's effective
+Kimi model routes to share one official `api.kimi.com` or `api.kimi.ai` coding
+endpoint. Custom proxies, mixed endpoints, and unavailable route information
+are not polled.
 
 See [Usage tracking](/concepts/usage-tracking) for details.
 

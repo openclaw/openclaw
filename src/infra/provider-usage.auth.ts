@@ -376,6 +376,10 @@ function hasAuthProfileCredentialSource(params: {
 }
 
 export async function resolveProviderAuths(params: {
+  resolveModelBaseUrls?: (
+    providerIds: readonly string[],
+    signal?: AbortSignal,
+  ) => Promise<readonly string[] | undefined>;
   signal?: AbortSignal;
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
@@ -454,6 +458,8 @@ export async function resolveProviderAuths(params: {
           config: state.cfg,
           env: state.env,
           context: {
+            resolveModelBaseUrls: async (providerIds) =>
+              await params.resolveModelBaseUrls?.(providerIds ?? [provider], state.signal),
             signal: state.signal,
             config: state.cfg,
             agentDir: state.agentDir,

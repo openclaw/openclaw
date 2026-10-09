@@ -343,42 +343,46 @@ export async function prepareWorkspaceBuildGroup(
     // Static Gateway publication consumes discovery entrypoints; the run owns activation.
     const ambientCredentialsStartedAt = performance.now();
     reportStage("ambient credentials");
-    const ambientCredentials = await prepareAmbientAgentCredentialsForDiscovery({
-      signal: options.signal,
-      config: input.config,
-      env,
-      authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
-      syntheticAuthProviderRefs:
-        catalogMode === "static"
-          ? scopeSyntheticAuthProviderRefs(
-              listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders),
-              options.providerDiscoveryProviderIds,
-            )
-          : scopeSyntheticAuthProviderRefs(
-              resolveRuntimeSyntheticAuthProviderRefs({
-                config: input.config,
-                env,
-                index: pluginMetadataSnapshot.index,
-                registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
-                ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-              }),
-              configuredProviderIds,
-            ),
-      ...(catalogMode === "static"
-        ? {
-            resolveSyntheticAuth: (provider: string) =>
-              prepareSyntheticAuth({
-                signal: options.signal,
-                config: input.config,
-                env,
-                workspaceDir: input.workspaceDir,
-                provider,
-                providers: preparedSyntheticAuthProviders,
-              }),
-          }
-        : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
+    // Route-only readers must not resolve ambient/synthetic auth before their
+    // endpoint policy runs. Mixed batches still prepare auth for their consumers.
+    const ambientCredentials = inputs.every((candidate) => candidate.skipCredentials)
+      ? {}
+      : await prepareAmbientAgentCredentialsForDiscovery({
+          signal: options.signal,
+          config: input.config,
+          env,
+          authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
+          syntheticAuthProviderRefs:
+            catalogMode === "static"
+              ? scopeSyntheticAuthProviderRefs(
+                  listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders),
+                  options.providerDiscoveryProviderIds,
+                )
+              : scopeSyntheticAuthProviderRefs(
+                  resolveRuntimeSyntheticAuthProviderRefs({
+                    config: input.config,
+                    env,
+                    index: pluginMetadataSnapshot.index,
+                    registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
+                    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+                  }),
+                  configuredProviderIds,
+                ),
+          ...(catalogMode === "static"
+            ? {
+                resolveSyntheticAuth: (provider: string) =>
+                  prepareSyntheticAuth({
+                    signal: options.signal,
+                    config: input.config,
+                    env,
+                    workspaceDir: input.workspaceDir,
+                    provider,
+                    providers: preparedSyntheticAuthProviders,
+                  }),
+              }
+            : {}),
+          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        });
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
     reportStage("agent facts");

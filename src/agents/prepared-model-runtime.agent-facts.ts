@@ -24,16 +24,18 @@ export async function prepareAgentFacts(
   includeCredentialProviders = catalogMode === "live",
 ): Promise<PreparedModelRuntimeAgentBaseFacts> {
   const env = input.env ?? process.env;
-  const preparedStore = await nativePluginBindings.authStore.prepareAuthProfileStoreForModelRuntime(
-    input.agentDir,
-    {
-      config: input.config,
-      inheritedAuthDir: input.inheritedAuthDir,
-      skipCredentials: input.skipCredentials,
-    },
-    assertCurrent,
-    env,
-  );
+  const preparedStore = input.skipCredentials
+    ? undefined
+    : await nativePluginBindings.authStore.prepareAuthProfileStoreForModelRuntime(
+        input.agentDir,
+        {
+          config: input.config,
+          inheritedAuthDir: input.inheritedAuthDir,
+          skipCredentials: input.skipCredentials,
+        },
+        assertCurrent,
+        env,
+      );
   assertCurrent();
   return withAgentRosterFactsBatch(input.config, () => {
     const authFacts = discoverAuthStorageFacts(input.agentDir, {

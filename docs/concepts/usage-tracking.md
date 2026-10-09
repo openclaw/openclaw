@@ -370,6 +370,14 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
   Shows each provider-reported currency balance.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
+- **Kimi Coding**: API key via env/config/auth store (`KIMI_API_KEY` or
+  `KIMICODE_API_KEY`). Shows five-hour and seven-day quota windows in
+  `openclaw status --usage` and the Control UI. The selected agent's effective
+  Kimi routes, including authored `models.json` overrides and provider aliases,
+  must share one official `api.kimi.com` or `api.kimi.ai` coding endpoint.
+  Custom proxies, mixed endpoints, and unknown routes are skipped before the
+  plugin resolves usage credentials. `openclaw models status` remains an
+  OAuth/token usage surface and does not show Kimi API-key quota.
 - **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
   surface, prefers stored MiniMax OAuth when present, and otherwise falls back

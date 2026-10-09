@@ -15,13 +15,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalog-auth.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
-
-const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
 type ModelAuthStatusFacts = ReturnType<typeof buildModelAuthStatusFacts>;
 const authStatusFacts = new WeakMap<
@@ -115,6 +114,13 @@ function buildModelAuthStatusFacts(
       authAliasLookupParams,
     });
   const authHealth = readAuthHealth();
+  const apiKeyUsageStatusProviders = new Set<UsageProviderId>(
+    listAvailableManifestContractValues({
+      snapshot: preparedSnapshot.metadataSnapshot,
+      contract: "usageProviders",
+      config: cfg,
+    }),
+  );
   // File-backed bootstrap can change without a Gateway publication. Its reader owns freshness.
   const readsExternalAuth = authHealth.profiles.some(
     (profile) =>
