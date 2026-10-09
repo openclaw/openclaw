@@ -202,6 +202,24 @@ describe("bundled plugin build entries", () => {
     }
   };
 
+  it("includes the manifest-less runtime core support package in dist build entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const expectedEntries = {
+      "extensions/image-generation-core/runtime-api":
+        "extensions/image-generation-core/runtime-api.ts",
+    };
+
+    expect(entries).toMatchObject(expectedEntries);
+  });
+
+  it("packs the runtime core support package without requiring a plugin manifest", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).toContain("dist/extensions/image-generation-core/package.json");
+    expect(artifacts).toContain("dist/extensions/image-generation-core/runtime-api.js");
+    expect(artifacts).not.toContain("dist/extensions/image-generation-core/openclaw.plugin.json");
+  });
+
   it.each([["discord", "src/voice/audio-worker.runtime", true]] as const)(
     "emits %s/%s through its owning build",
     (id, worker, isolated) => {

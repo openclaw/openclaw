@@ -368,7 +368,16 @@ describe("native owner content records", () => {
       fs.cpSync(f.root, baseline, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
     });
 
-    it.each(["rename", "missing output"])("rejects %s against a real native record", (mutation) => {
+    it.each([
+      "rename",
+      "lockfile",
+      "generator",
+      "compiler policy",
+      "compiler API",
+      "missing output",
+      "tampered output",
+      "orphan output",
+    ])("rejects %s against a real native record", (mutation) => {
       // Restore the same native generation before each independent invalidation.
       fs.rmSync(f.root, { recursive: true, force: true });
       fs.cpSync(baseline, f.root, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
@@ -382,10 +391,36 @@ describe("native owner content records", () => {
           "dist",
         );
       expect(matches(), "pristine native generation").toBe(true);
-      if (mutation === "rename") {
-        fs.renameSync(path.join(f.root, "nested/value.js"), path.join(f.root, "nested/renamed.js"));
-      } else {
-        fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
+      switch (mutation) {
+        case "rename":
+          fs.renameSync(
+            path.join(f.root, "nested/value.js"),
+            path.join(f.root, "nested/renamed.js"),
+          );
+          break;
+        case "lockfile":
+          f.write("pnpm-lock.yaml", "changed lock");
+          break;
+        case "generator":
+          f.write("scripts/compile-extension-boundary.mts", "export const changed = true;");
+          break;
+        case "compiler policy":
+          f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;");
+          break;
+        case "compiler API": {
+          const file = "node_modules/typescript/dist/api/async/api.js";
+          f.write(file, `${fs.readFileSync(path.join(f.root, file), "utf8")}\n`);
+          break;
+        }
+        case "missing output":
+          fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
+          break;
+        case "tampered output":
+          f.write("dist/nested/value.d.ts", "truncated");
+          break;
+        case "orphan output":
+          f.write("dist/nested/orphan.d.ts", "export {};");
+          break;
       }
       expect(matches()).toBe(false);
     });

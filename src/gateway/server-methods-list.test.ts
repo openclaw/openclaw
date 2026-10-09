@@ -5,9 +5,16 @@ import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-method-policy.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("listGatewayMethods", () => {
+  it("preserves the frozen legacy advertised method prefix", () => {
+    expect(listGatewayMethods().slice(0, LEGACY_ADVERTISED_GATEWAY_METHODS.length)).toEqual(
+      LEGACY_ADVERTISED_GATEWAY_METHODS,
+    );
+  });
+
   const sessionEnvironmentMethods = [
     ["environments.session.status", "operator.read", undefined],
     ["environments.session.create", "operator.admin", true],

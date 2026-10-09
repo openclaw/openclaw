@@ -94,6 +94,26 @@ describe("Codex app-server config", () => {
       autoReviewPolicy,
     ],
     [
+      "forces guarded app-server policy fields for auto mode",
+      {
+        pluginConfig: {
+          appServer: {
+            mode: "yolo",
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
+            approvalsReviewer: "user",
+          },
+        },
+        env: {
+          OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "never",
+          OPENCLAW_CODEX_APP_SERVER_SANDBOX: "danger-full-access",
+        },
+        execMode: "auto",
+        modelProvider: "openai",
+      },
+      autoReviewPolicy,
+    ],
+    [
       "prefers the normalized on-request alias over a permitted never policy",
       {
         execMode: "auto",

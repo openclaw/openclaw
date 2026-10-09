@@ -7,6 +7,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
 import * as entryWriter from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -657,5 +658,16 @@ describe.each(["ordinary", "followup"] as const)("%s accounting replacement race
     pendingTool.resolve();
     await accounting;
     expect(fixture.read()).toEqual(persisted);
+  });
+
+  it("does not recreate a deleted session while accounting a completed result", async () => {
+    const fixture = await createFixture();
+    await applySessionEntryLifecycleMutation({
+      storePath: fixture.context.storePath!,
+      removals: [{ sessionKey: fixture.context.sessionKey! }],
+      skipMaintenance: true,
+    });
+    await fixture.account(lane, { usage: { input: 120 } });
+    expect(fixture.read()).toBeUndefined();
   });
 });

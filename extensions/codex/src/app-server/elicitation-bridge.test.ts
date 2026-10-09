@@ -10,6 +10,7 @@ import {
   codexTestTurnIds,
 } from "./codex-app-server.test-fixtures.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import type { JsonObject } from "./protocol.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -1313,6 +1314,56 @@ describe("Codex app-server elicitation bridge", () => {
       _meta: null,
     });
   });
+
+  it.each<{ name: string; request: JsonObject }>([
+    {
+      name: "an ordinary form",
+      request: {
+        mode: "form",
+        message: "Choose a calendar",
+        requestedSchema: {
+          type: "object",
+          properties: { calendar: { type: "string", enum: ["work", "personal"] } },
+          required: ["calendar"],
+        },
+      },
+    },
+    {
+      name: "an OAuth URL",
+      request: {
+        mode: "url",
+        message: "Connect your calendar",
+        url: "https://example.com/oauth/authorize",
+        elicitationId: "connect-calendar",
+      },
+    },
+    {
+      name: "an extended OpenAI form",
+      request: {
+        mode: "openai/form",
+        message: "Choose an event image",
+        requestedSchema: { type: "object", properties: { image: { type: "string" } } },
+      },
+    },
+  ])(
+    "leaves $name from a plugin-owned MCP server to the ordinary input bridge",
+    async ({ request }) => {
+      const result = await routeCodexAppServerElicitationRequest({
+        requestParams: {
+          ...codexTestTurnIds(),
+          serverName: "google-calendar-mcp",
+          _meta: { app_id: "google-calendar-app" },
+          ...request,
+        },
+        paramsForRun: createParams(),
+        ...codexTestTurnIds(),
+        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
+      });
+
+      expect(result).toEqual({ kind: "not-mine" });
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not split surrogate pairs when truncating display parameter values", async () => {
     mockApprovalDecision("plugin:approval-utf16-safe", "allow-once");

@@ -118,4 +118,77 @@ describe("session MCP runtime", () => {
       }),
     );
   });
+
+  it("accepts draft-2020-12 local refs, boolean schemas, and dynamic anchors", () => {
+    const neverValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Never: false,
+      },
+      $ref: "#/$defs/Never",
+    });
+    expect(neverValidator("anything").valid).toBe(false);
+
+    const anchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $anchor: "value",
+          type: "string",
+        },
+      },
+      $ref: "#value",
+    });
+    expect(anchorValidator("ok").valid).toBe(true);
+    expect(anchorValidator(1).valid).toBe(false);
+
+    const dynamicRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $dynamicAnchor: "value",
+          type: "string",
+        },
+      },
+      $dynamicRef: "#value",
+    });
+    expect(dynamicRefValidator("ok").valid).toBe(true);
+    expect(dynamicRefValidator(1).valid).toBe(false);
+  });
+
+  it("attributes draft-2020-12 compiler failures to the MCP schema", () => {
+    let thrown: unknown;
+    try {
+      createBundleMcpJsonSchemaValidator().getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          value: { type: "string", pattern: "[" },
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      message: expect.stringContaining(
+        "Invalid MCP draft-2020-12 JSON Schema: Invalid regular expression",
+      ),
+      cause: expect.any(Error),
+    });
+  });
+
+  it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        url: { type: "string", pattern: "^https\\:\\/\\/" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    });
+
+    expect(validator({ url: "https://example.com/path" }).valid).toBe(true);
+    expect(validator({ url: "http://example.com" }).valid).toBe(false);
+  });
 });

@@ -30,6 +30,7 @@ import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
   buildMSTeamsAuthEndpoint,
+  buildMSTeamsTokenEndpoint,
 } from "./oauth.shared.js";
 import { exchangeMSTeamsCodeForTokens, refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
@@ -93,8 +94,13 @@ describe("manual delegated sign-in", () => {
         accessToken: "access",
         refreshToken: "refresh",
       });
-      const [, init] = firstFetchCall(fetchSpy);
+      const [url, init] = firstFetchCall(fetchSpy);
+      expect(url).toBe(buildMSTeamsTokenEndpoint("tenant"));
       const body = new URLSearchParams(init.body as string);
+      expect(body.get("grant_type")).toBe("authorization_code");
+      expect(body.get("client_id")).toBe("client");
+      expect(body.get("client_secret")).toBe("synthetic-client-secret");
+      expect(body.get("redirect_uri")).toBe(MSTEAMS_OAUTH_REDIRECT_URI);
       expect(body.get("code")).toBe("callback-code");
       expect(createHash("sha256").update(body.get("code_verifier")!).digest("base64url")).toBe(
         authUrl!.searchParams.get("code_challenge"),
@@ -124,6 +130,18 @@ describe("buildMSTeamsAuthUrl", () => {
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
     expect(parsed.searchParams.get("state")).toBe(state);
     expect(parsed.searchParams.get("prompt")).toBe("consent");
+  });
+
+  it("uses custom scopes when provided", () => {
+    const url = buildMSTeamsAuthUrl({
+      tenantId: "t",
+      clientId: "c",
+      challenge: "ch",
+      state: "s",
+      scopes: ["User.Read", "offline_access"],
+    });
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get("scope")).toBe("User.Read offline_access");
   });
 });
 
@@ -229,5 +247,24 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");
     expect(body.get("client_secret")).toBe("secret-1");
+  });
+
+  it("uses new refresh token when Azure returns one", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      responseJson({
+        access_token: "new-at",
+        refresh_token: "new-rt",
+        expires_in: 3600,
+      }),
+    );
+
+    const tokens = await refreshMSTeamsDelegatedTokens({
+      tenantId: "t",
+      clientId: "c",
+      clientSecret: "s", // pragma: allowlist secret
+      refreshToken: "old-rt",
+    });
+
+    expect(tokens.refreshToken).toBe("new-rt");
   });
 });

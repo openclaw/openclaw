@@ -61,7 +61,10 @@ describe("msteamsOutbound cfg threading", () => {
     mocks.createPoll.mockResolvedValue(undefined);
   });
 
-  it.each([{ configuredLimit: 6000, expectedLimit: 4000 }])(
+  it.each([
+    { configuredLimit: 1000, expectedLimit: 1000 },
+    { configuredLimit: 6000, expectedLimit: 4000 },
+  ])(
     "resolves the same capped $configuredLimit-character limit for lightweight and runtime outbound",
     ({ configuredLimit, expectedLimit }) => {
       const configuredCfg = {
@@ -346,7 +349,10 @@ describe("msteamsOutbound cfg threading", () => {
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledOnce();
   });
 
-  it.each([{ configuredLimit: 6000, textLength: 5000, expectedChunkLengths: [4000, 1000] }])(
+  it.each([
+    { configuredLimit: 1000, textLength: 1500, expectedChunkLengths: [1000, 500] },
+    { configuredLimit: 6000, textLength: 5000, expectedChunkLengths: [4000, 1000] },
+  ])(
     "uses the capped $configuredLimit-character configured limit for fallback payloads",
     async ({ configuredLimit, textLength, expectedChunkLengths }) => {
       const configuredCfg = {

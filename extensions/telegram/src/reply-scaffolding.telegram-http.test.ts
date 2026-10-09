@@ -239,4 +239,54 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered.join("\n")).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
     expect(delivered.join("\n")).not.toContain("Keep internal details private.");
   });
+
+  it("removes a copied prompt when the source and model normalize line endings differently", async () => {
+    const conversationContext = buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage: "private first paragraph\n\nprivate second paragraph",
+      lineBreak: "\r\n",
+    });
+
+    await prepareAndDispatch(
+      { text: `${conversationContext.replace(/\r\n/g, "\n")}\n\nVisible answer.` },
+      conversationContext,
+    );
+
+    expect(delivered).toEqual(["Visible answer."]);
+  });
+
+  it("never delivers a copied prompt disguised with same-line wrappers", async () => {
+    const conversationContext = buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage: "private inbound paragraph",
+    });
+
+    await prepareAndDispatch(
+      { text: `Visible prefix: ${conversationContext} visible suffix.` },
+      conversationContext,
+    );
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toContain("Visible prefix:");
+    expect(delivered[0]).toContain("visible suffix.");
+    expect(delivered[0]).not.toContain("private history");
+    expect(delivered[0]).not.toContain("private inbound paragraph");
+  });
+
+  it("never delivers an exact private prompt hidden inside a Markdown code fence", async () => {
+    const conversationContext = buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage: "private inbound paragraph",
+    });
+
+    await prepareAndDispatch(
+      { text: `\`\`\`text\n${conversationContext}\n\`\`\`\n\nVisible answer.` },
+      conversationContext,
+    );
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toContain("Visible answer.");
+    expect(delivered[0]).not.toContain("private history");
+    expect(delivered[0]).not.toContain("private inbound paragraph");
+  });
 });

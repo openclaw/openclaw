@@ -43,7 +43,9 @@ const UNEXPECTED_IDENTITY = serviceIdentity({
 describe("Codex Computer Use native service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.runIf(process.platform !== "win32").each(["ownership root", "Computer Use parent"] as const)(
+  it
+    .runIf(process.platform !== "win32")
+    .each(["ownership root", "isolated Codex home", "Computer Use parent"] as const)(
     "rejects a symlinked %s without touching its external target",
     async (boundary) => {
       const root = tempDirs.make("openclaw-computer-use-service-symlink-");
@@ -51,7 +53,12 @@ describe("Codex Computer Use native service", () => {
       const ownershipRoot = path.join(root, "agent");
       const codexHome = path.join(ownershipRoot, "codex-home");
       const targetParent = path.join(codexHome, "computer-use");
-      const linkedPath = boundary === "ownership root" ? ownershipRoot : targetParent;
+      const linkedPath =
+        boundary === "ownership root"
+          ? ownershipRoot
+          : boundary === "isolated Codex home"
+            ? codexHome
+            : targetParent;
       const externalRoot = path.join(root, "external");
       const externalParent = path.join(externalRoot, path.relative(linkedPath, targetParent));
       const externalTarget = path.join(externalParent, "Codex Computer Use.app");

@@ -122,4 +122,25 @@ describe("board widget sandbox CSP", () => {
     expect(policy).toContain("https://plugin-assets.example");
     expect(policy).toContain("connect-src 'none'");
   });
+
+  it("adds the requested descendant-frame guard before resetting document port offers", () => {
+    const proxy = buildSandboxHostDocument({ blockDescendantFrames: true }).html;
+    const genericProxy = buildSandboxHostDocument().html;
+
+    expect(proxy).toContain("const blockDescendantFrames = true");
+    expect(proxy).toContain("sandbox descendant browsing contexts are disabled");
+    expect(proxy).toContain('lock(Document.prototype,\\"createElement\\"');
+    expect(proxy).toContain('wrapSetter(Element.prototype,\\"innerHTML\\"');
+    expect(proxy).toContain('wrapMethod(Element.prototype,\\"setHTMLUnsafe\\"');
+    const guardedHtmlIndex = proxy.indexOf("const guardedHtml = guardDocument(params.html)");
+    expect(guardedHtmlIndex).toBeGreaterThan(-1);
+    expect(proxy.indexOf("widgetPortsOffered.clear()", guardedHtmlIndex)).toBeGreaterThan(
+      guardedHtmlIndex,
+    );
+    expect(proxy).toContain("const apply=Reflect.apply");
+    expect(proxy).toContain('if (html.slice(index, index + 4) !== "<!--") break');
+    expect(proxy).toContain('const commentEnd = html.indexOf("-->", index + 4)');
+    expect(genericProxy).toContain("const blockDescendantFrames = false");
+    expect(genericProxy).not.toContain('lock(Document.prototype,\\"createElement\\"');
+  });
 });
