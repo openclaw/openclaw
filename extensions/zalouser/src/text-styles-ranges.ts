@@ -257,12 +257,13 @@ export function applyTextEdits(
   );
 
   const styles: Style[] = [];
-  for (const style of ordered.map((orderedStyle) => ({
-    start: orderedStyle.start,
-    len: orderedStyle.end - orderedStyle.start,
-    st: orderedStyle.style,
-    ...(orderedStyle.style === TextStyle.Indent ? { indentSize: orderedStyle.indentSize } : {}),
-  }))) {
+  for (const orderedStyle of ordered) {
+    const style = {
+      start: orderedStyle.start,
+      len: orderedStyle.end - orderedStyle.start,
+      st: orderedStyle.style,
+      ...(orderedStyle.style === TextStyle.Indent ? { indentSize: orderedStyle.indentSize } : {}),
+    };
     const previous = styles.at(-1);
     if (
       previous?.st === TextStyle.Indent &&
