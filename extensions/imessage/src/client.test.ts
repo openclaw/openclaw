@@ -746,6 +746,27 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["chats.get", "messages.history"])(
+    "does not launch or invalidate the private bridge for %s errors",
+    async (method) => {
+      const cliPath = "/synthetic/imsg-basic-history";
+      privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
+      const client = new IMessageRpcClient({ cliPath });
+      await client.start();
+      const pending = client.request(method, { chat_id: 42, limit: 10 }, { timeoutMs: 0 });
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: -32603,
+        message: "Timed out waiting for response: code=-32603",
+      });
+      emitRpcError(child, { code: -32603, message: "Timed out waiting for response" });
+      await rejected;
+      expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+      expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
+      child.emit("close", 0, null);
+      await client.stop();
+    },
+  );
+
   it("logs recovery failure while preserving the original structured error", async () => {
     const recoveryError = new Error("launch stderr stream failed");
     const runtimeError = vi.fn();

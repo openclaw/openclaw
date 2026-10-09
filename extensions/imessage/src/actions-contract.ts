@@ -1,4 +1,5 @@
 export const IMESSAGE_ACTIONS = {
+  read: { gate: null },
   react: { gate: "reactions" },
   edit: { gate: "edit" },
   unsend: { gate: "unsend" },

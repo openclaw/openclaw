@@ -1,13 +1,66 @@
 ---
-summary: "Split-send DM coalescing and automatic inbound recovery after a bridge or gateway restart"
+summary: "Owner-requested DM history, split-send coalescing, and inbound recovery"
 read_when:
+  - Reading a selected one-to-one iMessage conversation
   - Debugging a command and its URL arriving as two turns
   - Understanding what happens to messages sent while the gateway was down
 title: "iMessage message behavior"
 sidebarTitle: "Message behavior"
 ---
 
-What OpenClaw does to inbound iMessages before an agent sees them.
+How OpenClaw reads selected DMs and handles inbound iMessages.
+
+## Read a selected DM
+
+The shared `message` tool supports a bounded, text-only read of one existing
+one-to-one conversation:
+
+```json
+{
+  "action": "read",
+  "channel": "imessage",
+  "target": "chat_id:42",
+  "limit": 10
+}
+```
+
+In Control UI, supply the known numeric chat ID explicitly. A delegated native
+iMessage request may use only its trusted current numeric DM target and originating
+account; a group context or another conversation/account is rejected. The shared
+message tool's existing target-alias precedence applies. Phone numbers, emails,
+contact names, groups, and unverified chat metadata are not accepted. Use `accountId`
+to select a configured account as an operator. The account must exist and be enabled.
+OpenClaw verifies that exact chat's metadata before requesting its history. It
+does not enumerate other conversations or fall back to chat discovery.
+
+Access requires a trusted owner or `operator.admin` requester. Claims in tool
+arguments do not grant access. This explicit read remains available with
+`dmPolicy: "disabled"` and `groupPolicy: "disabled"`; those settings govern
+inbound intake. Reading does not change configuration, enable intake, subscribe
+to messages, send anything, mark messages read, or emit typing indicators.
+
+The native imsg build must advertise the read-only `chats.get` RPC method.
+Older builds are not given a shell-command fallback; update imsg and refresh channel
+status to enable this action. Metadata and history use the same RPC connection.
+
+The read uses the account's existing `cliPath`, `dbPath`, and local or SSH
+transport. It works in basic mode with Messages database access; it does not
+require the private API bridge, disabled SIP, or an `imsg launch` recovery.
+
+Limits and output:
+
+- Default **10** messages; `limit` must be an integer from **1 to 50**.
+- Newest messages first, with stable row IDs, timestamps, sender, and incoming
+  or outgoing direction. Decoded text whitespace is preserved.
+- Each text body is capped at **4 KiB UTF-8** and sender text at **256 bytes**.
+  Per-record flags identify shortened or repaired text.
+- The complete serialized provider result, including both content and details,
+  is capped at **32 KiB**. Older records are omitted first; a heavily escaped
+  newest body may be shortened further. The result reports omitted records and
+  truncation explicitly.
+- `coverage: "recent-window"` and `historyComplete: false` always describe a
+  bounded window, never a complete history. Malformed records are omitted or
+  rejected. There is no pagination, search, export, or attachment output.
 
 <a id="coalescing-split-send-dms-command--url-in-one-composition"></a>
 

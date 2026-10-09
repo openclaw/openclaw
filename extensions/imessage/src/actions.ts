@@ -13,6 +13,7 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput } from "openclaw/plugin-sdk/poll-runtime";
@@ -21,6 +22,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { hasExclusiveIMessageLocalDatabase, resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
+import { effectIdFromParam } from "./actions-effects.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageActionReference } from "./message-action-reference.js";
@@ -41,6 +43,10 @@ import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
   "imessageActionsRuntime",
+);
+const loadIMessageRead = createLazyRuntimeNamedExport(
+  () => import("./read.js"),
+  "readIMessageAction",
 );
 
 const log = createSubsystemLogger("channels/imessage");
@@ -295,58 +301,21 @@ function extractReplyAttachment(
   return null;
 }
 
-const EFFECT_ALIASES: Record<string, string> = {
-  slam: "com.apple.MobileSMS.expressivesend.impact",
-  impact: "com.apple.MobileSMS.expressivesend.impact",
-  loud: "com.apple.MobileSMS.expressivesend.loud",
-  gentle: "com.apple.MobileSMS.expressivesend.gentle",
-  "invisible-ink": "com.apple.MobileSMS.expressivesend.invisibleink",
-  invisibleink: "com.apple.MobileSMS.expressivesend.invisibleink",
-  confetti: "com.apple.MobileSMS.expressivesend.confetti",
-  lasers: "com.apple.MobileSMS.expressivesend.lasers",
-  fireworks: "com.apple.MobileSMS.expressivesend.fireworks",
-  balloons: "com.apple.MobileSMS.expressivesend.balloon",
-  balloon: "com.apple.MobileSMS.expressivesend.balloon",
-  heart: "com.apple.MobileSMS.expressivesend.heart",
-  echo: "com.apple.messages.effect.CKEchoEffect",
-  happybirthday: "com.apple.messages.effect.CKHappyBirthdayEffect",
-  "happy-birthday": "com.apple.messages.effect.CKHappyBirthdayEffect",
-  shootingstar: "com.apple.messages.effect.CKShootingStarEffect",
-  "shooting-star": "com.apple.messages.effect.CKShootingStarEffect",
-  sparkles: "com.apple.messages.effect.CKSparklesEffect",
-  spotlight: "com.apple.messages.effect.CKSpotlightEffect",
-};
-const KNOWN_EFFECT_IDS = new Set(Object.values(EFFECT_ALIASES));
-
-function effectIdFromParam(raw?: string): string | undefined {
-  const value = normalizeOptionalLowercaseString(raw);
-  if (!value) {
-    return undefined;
-  }
-  const resolved = EFFECT_ALIASES[value] ?? raw;
-  if (typeof resolved === "string" && KNOWN_EFFECT_IDS.has(resolved)) {
-    return resolved;
-  }
-  throw new Error(
-    `iMessage sendWithEffect rejected unknown effect "${raw}". ` +
-      "Use one of: slam, loud, gentle, invisibleink, confetti, lasers, fireworks, balloon, heart, " +
-      "echo, happybirthday, shootingstar, sparkles, spotlight (or the canonical com.apple.MobileSMS.expressivesend.* / com.apple.messages.effect.* identifier).",
-  );
-}
-
 function assertActionEnabled(
   action: ChannelMessageActionName,
   actionsConfig: Record<string, boolean | undefined> | undefined,
 ): void {
   const canonicalAction = action === "upload-file" ? "sendAttachment" : action;
   const spec = IMESSAGE_ACTIONS[canonicalAction as keyof typeof IMESSAGE_ACTIONS];
-  if (!spec?.gate || !createActionGate(actionsConfig)(spec.gate)) {
+  if (!spec || (spec.gate !== null && !createActionGate(actionsConfig)(spec.gate))) {
     throw new Error(`iMessage ${action} is disabled in config.`);
   }
 }
 
 export const imessageMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeIMessageMessageTool,
+  readAuthorityActions: ["read"],
+  providerOwnedReadGates: ["read"],
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     normalizeOptionalLowercaseString(toolContext?.currentChannelProvider) === "imessage" &&
@@ -368,16 +337,24 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     leaveGroup: createIMessageTargetAliases(),
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({
-    action,
-    params,
-    cfg,
-    accountId,
-    toolContext,
-    senderIsOwner,
-    gatewayClientScopes,
-    conversationReadOrigin,
-  }) => {
+  handleAction: async (context) => {
+    const {
+      action,
+      params,
+      cfg,
+      accountId,
+      toolContext,
+      senderIsOwner,
+      gatewayClientScopes,
+      conversationReadOrigin,
+    } = context;
+    if (action === "read") {
+      const assertReadAuthority = captureChannelReadAuthority();
+      assertReadAuthority?.();
+      const read = await loadIMessageRead();
+      assertReadAuthority?.();
+      return await read(context);
+    }
     // Group administration mutates the host's Messages identity, so model-driven
     // actions need owner provenance or an admin-scoped Gateway caller.
     if (

@@ -202,25 +202,36 @@ describe("iMessage message-tool artifact", () => {
     expect(discovery?.actions).toContain("poll-vote");
   });
 
-  it("hides private actions when cached bridge status is unavailable", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: false,
-      v2Ready: false,
-      selectors: {},
-      rpcMethods: [],
-    });
+  it.each([false, true])(
+    "offers basic history only with metadata RPC support when the bridge is unavailable: %s",
+    (supported) => {
+      setCachedIMessagePrivateApiStatus("imsg", {
+        available: false,
+        v2Ready: false,
+        selectors: {},
+        rpcMethods: supported ? ["chats.get", "messages.history"] : ["messages.history"],
+      });
 
-    const discovery = describeMessageTool({
-      cfg: {
-        channels: {
-          imessage: {
-            cliPath: "imsg",
+      const discovery = describeMessageTool({
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: "imsg",
+            },
           },
-        },
-      } as never,
-      currentChannelId: "chat_id:1",
-    });
+        } as never,
+        currentChannelId: "chat_id:1",
+      });
 
-    expect(discovery?.actions).toStrictEqual([]);
+      expect(discovery?.actions).toStrictEqual(supported ? ["read"] : []);
+    },
+  );
+
+  it.each([
+    { cfg: {}, accountId: undefined },
+    { cfg: { channels: { imessage: { enabled: false, cliPath: "imsg" } } }, accountId: undefined },
+    { cfg: { channels: { imessage: { cliPath: "imsg" } } }, accountId: "missing" },
+  ])("does not advertise reads for an unavailable account: %j", ({ cfg, accountId }) => {
+    expect(describeMessageTool({ cfg, accountId })).toBeNull();
   });
 });

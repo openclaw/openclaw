@@ -271,7 +271,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       agentPrompt: {
         messageToolHints: () => [
-          "- iMessage current conversation: omit target, to, chatId, chatGuid, and chatIdentifier. OpenClaw resolves the trusted current chat server-side; never copy a redacted display value such as `***` into message actions.",
+          "- iMessage writes in the current conversation: omit target, to, chatId, chatGuid, and chatIdentifier. OpenClaw resolves the trusted current chat server-side; never copy a redacted display value such as `***` into message actions.",
+          "- iMessage read requires an owner request for one existing `chat_id:N` DM. Supply the ID in Control UI; delegated iMessage requests are limited to the trusted current numeric DM and account. Text only, default 10 messages, maximum 50; no groups, lookup, or pagination.",
         ],
       },
       doctor: imessageDoctor,

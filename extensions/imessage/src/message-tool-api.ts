@@ -4,7 +4,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { Type } from "typebox";
-import { resolveIMessageAccount } from "./accounts.js";
+import { listIMessageAccountIds, resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import {
   getCachedIMessagePrivateApiStatus,
@@ -33,7 +33,11 @@ export function describeIMessageMessageTool({
   currentChannelId,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) {
   const account = resolveIMessageAccount({ cfg, accountId });
-  if (!account.enabled || !account.configured) {
+  if (
+    !account.enabled ||
+    !account.configured ||
+    !listIMessageAccountIds(cfg).includes(account.accountId)
+  ) {
     return null;
   }
   const cliPath = account.config.cliPath?.trim() || "imsg";
@@ -48,6 +52,13 @@ export function describeIMessageMessageTool({
   const actions = new Set<ChannelMessageActionName>();
   for (const action of IMESSAGE_ACTION_NAMES) {
     const spec = IMESSAGE_ACTIONS[action];
+    // Basic history is independent of the private bridge and rich-action gates.
+    if (spec.gate === null) {
+      if (!privateApiStatus || privateApiStatus.rpcMethods.includes("chats.get")) {
+        actions.add(action);
+      }
+      continue;
+    }
     if (!gate(spec.gate)) {
       continue;
     }
