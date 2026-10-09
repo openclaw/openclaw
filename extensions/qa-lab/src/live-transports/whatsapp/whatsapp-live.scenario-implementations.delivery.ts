@@ -1,26 +1,42 @@
-// QA Lab WhatsApp delivery-shape, status, and approval scenarios.
 import { randomUUID } from "node:crypto";
 import type {
   WhatsAppQaApprovalScenarioRun,
   WhatsAppQaScenarioImplementation,
 } from "./whatsapp-live.contracts.js";
+import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
 import {
-  callWhatsAppGatewaySend,
+  requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionSequenceToTrigger,
   waitForWhatsAppSutReactionToTrigger,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
+import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
 
-export const whatsappQaReplyDeliveryShapeScenario: WhatsAppQaScenarioImplementation = {
-  posture: "direct-gateway",
-  buildRun: () => {
-    const token = `WHATSAPP_QA_REPLY_SHAPE_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
+function createWhatsAppApprovalScenario(
+  marker: string,
+  run: Omit<WhatsAppQaApprovalScenarioRun, "kind" | "token">,
+): WhatsAppQaScenarioImplementation {
+  return {
+    posture: "native-approval",
+    configOverrides: {
+      approvals: { exec: true, ...(run.approvalKind === "plugin" ? { plugin: true } : {}) },
+    },
+    ...(run.target === "group" ? { requiresGroupJid: true } : {}),
+    buildRun: () => ({
+      ...run,
+      kind: "approval",
+      token: `WHATSAPP_QA_${marker}_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  };
+}
+
+export const whatsappDeliveryScenarios = {
+  whatsappQaReplyDeliveryShapeScenario: createWhatsAppMessageScenario({
+    posture: "direct-gateway",
+    marker: "WHATSAPP_QA_REPLY_SHAPE",
+    buildRun: (token) => ({
       afterReply: async (_reply, context) => {
-        if (!context.sent.messageId) {
-          throw new Error("WhatsApp driver did not return a triggering message id.");
-        }
-        const quotedTriggerMessageId = context.sent.messageId;
+        const quotedTriggerMessageId = requireWhatsAppTriggerMessageId(context);
         const chunkStartedAt = new Date();
         const longText = `${token}_LONG_BEGIN\n${"A".repeat(4_500)}\n${token}_LONG_END`;
         await callWhatsAppGatewaySend(context, {
@@ -63,63 +79,36 @@ export const whatsappQaReplyDeliveryShapeScenario: WhatsAppQaScenarioImplementat
         });
         return `long reply chunked across ${firstChunk.messageId ?? "<first>"} and ${secondChunk.messageId ?? "<second>"}`;
       },
+      input: `Reply with only this exact marker before reply-shape checks: ${token}`,
+    }),
+  }),
+
+  whatsappQaStreamFinalMessageAccountingScenario: {
+    posture: "user-path",
+    buildRun: () => ({
       configMode: "allowlist",
       expectReply: true,
-      input: `Reply with only this exact marker before reply-shape checks: ${token}`,
-      matchText: token,
+      expectedJoinedSutTextIncludes: ["WHATSAPP-LONG-FINAL-BEGIN", "WHATSAPP-LONG-FINAL-END"],
+      expectedSutMessageCount: 2,
+      input: "WhatsApp long final QA check. Use the scripted long final response.",
+      matchText: "WHATSAPP-LONG-FINAL-BEGIN",
+      settleMs: 4_000,
       target: "dm",
-    };
-  },
-};
-
-export const whatsappQaStreamFinalMessageAccountingScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  buildRun: () => ({
-    configMode: "allowlist",
-    expectReply: true,
-    expectedJoinedSutTextIncludes: ["WHATSAPP-LONG-FINAL-BEGIN", "WHATSAPP-LONG-FINAL-END"],
-    expectedSutMessageCount: 2,
-    input: "WhatsApp long final QA check. Use the scripted long final response.",
-    matchText: "WHATSAPP-LONG-FINAL-BEGIN",
-    settleMs: 4_000,
-    target: "dm",
-  }),
-};
-
-function createWhatsAppApprovalScenario(
-  marker: string,
-  run: Omit<WhatsAppQaApprovalScenarioRun, "kind" | "token">,
-): WhatsAppQaScenarioImplementation {
-  return {
-    posture: "native-approval",
-    configOverrides: {
-      approvals: { exec: true, ...(run.approvalKind === "plugin" ? { plugin: true } : {}) },
-    },
-    ...(run.target === "group" ? { requiresGroupJid: true } : {}),
-    buildRun: () => ({
-      ...run,
-      kind: "approval",
-      token: `WHATSAPP_QA_${marker}_${randomUUID().slice(0, 8).toUpperCase()}`,
     }),
-  };
-}
+  },
 
-export const whatsappQaApprovalExecDenyNativeScenario = createWhatsAppApprovalScenario(
-  "EXEC_DENY",
-  {
+  whatsappQaApprovalExecDenyNativeScenario: createWhatsAppApprovalScenario("EXEC_DENY", {
     approvalKind: "exec",
     decision: "deny",
-  },
-);
+  }),
 
-export const whatsappQaStatusReactionsScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    statusReactions: true,
-  },
-  buildRun: () => {
-    const token = `WHATSAPP_QA_STATUS_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
+  whatsappQaStatusReactionsScenario: createWhatsAppMessageScenario({
+    posture: "user-path",
+    configOverrides: {
+      statusReactions: true,
+    },
+    marker: "WHATSAPP_QA_STATUS_REACTION",
+    buildRun: (token) => ({
       afterSend: async (context) => {
         const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
           expectation: { anyEmoji: true },
@@ -127,23 +116,17 @@ export const whatsappQaStatusReactionsScenario: WhatsAppQaScenarioImplementation
         });
         return `status reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
       },
-      configMode: "allowlist",
-      expectReply: true,
       input: `Reply with only this exact marker after normal processing: ${token}`,
-      matchText: token,
-      target: "dm",
-    };
-  },
-};
+    }),
+  }),
 
-export const whatsappQaStatusReactionLifecycleScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    statusReactions: true,
-  },
-  buildRun: () => {
-    const token = `WHATSAPP_QA_STATUS_LIFECYCLE_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
+  whatsappQaStatusReactionLifecycleScenario: createWhatsAppMessageScenario({
+    posture: "user-path",
+    configOverrides: {
+      statusReactions: true,
+    },
+    marker: "WHATSAPP_QA_STATUS_LIFECYCLE",
+    buildRun: (token) => ({
       afterReply: async (_reply, context) => {
         const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, {
           emojis: ["👀", "✅"],
@@ -157,56 +140,46 @@ export const whatsappQaStatusReactionLifecycleScenario: WhatsAppQaScenarioImplem
           .map((reaction) => reaction.reaction?.emoji ?? "<unknown>")
           .join(" -> ")}`;
       },
-      configMode: "allowlist",
-      expectReply: true,
       input: `Reply with only this exact marker after normal processing: ${token}`,
-      matchText: token,
-      target: "dm",
-    };
-  },
-};
+    }),
+  }),
 
-export const whatsappQaGroupAllowlistBlockScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    blockGroupSender: true,
-    groupPolicy: "allowlist",
+  whatsappQaGroupAllowlistBlockScenario: {
+    posture: "user-path",
+    configOverrides: {
+      blockGroupSender: true,
+      groupPolicy: "allowlist",
+    },
+    requiresGroupJid: true,
+    buildRun: () => {
+      const quietToken = `WHATSAPP_QA_GROUP_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: false,
+        input: `openclawqa blocked group should not reply with ${quietToken}`,
+        matchText: quietToken,
+        target: "group",
+      };
+    },
   },
-  requiresGroupJid: true,
-  buildRun: () => {
-    const quietToken = `WHATSAPP_QA_GROUP_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      configMode: "allowlist",
-      expectReply: false,
-      input: `openclawqa blocked group should not reply with ${quietToken}`,
-      matchText: quietToken,
-      target: "group",
-    };
-  },
-};
 
-export const whatsappQaApprovalExecNativeScenario = createWhatsAppApprovalScenario(
-  "EXEC_APPROVAL",
-  {
+  whatsappQaApprovalExecNativeScenario: createWhatsAppApprovalScenario("EXEC_APPROVAL", {
     approvalKind: "exec",
     decision: "allow-once",
-  },
-);
+  }),
 
-export const whatsappQaApprovalExecReactionNativeScenario = createWhatsAppApprovalScenario(
-  "EXEC_REACTION_APPROVAL",
-  { approvalKind: "exec", decision: "allow-once", decisionMode: "reaction" },
-);
+  whatsappQaApprovalExecReactionNativeScenario: createWhatsAppApprovalScenario(
+    "EXEC_REACTION_APPROVAL",
+    { approvalKind: "exec", decision: "allow-once", decisionMode: "reaction" },
+  ),
 
-export const whatsappQaApprovalExecGroupReactionNativeScenario = createWhatsAppApprovalScenario(
-  "GROUP_EXEC_REACTION_APPROVAL",
-  { approvalKind: "exec", decision: "allow-once", decisionMode: "reaction", target: "group" },
-);
+  whatsappQaApprovalExecGroupReactionNativeScenario: createWhatsAppApprovalScenario(
+    "GROUP_EXEC_REACTION_APPROVAL",
+    { approvalKind: "exec", decision: "allow-once", decisionMode: "reaction", target: "group" },
+  ),
 
-export const whatsappQaApprovalPluginNativeScenario = createWhatsAppApprovalScenario(
-  "PLUGIN_APPROVAL",
-  {
+  whatsappQaApprovalPluginNativeScenario: createWhatsAppApprovalScenario("PLUGIN_APPROVAL", {
     approvalKind: "plugin",
     decision: "allow-once",
-  },
-);
+  }),
+} satisfies Record<string, WhatsAppQaScenarioImplementation>;

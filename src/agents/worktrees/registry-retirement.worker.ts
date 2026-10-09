@@ -1,4 +1,4 @@
-import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.js";
+import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
@@ -8,26 +8,69 @@ import {
   getRegistryWorktreeInDatabase,
   rowToRecord,
   WORKTREE_RECORD_COLUMNS,
+  worktreeGcRevision,
 } from "./registry-read.kernel.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import { assertWorktreeRegistryPredicates } from "./registry-run-end.worker.js";
+import type { ManagedWorktreeRecord, WorktreeRemovalDeferral } from "./types.js";
 
-export type WorktreeRetirementOperations = {
-  "worktrees.retireMissing": {
-    input: {
-      observed: Pick<
-        ManagedWorktreeRecord,
-        "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-      >;
-      removedAt: number;
-    };
-    output: { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" };
-  };
-};
+export function deferWorktreeCleanupInWorker(
+  {
+    observed,
+    reason,
+    retry,
+    removalToken,
+  }: {
+    observed: ManagedWorktreeRecord;
+    reason: string | null;
+    retry?: WorktreeRemovalDeferral;
+    removalToken?: string;
+  },
+  options: OpenClawStateDatabaseOptions,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      if (removalToken) {
+        assertWorktreeRegistryPredicates(db, [
+          { kind: "removal-claim", id: observed.id, token: removalToken },
+        ]);
+      }
+      const current = getRegistryWorktreeInDatabase(db, observed.id);
+      const revision = worktreeGcRevision(observed);
+      if (!current || current.removedAt !== undefined || worktreeGcRevision(current) !== revision) {
+        return false;
+      }
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
+          .updateTable("worktrees")
+          .set({
+            gc_protection_json:
+              reason === null ? null : JSON.stringify({ revision, reason, retry }),
+          })
+          .where("id", "=", observed.id),
+      );
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return true;
+    },
+    options,
+    { operationLabel: "worktrees.deferCleanup" },
+  );
+}
 
 export function retireMissingWorktreeInWorker(
-  { observed, removedAt }: WorktreeRetirementOperations["worktrees.retireMissing"]["input"],
+  {
+    observed,
+    removedAt,
+  }: {
+    observed: Pick<
+      ManagedWorktreeRecord,
+      "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
+    >;
+    removedAt: number;
+  },
   options: OpenClawStateDatabaseOptions,
-): WorktreeRetirementOperations["worktrees.retireMissing"]["output"] {
+): { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" } {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
@@ -61,18 +104,12 @@ export function retireMissingWorktreeInWorker(
           .where("repo_fingerprint", "=", observed.repoFingerprint)
           .returning(WORKTREE_RECORD_COLUMNS),
       ).rows[0];
-      const current =
-        retired ??
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
-            .selectFrom("worktrees")
-            .select(WORKTREE_RECORD_COLUMNS)
-            .where("id", "=", observed.id),
-        ).rows[0];
+      const record = retired
+        ? rowToRecord(retired)
+        : getRegistryWorktreeInDatabase(db, observed.id);
 
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return { record: current ? rowToRecord(current) : undefined };
+      return { record };
     },
     options,
     { operationLabel: "worktrees.retireMissing" },

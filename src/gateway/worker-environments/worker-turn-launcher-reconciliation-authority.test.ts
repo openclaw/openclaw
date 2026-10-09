@@ -57,18 +57,18 @@ describe("reconciliation continuation authority", () => {
     async ({ mode, authority, revokeAt }) => {
       const remote = path.join(root, "remote-attachments");
       await mkdir(remote);
-      seedActivePlacement(mode, remote);
+      await seedActivePlacement(mode, remote);
       const active = placements.get(SESSION_ID);
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const prior = placements.claimTurn({
+      const prior = await placements.claimTurn({
         ...sessionTarget,
         claimId: "prior-result",
         runId: "prior-run",
         owner: placementTurnOwner(active),
       });
-      placements.markWorkspaceResultPending(prior);
+      await placements.markWorkspaceResultPending(prior);
       const waiting = vi.spyOn(placements, "waitForTurnClaimRelease");
       const bytes = Buffer.from("authorized attachment original");
       const saved = await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "note.txt");
@@ -132,12 +132,14 @@ describe("reconciliation continuation authority", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected local source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         syncWorkspace: vi.fn(),
@@ -197,9 +199,9 @@ describe("reconciliation continuation authority", () => {
         if (revokeAt === "wait") {
           revoke();
         }
-        placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
-        placements.acceptWorkspaceResult(prior);
-        placements.completeWorkspaceResultAndReleaseTurn(prior);
+        await placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
+        await placements.acceptWorkspaceResult(prior);
+        await placements.completeWorkspaceResultAndReleaseTurn(prior);
         if (revokeAt === "never") {
           await expect(run).resolves.toMatchObject({ meta: { durationMs: 1 } });
           expect(runLocal).toHaveBeenCalledOnce();

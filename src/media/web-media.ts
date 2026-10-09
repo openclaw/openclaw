@@ -1,4 +1,3 @@
-// Web media helpers load local and remote media for web-facing surfaces.
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -15,28 +14,25 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import type { EncodedImage } from "rastermill";
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError } from "../infra/fs-safe.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { getPluginRegistryForContext } from "../plugins/runtime.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { resolveUserPath } from "../utils.js";
-import { chunkItems } from "../utils/chunk-items.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
+import {
+  pruneGeneratedHtmlProvenance,
+  readGeneratedHtmlProvenance,
+  writeGeneratedHtmlProvenance,
+} from "./generated-html-provenance.js";
 import {
   getValidatedHostReadText,
   isAllowedHostReadFictionBook,
@@ -99,10 +95,8 @@ type WebMediaOptions = {
   hostReadCapability?: boolean;
 };
 
-/** Compression preference used to tune image size/quality search grids. */
 export type ImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
-/** Per-model image compression constraints merged into outbound media policy. */
 export type ImageCompressionModelPolicy = {
   maxBytes?: number;
   maxPixels?: number;
@@ -110,7 +104,6 @@ export type ImageCompressionModelPolicy = {
   preferredSidePx?: number;
 };
 
-/** Image compression policy for model/tool callers that need bounded media payloads. */
 export type ImageCompressionPolicy = {
   quality?: ImageQualityPreference;
   models?: ImageCompressionModelPolicy[];
@@ -177,6 +170,16 @@ function resolveWebMediaOptions(params: {
 const IMAGE_OPTIMIZE_HEADROOM_FACTOR = 4;
 
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV,
+// Markdown, TXT, JSON, and YAML, so host-read needs an explicit "this really
+// decodes as text" fallback.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
+  "text/csv",
+  "text/markdown",
+  "text/plain",
+  "application/json",
+  "application/yaml",
+]);
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
@@ -191,21 +194,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/x-tar",
   "application/zip",
   "application/epub+zip",
-  "text/csv",
-  "text/markdown",
-  "text/plain",
-  "application/json",
-  "application/yaml",
-]);
-// file-type returns undefined (no magic bytes) for plain-text formats like CSV,
-// Markdown, TXT, JSON, and YAML, so host-read needs an explicit "this really
-// decodes as text" fallback.
-const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
-  "text/csv",
-  "text/markdown",
-  "text/plain",
-  "application/json",
-  "application/yaml",
+  ...HOST_READ_TEXT_PLAIN_ALIASES,
 ]);
 // HTML remains deliberately outside the host-read allowlist pending a separate
 // security-boundary review, but extension-declared .html files still need to
@@ -214,19 +203,12 @@ const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, 
 const HOST_READ_DECLARED_TEXT_ERROR =
   "hostReadCapability permits only validated plain-text documents " +
   "and trusted generated HTML reports for local reads";
-const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
-  "text/plain": [".txt"],
-};
 
 function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   if (/^\s*media:\/\//i.test(mediaUrl)) {
     return mediaUrl;
   }
   return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
-}
-
-function isValidatedHostReadText(buffer?: Buffer): boolean {
-  return getValidatedHostReadText(buffer) !== undefined;
 }
 
 function resolveLocalMediaFileName(filePath: string): string | undefined {
@@ -245,26 +227,16 @@ type HostReadHtmlTrust =
   | { source: "temp-root" }
   | { source: "outbound"; expectedSha256: string; expectedSize: number };
 
-const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
-const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
-type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
-
 async function getTrustedGeneratedHtmlMarker(
   resolvedFilePath: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<{ sha256: string; size: number } | undefined> {
   try {
-    const { db } = openOpenClawStateDatabase();
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
-        .selectFrom("outbound_media_provenance")
-        .select(["kind", "version", "sha256", "size_bytes"])
-        .where("realpath", "=", resolvedFilePath),
-    );
-    return row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
-      row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION
-      ? { sha256: row.sha256, size: row.size_bytes }
-      : undefined;
+    const reply = await readGeneratedHtmlProvenance(context, {
+      type: "generatedHtmlProvenance.read",
+      input: resolvedFilePath,
+    });
+    return reply?.type === "generatedHtmlProvenance.read" ? reply.marker : undefined;
   } catch (error) {
     // State failures must narrow trust, never turn into a permissive fallback.
     logVerbose(
@@ -280,6 +252,14 @@ async function resolveTrustedGeneratedHostReadHtml(
   if (!filePath) {
     return undefined;
   }
+  let context: OpenClawStateWorkerContext | undefined;
+  try {
+    context = captureOpenClawStateWorkerContext();
+  } catch (error) {
+    // Refused storage narrows outbound trust without changing the temp-root contract.
+    logVerbose(`trusted-html admission failed: ${formatErrorMessage(error)}`);
+  }
+  const outboundPath = path.join(getMediaDir(), "outbound");
   const info = await lstat(filePath).catch(() => undefined);
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
     return undefined;
@@ -287,7 +267,7 @@ async function resolveTrustedGeneratedHostReadHtml(
   const [resolvedFilePath, tmpRoot, outboundRoot] = await Promise.all([
     realpath(filePath).catch(() => undefined),
     realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
-    realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
+    realpath(outboundPath).catch(() => undefined),
   ]);
   if (!resolvedFilePath) {
     return undefined;
@@ -295,7 +275,9 @@ async function resolveTrustedGeneratedHostReadHtml(
   // Outbound staging always requires provenance, even when a custom state dir
   // places media/outbound underneath the otherwise trusted temp root.
   if (outboundRoot && isPathInside(outboundRoot, resolvedFilePath)) {
-    const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
+    const marker = context
+      ? await getTrustedGeneratedHtmlMarker(resolvedFilePath, context)
+      : undefined;
     return marker
       ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
       : undefined;
@@ -308,88 +290,36 @@ export async function markTrustedGeneratedHtmlPath(
   filePath: string,
   contents: Buffer,
 ): Promise<void> {
+  const context = captureOpenClawStateWorkerContext();
+  const outboundPath = path.join(getMediaDir(), "outbound");
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const sizeBytes = contents.length;
   const resolvedFilePath = await realpath(filePath);
-  const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
+  const outboundRoot = await realpath(outboundPath).catch(() => undefined);
   if (!outboundRoot || !isPathInside(outboundRoot, resolvedFilePath)) {
     throw new Error(
       `markTrustedGeneratedHtmlPath: refusing path outside outbound staging: ${resolvedFilePath}`,
     );
   }
-  const sha256 = createHash("sha256").update(contents).digest("hex");
-  const sizeBytes = contents.length;
-  const createdAtMs = Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
-        .insertInto("outbound_media_provenance")
-        .values({
-          realpath: resolvedFilePath,
-          kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
-          version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
-          sha256,
-          size_bytes: sizeBytes,
-          created_at_ms: createdAtMs,
-        })
-        .onConflict((conflict) =>
-          conflict.column("realpath").doUpdateSet({
-            kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
-            version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
-            sha256,
-            size_bytes: sizeBytes,
-            created_at_ms: createdAtMs,
-          }),
-        ),
-    );
+  await writeGeneratedHtmlProvenance(context, {
+    type: "generatedHtmlProvenance.upsert",
+    input: {
+      realpath: resolvedFilePath,
+      kind: "trusted-generated-html",
+      version: 1,
+      sha256,
+      size_bytes: sizeBytes,
+      created_at_ms: Date.now(),
+    },
   });
 }
 
 /** Removes provenance whose staged regular file no longer exists. */
 export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
-  const { db } = openOpenClawStateDatabase();
-  const rows = executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
-      .selectFrom("outbound_media_provenance")
-      .select("realpath"),
-  ).rows;
-  const stale: string[] = [];
-  for (const row of rows) {
-    let info: Awaited<ReturnType<typeof lstat>>;
-    try {
-      info = await lstat(row.realpath);
-    } catch (error) {
-      if (isNotFoundPathError(error)) {
-        stale.push(row.realpath);
-      } else {
-        logVerbose(
-          `trusted-html prune kept uninspectable marker (${row.realpath}): ${formatErrorMessage(error)}`,
-        );
-      }
-      continue;
-    }
-    if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-      stale.push(row.realpath);
-    }
-  }
-  if (stale.length === 0) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(({ db: writeDb }) => {
-    for (const batch of chunkItems(stale, 500)) {
-      executeSqliteQuerySync(
-        writeDb,
-        getNodeSqliteKysely<OutboundProvenanceDatabase>(writeDb)
-          .deleteFrom("outbound_media_provenance")
-          .where("realpath", "in", batch),
-      );
-    }
-  });
-  logVerbose(`trusted-html prune removed ${stale.length} stale marker(s)`);
+  await pruneGeneratedHtmlProvenance(captureOpenClawStateWorkerContext());
 }
 
 function isTrustedGeneratedHostReadHtml(params: {
-  filePath?: string;
   sniffedContentType?: string;
   buffer?: Buffer;
   trustedGeneratedHtmlPath?: HostReadHtmlTrust;
@@ -419,12 +349,7 @@ function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string)
   if (!mime || !HOST_READ_TEXT_PLAIN_ALIASES.has(mime)) {
     return false;
   }
-  const allowedExtensions = HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME[mime];
-  if (!allowedExtensions) {
-    return true;
-  }
-  const ext = getFileExtension(filePath);
-  return ext !== undefined && allowedExtensions.includes(ext);
+  return mime !== "text/plain" || getFileExtension(filePath) === ".txt";
 }
 
 function formatCapLimit(label: string, cap: number, size: number): string {
@@ -453,7 +378,6 @@ function assertHostReadMediaAllowed(params: {
     if (
       declaredMime === "text/html" &&
       isTrustedGeneratedHostReadHtml({
-        filePath: params.filePath,
         sniffedContentType: params.sniffedContentType,
         buffer: params.buffer,
         trustedGeneratedHtmlPath: params.trustedGeneratedHtmlPath,
@@ -465,7 +389,7 @@ function assertHostReadMediaAllowed(params: {
       isAllowedHostReadTextAlias(declaredMime, params.filePath) &&
       !params.sniffedContentType &&
       params.buffer &&
-      isValidatedHostReadText(params.buffer)
+      getValidatedHostReadText(params.buffer) !== undefined
     ) {
       return;
     }
@@ -499,7 +423,7 @@ function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     isAllowedHostReadTextAlias(normalizedMime, params.filePath) &&
     params.buffer &&
-    isValidatedHostReadText(params.buffer)
+    getValidatedHostReadText(params.buffer) !== undefined
   ) {
     return;
   }
@@ -541,35 +465,10 @@ function toImageFileName(fileName: string | undefined, mimeType: string): string
     : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
-type OptimizedImage = {
-  buffer: Buffer;
-  optimizedSize: number;
-  resizeSide: number;
-  format: "jpeg" | "png" | "webp";
-  mimeType: string;
-  quality?: number;
-  compressionLevel?: number;
-};
-
 const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
 const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
 const DEFAULT_VISION_MAX_SIDE = 2048;
 const LOW_IMAGE_SIDE_FALLBACKS = [640, 512, 384, 256, 192, 128] as const;
-
-function normalizeImageQualityPreference(value?: string): ImageQualityPreference {
-  switch (value) {
-    case "efficient":
-    case "balanced":
-    case "high":
-      return value;
-    default:
-      return "auto";
-  }
-}
-
-function squareLongSideForPixelBudget(pixelBudget: number): number {
-  return Math.floor(Math.sqrt(pixelBudget));
-}
 
 function positiveInteger(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -580,8 +479,8 @@ function positiveInteger(value: number | undefined): number | undefined {
 function effectiveImageQualityPreference(
   policy?: ImageCompressionPolicy,
 ): Exclude<ImageQualityPreference, "auto"> {
-  const preference = normalizeImageQualityPreference(policy?.quality);
-  if (preference !== "auto") {
+  const preference = policy?.quality;
+  if (preference === "efficient" || preference === "balanced" || preference === "high") {
     return preference;
   }
   const imageCount = Math.max(1, Math.floor(policy?.imageCount ?? 1));
@@ -594,50 +493,36 @@ function effectiveImageQualityPreference(
 function maxSideForModel(model: ImageCompressionModelPolicy | undefined): number {
   const maxSide = positiveInteger(model?.maxSidePx);
   const maxPixels = positiveInteger(model?.maxPixels);
-  const hardLimits = [
-    maxSide,
-    maxPixels ? squareLongSideForPixelBudget(maxPixels) : undefined,
-  ].filter((value): value is number => value !== undefined);
+  const hardLimits = [maxSide, maxPixels ? Math.floor(Math.sqrt(maxPixels)) : undefined].filter(
+    (value): value is number => value !== undefined,
+  );
   if (hardLimits.length > 0) {
     return Math.min(...hardLimits);
   }
   return positiveInteger(model?.preferredSidePx) ?? DEFAULT_VISION_MAX_SIDE;
 }
 
-function preferredSideForModel(model: ImageCompressionModelPolicy | undefined): number {
-  return (
-    positiveInteger(model?.preferredSidePx) ??
-    Math.min(maxSideForModel(model), DEFAULT_VISION_MAX_SIDE)
-  );
-}
-
-function policyModelSides(policy: ImageCompressionPolicy | undefined): {
-  maxSide: number;
-  preferredSide: number;
-} {
-  const models = policy?.models?.length ? policy.models : [undefined];
-  const maxSide = Math.min(...models.map((model) => maxSideForModel(model)));
-  const preferredSide = Math.min(...models.map((model) => preferredSideForModel(model)));
-  return {
-    maxSide,
-    preferredSide: Math.min(preferredSide, maxSide),
-  };
-}
-
 function sideForPreference(
   preference: Exclude<ImageQualityPreference, "auto">,
   policy?: ImageCompressionPolicy,
 ): number {
-  const { maxSide, preferredSide } = policyModelSides(policy);
+  const models = policy?.models?.length ? policy.models : [undefined];
+  const maxSide = Math.min(...models.map((model) => maxSideForModel(model)));
+  const preferredSide = Math.min(
+    ...models.map(
+      (model) =>
+        positiveInteger(model?.preferredSidePx) ??
+        Math.min(maxSideForModel(model), DEFAULT_VISION_MAX_SIDE),
+    ),
+  );
   switch (preference) {
     case "efficient":
       return Math.min(preferredSide, maxSide, 1280);
-    case "balanced":
-      return Math.min(preferredSide, maxSide);
     case "high":
       return maxSide;
+    default:
+      return Math.min(preferredSide, maxSide);
   }
-  return Math.min(preferredSide, maxSide);
 }
 
 function imageMaxBytesForPolicy(policy?: ImageCompressionPolicy): number | undefined {
@@ -653,25 +538,20 @@ function imageSatisfiesHardDimensionPolicy(
   metadata?: ImageMetadata,
 ): boolean {
   const models = policy?.models ?? [];
-  const hardMaxSides = models
-    .map((model) => positiveInteger(model.maxSidePx))
-    .filter((value): value is number => value !== undefined);
-  const hardMaxPixels = models
-    .map((model) => positiveInteger(model.maxPixels))
-    .filter((value): value is number => value !== undefined);
-  if (hardMaxSides.length === 0 && hardMaxPixels.length === 0) {
+  const hardMaxSide = Math.min(
+    ...models.map((model) => positiveInteger(model.maxSidePx) ?? Infinity),
+  );
+  const hardMaxPixels = Math.min(
+    ...models.map((model) => positiveInteger(model.maxPixels) ?? Infinity),
+  );
+  if (hardMaxSide === Infinity && hardMaxPixels === Infinity) {
     return true;
   }
-
   const meta = metadata ?? readImageMetadataFromHeader(buffer);
-  if (!meta) {
-    return false;
-  }
-  const maxSide = Math.max(meta.width, meta.height);
-  const pixels = meta.width * meta.height;
-  return (
-    (hardMaxSides.length === 0 || maxSide <= Math.min(...hardMaxSides)) &&
-    (hardMaxPixels.length === 0 || pixels <= Math.min(...hardMaxPixels))
+  return Boolean(
+    meta &&
+    Math.max(meta.width, meta.height) <= hardMaxSide &&
+    meta.width * meta.height <= hardMaxPixels,
   );
 }
 
@@ -730,7 +610,6 @@ function isPreservableImageMime(
   );
 }
 
-/** Returns the stricter byte cap between caller limits and image compression policy limits. */
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -761,8 +640,7 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
-/** Resolves the ordered max-side and JPEG quality search grid for an image compression policy. */
-export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
+function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
 } {
@@ -779,75 +657,28 @@ export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
         sides: buildDescendingLadder(side, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
         qualities: [92, 85, 78, 70, 62, 52, 42],
       };
-    case "balanced":
+    default:
       return {
         sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
         qualities: [...DEFAULT_JPEG_QUALITIES],
       };
   }
-  return {
-    sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
-    qualities: [...DEFAULT_JPEG_QUALITIES],
-  };
 }
 
-function logOptimizedImage(params: { originalSize: number; optimized: OptimizedImage }): void {
-  if (!shouldLogVerbose()) {
+function logOptimizedImage(originalSize: number, optimized: EncodedImage): void {
+  if (!shouldLogVerbose() || optimized.bytes >= originalSize) {
     return;
   }
-  if (params.optimized.optimizedSize >= params.originalSize) {
-    return;
-  }
-  if (params.optimized.format === "png") {
+  const resizeSide = optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height);
+  if (optimized.format === "png") {
     logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px)`,
+      `Optimized PNG (preserving alpha) from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px)`,
     );
     return;
   }
   logVerbose(
-    `Optimized media from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
+    `Optimized media from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px, q=${optimized.chosen.quality})`,
   );
-}
-
-async function optimizeImageWithFallback(params: {
-  buffer: Buffer;
-  cap: number;
-  imageCompression?: ImageCompressionPolicy;
-  maxInputPixels?: number;
-}): Promise<OptimizedImage> {
-  const { buffer, cap } = params;
-  const grid = resolveImageCompressionGrid(params.imageCompression);
-  // Generic callers keep the shared decode limit. An owner with a bounded downscale path may
-  // widen source admission explicitly, while every encoded result remains under the output cap.
-  const processor = createImageProcessorWithPixelLimits({
-    inputPixels: params.maxInputPixels ?? MAX_IMAGE_INPUT_PIXELS,
-    outputPixels: MAX_IMAGE_INPUT_PIXELS,
-  });
-  const optimized = await processor.encode(buffer, {
-    format: "auto",
-    maxBytes: cap,
-    opaque: { format: "jpeg" },
-    transparent: { format: "png" },
-    search: {
-      maxSide: grid.sides,
-      quality: grid.qualities,
-    },
-    transparency: "auto",
-  });
-  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
-  }
-  return {
-    buffer: optimized.data,
-    optimizedSize: optimized.bytes,
-    resizeSide: optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height),
-    format: optimized.format,
-    mimeType: optimized.mimeType,
-    ...(optimized.chosen.quality === undefined ? {} : { quality: optimized.chosen.quality }),
-    ...(optimized.chosen.compressionLevel === undefined
-      ? {}
-      : { compressionLevel: optimized.chosen.compressionLevel }),
-  };
 }
 
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
@@ -885,21 +716,33 @@ export async function optimizeImageBufferForWebMedia(params: {
       fileName: params.fileName,
     };
   }
-  const optimized = await optimizeImageWithFallback({
-    buffer: params.buffer,
-    cap,
-    imageCompression: params.imageCompression,
-    ...(params.maxInputPixels === undefined ? {} : { maxInputPixels: params.maxInputPixels }),
+  const grid = resolveImageCompressionGrid(params.imageCompression);
+  // Generic callers keep the shared decode limit. An owner with a bounded downscale path may
+  // widen source admission explicitly, while every encoded result remains under the output cap.
+  const processor = createImageProcessorWithPixelLimits({
+    inputPixels: params.maxInputPixels ?? MAX_IMAGE_INPUT_PIXELS,
+    outputPixels: MAX_IMAGE_INPUT_PIXELS,
   });
-  logOptimizedImage({ originalSize: params.buffer.length, optimized });
-  if (optimized.buffer.length > cap) {
+  const optimized = await processor.encode(params.buffer, {
+    format: "auto",
+    maxBytes: cap,
+    opaque: { format: "jpeg" },
+    transparent: { format: "png" },
+    search: { maxSide: grid.sides, quality: grid.qualities },
+    transparency: "auto",
+  });
+  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
+    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
+  }
+  logOptimizedImage(params.buffer.length, optimized);
+  if (optimized.data.length > cap) {
     throw new ImageOptimizationLimitError(
-      formatCapReduce("Media", cap, optimized.buffer.length),
+      formatCapReduce("Media", cap, optimized.data.length),
       cap,
     );
   }
   return {
-    buffer: optimized.buffer,
+    buffer: optimized.data,
     contentType: optimized.mimeType,
     kind: "image",
     fileName: toImageFileName(params.fileName, optimized.mimeType),
@@ -930,7 +773,6 @@ async function loadWebMediaInternal(
   } = options;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
-  // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
@@ -944,13 +786,7 @@ async function loadWebMediaInternal(
     mediaUrl;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
-  const clampAndFinalize = async (params: {
-    buffer: Buffer;
-    contentType?: string;
-    kind: MediaKind | undefined;
-    fileName?: string;
-    trustedGeneratedHtmlSource?: boolean;
-  }): Promise<WebMediaResult> => {
+  const clampAndFinalize = async (params: WebMediaResult): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
@@ -1028,7 +864,6 @@ async function loadWebMediaInternal(
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
   }
 
-  // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
@@ -1066,7 +901,6 @@ async function loadWebMediaInternal(
     throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
 
-  // Local path
   let data: Buffer;
   if (readFileOverride) {
     data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Devices page renders the unified paired-device / node inventory sections.
 import { html, nothing, type TemplateResult } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
@@ -12,6 +11,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { macFamilyLabel } from "../../lib/mac-form-factor.ts";
@@ -33,6 +33,8 @@ import { renderHostStats } from "./host-stats.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
 import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 function toRemovalRequest(entry: DeviceInventoryEntry): InventoryRemovalRequest {
   const removal = resolveInventoryRemoval(entry);
@@ -61,9 +63,7 @@ function inventorySummary(
 }
 
 export function renderDeviceInventory(props: DevicesProps) {
-  const list = props.devicesList ?? { pending: [], paired: [] };
-  const pending = Array.isArray(list.pending) ? list.pending : [];
-  const paired = Array.isArray(list.paired) ? list.paired : [];
+  const { pending, paired } = props.devicesList ?? { pending: [], paired: [] };
   const groups = buildDeviceInventory({ paired, nodes: props.nodes, presence: props.presence });
   const gatewayPresence = findGatewayPresence(props.presence);
   const unpairedPresence = listUnpairedPresence(props.presence, groups);
@@ -192,44 +192,27 @@ function resolveNodeCoreVersion(entry: DeviceInventoryEntry): string | undefined
   return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
 }
 
-/** Warn statuses (dot + text) replacing the former warning chips. */
 function entryWarnStatuses(
   entry: DeviceInventoryEntry,
   gatewayVersion: string | null,
 ): TemplateResult[] {
   const statuses: TemplateResult[] = [];
-  const isApprovedNode = isApprovedNodeEntry(entry);
-  const nodeVersion = resolveNodeCoreVersion(entry);
-  const normalizedGatewayVersion = normalizeOptionalString(gatewayVersion);
-  if (
-    isApprovedNode &&
-    nodeVersion &&
-    normalizedGatewayVersion &&
-    nodeVersion !== normalizedGatewayVersion
-  ) {
-    const title = t("devices.inventory.versionDriftTitle", {
-      nodeVersion,
-      gatewayVersion: normalizedGatewayVersion,
-    });
+  const warn = (kind: string, title = t(`devices.inventory.${kind}Title`)) =>
     statuses.push(
       html`<span title=${title}>
-        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.versionDrift") })}
+        ${renderSettingsStatus({ kind: "warn", label: t(`devices.inventory.${kind}`) })}
       </span>`,
     );
+  const isApprovedNode = isApprovedNodeEntry(entry);
+  const nodeVersion = resolveNodeCoreVersion(entry);
+  if (isApprovedNode && nodeVersion && gatewayVersion && nodeVersion !== gatewayVersion) {
+    warn("versionDrift", t("devices.inventory.versionDriftTitle", { nodeVersion, gatewayVersion }));
   }
   if (entry.node?.workerBundle?.status === "missing") {
-    statuses.push(
-      html`<span title=${t("devices.inventory.workerMissingTitle")}>
-        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.workerMissing") })}
-      </span>`,
-    );
+    warn("workerMissing");
   }
   if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
-    statuses.push(
-      html`<span title=${t("devices.inventory.manualWakeTitle")}>
-        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.manualWake") })}
-      </span>`,
-    );
+    warn("manualWake");
   }
   const approvalState = entry.node?.approvalState;
   if (approvalState === "pending-approval" || approvalState === "pending-reapproval") {
@@ -423,7 +406,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
 }
 
 function renderPresenceRow(
-  presence: { kind: "gateway"; entry: PresenceEntry } | { kind: "unpaired"; entry: PresenceEntry },
+  presence: { kind: "gateway" | "unpaired"; entry: PresenceEntry },
   props: DevicesProps,
 ) {
   const { entry } = presence;

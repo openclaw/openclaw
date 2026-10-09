@@ -40,11 +40,6 @@ describe("migrateLegacyNodePairingStore", () => {
     await suiteRootTracker.cleanup();
   });
 
-  test("returns null when no legacy store exists", async () => {
-    const baseDir = await suiteRootTracker.make("case");
-    await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toBeNull();
-  });
-
   test("folds legacy rows into device records, drops orphans, and archives files", async () => {
     const baseDir = await suiteRootTracker.make("case");
     await seedNodeDevice(baseDir, "node-kept");

@@ -5,15 +5,10 @@ import { validateConfiguredBindings } from "../channels/plugins/configured-bindi
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
-import {
-  PluginHostCleanupTimeoutError,
-  withPluginHostCleanupTimeout,
-} from "../plugins/host-hook-cleanup-timeout.js";
+import { withPluginHostCleanupTimeout } from "../plugins/host-hook-cleanup-timeout.js";
 import {
   createPluginRuntimeApplication,
   getPluginRuntimeGeneration,
@@ -28,7 +23,7 @@ import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   getGatewayRestartDrainSignal,
   waitForGatewayRestartFenceSettlement,
@@ -40,7 +35,7 @@ import {
   reconcileClientPluginNodeCapabilities,
 } from "./plugin-node-capability.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
-import type { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
+import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
 import { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
 import {
   createPluginReloadCleanup,
@@ -50,10 +45,12 @@ import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
 } from "./server-plugin-reload-recovery.js";
+import { createPluginReloadServices } from "./server-plugin-reload-services.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
 } from "./server-reload-contracts.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 
@@ -67,16 +64,17 @@ export async function reloadGatewayPlugins(
   }: {
     runtime: Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
     port: number;
-    log: ReturnType<typeof createSubsystemLogger>;
+    log: Parameters<typeof createPluginReloadDiagnostics>[0];
     loadGatewayPluginBootstrapModule: () => Promise<typeof import("./server-plugin-bootstrap.js")>;
-    prepareAttachedPluginRuntime: (loaded: ReturnType<typeof prepareGatewayPluginLoad>) => Promise<{
-      publish: () => void;
-      afterCommit: () => void;
-    }>;
+    prepareAttachedPluginRuntime: PluginBootstrap.GatewayPluginRuntimePreparation;
   },
   params: Parameters<GatewayReloadHandlerParams["reloadPlugins"]>[0],
 ): ReturnType<GatewayReloadHandlerParams["reloadPlugins"]> {
   const restartDrainSignal = getGatewayRestartDrainSignal();
+  const drainSignal =
+    params.pluginLifecycle?.waitForDrain && params.pluginLifecycle.drainSignal
+      ? AbortSignal.any([restartDrainSignal, params.pluginLifecycle.drainSignal])
+      : restartDrainSignal;
   const { prepareGatewayPluginLoad: preparePlugins } = await loadGatewayPluginBootstrapModule();
   const {
     pluginRuntime,
@@ -90,7 +88,6 @@ export async function reloadGatewayPlugins(
     baseMethods,
     resolvePluginGatewayContext,
     channelManager,
-    broadcastPluginEvent,
     clients,
     broadcast,
   } = runtime;
@@ -117,7 +114,7 @@ export async function reloadGatewayPlugins(
   let committed = false;
   let restored = false;
   let candidateServices: PluginServicesHandle | undefined;
-  let loaded: ReturnType<typeof prepareGatewayPluginLoad> | undefined;
+  let loaded: ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad> | undefined;
   let decisionReplacement: ReturnType<typeof prepareDecisionProviderReload> | undefined;
   let memoryReplacement: ReturnType<typeof prepareMemoryRuntimeReload> | undefined;
   const changedPluginIds = new Set(replacePluginIds);
@@ -130,9 +127,7 @@ export async function reloadGatewayPlugins(
   const channels = createPluginReloadChannels({
     channelManager,
     previousRegistry,
-    skipChannels:
-      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
-      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS),
+    skipChannels: isChannelStartupSuppressedByEnvironment(params.env ?? {}),
     previousStopStarted: () => previousStopStarted,
     reloadParams: params,
     ambientEnvTriggers,
@@ -147,8 +142,10 @@ export async function reloadGatewayPlugins(
     reserveResourceHandoff,
     selectResourceHandoff,
     drainInstances,
+    drainMemory,
     drainRetainedWork,
     drainBeforeReplacement,
+    quiesceInstances,
     resumeInstances,
     drainForRecovery,
     disposeInstances,
@@ -158,6 +155,7 @@ export async function reloadGatewayPlugins(
   } = createPluginReloadCleanup({
     previousRegistry,
     changedPluginIds,
+    waitForDrain: params.pluginLifecycle?.waitForDrain,
     port,
     pluginWorkspaceDir,
     abortSignal: AbortSignal.any([runtime.requestEntryLifetime.signal, restartDrainSignal]),
@@ -170,21 +168,26 @@ export async function reloadGatewayPlugins(
   });
   const replacement = kernel.pluginRuntimeGeneration.reserve();
   const assertCurrent = () => {
+    drainSignal.throwIfAborted();
     params.assertInvokerOwned?.();
     if (params.isAborted?.()) {
       throw new GatewayConfigReloadSupersededError();
     }
   };
-  try {
+  const services = createPluginReloadServices(runtime, stopPreviousServices);
+  const checkpoint = async () => {
+    // Reconcile this operation's file watcher echoes before checking source ownership.
     await params.checkpoint?.();
     assertCurrent();
+  };
+  try {
+    await checkpoint();
     recordCleanup(
       await withPluginHostCleanupTimeout("pending plugin retirement", () =>
         kernel.pluginMetadata.waitForRetirement(),
       ),
     );
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     // Match startup's workspace inventory so a narrower scan cannot replace or drop other owners.
     const nextMetadata = await withPluginCache(cache, () =>
       resolveConfigWidePluginMetadataSnapshotAsync({
@@ -193,8 +196,7 @@ export async function reloadGatewayPlugins(
         allowCurrent: false,
       }),
     );
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     const activationConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.nextConfig,
       activationSourceConfig: params.sourceConfig,
@@ -244,20 +246,26 @@ export async function reloadGatewayPlugins(
       log.warn(warning);
       recordWarning(warning);
     }
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     // Reserve and gate new model runs atomically; admitted runs keep their callbacks until settled.
     releaseResourceHandoff = reserveResourceHandoff(resourceHandoffIds);
-    rollbackConfigEffects = params.prepareConfigEffects({
+    const configEffects = params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,
     });
+    rollbackConfigEffects = configEffects.rollback;
     phase = "drain";
     replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
-    await drainRetainedWork(resourceHandoffIds, restartDrainSignal, replacement.setReloadStatus);
-    assertCurrent();
-    channels.pause();
+    await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus);
+    await checkpoint();
     decisionReplacement = prepareDecisionProviderReload(previousRegistry, changedPluginIds);
+    channels.pause();
+    quiesceInstances();
+    await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus, {
+      includeCalls: true,
+    });
+    await checkpoint();
+    configEffects.retire();
     for (const sidecar of runtimeState.gatewayLifetimeSidecars.snapshot()) {
       const prepared = sidecar.preparePluginReload?.({
         previousRegistry,
@@ -271,24 +279,11 @@ export async function reloadGatewayPlugins(
       }
     }
     memoryReplacement = prepareMemoryRuntimeReload(previousRegistry, nextRegistry);
-    // Consumers release their handles while the producing instance is callable.
+    // Retained consumers and cleanup calls remain usable after ordinary admission closes.
     for (const sidecar of sidecarReplacements) {
       await sidecar.drain();
     }
-    try {
-      const result = await memoryReplacement.drain();
-      for (const error of result.errors) {
-        const warning = `Memory cleanup failed: ${formatErrorMessage(error)}`;
-        log.warn(warning);
-        recordWarning(warning);
-      }
-    } catch (error) {
-      if (!(error instanceof PluginHostCleanupTimeoutError)) {
-        throw error;
-      }
-      log.warn(error.message);
-      recordWarning(error.message);
-    }
+    await drainMemory(memoryReplacement.drain);
     await runtimeState.discovery?.update({
       gatewayDiscoveryServices: previousRegistry.gatewayDiscoveryServices.filter(
         (entry) => !changedPluginIds.has(entry.pluginId),
@@ -296,11 +291,11 @@ export async function reloadGatewayPlugins(
     });
     await drainBeforeReplacement(
       resourceHandoffIds,
-      restartDrainSignal,
+      drainSignal,
       replacement.setReloadStatus,
-      assertCurrent,
+      checkpoint,
     );
-    assertCurrent();
+    await checkpoint();
     replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
     // Channel monitors and services hold long-lived consumers until stop cancels
     // their loops. Ask those owners to stop before joining the remaining work.
@@ -309,8 +304,11 @@ export async function reloadGatewayPlugins(
     const stopOwner = (strict: boolean, label: string, run: () => Promise<void>) =>
       strict ? attempt(stopErrors, run) : cleanup(label, run);
     await channels.stopPrevious(resourceHandoffIds, stopErrors, cleanup);
-    await stopOwner(resourceHandoffIds.size > 0, "Plugin service cleanup failed", () =>
-      stopPreviousServices(previousServices, resourceHandoffIds.size > 0),
+    const strictServiceStop =
+      resourceHandoffIds.size > 0 || memoryReplacement.retainedPluginIds.size > 0;
+    const serviceStopIds = new Set([...changedPluginIds, ...memoryReplacement.retainedPluginIds]);
+    await stopOwner(strictServiceStop, "Plugin service cleanup failed", () =>
+      stopPreviousServices(previousServices, strictServiceStop, serviceStopIds),
     );
     // Finish admitted work before legacy stop hooks can close shared connections.
     // Removal has no replacement to protect and keeps its bounded, deferred cleanup.
@@ -329,13 +327,15 @@ export async function reloadGatewayPlugins(
         `Previous plugin cleanup failed; automatic recovery could not safely start: ${stopErrors.map(formatErrorMessage).join("; ")}`,
       );
     }
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     phase = "activate";
     loaded = withPluginCache(cache, () => preparePlugins(loadParams));
     nextRegistry = loaded.pluginRegistry;
     const { resolvedConfig } = loaded;
-    const attached = await prepareAttachedPluginRuntime(loaded);
+    const activationCleanup: Promise<void>[] = [];
+    const attached = await prepareAttachedPluginRuntime(loaded, (completion) =>
+      activationCleanup.push(completion),
+    );
     const publishMetadata = prepareGatewayPluginMetadataSnapshotPublication(nextMetadata, {
       config: params.nextConfig,
       compatibleConfigs: [params.sourceConfig, activationConfig],
@@ -353,25 +353,16 @@ export async function reloadGatewayPlugins(
       ),
     );
     await channels.stopAdditional(nextRegistry, changedPluginIds);
-    await params.checkpoint?.();
-    assertCurrent();
-    phase = "activate";
-    const startedServices = await withPluginRegistryPreparationScope(nextRegistry, () =>
-      startPluginServices({
-        registry: nextRegistry,
-        config: params.nextConfig,
-        workspaceDir: pluginWorkspaceDir,
-        broadcastPluginEvent,
-        getCronService: kernel.getCronService,
-        previous: previousServices,
-        onHandle: (handle) => {
-          candidateServices = handle;
-        },
-        throwOnStartError: true,
-      }),
+    await checkpoint();
+    const startedServices = await services.start(
+      nextRegistry,
+      params.nextConfig,
+      (handle) => {
+        candidateServices = handle;
+      },
+      memoryReplacement.retainedPluginIds,
     );
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     // Publication owns every independent activation tail, even when an earlier one fails.
     const activationErrors: unknown[] = [];
     try {
@@ -428,9 +419,13 @@ export async function reloadGatewayPlugins(
         throw error;
       }
       activationErrors.push(error);
+    } finally {
+      await Promise.allSettled(activationCleanup);
     }
     if (committed) {
-      await attempt(activationErrors, () => memoryReplacement!.commit(nextRegistry));
+      await attempt(activationErrors, () =>
+        services.resumeMemory(memoryReplacement, params.nextConfig),
+      );
       for (const sidecar of sidecarReplacements) {
         await attempt(activationErrors, () => sidecar.resume(params.nextConfig));
       }
@@ -523,7 +518,7 @@ export async function reloadGatewayPlugins(
         !previousCleanupFailed
       ) {
         const recoveryErrors: unknown[] = [];
-        let recovered: ReturnType<typeof prepareGatewayPluginLoad> | undefined;
+        let recovered: ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad> | undefined;
         let recoveredServices: PluginServicesHandle | undefined;
         let recoveryPublished = false;
         try {
@@ -565,31 +560,36 @@ export async function reloadGatewayPlugins(
               error,
             );
             restoredRegistry = recovered.pluginRegistry;
-            const attached = await prepareAttachedPluginRuntime(recovered);
+            const recoveryActivationCleanup: Promise<void>[] = [];
+            const attached = await prepareAttachedPluginRuntime(recovered, (completion) =>
+              recoveryActivationCleanup.push(completion),
+            );
             await withPluginRegistryPreparationScope(restoredRegistry, async () => {
               await attempt(recoveryErrors, async () => {
-                await startPluginServices({
-                  registry: restoredRegistry,
-                  config: previousConfig,
-                  workspaceDir: pluginWorkspaceDir,
-                  broadcastPluginEvent,
-                  getCronService: kernel.getCronService,
-                  previous: kernel.pluginRuntimeGeneration.currentServices(),
-                  onHandle: (handle) => {
+                await services.start(
+                  restoredRegistry,
+                  previousConfig,
+                  (handle) => {
                     recoveredServices = handle;
                     kernel.pluginRuntimeGeneration.publishServices(
                       kernel.pluginRuntimeGeneration.currentClaim(),
                       handle,
                     );
                   },
-                  throwOnStartError: true,
-                });
+                  memoryReplacement?.retainedPluginIds,
+                );
               });
-              attached.publish();
-              recoveryPublished = true;
-              attached.afterCommit();
+              try {
+                attached.publish();
+                recoveryPublished = true;
+                attached.afterCommit();
+              } finally {
+                await Promise.allSettled(recoveryActivationCleanup);
+              }
             });
-            await attempt(recoveryErrors, () => memoryReplacement?.commit(restoredRegistry));
+            await attempt(recoveryErrors, () =>
+              services.resumeMemory(memoryReplacement, previousConfig),
+            );
             broadcast(
               "plugins.changed",
               { generation: getPluginRegistryVersion(restoredRegistry) },
@@ -599,7 +599,9 @@ export async function reloadGatewayPlugins(
             // Restored preparation must be able to retain the still-callable instances.
             releaseResourceHandoff?.();
             resumeInstances();
-            await attempt(recoveryErrors, () => memoryReplacement?.rollback());
+            await attempt(recoveryErrors, () =>
+              services.resumeMemory(memoryReplacement, previousConfig, true),
+            );
           }
           for (const sidecar of sidecarReplacements) {
             await attempt(recoveryErrors, () => sidecar.resume(previousConfig));

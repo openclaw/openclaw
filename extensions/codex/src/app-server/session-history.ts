@@ -1,4 +1,5 @@
 /** Reads bounded model context from the Codex transcript mirror. */
+import { resolveAgentHarnessHistoryLimits } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -102,14 +103,7 @@ export async function readCodexMirroredSessionHistoryMessages(
       const loaded = await SessionManager.openModelContextAsync(resolved.target, {
         admission,
         signal,
-        limits: {
-          maxBytes: Math.min(
-            64 * 1024 * 1024,
-            Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
-          ),
-          maxEvents: 10_000,
-          toolResultOverflow: "omit",
-        },
+        limits: resolveAgentHarnessHistoryLimits(contextTokenBudget),
       });
       result = consumeCodexHistory(
         loaded.buildSessionContext().messages,

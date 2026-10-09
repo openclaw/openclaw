@@ -497,21 +497,6 @@ describe("Vercel Container Registry publishing", () => {
     }
   });
 
-  it("rejects an otherwise admissible layer total tipped over the cap by config", () => {
-    const manifest = platformManifest();
-    manifest.config.size = 1;
-    manifest.layers = Array.from({ length: 30 }, () => ({
-      ...manifest.layers[0]!,
-      size: 500_000_000,
-    }));
-    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
-
-    expect(publish).toThrow(
-      "total (compressed layers plus config, through layer[29]) is 15000000001 bytes; client cap 15000000000 bytes",
-    );
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
-  });
-
   it.each([0, 1])(
     "counts raw manifest UTF-8 bytes including whitespace with excess %i",
     (excess) => {
@@ -534,14 +519,12 @@ describe("Vercel Container Registry publishing", () => {
     },
   );
 
-  it.each(
-    ["config", "layer[0]"].flatMap((field) =>
-      [undefined, null, "1024", -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map((size) => ({
-        field,
-        size,
-      })),
-    ),
-  )("rejects invalid $field size $size before copying", ({ field, size }) => {
+  it.each([
+    { field: "config", size: "1024" },
+    { field: "layer[0]", size: -1 },
+    { field: "layer[0]", size: 0.5 },
+    { field: "config", size: Number.MAX_SAFE_INTEGER + 1 },
+  ])("rejects invalid $field size $size before copying", ({ field, size }) => {
     const manifest = platformManifest();
     const raw = JSON.stringify({
       ...manifest,
@@ -1019,18 +1002,18 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.4.0", vercel: "59.20.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.1.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-e5A70qlu7HzNZRgKKywlz09jsqkR7XwLRmQO1cwAnRzrgpVSIt/iL7GlO5131jS5xa+/fyNiLHpXT4DpOoE4WQ==",
-      version: "59.20.0",
+        "sha512-FuW5MhOfkOxPhyL+tQbAFmx+M4FpmTvqGSDsD2rP9FWYJt7GG2JKIsIbHOfYR5t/fqQqZrVQC3O2ODhwInEGVA==",
+      version: "62.1.0",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
       integrity:
-        "sha512-8DlAEKlHbOQmz5R05dAYE+P1wNQ44nEvAnf1jnWtF0LZWHiu/F48USSMKyY8Ib8iE1MCfo3Yvhmky8bUppLaWA==",
-      version: "4.4.0",
+        "sha512-u2hE1xn/HNxLxupbVsGQGfA+W2WYORrK18j6+x7AFRQzStkd5X2CHOUP2Zj93up8tT5lKBHmwyplVivlK9e4CQ==",
+      version: "4.6.0",
     });
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);

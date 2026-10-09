@@ -1,4 +1,3 @@
-// Unified operator approval lookup and first-answer resolution handlers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -123,8 +122,16 @@ type ApplyApprovalDecisionResult<TPayload> =
     }
   | { ok: false };
 
+type ApprovalPayload =
+  | ExecApprovalRequestPayload
+  | PluginApprovalRequestPayload
+  | SystemAgentApprovalRequestPayload;
+
 async function applyApprovalDecision<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
+  manager: Pick<
+    ExecApprovalManager<TPayload>,
+    "forceDenyDetailed" | "resolveDetailed" | "getLiveSnapshot"
+  >;
   id: string;
   decision: ApprovalDecision | null;
   forceMalformedDeny: boolean;
@@ -175,7 +182,6 @@ async function applyApprovalDecision<TPayload>(params: {
   };
 }
 
-/** Creates kind-agnostic approval lookup and resolution handlers. */
 export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
@@ -263,14 +269,11 @@ export function createApprovalHandlers(
       try {
         const prepared = id
           ? await loadVisibleApproval({
+              ...params,
               id,
               authority,
               client,
               getCfg: () => context.getRuntimeConfig(),
-              execApprovalManager: params.execApprovalManager,
-              pluginApprovalManager: params.pluginApprovalManager,
-              systemAgentApprovalManager: params.systemAgentApprovalManager,
-              databaseOptions: params.databaseOptions,
             })
           : null;
         record = prepared?.readCurrent() ?? null;
@@ -309,16 +312,13 @@ export function createApprovalHandlers(
       try {
         prepared = id
           ? await loadVisibleApproval({
+              ...params,
               id,
               authority,
               client,
               getCfg: () => context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
-              execApprovalManager: params.execApprovalManager,
-              pluginApprovalManager: params.pluginApprovalManager,
-              systemAgentApprovalManager: params.systemAgentApprovalManager,
-              databaseOptions: params.databaseOptions,
             })
           : null;
         record = prepared?.readCurrent() ?? null;
@@ -408,43 +408,32 @@ export function createApprovalHandlers(
           throw new Error("approval resolver authority is no longer active");
         }
       };
-      let resolution:
-        | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<SystemAgentApprovalRequestPayload>;
+      let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;
       try {
-        const decisionParams = {
+        resolution = await applyApprovalDecision<ApprovalPayload>({
           id: record.id,
           decision: requestedDecision,
           forceMalformedDeny,
           resolver,
           localResolvedBy,
           guard: { family: approvalGuard.family, assertCurrent },
-        };
-        resolution =
-          record.kind === "exec"
-            ? await applyApprovalDecision({
-                ...decisionParams,
-                manager: params.execApprovalManager,
-                // Grant terms freeze at resolve; an explicit per-resolve
-                // override (custom operator UIs, CLI) beats the config default.
-                ...(requestedDecision === "allow-always" &&
-                typeof resolveParams?.grantExpiresInDays === "number"
-                  ? {
-                      grantExpiresAtMs:
-                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
-                    }
-                  : {}),
-              })
-            : record.kind === "plugin"
-              ? await applyApprovalDecision({
-                  ...decisionParams,
-                  manager: params.pluginApprovalManager,
-                })
-              : await applyApprovalDecision({
-                  ...decisionParams,
-                  manager: params.systemAgentApprovalManager!,
-                });
+          manager:
+            record.kind === "exec"
+              ? params.execApprovalManager
+              : record.kind === "plugin"
+                ? params.pluginApprovalManager
+                : params.systemAgentApprovalManager!,
+          // Grant terms freeze at resolve; an explicit per-resolve
+          // override (custom operator UIs, CLI) beats the config default.
+          ...(record.kind === "exec" &&
+          requestedDecision === "allow-always" &&
+          typeof resolveParams?.grantExpiresInDays === "number"
+            ? {
+                grantExpiresAtMs:
+                  Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+              }
+            : {}),
+        });
       } catch (error) {
         if (!readCurrent()) {
           respondApprovalNotFound(respond);
@@ -475,12 +464,10 @@ export function createApprovalHandlers(
         // SQLite CAS is canonical. Never make the winning surface wait for
         // best-effort channel, push, or legacy-event reconciliation.
         void publishAppliedApprovalResolution({
+          ...params,
           record: terminalRecord,
           liveRecord: resolution.liveRecord,
           context,
-          forwarder: params.forwarder,
-          iosPushDelivery: params.iosPushDelivery,
-          pluginIosPushDelivery: params.pluginIosPushDelivery,
         }).catch((error: unknown) => {
           context.logGateway?.error?.(
             `${terminalRecord.kind} approvals: unified resolve publication failed: ${String(error)}`,

@@ -262,7 +262,7 @@ describe("scripts/connect.sh", () => {
     expect(existsSync(fixture.installArgs)).toBe(false);
   });
 
-  it.each(["latest", "next", "beta", "v2026.8.1", "2026.8", "2026.8.x", "^2026.8.1", "2026.8.*"])(
+  it.each(["latest", "v2026.8.1", "2026.8", "2026.8.x", "^2026.8.1", "2026.8.*"])(
     "rejects non-exact version %s",
     (version) => {
       const fixture = createFixture();

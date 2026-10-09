@@ -57,10 +57,19 @@ const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
+function readSlackResultLimit(params: Record<string, unknown>) {
+  return Math.min(
+    readPositiveIntegerParam(params, "limit", {
+      message: "limit must be a positive integer.",
+    }) ?? SLACK_REACTION_RESULT_LIMIT,
+    SLACK_REACTION_RESULT_LIMIT,
+  );
+}
+
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
 const bindSlackAction = createLazyRuntimeMethodBinder(loadSlackActionsRuntime);
 
-const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
+const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
 const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 
@@ -79,11 +88,9 @@ export const slackActionRuntime = {
   readSlackMessages: bindSlackAction((runtime) => runtime.readSlackMessages),
   removeOwnSlackReactions: bindSlackAction((runtime) => runtime.removeOwnSlackReactions),
   removeSlackReaction: bindSlackAction((runtime) => runtime.removeSlackReaction),
-  resolveSlackConversationName: bindSlackAction((runtime) => runtime.resolveSlackConversationName),
   resolveSlackConversationInfo: bindSlackChannelType(
     (runtime) => runtime.resolveSlackConversationInfo,
   ),
-  resolveSlackChannelType: bindSlackChannelType((runtime) => runtime.resolveSlackChannelType),
   sendSlackMessage: bindSlackAction((runtime) => runtime.sendSlackMessage),
   unpinSlackMessage: bindSlackAction((runtime) => runtime.unpinSlackMessage),
 };
@@ -108,10 +115,6 @@ function resolveThreadTsFromContext(
   }
   // Planning stays pure so failed sends cannot consume a thread before delivery.
   return threadTs;
-}
-
-function isImageContentType(value: string | undefined): boolean {
-  return value?.trim().toLowerCase().startsWith("image/") === true;
 }
 
 function hasPotentialSlackNamedPolicy(params: {
@@ -575,12 +578,7 @@ export async function handleSlackAction(
       return jsonResult({ ok: true, added: emoji });
     }
     await assertReadTargetAllowed(target);
-    const limit = Math.min(
-      readPositiveIntegerParam(params, "limit", {
-        message: "limit must be a positive integer.",
-      }) ?? SLACK_REACTION_RESULT_LIMIT,
-      SLACK_REACTION_RESULT_LIMIT,
-    );
+    const limit = readSlackResultLimit(params);
     const reactions = await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts);
     return jsonResult({
       ok: true,
@@ -831,10 +829,7 @@ export async function handleSlackAction(
           messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
-          withNormalizedTimestamp(
-            message as Record<string, unknown>,
-            (message as { ts?: unknown }).ts,
-          ),
+          withNormalizedTimestamp(message, message.ts),
         );
         return jsonResult({
           ok: true,
@@ -878,7 +873,7 @@ export async function handleSlackAction(
               "File could not be downloaded. Confirm the fileId came from the requested Slack channel or explicit thread and that the file is accessible and within the size limit.",
           });
         }
-        if (!isImageContentType(downloaded.contentType)) {
+        if (!downloaded.contentType?.trim().toLowerCase().startsWith("image/")) {
           return jsonResult({
             ok: true,
             fileId,
@@ -934,10 +929,7 @@ export async function handleSlackAction(
     const pins = await slackActionRuntime.listSlackPins(channelId, readOpts);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
-        ? withNormalizedTimestamp(
-            pin.message as Record<string, unknown>,
-            (pin.message as { ts?: unknown }).ts,
-          )
+        ? withNormalizedTimestamp(pin.message, pin.message.ts)
         : pin.message;
       return message ? Object.assign({}, pin, { message }) : pin;
     });
@@ -963,12 +955,7 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const limit = Math.min(
-      readPositiveIntegerParam(params, "limit", {
-        message: "limit must be a positive integer.",
-      }) ?? SLACK_REACTION_RESULT_LIMIT,
-      SLACK_REACTION_RESULT_LIMIT,
-    );
+    const limit = readSlackResultLimit(params);
     const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
     assertSlackDetachedTargetAllowed(account.accountId, teamId);
     const result = await slackActionRuntime.listSlackEmojis(buildActionOpts("read", teamId));

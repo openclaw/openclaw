@@ -102,17 +102,9 @@ openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout 5s node "$OPENCLA
 const sweepFixtureLoader = `
 source() {
   if [[ "$1" == scripts/e2e/lib/plugins/fixtures.sh ]]; then
-    write_fixture_plugin() { mkdir -p "$1"; }
-    write_demo_fixture_plugin() { write_fixture_plugin "$@"; }
-    write_fixture_plugin_with_cli() { write_fixture_plugin "$@"; }
-    write_fixture_plugin_with_vendored_dependency() { write_fixture_plugin "$@"; }
-    write_claude_bundle_fixture() { write_fixture_plugin "$@"; }
-    pack_fixture_plugin() { :; }
-    pack_fixture_plugin_with_cli_registry_dependency() { :; }
-    pack_fake_is_number_package() { :; }
+    pack_fixture_archive() { :; }
     pack_fixture_plugin_with_invalid_extension_entry() { :; }
     start_npm_fixture_registry() { :; }
-    record_fixture_plugin_trust() { :; }
     openclaw_plugins_cleanup_fixture_servers() { :; }
   else
     builtin source "$@"
@@ -120,7 +112,8 @@ source() {
 }
 node() {
   case "$1" in
-    scripts/e2e/lib/plugins/assertions.mjs|scripts/e2e/lib/fixture.mjs) return 0 ;;
+    scripts/e2e/lib/fixture.mjs) mkdir -p "$3" ;;
+    scripts/e2e/lib/plugins/assertions.mjs) return 0 ;;
     *) command node "$@" ;;
   esac
 }
@@ -131,11 +124,6 @@ source scripts/e2e/lib/plugins/sweep.sh
 const kitchenFixtureLoader = `
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
-assert_kitchen_sink_cutover_preinstalled() { :; }
-configure_kitchen_sink_runtime() { :; }
-assert_kitchen_sink_installed() { :; }
-assert_kitchen_sink_removed() { :; }
-remove_kitchen_sink_channel_config() { :; }
 node() {
   case "$1" in
     scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs) return 0 ;;
@@ -255,6 +243,8 @@ printf 'support=%s\\n' "$OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUP
 export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
 export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
 export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=clawhub:@example/consent-fixture
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=consent-fixture
 source scripts/e2e/lib/plugins/sweep.sh
 node() {
   case "$1" in
@@ -275,6 +265,25 @@ run_plugins_clawhub_scenario
     },
   );
 
+  it("requires an explicit package identity for live ClawHub E2E", () => {
+    const root = tempDirs.make("openclaw-clawhub-live-requirements-");
+    const result = runShell(
+      root,
+      writeCandidate(root),
+      `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+source scripts/e2e/lib/plugins/sweep.sh
+run_plugins_clawhub_scenario
+`,
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("the Kitchen Sink listing has been retired");
+  });
+
   it.each([
     {
       environment: `
@@ -284,15 +293,6 @@ unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
       expectedId: "openclaw-kitchen-sink-fixture",
       expectedSpec: "clawhub:@openclaw/plugin-e2e-fixture",
       name: "fixture default",
-    },
-    {
-      environment: `
-export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
-unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
-`,
-      expectedId: "openclaw-kitchen-sink-fixture",
-      expectedSpec: "clawhub:@openclaw/kitchen-sink",
-      name: "live default",
     },
     {
       environment: `
@@ -340,11 +340,9 @@ run_plugins_clawhub_scenario
   });
 
   it.each([
-    ["  --accept-capabilities  Accept\n", [consent]],
     ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", [consent]],
     ["  --accept-capabilities-extra  Other\n", []],
     ["See --accept-capabilities in newer releases\n", []],
-    ["  --force  Confirm\n", []],
   ])("reads only an advertised option from help %j", (help, expected) => {
     expect(fixtureCapabilityConsentArgs(help)).toEqual(expected);
   });

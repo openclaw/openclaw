@@ -53,7 +53,19 @@ export function createApplicationContextProvider(context: ApplicationContext) {
 
 export type ApplicationContextProvider = ReturnType<typeof createApplicationContextProvider>;
 
-export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
+export function createApplicationGateway(
+  initial: ApplicationGatewaySnapshot = {
+    client: null,
+    phase: "stopped",
+    offlineStable: false,
+    hello: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: "",
+    lastError: null,
+    lastErrorCode: null,
+  },
+) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();

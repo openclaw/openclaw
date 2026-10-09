@@ -327,6 +327,19 @@ openclaw-board-widget-cell {
   display: none;
 }
 
+.board-widget__frame-pane,
+.board-widget__mcp-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.board-widget__frame-pane > .board-widget__frame {
+  flex: 1;
+  min-height: 0;
+}
+
 .board-widget__frame {
   background: var(--board-surface);
   border: 0;
@@ -336,28 +349,35 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__plugin-loading,
-.board-widget__disabled-plugin {
+.board-widget__disabled-plugin,
+.board-widget__app-loading,
+.board-widget__stale,
+.board-widget__grant,
+.board-widget__error {
   align-content: center;
-  color: var(--muted);
   display: grid;
-  font-size: 11px;
-  gap: 10px;
   justify-items: center;
+  text-align: center;
+}
+
+.board-widget__plugin-loading,
+.board-widget__disabled-plugin,
+.board-widget__app-loading,
+.board-widget__stale {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.board-widget__plugin-loading,
+.board-widget__disabled-plugin {
+  gap: 10px;
   margin: 0;
   min-height: 100%;
   padding: 14px;
-  text-align: center;
 }
 
 .board-widget__disabled-plugin strong {
   color: var(--text);
-}
-
-.board-widget__mcp-app {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
 }
 
 .board-widget__mcp-app > .board-widget__grant {
@@ -371,7 +391,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__mcp-app-view {
-  display: block;
   flex: 1 1 0;
   min-height: 0;
   width: 100%;
@@ -379,18 +398,14 @@ openclaw-board-widget-cell {
 
 .board-widget__app-loading,
 .board-widget__stale {
-  align-content: center;
-  color: var(--muted);
-  display: grid;
-  font-size: 11px;
   gap: 8px;
-  justify-items: center;
   min-height: 160px;
   padding: 16px;
-  text-align: center;
 }
 
-.board-widget__stale strong {
+.board-widget__stale strong,
+.board-widget__grant strong,
+.board-widget__error strong {
   color: var(--text);
   font-size: 13px;
 }
@@ -657,19 +672,9 @@ openclaw-board-widget-cell {
 
 .board-widget__grant,
 .board-widget__error {
-  align-content: center;
-  display: grid;
   gap: 7px;
   height: 100%;
-  justify-items: center;
   padding: 16px;
-  text-align: center;
-}
-
-.board-widget__grant strong,
-.board-widget__error strong {
-  color: var(--text);
-  font-size: 13px;
 }
 
 .board-widget__grant > span,

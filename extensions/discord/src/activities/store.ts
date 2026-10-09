@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   PluginStateCompareIntent,
   PluginStateKeyedStore,
@@ -46,13 +47,6 @@ type DiscordActivityStores = {
   launches: AtomicPluginStateKeyedStore<DiscordActivityPendingLaunch>;
 };
 
-type OpenKeyedStore = <T>(options: {
-  namespace: string;
-  maxEntries: number;
-  overflowPolicy: "evict-oldest";
-  defaultTtlMs: number;
-}) => PluginStateKeyedStore<T>;
-
 function requireAtomicComparison<T>(
   store: PluginStateKeyedStore<T>,
 ): AtomicPluginStateKeyedStore<T> {
@@ -62,35 +56,19 @@ function requireAtomicComparison<T>(
   return store as AtomicPluginStateKeyedStore<T>;
 }
 
-export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): DiscordActivityStores {
+export function openDiscordActivityStores(
+  openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
+): DiscordActivityStores {
+  const openStore = <T>(namespace: string, maxEntries: number, defaultTtlMs: number) =>
+    openKeyedStore<T>({ namespace, maxEntries, overflowPolicy: "evict-oldest", defaultTtlMs });
   return {
     widgets: requireAtomicComparison(
-      openKeyedStore<DiscordActivityWidget>({
-        namespace: "activities-widgets",
-        maxEntries: 64,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: WIDGET_TTL_MS,
-      }),
+      openStore<DiscordActivityWidget>("activities-widgets", 64, WIDGET_TTL_MS),
     ),
-    sessions: openKeyedStore<DiscordActivitySession>({
-      namespace: "activities-sessions",
-      maxEntries: 256,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: SESSION_TTL_MS,
-    }),
-    docTokens: openKeyedStore<DiscordActivityDocToken>({
-      namespace: "activities-doc-tokens",
-      maxEntries: 256,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: DOC_TOKEN_TTL_MS,
-    }),
+    sessions: openStore<DiscordActivitySession>("activities-sessions", 256, SESSION_TTL_MS),
+    docTokens: openStore<DiscordActivityDocToken>("activities-doc-tokens", 256, DOC_TOKEN_TTL_MS),
     launches: requireAtomicComparison(
-      openKeyedStore<DiscordActivityPendingLaunch>({
-        namespace: "activities-launches",
-        maxEntries: 256,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: PENDING_LAUNCH_TTL_MS,
-      }),
+      openStore<DiscordActivityPendingLaunch>("activities-launches", 256, PENDING_LAUNCH_TTL_MS),
     ),
   };
 }

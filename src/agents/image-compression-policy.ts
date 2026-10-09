@@ -3,13 +3,6 @@ import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 
-type ResolveModelAsync = (typeof import("./embedded-agent-runner/model.js"))["resolveModelAsync"];
-
-const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
-  const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-  return await resolveModelAsync(...args);
-};
-
 /** Resolves the authoritative image limits for one selected provider/model. */
 export async function resolveImageCompressionModelPolicy(params: {
   cfg?: OpenClawConfig;
@@ -19,13 +12,12 @@ export async function resolveImageCompressionModelPolicy(params: {
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   abortSignal?: AbortSignal;
-  deps?: { resolveModelAsync?: ResolveModelAsync };
 }): Promise<ImageCompressionModelPolicy> {
-  const resolveModelAsync = params.deps?.resolveModelAsync ?? resolveModelAsyncDefault;
   async function resolvePolicyWithHooks(
     skipProviderRuntimeHooks: boolean,
   ): Promise<ImageCompressionModelPolicy> {
     try {
+      const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
       const resolved = await resolveModelAsync(
         params.provider,
         params.model,

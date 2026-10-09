@@ -2,6 +2,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
@@ -57,5 +58,6 @@ export async function backfillSessionRowTranscriptFields(
           : {}),
       };
     },
+    projectionLane,
   );
 }

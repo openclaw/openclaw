@@ -1,8 +1,8 @@
 import AppKit
 import QuartzCore
 
+@MainActor
 enum OverlayPanelFactory {
-    @MainActor
     static func makePanel(
         contentRect: NSRect,
         level: NSWindow.Level,
@@ -29,11 +29,10 @@ enum OverlayPanelFactory {
         return panel
     }
 
-    @MainActor
     static func animatePresent(window: NSWindow, from start: NSRect, to target: NSRect, duration: TimeInterval = 0.18) {
         window.setFrame(start, display: true)
         window.alphaValue = 0
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -42,7 +41,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func animateFrame(window: NSWindow, to frame: NSRect, duration: TimeInterval = 0.12) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
@@ -51,7 +49,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func applyFrame(window: NSWindow?, target: NSRect, animate: Bool) {
         guard let window else { return }
         if animate {
@@ -61,7 +58,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func present(
         window: NSWindow?,
         isFirstPresent: Bool,
@@ -80,7 +76,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func animateDismiss(
         window: NSWindow,
         offsetX: CGFloat = 6,
@@ -89,17 +84,9 @@ enum OverlayPanelFactory {
         completion: @escaping @MainActor @Sendable () -> Void)
     {
         let target = window.frame.offsetBy(dx: offsetX, dy: offsetY)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().setFrame(target, display: true)
-            window.animator().alphaValue = 0
-        } completionHandler: {
-            Task { @MainActor in completion() }
-        }
+        self.animateDismiss(window: window, to: target, duration: duration, completion: completion)
     }
 
-    @MainActor
     static func animateDismiss(
         window: NSWindow,
         to target: NSRect,
@@ -116,21 +103,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
-    static func animateDismissAndHide(
-        window: NSWindow,
-        offsetX: CGFloat = 6,
-        offsetY: CGFloat = 6,
-        duration: TimeInterval = 0.16,
-        onHidden: @escaping @MainActor () -> Void)
-    {
-        self.animateDismiss(window: window, offsetX: offsetX, offsetY: offsetY, duration: duration) {
-            window.orderOut(nil)
-            onHidden()
-        }
-    }
-
-    @MainActor
     static func animateDismissAndHide(
         window: NSWindow,
         to target: NSRect,
@@ -143,7 +115,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func clearGlobalEventMonitor(_ monitor: inout Any?) {
         if let current = monitor {
             NSEvent.removeMonitor(current)

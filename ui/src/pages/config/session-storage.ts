@@ -7,6 +7,7 @@ import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -45,10 +46,9 @@ class SessionStorageSettings extends OpenClawLightDomElement {
   @property({ type: Boolean }) advancedExpanded = false;
 
   @state() private ageDraft: string | null = null;
-  @state() private runBusy = false;
   @state() private runError: string | null = null;
   @state() private runOutcome: string | null = null;
-  private runOperation: object | null = null;
+  @state() private runOperation: object | null = null;
   private followingRun = false;
 
   private connectionHello: unknown;
@@ -72,7 +72,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     this.followingRun = false;
     this.ageDraft = null;
     this.runOperation = null;
-    this.runBusy = false;
     this.runError = null;
     this.runOutcome = null;
   }
@@ -185,7 +184,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const config = this.context.runtimeConfig;
     return (
       this.mutationDisabled ||
-      this.runBusy ||
+      this.runOperation !== null ||
       !this.client ||
       !config.canSet ||
       !config.state.connected ||
@@ -236,7 +235,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const gateway = this.context.gateway;
     const hello = gateway.snapshot.hello;
     this.runOperation = operation;
-    this.runBusy = true;
     this.runError = null;
     this.runOutcome = null;
     const isCurrent = () =>
@@ -262,7 +260,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.runBusy = false;
         this.runOperation = null;
       }
     }
@@ -470,7 +467,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
                   @click=${() => void this.runNow()}
                 >
                   ${t(
-                    this.runBusy || status?.maintenance.running
+                    this.runOperation !== null || status?.maintenance.running
                       ? "configView.sessionStorage.running"
                       : "configView.sessionStorage.runNow",
                   )}
@@ -489,7 +486,11 @@ class SessionStorageSettings extends OpenClawLightDomElement {
           ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/config-agents/sessions#cold-storage")}
         </div>
       `)}
-      <details class="settings-page" ?open=${this.advancedExpanded}>
+      <details
+        class="settings-page"
+        ?open=${this.advancedExpanded}
+        ${shellLayoutTraits({ settingsPage: true })}
+      >
         <summary class="settings-section__heading">
           ${t("configView.sessionStorage.advanced")}
         </summary>
@@ -501,16 +502,4 @@ class SessionStorageSettings extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-session-storage-settings")) {
   customElements.define("openclaw-session-storage-settings", SessionStorageSettings);
-}
-
-export function renderSessionStorage(props: {
-  mutationDisabled: boolean;
-  advancedExpanded: boolean;
-  editor: TemplateResult | typeof nothing;
-}) {
-  return html`<openclaw-session-storage-settings
-    .mutationDisabled=${props.mutationDisabled}
-    .advancedExpanded=${props.advancedExpanded}
-    .editor=${props.editor}
-  ></openclaw-session-storage-settings>`;
 }

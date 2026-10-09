@@ -21,14 +21,11 @@ import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
-import {
-  formatPluginInstallConfigSetError,
-  type ConfigMutationOptions,
-  type ConfigSetOperation,
-} from "./config-cli-input.js";
+import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import {
   normalizeConfigMutationExplicitSetPath,
   normalizeConfigMutationModelRefs,
@@ -56,6 +53,7 @@ import {
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
 import type { ConfigSetCurrentExpectation } from "./config-set-input.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -92,70 +90,38 @@ function remapSuppliedPathsAfterDelete(
   });
 }
 
-function valueHasAutoManagedChild(value: unknown, childPath: readonly PathSegment[]): boolean {
-  let cursor: unknown = value;
-  for (const segment of childPath) {
-    if (!isRecord(cursor)) {
-      return false;
-    }
-    if (!Object.hasOwn(cursor, segment)) {
-      return false;
-    }
-    cursor = cursor[segment];
-  }
-  return cursor !== undefined;
-}
-
-function operationClobbersAncestorChild(
-  operation: ConfigSetOperation,
-  managedPath: readonly PathSegment[],
-  merge?: boolean,
-): boolean {
-  if (operation.mutation === "delete") {
-    return true;
-  }
-  const childPath = managedPath.slice(operation.requestedPath.length);
-  const isMerge = operation.mutation === "merge" || (merge && operation.mutation !== "replace");
-  return isMerge ? valueHasAutoManagedChild(operation.value, childPath) : true;
-}
-
 function findAutoManagedMetaTargets(
   operations: readonly ConfigSetOperation[],
   merge?: boolean,
 ): readonly PathSegment[][] {
   const matches: PathSegment[][] = [];
-  const seen = new Set<string>();
-  const record = (path: readonly PathSegment[]) => {
-    const key = toDotPath(path);
-    if (!seen.has(key)) {
-      seen.add(key);
-      matches.push([...path]);
-    }
-  };
   for (const operation of operations) {
     const direct = AUTO_MANAGED_CONFIG_META_PATHS.some((path) =>
       pathStartsWith(operation.requestedPath, path),
     );
     if (direct) {
-      record(operation.requestedPath);
+      matches.push(operation.requestedPath);
       continue;
     }
+    const mergesValue =
+      operation.mutation !== "delete" &&
+      (operation.mutation === "merge" || (merge && operation.mutation !== "replace"));
     for (const managedPath of AUTO_MANAGED_CONFIG_META_PATHS) {
+      const childPath = managedPath.slice(operation.requestedPath.length);
       if (
         operation.requestedPath.length < managedPath.length &&
         pathStartsWith(managedPath, operation.requestedPath) &&
-        operationClobbersAncestorChild(operation, managedPath, merge)
+        (!mergesValue || getAtPath(operation.value, childPath).value !== undefined)
       ) {
-        record(managedPath);
+        matches.push([...managedPath]);
       }
     }
   }
-  return matches;
+  return dedupeByKey(matches, toDotPath);
 }
 
 function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
-  const targets = paths.map(toDotPath);
-  const subject = targets.length === 1 ? targets[0] : targets.join(", ");
+  const subject = paths.map(toDotPath).join(", ");
   return [
     `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
     "",
@@ -264,41 +230,6 @@ function configApplyHintForOperations(
     : "No gateway restart needed.";
 }
 
-async function loadMutationSchema() {
-  try {
-    return await readBestEffortRuntimeConfigSchema();
-  } catch {
-    return undefined;
-  }
-}
-
-function assertConfigSetCurrentExpectation(params: {
-  authoredConfig: OpenClawConfig;
-  operation: ConfigSetOperation;
-  expectation: ConfigSetCurrentExpectation;
-}): void {
-  const current = getAtPath(params.authoredConfig, params.operation.setPath);
-  const matches =
-    params.expectation.kind === "absent"
-      ? !current.found
-      : current.found && isDeepStrictEqual(current.value, params.expectation.value);
-  if (!matches) {
-    throw new ConfigMutationConflictError(
-      "conditional config set expectation did not match the authored config",
-      { retryable: false },
-    );
-  }
-}
-
-function assertConfigSetCurrentExpectationPath(params: {
-  operation: ConfigSetOperation;
-  writePath: readonly PathSegment[];
-}): void {
-  if (!pathEquals(params.operation.requestedPath, params.writePath)) {
-    throw new Error("conditional config set requires a direct, non-redirected config path");
-  }
-}
-
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
@@ -313,7 +244,16 @@ export async function runConfigOperations(params: {
       pathStartsWith(requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
     )
   ) {
-    throw new Error(formatPluginInstallConfigSetError());
+    throw new Error(
+      [
+        "plugins.installs is managed by the plugin index and cannot be edited with config set.",
+        "",
+        "Use plugin commands instead:",
+        `  ${formatCliCommand("openclaw plugins install <spec>")}`,
+        `  ${formatCliCommand("openclaw plugins update <plugin-id>")}`,
+        `  ${formatCliCommand("openclaw plugins uninstall <plugin-id>")}`,
+      ].join("\n"),
+    );
   }
   const autoManagedTargets = findAutoManagedMetaTargets(operations, options.merge);
   if (autoManagedTargets.length > 0) {
@@ -329,17 +269,23 @@ export async function runConfigOperations(params: {
       throw new Error("conditional config set requires one resolved operation");
     }
     assertCurrentExpectation = () => {
-      assertConfigSetCurrentExpectation({
-        authoredConfig: snapshot.resolved,
-        operation: expectationOperation,
-        expectation: currentExpectation,
-      });
+      const current = getAtPath(snapshot.resolved, expectationOperation.setPath);
+      const matches =
+        currentExpectation.kind === "absent"
+          ? !current.found
+          : current.found && isDeepStrictEqual(current.value, currentExpectation.value);
+      if (!matches) {
+        throw new ConfigMutationConflictError(
+          "conditional config set expectation did not match the authored config",
+          { retryable: false },
+        );
+      }
     };
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
-  const mutationSchema = await loadMutationSchema();
+  const mutationSchema = await readBestEffortRuntimeConfigSchema().catch(() => undefined);
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
   let explicitSetPaths: PathSegment[][] = [];
@@ -364,11 +310,11 @@ export async function runConfigOperations(params: {
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
-    if (currentExpectation) {
-      assertConfigSetCurrentExpectationPath({
-        operation,
-        writePath: roster.writePath(operation.setPath),
-      });
+    if (
+      currentExpectation &&
+      !pathEquals(operation.requestedPath, roster.writePath(operation.setPath))
+    ) {
+      throw new Error("conditional config set requires a direct, non-redirected config path");
     }
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
@@ -449,6 +395,7 @@ export async function runConfigOperations(params: {
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
       schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
+      command: params.successMode,
     };
     let suppliedPaths: PathSegment[][];
     if (merge) {
@@ -459,6 +406,7 @@ export async function runConfigOperations(params: {
         path: operation.setPath,
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
+        command: params.successMode,
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
       suppliedPaths = [operation.setPath];
@@ -598,15 +546,19 @@ export function handleConfigMutationError(params: {
   err: unknown;
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
+  jsonOutput: boolean;
 }) {
   if (params.err instanceof ExitError) {
     throw params.err;
   }
-  const isConflict = params.err instanceof ConfigMutationConflictError;
+  const conflict = params.err instanceof ConfigMutationConflictError ? params.err : undefined;
   const detail = formatErrorMessage(params.err);
-  const message = isConflict
-    ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
-    : detail;
+  let message = detail;
+  if (conflict) {
+    message = conflict.retryable
+      ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
+      : `Config change declined (${detail}). No settings were saved. Review the current config and any conditional expectations before retrying.`;
+  }
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
@@ -620,11 +572,14 @@ export function handleConfigMutationError(params: {
       checks: { schema: false, resolvability: false, resolvabilityComplete: false },
       refsChecked: 0,
       skippedExecRefs: 0,
-      errors: [{ kind: isConflict ? "conflict" : "schema", message }],
+      errors: [{ kind: conflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
+  }
+  if (params.jsonOutput) {
+    writeRuntimeJson(params.runtime, formatCliJsonFailure(message));
   }
   if (isConfigValidationFailedError(params.err)) {
     params.runtime.error("Config change declined. No settings were saved.");

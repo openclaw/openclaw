@@ -16,6 +16,7 @@ import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import "../../plugins/control-ui-contributions.ts";
 import { renderPluginReadme } from "./catalog-detail.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
@@ -23,7 +24,9 @@ import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
+  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
@@ -33,10 +36,10 @@ import {
   renderPluginRowMessage,
   type PluginRowMessage,
 } from "./plugin-row-message.ts";
-import { matchesPluginQuery } from "./plugin-state-presentation.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import {
   flattenPluginSettingsFields,
+  pluginSettingsNodeOptions,
   type PluginSettingsEditor,
   type PluginSettingsField,
 } from "./settings-editor.ts";
@@ -55,6 +58,7 @@ type SharedProps = Omit<
   busy: Readonly<Record<string, PluginMutationAction>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
   iconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (pluginId: string) => boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   onIconError: (pluginId: string) => void;
@@ -78,6 +82,10 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
     onAskPlugin?: () => void;
+    mcpLoginBusy?: boolean;
+    canMcpLogin?: boolean;
+    onMcpLogin?: (serverName: string) => void;
+    onEditMcp?: () => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
@@ -90,6 +98,7 @@ export type DetailProps = SharedProps &
     catalog?: PluginDiscoveryDetailResult;
     catalogLoading?: boolean;
     catalogIconUrls?: Readonly<Record<string, string>>;
+    catalogIconLoading?: (url: string) => boolean;
     hostControlsSchema: JsonSchema | null;
     backLabel: string;
     tab: InstalledPluginDetailTab;
@@ -109,33 +118,10 @@ function renderRetryError(error: string, onRetry: () => void): TemplateResult {
   </div>`;
 }
 
-function renderConfigActions(props: SharedProps) {
-  return html`<button
-    type="button"
-    class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-    aria-label=${t("common.reload")}
-    ?disabled=${props.configBusy || props.configSchemaLoading}
-    @click=${props.onConfigReload}
-  >
-    ${icons.refresh}
-  </button>`;
-}
-
-function renderSettingsTabs(props: InventoryProps): TemplateResult {
-  return renderHubTabs({
-    id: "plugin-settings",
-    active: props.tab,
-    tabs: [
-      { value: "installed", label: t("pluginsPage.settingsInstalled") },
-      { value: "advanced", label: t("pluginsPage.advanced") },
-    ],
-    ariaLabel: t("pluginsPage.settingsTabs"),
-    panelId: "plugin-settings-panel",
-    variant: "sub",
-    className: "plugins-settings-tabs",
-    carapace: true,
-    onSelect: props.onTabChange,
-  });
+function renderConnectionStatus(ready: boolean, label: string) {
+  return ready
+    ? html`<span class="plugin-connection-status" role="status"> ${icons.check} ${t(label)} </span>`
+    : nothing;
 }
 
 function renderInstalledInventory(props: InventoryProps): TemplateResult {
@@ -149,8 +135,16 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
     return renderRetryError(props.error, props.onRefresh);
   }
   const refreshError = props.error ? renderRetryError(props.error, props.onRefresh) : nothing;
+  const query = props.query.trim().toLocaleLowerCase();
   const plugins = (props.result?.plugins ?? [])
-    .filter((plugin) => plugin.installed && matchesPluginQuery(plugin, props.query))
+    .filter(
+      (plugin) =>
+        plugin.installed &&
+        (!query ||
+          [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
+            value?.toLocaleLowerCase().includes(query),
+          )),
+    )
     .toSorted((left, right) => left.name.localeCompare(right.name));
   if (plugins.length === 0) {
     return html`${refreshError}${renderSettingsEmpty(
@@ -161,50 +155,49 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
   return html`${refreshError}${repeat(
     plugins,
     (plugin) => plugin.id,
-    (plugin) => {
-      const key = pluginRowKey(plugin.id);
-      return html`
-        <article
-          class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
-          data-plugin-id=${plugin.id}
-          @click=${(event: Event) => {
-            const target = event.target;
-            if (!(target instanceof Element) || !target.closest("button, a")) {
-              props.onOpenPlugin(plugin.id);
+    (plugin) => html`
+      <article
+        class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
+        data-plugin-id=${plugin.id}
+        @click=${(event: Event) => {
+          const target = event.target;
+          if (!(target instanceof Element) || !target.closest("button, a")) {
+            props.onOpenPlugin(plugin.id);
+          }
+        }}
+      >
+        ${renderArtTile(plugin.id, plugin.name, {
+          iconUrl: props.iconUrls[plugin.id],
+          onIconError: () => props.onIconError(plugin.id),
+          loading: props.iconLoading?.(plugin.id),
+        })}
+        <a
+          class="settings-row__text plugins-settings-row__link oc-settings-row-content"
+          href=${props.pluginHref(plugin.id)}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
             }
+            event.preventDefault();
+            props.onOpenPlugin(plugin.id);
           }}
         >
-          ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
-            props.onIconError(plugin.id),
-          )}
-          <a
-            class="settings-row__text plugins-settings-row__link oc-settings-row-content"
-            href=${props.pluginHref(plugin.id)}
-            @click=${(event: MouseEvent) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              event.preventDefault();
-              props.onOpenPlugin(plugin.id);
-            }}
+          <span class="settings-row__title oc-settings-row-title">${plugin.name}</span>
+          <span class="settings-row__desc oc-settings-row-description"
+            >${plugin.description || t("pluginsPage.optionalCapability")}</span
           >
-            <span class="settings-row__title oc-settings-row-title">${plugin.name}</span>
-            <span class="settings-row__desc oc-settings-row-description"
-              >${plugin.description || t("pluginsPage.optionalCapability")}</span
-            >
-          </a>
-          <div class="settings-row__control oc-settings-row-control">
-            ${
-              plugin.state === "not-installed"
-                ? nothing
-                : renderPluginStateStatus(plugin.state, "plugins-settings-row__status")
-            }
-            <span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-          </div>
-          ${renderPluginRowMessage(props.messages[key])}
-        </article>
-      `;
-    },
+        </a>
+        <div class="settings-row__control oc-settings-row-control">
+          ${
+            plugin.state === "not-installed"
+              ? nothing
+              : renderPluginStateStatus(plugin.state, "plugins-settings-row__status")
+          }
+          <span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+        </div>
+        ${renderPluginRowMessage(props.messages[pluginRowKey(plugin.id)])}
+      </article>
+    `,
   )}`;
 }
 
@@ -258,12 +251,21 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
           </label>
           <div class="settings-group oc-settings-group">${renderInstalledInventory(props)}</div>
         `
-      : html`<div id="plugin-settings-advanced">
+      : html`<div id="plugin-settings-advanced" class="settings-stack">
+          <openclaw-plugin-manager></openclaw-plugin-manager>
           ${renderSettingsSection(
             {
               title: t("pluginsPage.advanced"),
               description: t("pluginsPage.advancedDescription"),
-              actions: renderConfigActions(props),
+              actions: html`<button
+                type="button"
+                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
+                aria-label=${t("common.reload")}
+                ?disabled=${props.configBusy || props.configSchemaLoading}
+                @click=${props.onConfigReload}
+              >
+                ${icons.refresh}
+              </button>`,
               carapace: true,
             },
             renderAdvanced(props),
@@ -276,7 +278,20 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
         subtitle: t("pluginsPage.settingsDescription"),
       })}
       <div class="plugins-settings-content">
-        ${renderSettingsTabs(props)}
+        ${renderHubTabs({
+          id: "plugin-settings",
+          active: props.tab,
+          tabs: [
+            { value: "installed", label: t("pluginsPage.settingsInstalled") },
+            { value: "advanced", label: t("pluginsPage.advanced") },
+          ],
+          ariaLabel: t("pluginsPage.settingsTabs"),
+          panelId: "plugin-settings-panel",
+          variant: "sub",
+          className: "plugins-settings-tabs",
+          carapace: true,
+          onSelect: props.onTabChange,
+        })}
         <wa-tab-panel
           id="plugin-settings-panel"
           name=${props.tab}
@@ -298,19 +313,10 @@ function permissionSettings(props: DetailProps): PluginSettingsEditor["permissio
   const fields =
     props.hostControlsSchema && props.configValue
       ? resolveConfigObjectFields({
-          rawAvailable: false,
-          maskSensitive: true,
           schema: props.hostControlsSchema,
           value: pluginEntryValue(props.configValue, props.pluginId),
           path: ["plugins", "entries", props.pluginId],
-          hints: props.configHints,
-          unsupported: new Set(props.configUnsupportedPaths),
-          disabled: !props.connected || !props.canEditConfig || props.configBusy,
-          showLabel: false,
-          compact: true,
-          commitOnBlur: true,
-          onPatch: props.onConfigPatch,
-          onRemove: props.onConfigRemove,
+          ...pluginSettingsNodeOptions(props),
         }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
       : [];
   for (const field of fields) {
@@ -364,15 +370,13 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       { carapace: true },
     );
   }
-  const key = pluginRowKey(plugin.id);
   const catalog = props.catalog ?? props.inspection?.catalog;
   const components = props.inspection?.components;
-  const settings = props.tab === "configuration";
   const notices = html`${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}
   ${props.inspectionError ? renderRetryError(props.inspectionError, props.onRetryInspection) : nothing}
   ${plugin.error ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">${formatUiExternalText(plugin.error)}</div>` : nothing}
-  ${renderPluginRowMessage(props.messages[key])}`;
-  if (settings) {
+  ${renderPluginRowMessage(props.messages[pluginRowKey(plugin.id)])}`;
+  if (props.tab === "configuration") {
     return renderSettingsPage(
       html`
         ${notices}
@@ -391,7 +395,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
     name,
     description: catalog?.detail.skills.find((skill) => skill.name === name)?.description,
   }));
-  const tools: Array<{ name: string; description?: string }> =
+  const tools: PluginToolPreview[] =
     props.tools ?? names(props.inspection?.declared.tools ?? catalog?.detail.contracts?.tools);
   return renderSettingsPage(
     renderPluginDetailShell({
@@ -401,19 +405,25 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       backHref: props.backHref,
       backLabel: props.backLabel,
       onBack: props.onBack,
-      icon: renderArtTile(
-        plugin.id,
-        plugin.name,
-        props.iconUrls[plugin.id] ??
+      icon: renderArtTile(plugin.id, plugin.name, {
+        iconUrl:
+          props.iconUrls[plugin.id] ??
           (catalog?.plugin.catalog.imageUrl
             ? props.catalogIconUrls?.[catalog.plugin.catalog.imageUrl]
             : undefined),
-        () => props.onIconError(plugin.id),
-        "plugins-tile",
-        catalog?.detail.author?.imageUrl
+        onIconError: () => props.onIconError(plugin.id),
+        authorIconUrl: catalog?.detail.author?.imageUrl
           ? props.catalogIconUrls?.[catalog.detail.author.imageUrl]
           : undefined,
-      ),
+        loading: Boolean(
+          props.iconLoading?.(plugin.id) ||
+          props.catalogLoading ||
+          (catalog?.plugin.catalog.imageUrl &&
+            props.catalogIconLoading?.(catalog.plugin.catalog.imageUrl)) ||
+          (catalog?.detail.author?.imageUrl &&
+            props.catalogIconLoading?.(catalog.detail.author.imageUrl)),
+        ),
+      }),
       identity: renderPluginPublisher(catalog, props.inspection?.overview?.publisherName),
       titleAction: props.installProgress
         ? html`<openclaw-plugin-install-action
@@ -441,18 +451,54 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           : undefined,
       panel: html`${notices}
       ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.accounts"),
+        (props.inspection?.mcpAuth ?? []).map((server) => ({
+          name: server.serverName,
+          trailing: html`${renderConnectionStatus(server.state === "authorized", "pluginsPage.auth.connected")}
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(server.state === "authorized" ? "pluginsPage.auth.editAccount" : "pluginsPage.auth.connectAccount", { name: server.serverName })}
+              ?disabled=${server.state === "authorized" ? !props.onEditMcp : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
+              @click=${() => (server.state === "authorized" ? props.onEditMcp?.() : props.onMcpLogin?.(server.serverName))}
+            >
+              ${t(server.state === "authorized" ? "pluginsPage.auth.edit" : "pluginsPage.auth.connect")}
+            </button>`,
+        })),
+        icons.circleUser,
+      )}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.credentials"),
+        (props.inspection?.credentials ?? []).map((credential) => ({
+          name: credential.envVars.join(" / ") || credential.label,
+          trailing: html`${renderConnectionStatus(credential.status === "configured", "pluginsPage.auth.configured")}
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(credential.status === "configured" ? "pluginsPage.auth.editCredential" : "pluginsPage.auth.configureCredential", { name: credential.label })}
+              @click=${() => props.onTabChange("configuration")}
+            >
+              ${t(credential.status === "configured" ? "pluginsPage.auth.edit" : "pluginsPage.auth.configure")}
+            </button>`,
+        })),
+        icons.key,
+      )}
+      ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(
         t("pluginsPage.detailTools"),
-        tools.map(({ name, description }) => ({
+        tools.map(({ name, description, parameters }) => ({
           name,
           description,
           onOpen:
-            description?.trim() && props.onOpenTool ? () => props.onOpenTool?.(name) : undefined,
+            (description?.trim() || parameters?.length) && props.onOpenTool
+              ? () => props.onOpenTool?.(name)
+              : undefined,
         })),
         icons.wrench,
       )}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers ?? catalog?.detail.mcpServers), icons.plug)}`,
+      ${renderPluginMcpServers(components?.mcpServers ?? catalog?.detail.mcpServers ?? [], catalog?.detail.mcpServerDetails)}`,
       readme:
         props.inspection?.overview?.readme || catalog?.detail.readme
           ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)

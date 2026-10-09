@@ -11,26 +11,22 @@ import {
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 
-function normalizeRangeSnippet(lines: string[], startLine: number, endLine: number): string {
-  const startIndex = Math.max(0, startLine - 1);
-  const endIndex = Math.min(lines.length, endLine);
-  if (startIndex >= endIndex) {
-    return "";
-  }
-  return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
-}
-
-function normalizeListMarkerFreeRangeSnippet(
+function normalizeRangeSnippet(
   lines: string[],
   startLine: number,
   endLine: number,
+  stripListMarkers = false,
 ): string {
   const startIndex = Math.max(0, startLine - 1);
   const endIndex = Math.min(lines.length, endLine);
   if (startIndex >= endIndex) {
     return "";
   }
-  const strippedLines = lines.slice(startIndex, endIndex).map((line) => {
+  const range = lines.slice(startIndex, endIndex);
+  if (!stripListMarkers) {
+    return normalizeSnippet(range.join(" "));
+  }
+  const strippedLines = range.map((line) => {
     const trimmed = line.trim();
     const withoutMarker = trimmed.replace(PROMOTION_LIST_MARKER_RE, "");
     return { text: withoutMarker, hadListMarker: withoutMarker !== trimmed };
@@ -72,25 +68,9 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
   return headings;
 }
 
-function buildListMarkerFreeMatchSnippet(
-  heading: string | null,
-  listMarkerFreeSnippet: string,
-): string {
-  if (!listMarkerFreeSnippet) {
-    return listMarkerFreeSnippet;
-  }
-  return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
-}
-
 function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
-  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
-    return false;
-  }
   const bodyIndex = targetSnippet.indexOf(bodySnippet);
-  if (bodyIndex <= 0) {
-    return false;
-  }
-  return sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
+  return bodyIndex > 0 && sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
 }
 
 function extractTargetHeadingBodySnippet(
@@ -103,10 +83,9 @@ function extractTargetHeadingBodySnippet(
   if (bodySnippet.startsWith(targetSnippet)) {
     return null;
   }
-  const normalizedBody = normalizeSnippet(bodySnippet);
   for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
-    const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
-    if (targetBody && normalizedBody.startsWith(targetBody)) {
+    const targetBody = targetSnippet.slice(separatorIndex + 2);
+    if (targetBody && bodySnippet.startsWith(targetBody)) {
       return targetBody;
     }
     separatorIndex = targetSnippet.indexOf(": ", separatorIndex + 2);
@@ -114,23 +93,20 @@ function extractTargetHeadingBodySnippet(
   return null;
 }
 
-function compareCandidateWindow(
-  targetSnippet: string,
-  windowSnippet: string,
-): { matched: boolean; quality: number } {
+function compareCandidateWindow(targetSnippet: string, windowSnippet: string): number {
   if (!targetSnippet || !windowSnippet) {
-    return { matched: false, quality: 0 };
+    return 0;
   }
   if (windowSnippet === targetSnippet) {
-    return { matched: true, quality: 3 };
+    return 3;
   }
   if (windowSnippet.includes(targetSnippet)) {
-    return { matched: true, quality: 2 };
+    return 2;
   }
   if (targetSnippet.includes(windowSnippet)) {
-    return { matched: true, quality: 1 };
+    return 1;
   }
-  return { matched: false, quality: 0 };
+  return 0;
 }
 
 function relocateCandidateRange(
@@ -139,25 +115,11 @@ function relocateCandidateRange(
 ): { startLine: number; endLine: number; snippet: string } | null {
   const targetSnippet = normalizeSnippet(candidate.snippet);
   const preferredSpan = Math.max(1, candidate.endLine - candidate.startLine + 1);
-  if (targetSnippet.length === 0) {
-    const fallbackSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
-    if (!fallbackSnippet) {
-      return null;
-    }
-    return {
-      startLine: candidate.startLine,
-      endLine: candidate.endLine,
-      snippet: fallbackSnippet,
-    };
-  }
-
   const exactSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
-  if (exactSnippet === targetSnippet) {
-    return {
-      startLine: candidate.startLine,
-      endLine: candidate.endLine,
-      snippet: exactSnippet,
-    };
+  if (!targetSnippet || exactSnippet === targetSnippet) {
+    return exactSnippet
+      ? { startLine: candidate.startLine, endLine: candidate.endLine, snippet: exactSnippet }
+      : null;
   }
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
@@ -171,18 +133,19 @@ function relocateCandidateRange(
       const endLine = startIndex + span;
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
-      const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
-      const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
-        headingLookup[startLine] ?? null,
-        listMarkerFreeSnippet,
-      );
+      const listMarkerFreeSnippet = normalizeRangeSnippet(lines, startLine, endLine, true);
+      const heading = headingLookup[startLine];
+      const listMarkerFreeMatchSnippet =
+        heading && listMarkerFreeSnippet
+          ? `${heading}: ${listMarkerFreeSnippet}`
+          : listMarkerFreeSnippet;
       const listMarkerFreeComparison =
         listMarkerFreeSnippet === snippet
-          ? { matched: false, quality: 0 }
+          ? 0
           : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
       const listMarkerFreeContextComparison =
         listMarkerFreeMatchSnippet === listMarkerFreeSnippet
-          ? { matched: false, quality: 0 }
+          ? 0
           : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
       const targetHeadingBodySnippet = extractTargetHeadingBodySnippet(
         targetSnippet,
@@ -191,41 +154,37 @@ function relocateCandidateRange(
       const targetHeadingBodyComparison =
         targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
           ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
-          : { matched: false, quality: 0 };
-      const useTargetHeadingBodyContext =
-        targetHeadingBodyComparison.matched &&
-        targetHeadingBodyComparison.quality >= comparison.quality &&
-        targetHeadingBodyComparison.quality >= listMarkerFreeComparison.quality;
-      const useListMarkerFreeContext =
-        !useTargetHeadingBodyContext &&
-        listMarkerFreeContextComparison.quality > comparison.quality &&
-        listMarkerFreeContextComparison.quality >= listMarkerFreeComparison.quality;
-      const useListMarkerFree =
-        !useListMarkerFreeContext && listMarkerFreeComparison.quality > comparison.quality;
-      const bestComparison = useTargetHeadingBodyContext
-        ? targetHeadingBodyComparison
-        : useListMarkerFreeContext
-          ? listMarkerFreeContextComparison
-          : useListMarkerFree
-            ? listMarkerFreeComparison
-            : comparison;
-      if (!bestComparison.matched) {
+          : 0;
+      let bestComparison = comparison;
+      let matchedSnippet = snippet;
+      if (
+        targetHeadingBodyComparison > 0 &&
+        targetHeadingBodyComparison >= comparison &&
+        targetHeadingBodyComparison >= listMarkerFreeComparison
+      ) {
+        bestComparison = targetHeadingBodyComparison;
+        matchedSnippet = listMarkerFreeMatchSnippet;
+      } else if (
+        listMarkerFreeContextComparison > comparison &&
+        listMarkerFreeContextComparison >= listMarkerFreeComparison
+      ) {
+        bestComparison = listMarkerFreeContextComparison;
+        matchedSnippet = listMarkerFreeMatchSnippet;
+      } else if (listMarkerFreeComparison > comparison) {
+        bestComparison = listMarkerFreeComparison;
+        matchedSnippet = targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
+          ? listMarkerFreeMatchSnippet
+          : listMarkerFreeSnippet;
+      }
+      if (bestComparison === 0) {
         continue;
       }
-      const matchedSnippet =
-        useTargetHeadingBodyContext || useListMarkerFreeContext
-          ? listMarkerFreeMatchSnippet
-          : useListMarkerFree
-            ? targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
-              ? listMarkerFreeMatchSnippet
-              : listMarkerFreeSnippet
-            : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
-        bestComparison.quality > bestMatch.quality ||
-        (bestComparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (bestComparison.quality === bestMatch.quality &&
+        bestComparison > bestMatch.quality ||
+        (bestComparison === bestMatch.quality && distance < bestMatch.distance) ||
+        (bestComparison === bestMatch.quality &&
           distance === bestMatch.distance &&
           Math.abs(span - preferredSpan) <
             Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
@@ -234,7 +193,7 @@ function relocateCandidateRange(
           startLine,
           endLine,
           snippet: matchedSnippet,
-          quality: bestComparison.quality,
+          quality: bestComparison,
           distance,
         };
       }
@@ -271,11 +230,8 @@ function lineRangeOverlapsDreamingFence(
     const isStart = DREAMING_FENCE_START_RE.test(line);
     const isEnd = DREAMING_FENCE_END_RE.test(line);
     if (isStart || isEnd) {
-      // The marker line itself is managed-block content. A relocated range
-      // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
-      // build its snippet from raw lines that contain that marker text and
-      // leak it into MEMORY.md alongside any adjacent fenced content captured
-      // by the same window. (#80613)
+      // Marker lines are managed content too; promoting them would leak
+      // dreaming scratchwork into MEMORY.md (#80613).
       if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
         return true;
       }

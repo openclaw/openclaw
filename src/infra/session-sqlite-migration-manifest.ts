@@ -9,29 +9,14 @@ import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
-import {
-  MigrationArtifactSchema,
-  type MigrationArtifact,
-} from "./session-sqlite-migration-artifact.js";
+import { MigrationArtifactSchema } from "./session-sqlite-migration-artifact.js";
 import {
   isSessionSqliteMigrationWarning,
   type DoctorSessionSqliteIssue,
-  type DoctorSessionSqliteRestoreConflict,
 } from "./session-sqlite-migration-issues.js";
 
-export type SessionSqliteMigrationMoveKind =
-  | "legacy-store"
-  | "transcript"
-  | "trajectory"
-  | "unreferenced-jsonl";
-
-export type SessionSqliteMigrationMove = {
-  archivePath: string;
-  artifact?: MigrationArtifact;
-  kind: SessionSqliteMigrationMoveKind;
-  sessionKey?: string;
-  sourcePath: string;
-};
+export type SessionSqliteMigrationMove = z.infer<typeof MigrationMoveSchema>;
+export type SessionSqliteMigrationMoveKind = SessionSqliteMigrationMove["kind"];
 
 export type SessionSqliteMigrationTargetInput = {
   agentId: string;
@@ -39,41 +24,9 @@ export type SessionSqliteMigrationTargetInput = {
   storePath: string;
 };
 
-export type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & {
-  completedMoves: SessionSqliteMigrationMove[];
-  issues: DoctorSessionSqliteIssue[];
-  plannedMoves: SessionSqliteMigrationMove[];
-  validationBeforeArchive: "not_run" | "passed" | "failed";
-};
-
-export type SessionSqliteMigrationGithubIssue = {
-  marker: string;
-  status: "attempted";
-  title: string;
-};
-
-export type SessionSqliteMigrationManifest = {
-  completedAt?: string;
-  failedAt?: string;
-  failureReports?: {
-    githubIssue?: SessionSqliteMigrationGithubIssue;
-    jsonPath: string;
-    markdownPath: string;
-  };
-  manifestVersion: 1 | 2 | 3 | 4;
-  openClawVersion: string;
-  restore?: {
-    attemptedAt: string;
-    consumedArchives?: string[];
-    conflicts: DoctorSessionSqliteRestoreConflict[];
-    restoredFiles: string[];
-    skippedFiles: string[];
-    status: "restored" | "partial" | "conflicts" | "failed" | "noop";
-  };
-  runId: string;
-  startedAt: string;
-  targets: SessionSqliteMigrationTargetManifest[];
-};
+export type SessionSqliteMigrationTargetManifest = z.infer<typeof MigrationTargetSchema>;
+export type SessionSqliteMigrationGithubIssue = z.infer<typeof MigrationGithubIssueSchema>;
+export type SessionSqliteMigrationManifest = z.infer<typeof MigrationManifestSchema>;
 
 export type ActiveSessionSqliteMigrationRun = {
   manifest: SessionSqliteMigrationManifest;
@@ -93,7 +46,13 @@ const MigrationMoveSchema = z
   .object({
     archivePath: AbsolutePathSchema,
     artifact: MigrationArtifactSchema.optional(),
-    kind: z.enum(["legacy-store", "transcript", "trajectory", "unreferenced-jsonl"]),
+    kind: z.enum([
+      "legacy-store",
+      "transcript",
+      "trajectory",
+      "unreferenced-jsonl",
+      "database-backup",
+    ]),
     sessionKey: z.string().optional(),
     sourcePath: AbsolutePathSchema,
   })
@@ -129,6 +88,7 @@ const MigrationGithubIssueSchema = z.object({
 const MigrationTargetSchema = z
   .object({
     agentId: z.string().min(1),
+    databaseIdentity: z.object({ dev: z.string(), ino: z.string() }).optional(),
     completedMoves: z.array(MigrationMoveSchema),
     issues: z.array(MigrationIssueSchema),
     plannedMoves: z.array(MigrationMoveSchema),
@@ -137,6 +97,14 @@ const MigrationTargetSchema = z
     validationBeforeArchive: z.enum(["not_run", "passed", "failed"]),
   })
   .superRefine((target, context) => {
+    if (
+      (target.databaseIdentity && target.storePath !== target.sqlitePath) ||
+      [...target.plannedMoves, ...target.completedMoves].some(
+        (move) => (move.kind === "database-backup") !== Boolean(target.databaseIdentity),
+      )
+    ) {
+      context.addIssue({ code: "custom", message: "invalid database backup target" });
+    }
     const plannedMoveKeys = new Set<string>();
     for (const move of target.plannedMoves) {
       if (!isRestoreMoveWithinTarget(move, target)) {
@@ -351,26 +319,16 @@ export function findLatestFailedSessionSqliteMigrationManifest(
     }
   | undefined {
   return listSessionSqliteMigrationManifestPaths(env)
-    .map((manifestPath) => {
+    .flatMap((manifestPath) => {
       const manifest = readSessionSqliteMigrationManifest(manifestPath);
-      return {
-        manifest,
-        manifestPath,
-        targets: manifest ? filterRestoreManifestTargets(manifest, trustedTargets) : [],
-      };
+      if (!manifest) {
+        return [];
+      }
+      const targets = filterRestoreManifestTargets(manifest, trustedTargets);
+      return isFailedSessionSqliteMigrationManifest(manifest) && targets.length > 0
+        ? [{ manifest, manifestPath, targets }]
+        : [];
     })
-    .filter(
-      (
-        item,
-      ): item is {
-        manifest: SessionSqliteMigrationManifest;
-        manifestPath: string;
-        targets: SessionSqliteMigrationTargetManifest[];
-      } =>
-        item.manifest !== undefined &&
-        isFailedSessionSqliteMigrationManifest(item.manifest) &&
-        item.targets.length > 0,
-    )
     .toSorted(
       (left, right) => manifestSortTime(right.manifest) - manifestSortTime(left.manifest),
     )[0];
@@ -460,8 +418,9 @@ export function filterRestoreManifestTargets(
   );
   return manifest.targets.filter(
     (target) =>
+      !target.databaseIdentity &&
       trustedSqlitePaths.get(sessionSqliteMigrationTargetKey(target)) ===
-      canonicalMigrationFilePath(target.sqlitePath),
+        canonicalMigrationFilePath(target.sqlitePath),
   );
 }
 
@@ -513,7 +472,7 @@ export function readSessionSqliteMigrationManifest(
 
 function isRestoreMoveWithinTarget(
   move: SessionSqliteMigrationMove,
-  target: Pick<SessionSqliteMigrationTargetManifest, "storePath">,
+  target: Pick<SessionSqliteMigrationTargetInput, "storePath">,
 ): boolean {
   const sourcePath = path.resolve(move.sourcePath);
   const archivePath = path.resolve(move.archivePath);
@@ -521,6 +480,13 @@ function isRestoreMoveWithinTarget(
     return false;
   }
   const storePath = path.resolve(target.storePath);
+  if (move.kind === "database-backup") {
+    return (
+      sourcePath === storePath &&
+      archivePath.startsWith(`${sourcePath}.pre-startup-migration-`) &&
+      /^[a-f0-9-]{36}\.bak$/.test(archivePath.slice(`${sourcePath}.pre-startup-migration-`.length))
+    );
+  }
   const sessionsDir = path.dirname(storePath);
   const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
   if (path.dirname(archivePath) !== archiveDir) {
@@ -685,7 +651,7 @@ export function uniqueRestoreMoves(
 ): SessionSqliteMigrationMove[] {
   const moves = new Map<string, SessionSqliteMigrationMove>();
   for (const move of [...target.completedMoves, ...target.plannedMoves]) {
-    moves.set(`${move.sourcePath}\u0000${move.archivePath}`, move);
+    moves.set(migrationMoveKey(move), move);
   }
   return [...moves.values()];
 }

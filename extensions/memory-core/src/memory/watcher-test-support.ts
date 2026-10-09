@@ -1,109 +1,74 @@
+import type {
+  ObservationRoot,
+  WatchInvalidation,
+  WatchHealth,
+  WatchOptions,
+  WatchSubscription,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { vi } from "vitest";
 
-export function createMemoryWatcherTestFactories() {
-  const chokidarKey = Symbol.for("openclaw.test.memoryWatchFactory");
-  const nativeKey = Symbol.for("openclaw.test.memoryNativeWatchFactory");
-  type ChokidarEvent = "add" | "change" | "unlink" | "unlinkDir" | "error" | "ready";
-  type ChokidarCallback = (...args: unknown[]) => void;
-  function createMockChokidarWatcher() {
-    const handlers = new Map<ChokidarEvent, ChokidarCallback[]>();
-    const onceHandlers = new Map<ChokidarEvent, ChokidarCallback[]>();
-    const watcher = {
-      watchedEntries: {} as Record<string, string[]>,
-      on: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
-        handlers.set(event, [...(handlers.get(event) ?? []), callback]);
-        return watcher;
-      }),
-      once: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
-        onceHandlers.set(event, [...(onceHandlers.get(event) ?? []), callback]);
-        return watcher;
-      }),
-      add: vi.fn((_path: string | string[]) => watcher),
-      close: vi.fn(async () => undefined),
-      getWatched: vi.fn(() => watcher.watchedEntries),
-      emit: (event: ChokidarEvent, ...args: unknown[]) => {
-        for (const callback of handlers.get(event) ?? []) {
-          callback(...args);
-        }
-        const callbacks = onceHandlers.get(event) ?? [];
-        onceHandlers.delete(event);
-        for (const callback of callbacks) {
-          callback(...args);
-        }
-      },
-    };
-    return watcher;
-  }
-
-  type NativeEvent = "error";
-  type NativeCallback = (eventType: string, filename: string | null) => void | Promise<void>;
-  type NativeErrorCallback = (err: Error) => void;
-  function createMockNativeWatcher(
-    dir: string,
-    options: { recursive?: boolean },
-    listener: NativeCallback,
-  ) {
-    const errorHandlers: NativeErrorCallback[] = [];
-    const watcher = {
-      dir,
-      options,
-      recursive: options.recursive === true,
-      listener,
-      on: vi.fn((event: NativeEvent, callback: NativeErrorCallback) => {
-        if (event === "error") {
-          errorHandlers.push(callback);
-        }
-        return watcher;
-      }),
-      close: vi.fn(() => undefined),
-      emit: (eventType: string, filename: string | null) => {
-        return listener(eventType, filename);
-      },
-      emitError: (err: Error) => {
-        for (const handler of errorHandlers) {
-          handler(err);
-        }
-      },
-    };
-    return watcher;
-  }
-
-  const chokidarWatchers: Array<ReturnType<typeof createMockChokidarWatcher>> = [];
-  const nativeWatchers: Array<ReturnType<typeof createMockNativeWatcher>> = [];
-  const failingDir = { current: null as string | null };
-
-  const result = {
-    createdChokidarWatchers: chokidarWatchers,
-    createdNativeWatchers: nativeWatchers,
-    memoryLoggerWarn: vi.fn(),
-    watchMock: vi.fn(() => {
-      const watcher = createMockChokidarWatcher();
-      chokidarWatchers.push(watcher);
-      return watcher;
+/** Controlled library boundary; no directory discovery or event transport emulation. */
+export function createMemoryObservationHarness() {
+  const observations: Array<{
+    root: ObservationRoot;
+    options: WatchOptions;
+    subscription: WatchSubscription;
+    close: ReturnType<typeof vi.fn<() => Promise<void>>>;
+    dirty: (changes?: WatchInvalidation["changes"], reason?: WatchInvalidation["reason"]) => void;
+    health: (facts: Partial<WatchHealth>) => void;
+  }> = [];
+  const harness = {
+    observations,
+    closeBarrier: undefined as Promise<void> | undefined,
+    created: undefined as (() => void) | undefined,
+    watch: vi.fn((authority: ObservationRoot, options: WatchOptions): WatchSubscription => {
+      let health: WatchHealth = {
+        state: "ready",
+        mode: options.mode === "poll" ? "poll" : "events",
+        directories: 1,
+      };
+      const closeBarrier = harness.closeBarrier;
+      const close = vi.fn(() => {
+        health = { ...health, state: "closed", directories: 0 };
+        return closeBarrier ?? Promise.resolve();
+      });
+      const subscription: WatchSubscription = {
+        ready: Promise.resolve(),
+        close,
+        [Symbol.asyncDispose]: close,
+        health: () => health,
+        reconcile: vi.fn(async () => undefined),
+        setScopes: vi.fn(async (scopes) => {
+          options.scopes = scopes;
+        }),
+      };
+      observations.push({
+        root: authority,
+        options,
+        subscription,
+        close,
+        dirty: (changes, reason = "event") => {
+          if (health.state !== "closed") {
+            options.onInvalidate({ reason, changes });
+          }
+        },
+        health: (facts) => {
+          if (health.state === "closed") {
+            return;
+          }
+          health = { ...health, ...facts };
+          options.onHealth?.(health);
+        },
+      });
+      harness.created?.();
+      return subscription;
     }),
-    nativeWatchMock: vi.fn(
-      (dir: string, options: { recursive?: boolean }, listener: NativeCallback) => {
-        if (failingDir.current && dir === failingDir.current) {
-          throw new Error("simulated native fs.watch creation failure");
-        }
-        const watcher = createMockNativeWatcher(dir, options, listener);
-        nativeWatchers.push(watcher);
-        return watcher;
-      },
-    ),
-    nativeWatchMockFailingDir: failingDir,
+    reset() {
+      observations.length = 0;
+      harness.closeBarrier = undefined;
+      harness.created = undefined;
+      harness.watch.mockClear();
+    },
   };
-  (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
-  (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
-  return result;
-}
-
-export async function advanceWatchSync(
-  sync: { mockImplementationOnce: (callback: () => Promise<void>) => unknown },
-  milliseconds = 1_500,
-) {
-  const observed = Promise.withResolvers<void>();
-  sync.mockImplementationOnce(async () => observed.resolve());
-  await vi.advanceTimersByTimeAsync(milliseconds);
-  await observed.promise;
+  return harness;
 }

@@ -50,7 +50,9 @@ function createDoctorRuntime(root: string) {
   return (env: NodeJS.ProcessEnv, args: string[]) =>
     tempDirs.track(
       runtimeDirs.track(
-        runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS, 4 * 1024 * 1024),
+        runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS, {
+          maxBuffer: 4 * 1024 * 1024,
+        }),
       ),
     );
 }

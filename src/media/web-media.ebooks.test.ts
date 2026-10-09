@@ -75,6 +75,27 @@ describe("host-read ebook documents", () => {
     expect(result.kind).toBe("document");
   });
 
+  it("allows a quoted closing bracket in an external doctype identifier", async () => {
+    const result = await loadDocumentWithHostRead(
+      "external-doctype.fb2",
+      '<?xml version="1.0"?><!DOCTYPE FictionBook SYSTEM "book>schema.dtd">' +
+        `<FictionBook xmlns="${FICTIONBOOK_NAMESPACE}"/>`,
+    );
+
+    expect(result.kind).toBe("document");
+  });
+
+  it.each([
+    { fileName: "quoted.fb2", root: "FictionBook", namespace: "xmlns", note: `"a>'b"` },
+    { fileName: "quoted.xml", root: "fb:FictionBook", namespace: "xmlns:fb", note: `'a>"b'` },
+  ])("preserves quoted root attributes in host-read $fileName", async (entry) => {
+    const body = `<?xml version="1.0"?><${entry.root} note=${entry.note} ${entry.namespace}="${FICTIONBOOK_NAMESPACE}"><description/></${entry.root}>`;
+    const result = await loadDocumentWithHostRead(entry.fileName, body);
+
+    expect(result.kind).toBe("document");
+    expect(result.buffer).toEqual(Buffer.from(body));
+  });
+
   it.each([
     {
       name: "generic XML with a .xml extension",
@@ -115,6 +136,26 @@ describe("host-read ebook documents", () => {
       name: "a FictionBook element nested below a foreign root",
       fileName: "wrapped.xml",
       body: '<?xml version="1.0"?><settings><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"/></settings>',
+    },
+    {
+      name: "a namespace decoy after a quoted closing bracket",
+      fileName: "quoted-decoy.fb2",
+      body: `<FictionBook note='a>b xmlns="${FICTIONBOOK_NAMESPACE}"'/>`,
+    },
+    {
+      name: "an unterminated quoted attribute after the namespace",
+      fileName: "unterminated.fb2",
+      body: `<FictionBook xmlns="${FICTIONBOOK_NAMESPACE}" note="a>b/>`,
+    },
+    {
+      name: "a FictionBook decoy in a DTD entity value",
+      fileName: "doctype-decoy.xml",
+      body: `<?xml version="1.0"?><!DOCTYPE settings [<!ENTITY decoy "><FictionBook xmlns='${FICTIONBOOK_NAMESPACE}'/>">]><settings/>`,
+    },
+    {
+      name: "an unsupported DTD internal subset before a FictionBook root",
+      fileName: "internal-subset.fb2",
+      body: `<?xml version="1.0"?><!DOCTYPE FictionBook [<!ENTITY title "book">]><FictionBook xmlns="${FICTIONBOOK_NAMESPACE}"/>`,
     },
   ])("rejects text-valid host-read $name", async ({ fileName, body }) => {
     await expectLoadWebMediaErrorCode(loadDocumentWithHostRead(fileName, body), "path-not-allowed");

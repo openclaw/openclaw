@@ -13,7 +13,7 @@ import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-f
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
-import { runStartupSessionMigration } from "../gateway/server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "../gateway/server-startup-session-migration.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
@@ -25,7 +25,7 @@ import {
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { getUserPreferences } from "../state/user-preferences.js";
+import { getUserPreferences } from "../state/user-preferences.test-support.js";
 import {
   listConfigCorpusFixtureNames,
   readConfigCorpusFixture,
@@ -207,7 +207,6 @@ export function createStateStartupCorpusFixture() {
             });
             const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
               sourceRaw: snapshot.parsed,
-              sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
             });
             fs.writeFileSync(configPath, JSON.stringify(normalized.config));
             // Repeat the real repair path: a second run must preserve the same records.
@@ -219,22 +218,18 @@ export function createStateStartupCorpusFixture() {
                 doctorOnlyStateMigrations: true,
                 preparePluginMetadataSnapshot: true,
               });
-              phase("doctor-checkpoint");
-              await runDoctorConfigPreflight({
-                observe: false,
-                requireStartupMigrationCheckpoint: true,
-              });
               phase("startup-config-read");
               const initialSnapshotRead = await io.readConfigFileSnapshotWithPluginMetadata();
               phase("startup-config");
               const startup = await loadGatewayStartupConfigSnapshot({
                 initialSnapshotRead,
                 minimalTestGateway: false,
+                ambientEnvTriggers: "suppress",
                 log: console,
               });
               const config = startup.snapshot.config;
               phase("startup-session-migration");
-              await runStartupSessionMigration({ cfg: config, log: console });
+              await runStartupSessionMaintenanceForTest({ cfg: config, log: console });
               phase("state-assertions");
               for (const session of fixture.sessions) {
                 signal.throwIfAborted();

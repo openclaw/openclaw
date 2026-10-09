@@ -1,97 +1,83 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { SharedGitHubPublicationReadInput } from "../state/github-publication-read.types.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
+import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 
-export type SharedGitHubPublicationSession = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  lifecycleRevision?: string | null;
-};
-export type SharedGitHubPublicationSelector = { requestId: string } | { idempotencyKey?: string };
+type SharedGitHubPublicationSelector = SharedGitHubPublicationReadInput["selector"];
 
-export function readSharedGitHubPublicationSession(
-  session: SharedGitHubPublicationSession,
-  loaded: { agentId: string; canonicalKey: string; entry?: SessionEntry },
-) {
-  const entry = loaded.entry;
-  if (
-    !entry ||
-    loaded.agentId !== session.agentId ||
-    loaded.canonicalKey !== session.sessionKey ||
-    entry.sessionId !== session.sessionId ||
-    (session.lifecycleRevision !== undefined &&
-      (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
-  ) {
-    throw new GitHubPublicationSessionChangedError();
-  }
-  return entry;
+function workspaceSelection(entry: SessionEntry): SharedGitHubPublicationReadInput["entry"] {
+  return {
+    archivedAt: entry.archivedAt,
+    repositoryWorkspaceId: entry.repositoryWorkspaceId,
+    lifecycleRevision: entry.lifecycleRevision,
+    ...(entry.worktree
+      ? {
+          worktree: {
+            id: entry.worktree.id,
+            branch: entry.worktree.branch,
+            repoRoot: entry.worktree.repoRoot,
+          },
+        }
+      : {}),
+  };
 }
 
-/** Execution resolvers open mutable stores. Observation uses their recorded owners on this reader. */
-export function readSharedGitHubPublicationWorkspace(
-  db: DatabaseSync,
-  session: SharedGitHubPublicationSession,
-  entry: SessionEntry,
+/** Observation retains the selected session while the existing-only shared reader runs. */
+export async function readSharedGitHubPublication(
+  kind: SharedGitHubPublicationReadInput["kind"],
+  session: PublicationSessionIdentity,
+  selector: SharedGitHubPublicationSelector,
 ) {
-  if (entry.archivedAt !== undefined) {
-    return undefined;
-  }
-  const query = getNodeSqliteKysely<Pick<DB, "worktrees" | "session_repository_workspaces">>(db);
-  if (entry.repositoryWorkspaceId) {
-    const workspace = tableExists(db, "session_repository_workspaces")
-      ? executeSqliteQueryTakeFirstSync(
-          db,
-          query
-            .selectFrom("session_repository_workspaces")
-            .selectAll()
-            .where("workspace_id", "=", entry.repositoryWorkspaceId),
-        )
-      : undefined;
+  const capturedSelector = { ...selector };
+  let workspaceIndependent = false;
+  const selected = retainGatewaySessionEntryReadOnly(
+    session.sessionKey,
+    session.agentId,
+    (previous, current) =>
+      workspaceIndependent ||
+      isDeepStrictEqual(workspaceSelection(previous), workspaceSelection(current)),
+  );
+  try {
+    const entry = selected.entry;
     if (
-      !workspace ||
-      workspace.agent_id !== session.agentId ||
-      workspace.session_key !== session.sessionKey
+      !entry ||
+      selected.agentId !== session.agentId ||
+      selected.canonicalKey !== session.sessionKey ||
+      entry.sessionId !== session.sessionId ||
+      (session.lifecycleRevision !== undefined &&
+        (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
     ) {
-      throw new Error("GitHub publication session repository owner is unavailable.");
+      throw new GitHubPublicationSessionChangedError();
     }
-    return {
-      kind: "repository" as const,
-      workspaceId: workspace.workspace_id,
-      branch: workspace.branch,
-    };
+    const result = await withArtifactPreservingStateReads(() =>
+      executeExistingOpenClawStateRead(
+        {},
+        {
+          type: "githubPublication.sharedObservation",
+          input: { kind, session, selector: capturedSelector, entry: workspaceSelection(entry) },
+        },
+        { current: true, preferIndependentWarmRead: true },
+      ),
+    );
+    if (result && (!result.ok || result.type !== "githubPublication.sharedObservation")) {
+      throw new Error("Shared GitHub publication observation is unavailable.");
+    }
+    const row = result?.row;
+    // Missing or terminal by-id receipts do not qualify the current workspace.
+    workspaceIndependent =
+      "requestId" in capturedSelector &&
+      (!row || row.status === "published" || row.status === "failed");
+    if (!selected.isCurrentAtResponse()) {
+      throw new GitHubPublicationSessionChangedError();
+    }
+    return row;
+  } finally {
+    selected.release();
   }
-  if (!entry.worktree?.id) {
-    return undefined;
-  }
-  const worktree = tableExists(db, "worktrees")
-    ? executeSqliteQueryTakeFirstSync(
-        db,
-        query
-          .selectFrom("worktrees")
-          .select(["id", "branch", "repo_root", "repo_fingerprint"])
-          .where("owner_kind", "=", "session")
-          .where("owner_id", "=", session.sessionKey)
-          .where("removed_at", "is", null)
-          .orderBy("created_at", "desc")
-          .limit(1),
-      )
-    : undefined;
-  if (
-    !worktree ||
-    worktree.id !== entry.worktree.id ||
-    worktree.branch !== entry.worktree.branch ||
-    worktree.repo_root !== entry.worktree.repoRoot
-  ) {
-    throw new Error("GitHub publication session worktree owner is unavailable.");
-  }
-  return {
-    kind: "worktree" as const,
-    worktreeId: worktree.id,
-    branch: worktree.branch,
-    repositoryFingerprint: worktree.repo_fingerprint,
-  };
 }

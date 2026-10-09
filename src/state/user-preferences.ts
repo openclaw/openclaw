@@ -1,23 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ok, type Result } from "@openclaw/normalization-core/result";
+import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "./openclaw-state-worker-store.js";
 import {
-  ensureUserPreferencesSchema,
-  readUserPreferences,
-  updatesGitCoauthorPreference,
-  writeUserPreferences,
-} from "./user-preferences.store.js";
+  beginUserPreferenceMutation,
+  captureUserPreferenceRead,
+} from "./user-preferences-publication.js";
+import { updatesGitCoauthorPreference } from "./user-preferences.store.js";
 import type {
   CanonicalUserPreferences,
   UserPreferenceCoauthorMutation,
@@ -26,40 +22,27 @@ import type {
 import { prepareUserPreferenceUpdate } from "./user-preferences.validation.js";
 import { fenceUserProfileMutationAuthority } from "./user-profile-events.js";
 
-export function getUserPreferences(
-  profileId: string,
-  keys?: readonly string[],
+/** Read one preference for a canonical profile batch without opening SQLite on the caller. */
+export async function getUserPreferenceValues(
+  profileIds: readonly string[],
+  key: string,
   options: OpenClawStateDatabaseOptions = {},
-): Record<string, unknown> {
-  if (keys?.length === 0) {
-    return {};
+): Promise<{ values: Map<string, unknown>; isCurrent: () => boolean }> {
+  if (profileIds.length === 0) {
+    return { values: new Map(), isCurrent: () => true };
   }
-  ensureUserPreferencesSchema(options);
-  return readUserPreferences(openOpenClawStateDatabase(options).db, profileId, keys);
-}
-
-export function setUserPreferences(
-  profileId: string,
-  entries: Record<string, unknown>,
-  options: OpenClawStateDatabaseOptions & { expectedEntries?: Record<string, unknown> } = {},
-): Result<void, UserPreferenceError> {
-  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
-  if (!prepared.ok) {
-    return prepared;
-  }
-  if (
-    prepared.value.serialized.length === 0 &&
-    prepared.value.deletionKeys.length === 0 &&
-    prepared.value.expected.length === 0
-  ) {
-    return ok(undefined);
-  }
-  ensureUserPreferencesSchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => writeUserPreferences(db, profileId, prepared.value),
-    options,
-    { operationLabel: "users.preferences.set" },
+  const ids = [...new Set(profileIds)];
+  const context = captureOpenClawStateWorkerContext(options);
+  const isCurrent = await captureUserPreferenceRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userPreferences.values", profileIds: ids, key },
+    { context, current: true },
   );
+  if (reply && (!reply.ok || reply.type !== "userPreferences.values")) {
+    throw new Error(reply.ok ? "Unexpected user preference values reply" : reply.message);
+  }
+  return { values: reply?.values ?? new Map(), isCurrent };
 }
 
 export function getCanonicalUserPreferences(
@@ -86,6 +69,7 @@ export async function setCanonicalUserPreferences(
     return prepared;
   }
   const context = captureOpenClawStateWorkerContext(options);
+  const finishMutation = beginUserPreferenceMutation(context.admission);
   let publicationSettled: Promise<void> | undefined;
   try {
     return await runOpenClawStateWorkerOperation(
@@ -175,6 +159,10 @@ export async function setCanonicalUserPreferences(
     );
   } finally {
     // Caller revocation cannot discard a committed preference change or its authority fence.
-    await publicationSettled;
+    try {
+      await publicationSettled;
+    } finally {
+      finishMutation();
+    }
   }
 }

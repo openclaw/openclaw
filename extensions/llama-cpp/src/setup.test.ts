@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   progressUpdate: vi.fn(),
   hardware: vi.fn(),
   downloadFetch: vi.fn(),
+  ensureServerInstalled: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -32,6 +33,11 @@ vi.mock("./managed-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./managed-server.js")>()),
   ensureLlamaCppModel: mocks.ensureModel,
   prepareManagedLlamaServer: mocks.prepareServer,
+}));
+
+vi.mock("./llama-server-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./llama-server-install.js")>()),
+  ensureLlamaServerInstalled: mocks.ensureServerInstalled,
 }));
 
 import {
@@ -91,6 +97,10 @@ beforeEach(async () => {
   mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
   mocks.progressUpdate.mockReset();
   mocks.downloadFetch.mockReset();
+  mocks.ensureServerInstalled.mockReset().mockImplementation(async ({ asset }) => ({
+    command: path.join(tempRoot, "llama-server"),
+    asset,
+  }));
 });
 
 afterEach(async () => {
@@ -434,6 +444,54 @@ describe("llama.cpp managed setup", () => {
     expect(mocks.removeProfiles).not.toHaveBeenCalled();
   });
 
+  it("does not suggest retrying setup on a host the verified build cannot run on", async () => {
+    const ctx = authContext(true);
+    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
+    mocks.prepareServer.mockRejectedValue(
+      new UnsupportedLlamaServerHostError("The verified llama-server build requires macOS 13.3+"),
+    );
+
+    const setup = runLlamaCppSetup(ctx);
+    await expect(setup).rejects.toThrow(
+      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+",
+    );
+    await expect(setup).rejects.not.toThrow("retry");
+  });
+
+  it("refuses an unsupported host before downloading any model files", async () => {
+    const ctx = authContext(true);
+    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
+    // ensureLlamaServerInstalled refuses because no validating install exists and the
+    // host cannot run a fresh download; nothing should be fetched afterwards.
+    mocks.ensureServerInstalled.mockRejectedValueOnce(
+      new UnsupportedLlamaServerHostError(
+        "The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
+      ),
+    );
+
+    await expect(runLlamaCppSetup(ctx)).rejects.toThrow(
+      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
+  it("reuses a validating installed server through guided setup without refusing by OS version", async () => {
+    const ctx = authContext(true);
+    // Simulates installLlamaServer's reuse branch: an already-installed, validating
+    // binary is returned on any macOS version (installer never asserts the OS floor
+    // for a valid reuse). Guided setup must proceed instead of pre-refusing.
+    mocks.ensureServerInstalled.mockResolvedValueOnce({
+      command: path.join(tempRoot, "existing-llama-server"),
+      asset: {} as never,
+    });
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toBeDefined();
+    expect(mocks.ensureServerInstalled).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureModel).toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(mocks.prepareServer).toHaveBeenCalled();
+  });
+
   it("pins the default model identity and integrity", () => {
     expect(DEFAULT_LLAMA_CPP_MODEL_URI).toBe(
       "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf",
@@ -518,6 +576,12 @@ describe("llama.cpp managed setup", () => {
     const ctx = authContext(true);
 
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /embedding-only.*0\.3 GB.*memory\.search\.provider.*local.*models auth login --provider llama-cpp --method local/su,
+      ),
+      "Setup skipped",
+    );
     expect(ctx.prompter.confirm).not.toHaveBeenCalled();
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });

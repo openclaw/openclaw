@@ -58,7 +58,12 @@ export function createMessageToolTurnAuthority(params: {
       return {
         authorization,
         config: admitScheduled ? admitScheduled() : params.getConfig(),
-        hasChannelTurnContext: Boolean(authorization && !authorization.scheduled && !dashboardRead),
+        hasChannelTurnContext: Boolean(
+          authorization &&
+          !authorization.scheduled &&
+          !authorization.deliveryAttempt &&
+          !dashboardRead,
+        ),
         gatewayTurnCapability: dashboardRead && !isRead ? undefined : token,
         scheduledRead: isRead ? authorization?.scheduled : undefined,
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,

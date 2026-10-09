@@ -1,4 +1,3 @@
-// Diffs plugin module implements viewer payload behavior.
 import { DIFF_INDICATORS, DIFF_LAYOUTS, DIFF_THEMES } from "./types.js";
 import type { DiffViewerPayload } from "./types.js";
 
@@ -24,70 +23,32 @@ export function parseViewerPayloadJson(raw: string): DiffViewerPayload {
 }
 
 function isDiffViewerPayload(value: unknown): value is DiffViewerPayload {
-  if (!isViewerRecord(value)) {
-    return false;
-  }
-
-  if (typeof value.prerenderedHTML !== "string") {
-    return false;
-  }
-
-  if (!Array.isArray(value.langs) || !value.langs.every((lang) => typeof lang === "string")) {
-    return false;
-  }
-
-  if (!isViewerOptions(value.options)) {
-    return false;
-  }
-
-  const hasFileDiff = isViewerRecord(value.fileDiff);
-  const hasBeforeAfterFiles = isViewerRecord(value.oldFile) && isViewerRecord(value.newFile);
-  if (!hasFileDiff && !hasBeforeAfterFiles) {
-    return false;
-  }
-
-  return true;
+  return (
+    isViewerRecord(value) &&
+    typeof value.prerenderedHTML === "string" &&
+    Array.isArray(value.langs) &&
+    value.langs.every((lang) => typeof lang === "string") &&
+    isViewerOptions(value.options) &&
+    (isViewerRecord(value.fileDiff) ||
+      (isViewerRecord(value.oldFile) && isViewerRecord(value.newFile)))
+  );
 }
 
 function isViewerOptions(value: unknown): boolean {
-  if (!isViewerRecord(value)) {
-    return false;
-  }
-
-  if (!isViewerRecord(value.theme)) {
-    return false;
-  }
-  if (value.theme.light !== "pierre-light" || value.theme.dark !== "pierre-dark") {
-    return false;
-  }
-
-  if (!includesValue(DIFF_LAYOUTS, value.diffStyle)) {
-    return false;
-  }
-  if (!includesValue(DIFF_INDICATORS, value.diffIndicators)) {
-    return false;
-  }
-  if (!includesValue(DIFF_THEMES, value.themeType)) {
-    return false;
-  }
-  if (!includesValue(OVERFLOW_VALUES, value.overflow)) {
-    return false;
-  }
-
-  if (typeof value.disableLineNumbers !== "boolean") {
-    return false;
-  }
-  if (typeof value.expandUnchanged !== "boolean") {
-    return false;
-  }
-  if (typeof value.backgroundEnabled !== "boolean") {
-    return false;
-  }
-  if (typeof value.unsafeCSS !== "string") {
-    return false;
-  }
-
-  return true;
+  return (
+    isViewerRecord(value) &&
+    isViewerRecord(value.theme) &&
+    value.theme.light === "pierre-light" &&
+    value.theme.dark === "pierre-dark" &&
+    includesValue(DIFF_LAYOUTS, value.diffStyle) &&
+    includesValue(DIFF_INDICATORS, value.diffIndicators) &&
+    includesValue(DIFF_THEMES, value.themeType) &&
+    includesValue(OVERFLOW_VALUES, value.overflow) &&
+    typeof value.disableLineNumbers === "boolean" &&
+    typeof value.expandUnchanged === "boolean" &&
+    typeof value.backgroundEnabled === "boolean" &&
+    typeof value.unsafeCSS === "string"
+  );
 }
 
 function includesValue<T extends readonly string[]>(values: T, value: unknown): value is T[number] {

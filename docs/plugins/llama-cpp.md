@@ -49,6 +49,11 @@ does not pass that check. Each verification check has a 90-second deadline.
 Changing `agents.defaults.timeoutSeconds` does not extend setup verification.
 Failures identify whether the response check or tool-use check timed out.
 
+If the configured server executable is missing from OpenClaw's current managed
+installation, chat and local embeddings restore the same verified build before
+starting it. Custom server paths and installations from older releases still
+require manual repair or rerunning setup.
+
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before
@@ -107,6 +112,16 @@ setup explains the limitation and names CPU execution in the confirmation.
 For other acceleration backends, run a compatible server yourself and choose
 **Existing llama-server**.
 
+Runtime validation allows up to two minutes per executable version check so
+macOS security assessment and Metal initialization can finish after installation
+or when reusing a runtime. Setup remains cancellable during validation.
+
+The verified macOS builds require macOS 13.3 or later, and setup stops before
+downloading on older releases. To keep managed chat and local embeddings there,
+build `llama-server` on that Mac and set
+`models.providers.llama-cpp.localService.command` to its absolute path; see
+[Local model services](/gateway/local-model-services).
+
 If no recommendation fits, setup explains whether to free memory, free disk
 space, or fix cache-directory permissions. Cancelling or failing guided
 verification leaves the previous default model selected. A setup candidate has
@@ -127,6 +142,17 @@ declined, OpenClaw offers a separate embedding-only setup. It installs only the
 managed server and the configured embedding model after explicit consent. It
 does not add a llama.cpp chat model or change the current chat model. Setup discovery remains
 read-only and never installs or downloads anything.
+
+If no recommended chat model fits your memory budget, enable local memory
+search and retry setup to get the embedding-only offer (about 0.3 GB for the
+default embedding model):
+
+```bash
+openclaw config set memory.search.provider local
+openclaw models auth login --provider llama-cpp --method local
+```
+
+If you use `--profile`, use the same profile for both commands.
 
 If the llama.cpp provider has any configured chat models, embedding-only setup
 leaves it unchanged. Move any chat routes to another provider and remove those
@@ -183,6 +209,10 @@ manager, or machine owns the process.
     endpoint. Enable API-key authentication only when the server or proxy
     requires it.
 
+    The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
+    `localhost:8080`. Invalid URLs and embedded credentials are rejected inline
+    so you can correct the endpoint without restarting setup.
+
   </Step>
   <Step title="Select the model">
     ```bash
@@ -193,7 +223,7 @@ manager, or machine owns the process.
 </Steps>
 
 OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
-`/props`. Router property probes use `autoload=false`. Discovery never loads,
+`/props`. Router property checks use `autoload=false`. Discovery never loads,
 wakes, unloads, downloads, or reloads models.
 
 For discovered models, OpenClaw advertises reasoning and effort controls only

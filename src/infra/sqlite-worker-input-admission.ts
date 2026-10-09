@@ -1,5 +1,9 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import type {
+  SqliteWorkerInputPreparation,
+  SqliteWorkerInputRetention,
+} from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 
 /** Retained inputs share the broker budget before they become queued jobs. */
@@ -7,7 +11,7 @@ export class SqliteWorkerInputAdmission {
   private bytes = 0;
   private inputPreparationGeneration = {};
   private readonly inputPreparations = new Set<Promise<void>>();
-  private openTail: Promise<void> = Promise.resolve();
+  private readonly openQueue = new Map<string, StoreWriterQueue>();
 
   constructor(
     private readonly owner: {
@@ -34,7 +38,7 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(bytes: number, dispatch: () => Promise<T>): Promise<T> {
+  open<T>(bytes: number, dispatch: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
@@ -43,19 +47,19 @@ export class SqliteWorkerInputAdmission {
         new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
       );
     }
-    const previous = this.openTail;
-    const settled = createDeferredCore();
-    this.openTail = settled.promise;
     const release = this.retain(bytes);
     // Physical-file identity must be published before admitting another open alias.
-    return previous.then(dispatch).finally(() => {
-      release();
-      settled.resolve();
-    });
+    return runQueuedStoreWrite({
+      queues: this.openQueue,
+      storePath: "sqlite-open",
+      label: "SQLite worker open",
+      fn: dispatch,
+      signal,
+    }).finally(release);
   }
 
   joinOpens(): Promise<void> {
-    return this.openTail;
+    return this.openQueue.get("sqlite-open")?.drainPromise ?? Promise.resolve();
   }
 
   invalidatePreparations(): void {
@@ -66,7 +70,10 @@ export class SqliteWorkerInputAdmission {
     await Promise.allSettled(this.inputPreparations);
   }
 
-  reserveInputPreparation(inputBytes: number): SqliteWorkerInputPreparation {
+  reserveInputPreparation(
+    inputBytes: number,
+    retention: SqliteWorkerInputRetention = "stream",
+  ): SqliteWorkerInputPreparation {
     if (!Number.isSafeInteger(inputBytes) || inputBytes < 0) {
       throw new RangeError("SQLite worker input bytes must be a non-negative safe integer");
     }
@@ -74,7 +81,9 @@ export class SqliteWorkerInputAdmission {
       throw new SqliteWorkerError("SQLite worker host is closing", "closed");
     }
     const bytes =
-      inputBytes > this.owner.maxQueuedInputBytes ? this.owner.maxMessageBytes : inputBytes;
+      retention === "stream" && inputBytes > this.owner.maxQueuedInputBytes
+        ? this.owner.maxMessageBytes
+        : inputBytes;
     if (this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes) {
       throw new SqliteWorkerError("SQLite worker input preparation capacity reached", "overloaded");
     }

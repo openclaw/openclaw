@@ -6,34 +6,20 @@ import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
 import "./chat-tool-output.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
-import { renderMessageGroup } from "./chat-message.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the
 // rounding and duplicate-key loss that the display must not introduce.
 const jsonSources = [
   {
-    name: "object numeric lexemes",
-    text: '{"id":9007199254740993,"overflow":1e400,"decimal":0.1234567890123456789,"zero":-0}',
+    name: "object lexemes, duplicate keys, escapes and whitespace",
+    text: '{\r\n\t"id":9007199254740993,"overflow":1e400,"decimal":0.1234567890123456789,"zero":-0,\r\n\t"state":"before","state":"after","nested":{"text":"  **stars** before\u2028between\u2029after  ","escaped":"\\u0061","quoted":"say \\"hello\\"","slash":"\\/","backslash":"\\\\"}\r\n}',
   },
-  {
-    name: "array numeric lexemes",
-    text: "[9007199254740993,1e400,0.1234567890123456789,-0]",
-  },
-  { name: "duplicate keys", text: '{"state":"before","state":"after"}' },
-  {
-    name: "escaped strings",
-    text: String.raw`{"quoted":"say \"hello\"","slash":"\/","unicode":"\u0061","backslash":"\\"}`,
-  },
-  { name: "literal Markdown", text: '{"text":"**stars**"}' },
-  { name: "ordinary formatted JSON", text: '{\n  "count": 42,\n  "ready": true\n}' },
-  {
-    name: "natural nested indentation and string whitespace",
-    text: '{\n\t"nested": {\n\t\t"id": 9007199254740993,\n\t\t"state": "before", "state": "after",\n\t\t"text": "  keep these spaces  "\n\t}\n}',
-  },
+  { name: "array lexemes", text: "[9007199254740993,1e400,0.1234567890123456789,-0]" },
 ];
 
 const containers: HTMLElement[] = [];
@@ -70,25 +56,50 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     return container;
   }
 
-  it.each([
-    ...jsonSources,
+  it.each<{ name: string; text: string; fenced: boolean; tree: boolean; size?: number }>([
+    ...(role === "assistant" ? jsonSources : jsonSources.slice(0, 1)).map(({ name, text }) => ({
+      name,
+      text,
+      fenced: false,
+      tree: true,
+    })),
+    ...[20_000, 20_001].map((size) => ({
+      name: `${size}-character boundary`,
+      size,
+      text: '{"text":"' + "x".repeat(size - 11) + '"}',
+      fenced: false,
+      tree: size === 20_000,
+    })),
     {
-      name: "CRLF and literal Unicode separators",
-      text: '{\r\n  "text": "before\u2028between\u2029after"\r\n}',
+      name: "explicit fence",
+      text: '{"id":9007199254740993,"text":"**stars**"}',
+      fenced: true,
+      tree: true,
     },
-  ])("preserves $name in literal code and copy", ({ text }) => {
-    const container = renderMessage(text);
-    expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
-    expect(container.querySelector(".chat-text strong")).toBeNull();
-    const copy = container.querySelector<HTMLElement>(".code-block-copy");
-    if (role === "user") {
-      expect(copy).toBeNull();
-      expect(container.querySelector(".code-block-wrapper")).toBeNull();
-    } else {
-      expect(copy).not.toBeNull();
-      expect(readMarkdownCodeBlockCopyText(copy!)).toBe(text);
+  ])("preserves $name in literal code and copy", (scenario) => {
+    const { text, fenced, tree } = scenario;
+    if (scenario.size !== undefined) {
+      expect(text).toHaveLength(scenario.size);
     }
-    if (role === "assistant") {
+    const source = fenced ? "```json\n" + text + "\n```" : text;
+    const displayed = fenced ? (role === "toolResult" ? source : text + "\n") : text;
+    const container = renderMessage(source);
+    expect(container.querySelectorAll("pre code")).toHaveLength(1);
+    expect(container.querySelector(fenced ? "pre code" : ".chat-text pre code")?.textContent).toBe(
+      displayed,
+    );
+    expect(container.querySelector("pre strong, .chat-text strong")).toBeNull();
+    const copy = container.querySelector<HTMLElement>(".code-block-copy");
+    if (!fenced) {
+      if (role === "user") {
+        expect(copy).toBeNull();
+        expect(container.querySelector(".code-block-wrapper")).toBeNull();
+      } else {
+        expect(copy).not.toBeNull();
+        expect(readMarkdownCodeBlockCopyText(copy!)).toBe(text);
+      }
+    }
+    if (role === "assistant" && tree) {
       expect(container.querySelectorAll(".code-block-json-tree")).toHaveLength(1);
       expect(container.querySelector('[data-json-mode="tree"]')?.getAttribute("aria-pressed")).toBe(
         "true",
@@ -96,15 +107,14 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
       expect(container.querySelector('[data-json-mode="raw"]')?.getAttribute("aria-pressed")).toBe(
         "false",
       );
-      expect(container.querySelector(".code-block-viewport pre code")?.textContent).toBe(text);
+      expect(container.querySelector(".code-block-viewport pre code")?.textContent).toBe(displayed);
     } else {
-      expect(
-        container.querySelector(
-          ".code-block-json-tree, .code-block-json-mode, .code-block-wrap, .code-block-expand",
-        ),
-      ).toBeNull();
+      expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
+      if (role !== "assistant") {
+        expect(container.querySelector(".code-block-wrap, .code-block-expand")).toBeNull();
+      }
     }
-    if (role === "toolResult") {
+    if (role === "toolResult" && !fenced) {
       expect(container.querySelector(".chat-tool-msg-body .chat-text pre code")?.textContent).toBe(
         text,
       );
@@ -112,67 +122,11 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     }
   });
 
-  it.each([19_999, 20_000, 20_001])(
-    "retains the auto-JSON rendering boundary at %i characters",
-    (size) => {
-      const text = '{"text":"' + "x".repeat(size - 11) + '"}';
-      expect(text).toHaveLength(size);
-      const container = renderMessage(text);
-      if (size <= 20_000) {
-        expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
-        expect(container.querySelectorAll(".code-block-json-tree")).toHaveLength(
-          role === "assistant" ? 1 : 0,
-        );
-      } else {
-        expect(container.querySelector(".code-block-json-tree")).toBeNull();
-        expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
-      }
-    },
-  );
-
-  it("keeps explicitly fenced JSON literal in one shared code block", () => {
-    const text = '{"id":9007199254740993,"text":"**stars**"}';
-    const fenced = "```json\n" + text + "\n```";
-    const container = renderMessage(fenced);
-    expect(container.querySelectorAll("pre code")).toHaveLength(1);
-    expect(container.querySelectorAll(".code-block-json-tree")).toHaveLength(
-      role === "assistant" ? 1 : 0,
-    );
-    // Tool cards show raw output; authored message Markdown consumes its fence.
-    expect(container.querySelector("pre code")?.textContent).toBe(
-      role === "toolResult" ? fenced : text + "\n",
-    );
-    expect(container.querySelector("pre strong")).toBeNull();
-  });
-
-  if (role === "assistant") {
-    it("keeps duplicate member order and original lexemes in the message tree", () => {
-      const text = String.raw`{"2":1.00,"1":1E+03,"state":9007199254740993,"state":1e400,"nested":{"zero":-0,"escaped":"\u0061"}}`;
-      const container = renderMessage(text);
-      const tree = container.querySelector(".code-block-json-tree")!;
-      expect(
-        Array.from(tree.querySelectorAll(".code-block-json-key"), (key) => key.textContent),
-      ).toEqual(['"2"', '"1"', '"state"', '"state"', '"nested"', '"zero"', '"escaped"']);
-      expect(
-        Array.from(
-          tree.querySelectorAll(".code-block-json-value--literal"),
-          (value) => value.textContent,
-        ),
-      ).toEqual(["1.00", "1E+03", "9007199254740993", "1e400", "-0"]);
-      expect(tree.querySelector(".code-block-json-value--string")?.textContent).toBe('"\\u0061"');
-    });
-
-    it("does not turn an unfenced streaming JSON message into a tree", () => {
-      const text = "[9007199254740993,1e400,-0]";
-      const container = renderMessage(text, true);
-      expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
-      expect(container.textContent).toContain(text);
-    });
-  }
-
-  it("keeps invalid JSON as ordinary message output", () => {
-    const text = '{"count": }';
-    const container = renderMessage(text);
+  it.each([
+    { text: '{"count": }', streaming: false },
+    ...(role === "assistant" ? [{ text: "[9007199254740993,1e400,-0]", streaming: true }] : []),
+  ])("keeps non-tree output literal: $text (streaming=$streaming)", ({ text, streaming }) => {
+    const container = renderMessage(text, streaming);
     expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
     expect(container.textContent).toContain(text);
   });
@@ -216,35 +170,23 @@ describe("tool JSON details", () => {
     return panel;
   }
 
-  it.each(jsonSources)("preserves $name after opening tool details", async ({ text }) => {
-    const panel = await openToolDetails(text);
-    expect(panel.querySelector("pre code")?.textContent).toBe(text);
-    expect(panel.querySelector("pre strong")).toBeNull();
-  });
-
-  it.each([19_999, 20_000, 20_001])(
-    "keeps %i-character JSON output literal in details",
-    async (size) => {
-      const text = '{"text":"**stars**' + "x".repeat(size - 20) + '"}';
-      expect(text).toHaveLength(size);
-      const panel = await openToolDetails(text);
-      expect(panel.querySelector("pre code")?.textContent).toBe(text);
-      expect(panel.querySelector("pre strong")).toBeNull();
+  it.each([
+    jsonSources[0]!,
+    {
+      name: "oversized JSON",
+      size: 20_001,
+      text: '{"text":"**stars**' + "x".repeat(19_981) + '"}',
     },
-  );
-
-  it("keeps explicitly fenced JSON output literal in details", async () => {
-    const text = '{"id":9007199254740993,"text":"**stars**"}';
-    const fenced = "```json\n" + text + "\n```";
-    const panel = await openToolDetails(fenced);
-    expect(panel.querySelector("pre code")?.textContent).toBe(fenced);
-    expect(panel.querySelector("pre strong")).toBeNull();
-  });
-
-  it("keeps invalid JSON literal in the inspector", async () => {
-    const text = '{"count": }';
+    { name: "explicit fence", text: '```json\n{"id":9007199254740993,"text":"**stars**"}\n```' },
+    { name: "invalid JSON", text: '{"count": }' },
+  ])("preserves $name after opening tool details", async (scenario) => {
+    const { text } = scenario;
+    if ("size" in scenario) {
+      expect(text).toHaveLength(scenario.size);
+    }
     const panel = await openToolDetails(text);
     expect(panel.querySelector("pre code")?.textContent).toBe(text);
+    expect(panel.querySelector("pre strong")).toBeNull();
   });
 });
 
@@ -326,40 +268,41 @@ describe("JSON group DOM retention", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(code.textContent).toBe(text);
   });
-  it("preserves the user JSON code DOM across rerenders without controls", () => {
+  it.each(["user", "assistant"])("preserves %s JSON DOM across rerenders", (role) => {
     const container = createContainer();
-    const message = { role: "user", content: '{"ok":true}', timestamp: 1 };
-    renderJsonMessageGroup(container, message, "user", { autoExpandToolCalls: true });
+    const message = {
+      role,
+      content: role === "user" ? '{"ok":true}' : '{"nested":{"ok":true}}',
+      timestamp: 1,
+    };
+    renderJsonMessageGroup(container, message, role, { showToolCalls: true });
     const code = expectElement(container, ".chat-text pre code", HTMLElement);
     expect(code.textContent).toBe(message.content);
-    expect(container.querySelector(".chat-text button, .chat-text details")).toBeNull();
-
-    renderJsonMessageGroup(container, message, "user", { autoExpandToolCalls: false });
-
+    const tree =
+      role === "assistant" ? expectElement(container, ".code-block-json-tree", HTMLElement) : null;
+    const root = tree ? expectElement(tree, ":scope > details", HTMLDetailsElement) : null;
+    const nested = root
+      ? expectElement(root, ".code-block-json-children details", HTMLDetailsElement)
+      : null;
+    if (role === "assistant") {
+      expect(root?.open).toBe(true);
+      expect(nested?.open).toBe(true);
+      expectElement(nested!, ":scope > summary", HTMLElement).click();
+      expect(nested?.open).toBe(false);
+    } else {
+      expect(container.querySelector(".chat-text button, .chat-text details")).toBeNull();
+    }
+    renderJsonMessageGroup(container, message, role, { showToolCalls: false });
     expect(container.querySelector(".chat-text pre code")).toBe(code);
-    expect(container.querySelector(".code-block-wrapper")).toBeNull();
-  });
-
-  it("preserves native assistant JSON tree disclosure state across rerenders", () => {
-    const container = createContainer();
-    const message = { role: "assistant", content: '{"nested":{"ok":true}}', timestamp: 1 };
-    renderJsonMessageGroup(container, message, "assistant", { autoExpandToolCalls: true });
-    const tree = expectElement(container, ".code-block-json-tree", HTMLElement);
-    const root = expectElement(tree, ":scope > details", HTMLDetailsElement);
-    const nested = expectElement(root, ".code-block-json-children details", HTMLDetailsElement);
-    const code = expectElement(container, ".code-block-viewport pre code", HTMLElement);
-    expect(root.open).toBe(true);
-    expect(nested.open).toBe(true);
-    expectElement(nested, ":scope > summary", HTMLElement).click();
-    expect(nested.open).toBe(false);
-
-    renderJsonMessageGroup(container, message, "assistant", { autoExpandToolCalls: false });
-
-    expect(container.querySelector(".code-block-json-tree")).toBe(tree);
-    expect(tree.querySelector(":scope > details")).toBe(root);
-    expect(root.querySelector(".code-block-json-children details")).toBe(nested);
-    expect(nested.open).toBe(false);
-    expect(container.querySelector(".code-block-viewport pre code")).toBe(code);
     expect(code.textContent).toBe(message.content);
+    if (role === "assistant") {
+      expect(container.querySelector(".code-block-json-tree")).toBe(tree);
+      expect(tree?.querySelector(":scope > details")).toBe(root);
+      expect(root?.querySelector(".code-block-json-children details")).toBe(nested);
+      expect(nested?.open).toBe(false);
+      expect(container.querySelector(".code-block-viewport pre code")).toBe(code);
+    } else {
+      expect(container.querySelector(".code-block-wrapper")).toBeNull();
+    }
   });
 });

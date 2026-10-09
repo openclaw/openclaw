@@ -8,6 +8,7 @@ import {
   type SpawnStdioEntry,
 } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type ClaudeCliSpawnOptions = Pick<
   CliBackendExecuteContext,
@@ -127,17 +128,7 @@ export function createClaudeCliProcessOwner(
       }
       // Process exit can precede stderr EOF. Descendants may keep the pipe open.
       if (child && (child.exitCode !== null || child.signalCode !== null)) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            drained,
-            new Promise<void>((resolve) => {
-              timer = setTimeout(resolve, STDERR_DRAIN_GRACE_MS);
-            }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
+        await raceWithTimeout(Promise.resolve(drained), STDERR_DRAIN_GRACE_MS, () => undefined);
       }
       if (disposed || currentContext() !== context || context.abortSignal?.aborted) {
         return error;

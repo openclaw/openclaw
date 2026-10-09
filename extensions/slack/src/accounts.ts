@@ -12,12 +12,12 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasSlackAccountCredentials } from "./account-configured.js";
-import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
+import {
+  buildSlackAccountSurfaceFields,
+  type SlackAccountSurfaceFields,
+} from "./account-surface-fields.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 
 export { resolveSlackReplyToMode } from "./account-reply-mode.js";
@@ -95,30 +95,11 @@ function resolveSlackAccountConfig(
 }
 
 type SlackStreamingConfig = NonNullable<SlackAccountConfig["streaming"]>;
-type SlackStreamingConfigValue = SlackStreamingConfig | boolean | string;
-
-function asStreamingConfigObject(value: unknown): SlackStreamingConfig | undefined {
-  return asOptionalRecord(value) as SlackStreamingConfig | undefined;
-}
-
-function asLegacyStreamingScalar(value: unknown): boolean | string | undefined {
-  return typeof value === "boolean" || typeof value === "string" ? value : undefined;
-}
 
 function mergeSlackStreamingConfig(
-  base: unknown,
-  account: unknown,
-): SlackStreamingConfigValue | undefined {
-  const accountObject = asStreamingConfigObject(account);
-  if (account !== undefined && !accountObject) {
-    return asLegacyStreamingScalar(account);
-  }
-  const baseObject = asStreamingConfigObject(base);
-  if (base !== undefined && !baseObject) {
-    return accountObject ?? asLegacyStreamingScalar(base);
-  }
-  const baseConfig = baseObject;
-  const accountConfig = accountObject;
+  baseConfig: SlackStreamingConfig | undefined,
+  accountConfig: SlackStreamingConfig | undefined,
+): SlackStreamingConfig | undefined {
   if (!baseConfig || !accountConfig) {
     return accountConfig ?? baseConfig;
   }
@@ -157,10 +138,10 @@ export function mergeSlackAccountConfig(
   const accountConfig = resolveSlackAccountConfig(cfg, accountId);
   const merged = resolveMergedSlackAccountConfig(cfg, accountId);
   const streaming = mergeSlackStreamingConfig(
-    (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
-    (accountConfig as Record<string, unknown> | undefined)?.streaming,
+    cfg.channels?.slack?.streaming,
+    accountConfig?.streaming,
   );
-  return streaming !== undefined ? ({ ...merged, streaming } as SlackAccountConfig) : merged;
+  return streaming !== undefined ? { ...merged, streaming } : merged;
 }
 
 export function resolveSlackAccountAllowFrom(params: {
@@ -253,17 +234,7 @@ export function resolveSlackAccount(params: {
     appTokenSource,
     userTokenSource,
     config: merged,
-    groupPolicy: merged.groupPolicy,
-    textChunkLimit: merged.textChunkLimit,
-    mediaMaxMb: merged.mediaMaxMb,
-    reactionNotifications: merged.reactionNotifications,
-    reactionAllowlist: merged.reactionAllowlist,
-    replyToMode: merged.replyToMode,
-    replyToModeByChatType: merged.replyToModeByChatType,
-    actions: merged.actions,
-    slashCommand: merged.slashCommand,
-    dm: merged.dm,
-    channels: merged.channels,
+    ...buildSlackAccountSurfaceFields(merged),
   };
 }
 

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
@@ -23,6 +23,7 @@ import {
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
@@ -46,7 +47,6 @@ it("keeps embedded completion pending until its incognito pause fences the next 
       lifecycleRunId: runId,
       updatedAt: 1_000,
       startedAt: 1_000,
-      status: "running" as const,
     };
     writeSessionEntry(database, target.sessionKey, entry);
     appendTranscriptMessageSync(
@@ -115,7 +115,9 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         await release.promise;
       });
       await entered.promise;
-      const owner = createSessionLifecyclePersistenceOwner();
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      const owner = createSessionLifecyclePersistenceOwner(scheduler);
       const persistence = owner.observe({
         sessionKey: target.sessionKey,
         agentId: "main",
@@ -176,6 +178,7 @@ it("records an incognito pause in its existing terminal entry write and fences s
       "writer",
       "newer-review",
       "old-event",
+      "revoked",
     ] as const) {
       const runId = `review-terminal-${variant}`;
       const target = {
@@ -202,7 +205,6 @@ it("records an incognito pause in its existing terminal entry write and fences s
         lifecycleRunId: variant === "writer" ? "replacement-writer" : runId,
         updatedAt: 1_000,
         startedAt: 1_000,
-        status: "running" as const,
         ...(variant === "newer-review"
           ? { providerReview: { ...review, id: "newer-review" } }
           : {}),
@@ -220,6 +222,12 @@ it("records an incognito pause in its existing terminal entry write and fences s
           },
         },
       );
+      let current = true;
+      const assertSourceCurrent = () => {
+        if (!current) {
+          throw new Error("Source authority expired");
+        }
+      };
       const lifecycleGeneration = getAgentRunLifecycleGeneration();
       registerAgentRunContext(runId, {
         agentId: target.agentId,
@@ -227,6 +235,7 @@ it("records an incognito pause in its existing terminal entry write and fences s
         sessionKey: target.sessionKey,
         lifecycleGeneration,
         lifecycleStartedAt: 1_000,
+        assertSourceCurrent,
       });
       try {
         if (variant !== "ordinary") {
@@ -235,7 +244,7 @@ it("records an incognito pause in its existing terminal entry write and fences s
             target,
             review,
             expectedWriterRunId: runId,
-            assertCurrent() {},
+            assertCurrent: assertSourceCurrent,
           });
         }
         const fact = readAgentRunProviderReview(runId);
@@ -259,11 +268,26 @@ it("records an incognito pause in its existing terminal entry write and fences s
             : null,
         );
         try {
-          await persistGatewaySessionLifecycleEvent({
+          const persistence = persistGatewaySessionLifecycleEvent({
             sessionKey: target.sessionKey,
             agentId: "main",
             event,
+            ...(variant === "revoked"
+              ? {
+                  assertCommitAllowed: () => {
+                    current = false;
+                  },
+                }
+              : {}),
           });
+          if (variant === "revoked") {
+            await expect(persistence).rejects.toThrow("Source authority expired");
+            expect(
+              readExactSessionEntryRow(database, target.sessionKey)?.entry.status,
+            ).toBeUndefined();
+          } else {
+            await persistence;
+          }
           // The normal lifecycle write already owns entry serialization; a pause adds no second write.
           expect(statements.counts.entryWrite).toBeLessThanOrEqual(1);
           if (variant === "current" || variant === "ordinary") {
@@ -278,82 +302,6 @@ it("records an incognito pause in its existing terminal entry write and fences s
       } finally {
         clearAgentRunContext(runId, lifecycleGeneration);
       }
-    }
-  });
-});
-
-it("refuses an incognito terminal review when its source authority expires before commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const runId = "review-terminal-revoked";
-    const target = {
-      agentId: "main",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-      sessionKey: "agent:main:dashboard:incognito-revoked",
-      sessionId: "review-revoked",
-      lifecycleRevision: "generation-1",
-    };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: target.storePath });
-    writeSessionEntry(database, target.sessionKey, {
-      sessionId: target.sessionId,
-      lifecycleRevision: target.lifecycleRevision,
-      activeWriterRunId: runId,
-      lifecycleRunId: runId,
-      updatedAt: 1_000,
-      status: "running",
-    });
-    let current = true;
-    const assertSourceCurrent = () => {
-      if (!current) {
-        throw new Error("Source authority expired");
-      }
-    };
-    const lifecycleGeneration = getAgentRunLifecycleGeneration();
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      lifecycleGeneration,
-      assertSourceCurrent,
-    });
-    try {
-      captureAgentRunProviderReview({
-        runId,
-        target,
-        expectedWriterRunId: runId,
-        assertCurrent: assertSourceCurrent,
-        review: {
-          id: "revoked-review",
-          sessionId: target.sessionId,
-          runId,
-          provider: "openai",
-          model: "test-model",
-          runtimeId: "codex",
-        },
-      });
-      await expect(
-        persistGatewaySessionLifecycleEvent({
-          sessionKey: target.sessionKey,
-          agentId: "main",
-          event: {
-            runId,
-            sessionId: target.sessionId,
-            lifecycleGeneration,
-            ts: Date.now(),
-            data: { phase: "end", stopReason: "error" },
-          },
-          assertCommitAllowed: () => {
-            current = false;
-          },
-        }),
-      ).rejects.toThrow("Source authority expired");
-      expect(readExactSessionEntryRow(database, target.sessionKey)?.entry).toMatchObject({
-        status: "running",
-      });
-      expect(
-        readExactSessionEntryRow(database, target.sessionKey)?.entry.providerReview,
-      ).toBeUndefined();
-    } finally {
-      clearAgentRunContext(runId, lifecycleGeneration);
     }
   });
 });

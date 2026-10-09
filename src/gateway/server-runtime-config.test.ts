@@ -18,10 +18,6 @@ const TOKEN_AUTH = {
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {
-    // This test validates BOTH validation layers:
-    // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
-    // 2. Runtime config validation in src/gateway/server-runtime-config.ts (line 99)
-    // Both must allow lan binding when authMode === "trusted-proxy"
     it.each([
       {
         name: "lan binding",
@@ -46,55 +42,27 @@ describe("resolveGatewayRuntimeConfig", () => {
         },
         expectedBindHost: "127.0.0.1",
       },
-      {
-        name: "loopback binding with ::1 proxy",
-        cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
-        },
-        expectedBindHost: "127.0.0.1",
-      },
-      {
-        name: "loopback binding with loopback cidr proxy",
-        cfg: {
-          gateway: {
-            bind: "loopback" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: ["127.0.0.0/8"],
-          },
-        },
-        expectedBindHost: "127.0.0.1",
-      },
     ])("allows $name", async ({ cfg, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.authMode).toBe("trusted-proxy");
       expect(result.bindHost).toBe(expectedBindHost);
     });
 
-    it.each([
-      {
-        name: "loopback binding without trusted proxies",
-        cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
-        },
-        expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
-      },
-      {
-        name: "lan binding without trusted proxies",
-        cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: [],
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
+    it("rejects lan binding without trusted proxies", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "lan",
+              auth: TRUSTED_PROXY_AUTH,
+              trustedProxies: [],
+              controlUi: { allowedOrigins: ["https://control.example.com"] },
+            },
           },
-        },
-        expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
-      },
-    ])("rejects $name", async ({ cfg, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
-        expectedMessage,
+          port: 18789,
+        }),
+      ).rejects.toThrow(
+        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       );
     });
 

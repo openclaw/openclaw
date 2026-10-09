@@ -84,20 +84,16 @@ describe("chat selection popup", () => {
     buttons[actionIndex]?.click();
     const [called, untouched] =
       actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
-    if (actionIndex === 0) {
-      expect(called).toHaveBeenCalledWith(
-        {
-          text: "Let's Encrypt cert",
-          start: 0,
-          end: 18,
-          messageId: "assistant-1",
-          entryId: "entry-1",
-        },
-        expect.objectContaining({ top: 100, left: 100 }),
-      );
-    } else {
-      expect(called).toHaveBeenCalledWith("Let's Encrypt cert");
-    }
+    expect(called).toHaveBeenCalledWith(
+      {
+        text: "Let's Encrypt cert",
+        start: 0,
+        end: 18,
+        messageId: "assistant-1",
+        entryId: "entry-1",
+      },
+      expect.objectContaining({ top: 100, left: 100 }),
+    );
     expect(untouched).not.toHaveBeenCalled();
     expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
@@ -173,7 +169,10 @@ describe("chat selection popup", () => {
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
 
     expect(firstAskSideChat).not.toHaveBeenCalled();
-    expect(secondAskSideChat).toHaveBeenCalledWith("replacement");
+    expect(secondAskSideChat).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "replacement" }),
+      expect.anything(),
+    );
   });
 
   it("dismisses when the selection collapses", () => {
@@ -260,6 +259,44 @@ describe("chat annotation editor", () => {
     );
     expect(onSave).toHaveBeenCalledWith("  Why this? 🦞\nKeep the next line.  ");
   });
+
+  it.each([
+    { modifiers: {}, release: "keyup" },
+    { modifiers: { ctrlKey: true }, release: "blur" },
+    { modifiers: { metaKey: true }, release: "timeout" },
+  ])(
+    "keeps the comment editor open on Safari composition-confirm Enter: %j",
+    ({ modifiers, release }) => {
+      const { input, onSave } = editor({ comment: "日本語" });
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+      input.dispatchEvent(end);
+      for (const offset of [1, 100]) {
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        });
+        Object.defineProperty(enter, "timeStamp", {
+          value: end.timeStamp + (release === "timeout" ? offset : 1),
+        });
+        if (offset === 100 && release !== "timeout") {
+          input.dispatchEvent(
+            release === "blur"
+              ? new FocusEvent("blur")
+              : new KeyboardEvent("keyup", { key: "Enter" }),
+          );
+        }
+        input.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(offset === 100);
+        expect(onSave).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
+        expect(document.querySelector("[role=dialog]") !== null).toBe(offset !== 100);
+      }
+      expect(onSave).toHaveBeenCalledWith("日本語");
+    },
+  );
 
   it.each([{ isComposing: true }, { keyCode: 229 }])(
     "preserves unsaved comments when Escape dismisses IME candidates: %j",

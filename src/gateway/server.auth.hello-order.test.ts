@@ -2,8 +2,12 @@ import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
-import type { SystemPresence } from "../infra/system-presence.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { upsertPresence, type SystemPresence } from "../infra/system-presence.js";
+import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -13,6 +17,7 @@ import {
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import { connectWatchNode } from "./watch-node-http.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -80,6 +85,44 @@ function presenceReasons(frames: ObservedFrame[], instanceId: string) {
 }
 
 describe("Gateway hello publication", () => {
+  test("publishes an HTTP node replacing an undelivered WebSocket presence row", async () => {
+    await configureAuth();
+    await withGatewayServer(async ({ port }) => {
+      const reader = await openBrowser(port, "http-presence-reader");
+      try {
+        expect((await reader.connect()).ok).toBe(true);
+        const identity = loadOrCreateDeviceIdentity({ identityKey: "hello-http-node" });
+        const issued = await issueDevicePairSetupBootstrapToken({
+          profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        upsertPresence(
+          identity.deviceId,
+          { connectionId: "undelivered-ws", deviceId: identity.deviceId, reason: "connect" },
+          { pending: true },
+        );
+        const published = onceMessage<ObservedFrame>(
+          reader.socket,
+          (frame) =>
+            frame.event === "presence" &&
+            frame.payload?.presence?.some((entry) => entry.deviceId === identity.deviceId) === true,
+        );
+        const response = await connectWatchNode({
+          baseUrl: `http://127.0.0.1:${port}/api/nodes/watch`,
+          identity,
+          bootstrapToken: issued.token,
+        });
+        expect(response.status).toBe(200);
+        const entry = (await published).payload?.presence?.find(
+          (row) => row.deviceId === identity.deviceId,
+        );
+        expect(entry).toMatchObject({ reason: "connect", connectionId: expect.any(String) });
+        expect(entry?.connectionId).not.toBe("undelivered-ws");
+      } finally {
+        reader.socket.close();
+      }
+    });
+  });
+
   test("sends hello before connect presence and promptly notifies established readers", async () => {
     await configureAuth();
     await withGatewayServer(async ({ port }) => {
@@ -118,6 +161,8 @@ describe("Gateway hello publication", () => {
       await withGatewayServer(async ({ port }) => {
         const reader = await openBrowser(port, "established-reader");
         const joining = await openBrowser(port, failedInstanceId);
+        const publisher = await openBrowser(port, "presence-publisher");
+        const pendingHello = createDeferred<() => void>();
         let failNextHello = true;
         try {
           expect((await reader.connect()).ok).toBe(true);
@@ -129,14 +174,17 @@ describe("Gateway hello publication", () => {
             if (failNextHello && typeof args[0] === "string" && args[0].includes('"hello-ok"')) {
               failNextHello = false;
               const callback = args.findLast((arg) => typeof arg === "function");
-              if (failure === "closed-before-callback") {
-                this.close(1000, "test close before hello");
+              if (typeof callback !== "function") {
+                throw new Error("hello delivery requires a callback");
               }
-              if (typeof callback === "function") {
+              pendingHello.resolve(() => {
+                if (failure === "closed-before-callback") {
+                  this.close(1000, "test close before hello");
+                }
                 callback(
                   failure === "write-error" ? new Error("test hello write failure") : undefined,
                 );
-              }
+              });
               return;
             }
             Reflect.apply(originalSend, this, args);
@@ -155,6 +203,23 @@ describe("Gateway hello publication", () => {
               expect(joining.connect()).rejects.toThrow(/closed/),
               closed,
               disconnected,
+              (async () => {
+                const failHello = await pendingHello.promise;
+                try {
+                  const published = onceMessage<ObservedFrame>(
+                    reader.socket,
+                    (frame) =>
+                      frame.event === "presence" &&
+                      frame.payload?.presence?.some(
+                        (entry) => entry.instanceId === "presence-publisher",
+                      ) === true,
+                  );
+                  const [result] = await Promise.all([publisher.connect(), published]);
+                  expect(result.ok).toBe(true);
+                } finally {
+                  failHello();
+                }
+              })(),
             ]);
             expect(failNextHello).toBe(false);
             const reasons = presenceReasons(reader.frames, failedInstanceId);
@@ -164,6 +229,7 @@ describe("Gateway hello publication", () => {
             sendSpy.mockRestore();
           }
         } finally {
+          publisher.socket.close();
           joining.socket.close();
           reader.socket.close();
         }

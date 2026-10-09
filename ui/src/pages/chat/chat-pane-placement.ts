@@ -26,6 +26,10 @@ export type PlacementComposerPresentation = {
   busyMessage: string | null;
   startup: ApplicationPlacementStartupStatus | null;
   diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
+  workerRuntimeInstall: Extract<
+    NonNullable<GatewaySessionRow["placement"]>,
+    { state: "active" | "provisioning" }
+  >["workerRuntimeInstall"];
   runError: { summary: string } | null;
   failedUnavailableMessage: string;
   disabledBanner: ChatComposerDisabledBanner | undefined;
@@ -117,22 +121,35 @@ export function resolvePlacementComposer(params: {
   const canSendDuringSetup = state.kind === "setup" && !params.startupPending;
   const busyMessage = !params.startupPending && state.kind === "busy" ? state.message : null;
   const placement = params.row?.placement;
+  const canRecoverOnSend =
+    !params.startupPending &&
+    state.kind === "failed" &&
+    placement?.state === "failed" &&
+    placement.retryOnSend === true;
   const terminalReason =
     placement && "terminalReason" in placement ? placement.terminalReason : undefined;
   const failureReason = placement?.state === "failed" ? placement.recoveryError : terminalReason;
   const common = {
     state,
-    blocksSend: state.kind !== "ready" && !canSendDuringWorkspaceSync && !canSendDuringSetup,
+    blocksSend:
+      state.kind !== "ready" &&
+      !canSendDuringWorkspaceSync &&
+      !canSendDuringSetup &&
+      !canRecoverOnSend,
     busyMessage,
     startup: state.kind === "setup" ? state.startup : null,
     diskSpace: placement?.state === "active" ? placement.diskSpace : undefined,
+    workerRuntimeInstall:
+      placement?.state === "active" || placement?.state === "provisioning"
+        ? placement.workerRuntimeInstall
+        : undefined,
     runError:
       failureReason && !controls.restarting
         ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }
         : null,
     failedUnavailableMessage: t("sessionsView.failedSessionUnavailable"),
   };
-  if (params.startupPending || !params.row) {
+  if (params.startupPending || !params.row || canRecoverOnSend) {
     return { ...common, disabledBanner: undefined };
   }
   const dispatchRequired = state.kind === "dispatch-required";
@@ -255,18 +272,11 @@ export function resolveChatPanePlacement(params: {
   const reclaiming = params.reclaimingKey === params.row?.key;
   const restarting = params.restartingKey === params.row?.key;
   const action = resolveCloudWorkerStopAction(params.row?.placement);
-  const moveAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.move",
-    requiredScope: "operator.write",
-  });
-  const reclaimAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
-  const restartAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.dispatch",
-    requiredScope: "operator.write",
-  });
+  const readWriteAccess = (method: string) =>
+    readSessionMethodAccess(params.gatewaySnapshot, { method, requiredScope: "operator.write" });
+  const moveAccess = readWriteAccess("sessions.move");
+  const reclaimAccess = readWriteAccess("sessions.reclaim");
+  const restartAccess = readWriteAccess("sessions.dispatch");
   const placementState = params.row?.placement?.state;
   const dispatchRequired = repositorySessionNeedsWorker(params.row);
   const recoveryAction =
@@ -275,13 +285,11 @@ export function resolveChatPanePlacement(params: {
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const moveDisabledReason = moving
     ? t("common.loading")
-    : reclaiming
+    : reclaiming || placementState !== "active"
       ? t("sessionsView.actionUnavailable")
-      : placementState !== "active"
-        ? t("sessionsView.actionUnavailable")
-        : moveAccess.allowed
-          ? undefined
-          : moveAccess.reason;
+      : moveAccess.allowed
+        ? undefined
+        : moveAccess.reason;
   const recoveryDisabledReason = restarting
     ? t("common.loading")
     : moving || reclaiming || (!dispatchRequired && recoveryAction !== "restart")

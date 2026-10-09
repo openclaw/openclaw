@@ -6,32 +6,14 @@ import { createReplyTurnLedger } from "../../auto-reply/reply/dispatch-from-conf
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
-import type { DurableMessageBatchSendParams } from "../message/send.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
-import {
-  createCtx,
-  createDurableSendResult,
-  expectDispatched,
-} from "./run-channel-turn.delivery.test-helpers.js";
+import { createCtx, expectDispatched } from "./run-channel-turn.delivery.test-helpers.js";
 
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
-const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
-const sendStructuredDurableMessageBatch = vi.hoisted(() => vi.fn());
-const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
-const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
-const createMessageSentEmitter = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/outbound/message-sent-hook.js").createMessageSentEmitter>(),
+const sendStructuredDurableMessageBatch = vi.hoisted(() =>
+  vi.fn<typeof import("../message/send.js").sendStructuredDurableMessageBatchCore>(),
 );
-
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  return {
-    ...actual,
-    dispatchInboundMessageWithRoutedChannelDispatcher: dispatchReplyWithRoutedChannelDispatcherCore,
-  };
-});
-
-vi.mock("../../infra/outbound/message-sent-hook.js", () => ({ createMessageSentEmitter }));
+const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
@@ -42,7 +24,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
   return {
     ...actual,
-    sendDurableMessageBatchCore: sendDurableMessageBatch,
+    sendDurableMessageBatchCore: vi.fn(),
     sendStructuredDurableMessageBatchCore: sendStructuredDurableMessageBatch,
   };
 });
@@ -61,15 +43,6 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
 }));
 
-vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/delivery-completion.js")>();
-  return {
-    ...actual,
-    settlePendingFinalDelivery: vi.fn(async (_completion: unknown, state: string) => ({ state })),
-  };
-});
-
 describe("group thread channel delivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,23 +51,12 @@ describe("group thread channel delivery", () => {
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
   });
 
-  it.each(
-    ["deferred direct", "durable"].flatMap((lane) =>
-      [false, true].map((prepared) => ({ lane, prepared })),
-    ),
-  )(
+  it.each([
+    { lane: "deferred direct", prepared: false },
+    { lane: "durable", prepared: true },
+  ])(
     "attributes group $lane delivery to each participant (prepared: $prepared)",
     async ({ lane, prepared }) => {
-      const actualDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-        "../../auto-reply/dispatch.js",
-      );
-      const actualSent = await vi.importActual<
-        typeof import("../../infra/outbound/message-sent-hook.js")
-      >("../../infra/outbound/message-sent-hook.js");
-      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
-        actualDispatch.dispatchInboundMessageWithRoutedChannelDispatcher,
-      );
-      createMessageSentEmitter.mockImplementation(actualSent.createMessageSentEmitter);
       const runMessageSending = vi.fn(async () => undefined);
       const runMessageSent = vi.fn(async () => undefined);
       getGlobalHookRunner.mockReturnValue({
@@ -103,25 +65,15 @@ describe("group thread channel delivery", () => {
         runMessageSent,
       });
       const token = createExecutionIdentityAdmissionToken("run-alice");
-      const durableRequests: DurableMessageBatchSendParams[] = [];
-      const durableSend = async (request: DurableMessageBatchSendParams) => {
-        durableRequests.push(request);
-        return createDurableSendResult([`sent-${request.payloads[0]?.text}`]);
-      };
-      if (lane === "durable" && !prepared) {
-        sendDurableMessageBatch
-          .mockImplementationOnce(durableSend)
-          .mockImplementationOnce(durableSend);
-      }
-      if (lane === "durable" && prepared) {
-        sendStructuredDurableMessageBatch.mockImplementation(
-          ({
-            plan,
-            ...request
-          }: Parameters<
-            typeof import("../message/send.js").sendStructuredDurableMessageBatchCore
-          >[0]) => durableSend({ ...request, payloads: plan.map((entry) => entry.payload) }),
-        );
+      if (lane === "durable") {
+        sendStructuredDurableMessageBatch.mockImplementation(async ({ plan, channel }) => {
+          const messageId = `sent-${plan[0]?.payload.text}`;
+          return {
+            status: "sent",
+            results: [{ channel, messageId }],
+            receipt: { platformMessageIds: [messageId], parts: [], sentAt: 1 },
+          };
+        });
       }
       const deliver = async (payload: ReplyPayload) => ({
         visibleReplySent: false,
@@ -181,6 +133,9 @@ describe("group thread channel delivery", () => {
 
       expectDispatched(result);
       if (lane === "durable") {
+        const durableRequests = sendStructuredDurableMessageBatch.mock.calls.map(
+          ([request]) => request,
+        );
         expect(durableRequests).toHaveLength(2);
         for (const agentId of ["alice", "bob"]) {
           const request = durableRequests.find((entry) => entry.session?.agentId === agentId);

@@ -13,7 +13,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
   const classification = reason ? ({ kind: "reason", reason } as const) : null;
   return {
-    reason: classification?.kind === "reason" ? classification.reason : undefined,
+    reason: reason || undefined,
     code: described.code,
     provider: described.provider,
     model: described.model,

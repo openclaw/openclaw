@@ -1,10 +1,10 @@
-// QA Lab WhatsApp driver lifecycle and no-reply waits.
 import {
   startWhatsAppQaDriverSession,
   type WhatsAppQaDriverObservedMessage,
   type WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
 import {
   isWhatsAppScenarioSutMessage,
@@ -51,9 +51,23 @@ export async function waitForNoWhatsAppReply(
   await new Promise((resolve) => {
     setTimeout(resolve, params.windowMs);
   });
-  const unexpectedReply = findUnexpectedWhatsAppNoReplyMessage({
-    ...params,
-    messages: params.driver.getObservedMessages(),
+  const observedAfterMs = params.observedAfter.getTime();
+  const unexpectedReply = params.driver.getObservedMessages().find((message) => {
+    if (new Date(message.observedAt).getTime() <= observedAfterMs) {
+      return false;
+    }
+    const fromExpectedSut = isWhatsAppScenarioSutMessage(message, {
+      observedAfter: params.observedAfter,
+      sutPhoneE164: params.sutPhoneE164,
+      target: params.target === "group" ? params.groupJid : "",
+      targetKind: params.target,
+    });
+    const missingGroupSender =
+      params.target === "group" && message.fromJid === params.groupJid && !message.fromPhoneE164;
+    if (!fromExpectedSut && !missingGroupSender) {
+      return false;
+    }
+    return !(params.allowQuietWindowMessage?.(message) ?? false);
   });
   if (unexpectedReply) {
     throw new Error("unexpected WhatsApp reply observed in quiet scenario");
@@ -125,41 +139,9 @@ export async function waitForDistinctWhatsAppSutMessages(
     .map(([, message]) => message);
 }
 
-function findUnexpectedWhatsAppNoReplyMessage(
-  params: {
-    allowQuietWindowMessage?: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    messages: WhatsAppQaDriverObservedMessage[];
-    observedAfter: Date;
-    sutPhoneE164: string;
-  } & WhatsAppQaNoReplyTarget,
-): WhatsAppQaDriverObservedMessage | undefined {
-  const observedAfterMs = params.observedAfter.getTime();
-  return params.messages.find((message) => {
-    if (new Date(message.observedAt).getTime() <= observedAfterMs) {
-      return false;
-    }
-    const fromExpectedSut = isWhatsAppScenarioSutMessage(message, {
-      observedAfter: params.observedAfter,
-      sutPhoneE164: params.sutPhoneE164,
-      target: params.target === "group" ? params.groupJid : "",
-      targetKind: params.target,
-    });
-    const missingGroupSender =
-      params.target === "group" && message.fromJid === params.groupJid && !message.fromPhoneE164;
-    if (!fromExpectedSut && !missingGroupSender) {
-      return false;
-    }
-    return !(params.allowQuietWindowMessage?.(message) ?? false);
-  });
-}
-
 export function isTransientWhatsAppQaDriverError(error: unknown) {
-  const message = formatErrorMessage(error);
-  return (
-    /\bConnection Closed\b/iu.test(message) ||
-    /\bconflict\b/iu.test(message) ||
-    /\bpending notifications\b/iu.test(message) ||
-    /\bsession conflict\b/iu.test(message)
+  return /\b(?:Connection Closed|conflict|pending notifications)\b/iu.test(
+    formatErrorMessage(error),
   );
 }
 
@@ -172,10 +154,7 @@ export async function restartWhatsAppQaDriverSession(params: {
 }
 
 export async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }) {
-  for (const attempt of Array.from(
-    { length: WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS },
-    (_, index) => index + 1,
-  )) {
+  for (let attempt = 1; attempt <= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS; attempt += 1) {
     try {
       return await startWhatsAppQaDriverSession({
         authDir: params.authDir,
@@ -188,9 +167,7 @@ export async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: s
       ) {
         throw error;
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
-      });
+      await sleep(WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
     }
   }
   throw new Error("unreachable WhatsApp QA driver retry loop exit");

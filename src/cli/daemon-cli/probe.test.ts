@@ -1,4 +1,5 @@
 // Daemon probe tests cover gateway probe command behavior and output.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { assert, describe, expect, it, vi } from "vitest";
 import { gatewayProbeResultSawGateway } from "../../commands/gateway-health-auth-diagnostic.js";
 import { probeGatewayStatus } from "./probe.js";
@@ -95,6 +96,7 @@ describe("probeGatewayStatus", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(probeGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
+      configuredRemote: false,
       auth: {
         token: "temp-token",
         password: undefined,

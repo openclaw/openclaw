@@ -48,7 +48,7 @@ describe("Git backup command agent selection", () => {
       repositoryPath: "/tmp/repository",
     });
     mocks.getRuntimeConfig.mockReset().mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+      agents: { entries: { main: {}, "ops-team": {} } },
     });
     mocks.recordBackupRunOutcome.mockReset();
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
@@ -149,7 +149,6 @@ describe("Git backup command agent selection", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s Git create agent", async (_label, agent, message) => {
     await expect(

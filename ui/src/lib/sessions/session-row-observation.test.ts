@@ -505,40 +505,46 @@ describe("session row observations", () => {
     },
   );
 
-  it("keeps a descriptor lease when a different-ID event has no admitted roster member", async () => {
-    const h = await descriptorOwner(workRow);
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        agentId: "work",
-        reason: "create",
-        session: { ...workRow, sessionId: "unadmitted-work-session", updatedAt: 1_000 },
-        ts: 1_000,
-      },
-    });
-    expect(h.observation.isCurrent()).toBe(true);
-    expect(h.observation.row).toMatchObject(workRow);
-    expect(h.changed).not.toHaveBeenCalled();
-    h.keepMain();
-  });
-
-  it("seeds a live descriptor past an unobserved primary incarnation", async () => {
-    const h = await descriptorOwner(workRow);
-    const unobserved = { ...workRow, sessionId: "unobserved-work-session", updatedAt: 100 };
-    expect(
-      h.sessions.reconcile(unobserved, undefined, {
-        resultAgentId: "work",
-        selectedGlobalAgentId: "work",
-        archivedFilter: "all",
-      }),
-    ).toBe(true);
-    expect(h.sessions.state.result?.sessions).toEqual([unobserved]);
-    expect(h.observation.row).toMatchObject(workRow);
-    const observation = h.sessions.observeRow({ key: "global", agentId: "work" }, () => undefined);
-    h.disposers.push(observation.dispose);
-    expect(observation.row).toMatchObject(workRow);
-  });
+  it.each(["unadmitted event", "unobserved primary"] as const)(
+    "keeps a live descriptor past an %s incarnation",
+    async (source) => {
+      const h = await descriptorOwner(workRow);
+      if (source === "unadmitted event") {
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            agentId: "work",
+            reason: "create",
+            session: { ...workRow, sessionId: "unadmitted-work-session", updatedAt: 1_000 },
+            ts: 1_000,
+          },
+        });
+        expect(h.observation.isCurrent()).toBe(true);
+        expect(h.changed).not.toHaveBeenCalled();
+        h.keepMain();
+      } else {
+        const unobserved = { ...workRow, sessionId: "unobserved-work-session", updatedAt: 100 };
+        expect(
+          h.sessions.reconcile(unobserved, undefined, {
+            resultAgentId: "work",
+            selectedGlobalAgentId: "work",
+            archivedFilter: "all",
+          }),
+        ).toBe(true);
+        expect(h.sessions.state.result?.sessions).toEqual([unobserved]);
+      }
+      expect(h.observation.row).toMatchObject(workRow);
+      if (source === "unobserved primary") {
+        const observation = h.sessions.observeRow(
+          { key: "global", agentId: "work" },
+          () => undefined,
+        );
+        h.disposers.push(observation.dispose);
+        expect(observation.row).toMatchObject(workRow);
+      }
+    },
+  );
 
   it("settles the descriptor-only run without donating the preceding run's timing or changing Main", async () => {
     const initial: GatewaySessionRow = {
@@ -749,106 +755,33 @@ describe("session row observations", () => {
     await list.settled;
   });
 
-  it("keeps a foreign owner's global facts separate even when durable session IDs are equal", async () => {
-    const initial = { ...workRow, sessionId: "shared-session-id" };
-    const h = await descriptorOwner(initial, { ...mainRow, sessionId: initial.sessionId });
-    const query = { agentId: "work", search: "Work", limit: 1 };
-    const managed = h.sessions.observeList(query, () => undefined);
-    h.disposers.push(managed.dispose);
-    h.reply("sessions.list", query, sessionsResult([initial], 200));
-    await managed.refresh();
-    const managedBefore = h.sessions.listSnapshot(query).result;
-    h.changed.mockClear();
-    const list = h.holdWorkList();
-    const before = h.observation.row;
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: "global",
-        agentId: "research",
-        sessionId: initial.sessionId,
-        reason: "patch",
-        ts: 1_000,
-        updatedAt: 1_000,
-        label: "Foreign descriptor",
-        status: "done",
-        hasActiveRun: false,
-        activeRunIds: [],
-      },
-    });
-    expect(h.observation.row).toBe(before);
-    expect(h.changed).not.toHaveBeenCalled();
-    h.keepMain();
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: "global",
-        agentId: "research",
-        sessionId: initial.sessionId,
-        reason: "delete",
-        ts: 1_100,
-      },
-    });
-    expect.soft(h.sessions.listSnapshot(query).result).toBe(managedBefore);
-    expect.soft(h.sessions.listSnapshot(query).result?.sessions).toMatchObject([initial]);
-    expect(h.observation.row).toBe(before);
-    expect(h.changed).not.toHaveBeenCalled();
-    h.keepMain();
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: "global",
-        agentId: "work",
-        sessionId: initial.sessionId,
-        reason: "patch",
-        ts: 250,
-        updatedAt: 250,
-        label: "Owned descriptor",
-      },
-    });
-    expect(h.observation.row).toMatchObject({
-      ...initial,
-      updatedAt: 250,
-      label: "Owned descriptor",
-    });
-    expect(h.changed).toHaveBeenCalledOnce();
-    expect.soft(h.sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Owned descriptor");
-    h.keepMain();
-    list.response.resolve(sessionsResult([initial], 200));
-    await list.settled;
-    expect(h.sessions.state.result?.sessions[0]?.label).toBe("Owned descriptor");
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: "global",
-        agentId: "work",
-        sessionId: initial.sessionId,
-        reason: "delete",
-        ts: 1_200,
-      },
-    });
-    expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([]);
-    expect(h.observation.row).toBeNull();
-    expect(h.sessions.state.agentId).toBe("work");
-    expect(h.sessions.state.result?.sessions).toEqual([]);
-  });
-
-  it.each(["global", "unknown"] as const)(
-    "keeps the projected %s owner in a normal All-agents query",
-    async (key) => {
-      const primary = { ...mainRow, key, kind: key, sessionId: "shared-sentinel-session" };
-      const h = await descriptorOwner(workRow, primary);
-      const query = {
-        limit: 50,
-        includeGlobal: true,
-        includeUnknown: true,
-        includeDerivedTitles: false,
-        includeLastMessage: false,
+  it.each([
+    { key: "global", owner: "work" },
+    { key: "global", owner: "main" },
+    { key: "unknown", owner: "main" },
+  ] as const)(
+    "isolates $key facts for $owner even when durable session IDs are equal",
+    async ({ key, owner }) => {
+      const scoped = owner === "work";
+      const initial = {
+        ...(scoped ? workRow : mainRow),
+        key,
+        kind: key,
+        sessionId: "shared-session-id",
       };
+      const h = await descriptorOwner(
+        scoped ? initial : workRow,
+        scoped ? { ...mainRow, sessionId: initial.sessionId } : initial,
+      );
+      const query = scoped
+        ? { agentId: "work", search: "Work", limit: 1 }
+        : {
+            limit: 50,
+            includeGlobal: true,
+            includeUnknown: true,
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+          };
       const other: GatewaySessionRow = {
         key: "agent:research:ordinary",
         agentId: "research",
@@ -857,111 +790,156 @@ describe("session row observations", () => {
         updatedAt: 100,
         label: "Research conversation",
       };
+      const rows = scoped ? [initial] : [{ ...initial }, other];
       const managed = h.sessions.observeList(query, () => undefined);
       h.disposers.push(managed.dispose);
       h.reply(
         "sessions.list",
-        { limit: 50, includeGlobal: true, includeUnknown: true },
-        sessionsResult([primary, other], 900),
+        scoped ? query : { limit: 50, includeGlobal: true, includeUnknown: true },
+        sessionsResult(rows, scoped ? 200 : 900),
       );
       await managed.refresh();
-      const before = h.sessions.listSnapshot(query).result;
+      const managedBefore = h.sessions.listSnapshot(query).result;
+      h.changed.mockClear();
+      const list = scoped ? h.holdWorkList() : null;
+      const before = h.observation.row;
       h.emitEvent({
         type: "event",
         event: "sessions.changed",
         payload: {
           sessionKey: key,
           agentId: "research",
-          sessionId: primary.sessionId,
+          sessionId: initial.sessionId,
           reason: "patch",
           ts: 1_000,
           updatedAt: 1_000,
-          label: "Foreign sentinel",
-          hasActiveRun: true,
-          status: "running",
-          activeRunIds: ["research-run"],
+          label: scoped ? "Foreign descriptor" : "Foreign sentinel",
+          status: scoped ? "done" : "running",
+          hasActiveRun: !scoped,
+          activeRunIds: scoped ? [] : ["research-run"],
         },
       });
-      expect.soft(h.sessions.listSnapshot(query).result).toBe(before);
-      expect.soft(h.sessions.listSnapshot(query).result?.sessions).toEqual([primary, other]);
+      expect(h.sessions.listSnapshot(query).result).toBe(managedBefore);
+      expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(rows);
+      expect(h.observation.row).toBe(before);
+      expect(h.changed).not.toHaveBeenCalled();
+      h.keepMain();
       h.emitEvent({
         type: "event",
         event: "sessions.changed",
         payload: {
           sessionKey: key,
           agentId: "research",
-          sessionId: primary.sessionId,
+          sessionId: initial.sessionId,
           reason: "delete",
-          ts: 1_050,
+          ts: scoped ? 1_100 : 1_050,
         },
       });
-      expect(h.sessions.listSnapshot(query).result).toBe(before);
+      expect(h.sessions.listSnapshot(query).result).toBe(managedBefore);
+      expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(rows);
+      expect(h.observation.row).toBe(before);
+      expect(h.changed).not.toHaveBeenCalled();
+      h.keepMain();
+      const owned = {
+        ...initial,
+        updatedAt: scoped ? 250 : 1_100,
+        label: scoped ? "Owned descriptor" : "Owned sentinel",
+      };
       h.emitEvent({
         type: "event",
         event: "sessions.changed",
         payload: {
           sessionKey: key,
-          agentId: "main",
-          sessionId: primary.sessionId,
+          agentId: owner,
+          sessionId: initial.sessionId,
           reason: "patch",
-          ts: 1_100,
-          updatedAt: 1_100,
-          label: "Owned sentinel",
+          ts: owned.updatedAt,
+          updatedAt: owned.updatedAt,
+          label: owned.label,
         },
       });
-      expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([
-        { ...primary, updatedAt: 1_100, label: "Owned sentinel" },
-        other,
-      ]);
+      expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(
+        scoped ? [owned] : [owned, other],
+      );
+      if (list) {
+        expect(h.observation.row).toMatchObject(owned);
+        expect(h.changed).toHaveBeenCalledOnce();
+        h.keepMain();
+        list.response.resolve(sessionsResult([initial], 200));
+        await list.settled;
+        expect(h.sessions.state.result?.sessions[0]?.label).toBe("Owned descriptor");
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            sessionKey: "global",
+            agentId: "work",
+            sessionId: initial.sessionId,
+            reason: "delete",
+            ts: 1_200,
+          },
+        });
+        expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([]);
+        expect(h.observation.row).toBeNull();
+        expect(h.sessions.state.agentId).toBe("work");
+        expect(h.sessions.state.result?.sessions).toEqual([]);
+      }
     },
   );
 
-  it("keeps a deleted descriptor absent when its earlier empty read finishes", async () => {
-    const h = await descriptorOwner(workRow);
-    h.observation.dispose();
-    const observation = h.sessions.observeRow({ key: "global", agentId: "work" }, () => undefined);
-    h.disposers.push(observation.dispose);
-    expect(observation.row).toBeNull();
-    const earlier = h.holdDescribe(observation);
-    const query = { agentId: "work", search: "Work", limit: 1 };
-    const managed = h.sessions.observeList(query, () => undefined);
-    h.disposers.push(managed.dispose);
-    h.reply("sessions.list", query, sessionsResult([workRow], 200));
-    await managed.refresh();
-    expect(observation.row).toMatchObject(workRow);
-
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: "global",
-        agentId: "work",
-        sessionId: workRow.sessionId,
-        reason: "delete",
-        ts: 300,
-      },
-    });
-    expect(observation.row).toBeNull();
-    expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([]);
-    h.keepMain();
-    earlier.response.resolve({
-      session: { ...workRow, updatedAt: 1_000, label: "Deleted late reply" },
-    });
-    await earlier.settled;
-    expect(observation.row).toBeNull();
-    h.keepMain();
-  });
-
-  it("retires a descriptor receipt when its Gateway connection ends", async () => {
-    const h = await descriptorOwner(workRow);
-    const old = h.holdDescribe();
-    h.publish(false);
-    expect(h.observation.isCurrent()).toBe(false);
-    expect(h.observation.row).toBeNull();
-    h.changed.mockClear();
-    old.response.resolve({ session: { ...workRow, updatedAt: 500, label: "Old connection" } });
-    expect(await old.settled).toEqual({ status: "retired" });
-    expect(h.observation.row).toBeNull();
-    expect(h.changed).not.toHaveBeenCalled();
-  });
+  it.each(["delete", "disconnect"] as const)(
+    "keeps a descriptor absent after %s when an earlier read finishes",
+    async (retirement) => {
+      const h = await descriptorOwner(workRow);
+      let observation = h.observation;
+      if (retirement === "delete") {
+        observation.dispose();
+        observation = h.sessions.observeRow({ key: "global", agentId: "work" }, () => undefined);
+        h.disposers.push(observation.dispose);
+        expect(observation.row).toBeNull();
+      }
+      const earlier = h.holdDescribe(observation);
+      const query = { agentId: "work", search: "Work", limit: 1 };
+      if (retirement === "delete") {
+        const managed = h.sessions.observeList(query, () => undefined);
+        h.disposers.push(managed.dispose);
+        h.reply("sessions.list", query, sessionsResult([workRow], 200));
+        await managed.refresh();
+        expect(observation.row).toMatchObject(workRow);
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            sessionKey: "global",
+            agentId: "work",
+            sessionId: workRow.sessionId,
+            reason: "delete",
+            ts: 300,
+          },
+        });
+        expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([]);
+        h.keepMain();
+      } else {
+        h.publish(false);
+        expect(observation.isCurrent()).toBe(false);
+        h.changed.mockClear();
+      }
+      expect(observation.row).toBeNull();
+      earlier.response.resolve({
+        session: {
+          ...workRow,
+          updatedAt: retirement === "delete" ? 1_000 : 500,
+          label: retirement === "delete" ? "Deleted late reply" : "Old connection",
+        },
+      });
+      const result = await earlier.settled;
+      expect(observation.row).toBeNull();
+      if (retirement === "delete") {
+        h.keepMain();
+      } else {
+        expect(result).toEqual({ status: "retired" });
+        expect(h.changed).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

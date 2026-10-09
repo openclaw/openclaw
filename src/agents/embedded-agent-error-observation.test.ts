@@ -52,6 +52,15 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
   });
 
+  it("masks a bare pass: credential in the provider message preview", () => {
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        error: { type: "invalid_request", message: "pass: opaque-pass-secret-1234567890 rejected" },
+      }),
+    );
+    expect(observed.providerErrorMessagePreview).toBe("pass: opaque…7890 rejected");
+  });
+
   it("redacts provider error types as well as message previews", () => {
     const observed = buildApiErrorObservationFields(
       JSON.stringify({

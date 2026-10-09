@@ -7,6 +7,7 @@ export type SessionRowPlacementFacts = {
   move: WorkerPlacementMoveIntent | undefined;
   environment: WorkerEnvironmentPlacementFacts | undefined;
   workspaceResultReconciling: boolean;
+  workspaceRecoveryPending: boolean;
 };
 
 export type SessionRowPlacementFactsReader = {

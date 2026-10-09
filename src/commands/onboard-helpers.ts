@@ -8,36 +8,30 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { readSourceConfigBestEffort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
-import "../infra/browser-open.js";
-import "../infra/detect-binary.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentSessionDirs, moveToTrash, removeWorkspaceDirs } from "./cleanup-utils.js";
+import { moveToTrash, removeAgentSessions, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export {
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
-export {
-  detectBrowserOpenSupport,
-  openUrl,
-  resolveBrowserOpenCommand,
-} from "../infra/browser-open.js";
+export { detectBrowserOpenSupport, openUrl } from "../infra/browser-open.js";
 export { detectBinary } from "../infra/detect-binary.js";
 export { randomToken } from "./random-token.js";
 
@@ -160,7 +154,7 @@ export function applyWizardMetadata(
 ): OpenClawConfig {
   const commit =
     normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
-  return inheritLegacyDefaultAgentId(cfg, {
+  return {
     ...cfg,
     wizard: {
       ...cfg.wizard,
@@ -170,7 +164,7 @@ export function applyWizardMetadata(
       lastRunCommand: params.command,
       lastRunMode: params.mode,
     },
-  });
+  };
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
@@ -193,9 +187,7 @@ export function formatControlUiSshHint(params: {
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].join("\n");
 }
 
 /** Ensures workspace bootstrap files and session transcript directories exist. */
@@ -206,18 +198,18 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
-    beforePersistentApply?: () => void;
+    guard?: WorkspaceStateGuard;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
-    ensureBootstrapFiles: !options?.skipBootstrap,
-    skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
-    beforePersistentApply: options.beforePersistentApply,
+    ensureBootstrapFiles: !options.skipBootstrap,
+    skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
+    guard: options.guard,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
-  options.beforePersistentApply?.();
+  options.guard?.assertHost?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
@@ -254,21 +246,22 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     }
   };
 
+  if (scope !== "config") {
+    await removeAgentSessions(
+      {
+        cfg: await readSourceConfigBestEffort(),
+        configPath: resolveConfigPath(),
+        stateDir: resolveStateDir(),
+      },
+      runtime,
+    );
+  }
   await trashRequiredPath(resolveConfigPath());
   if (scope === "config") {
     throwIfResetFailed(failures);
     return;
   }
   await trashRequiredPath(path.join(resolveConfigDir(), "credentials"));
-  const stateDir = resolveStateDir();
-  try {
-    const sessionDirs = await listAgentSessionDirs(stateDir);
-    for (const sessionDir of sessionDirs) {
-      await trashRequiredPath(sessionDir);
-    }
-  } catch {
-    failures.push(path.join(stateDir, "agents"));
-  }
   if (scope === "full") {
     failures.push(
       ...(await removeWorkspaceDirs([workspaceDir], runtime, {
@@ -291,6 +284,7 @@ type OnboardingGatewayProbeParams = {
   url: string;
   config?: OpenClawConfig;
   originScopedDeviceAuth?: boolean;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -308,6 +302,7 @@ function runOnboardingGatewayProbe(
     url,
     ...(params.config ? { config: params.config } : {}),
     ...(params.originScopedDeviceAuth ? { originScopedDeviceAuth: true } : {}),
+    ...(params.configuredRemote ? { configuredRemote: true } : {}),
     timeoutMs,
     auth: {
       token: params.token,

@@ -7,6 +7,12 @@ import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js"
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
+/** Process-private locator; live owner admission remains separate from this identity. */
+export type SqliteWorkerEphemeralTarget = {
+  kind: "ephemeral";
+  handle: string;
+  incarnation: string;
+};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -29,12 +35,18 @@ export type SqliteWorkerCloseReceipt = {
 
 // Source fixtures and compiled backends can load separate copies in the same Worker.
 export const SQLITE_WORKER_PREPARE_COMMAND = Symbol.for("openclaw.sqliteWorkerPrepareCommand");
+export const SQLITE_WORKER_PREPARE_ADMITTED = Symbol.for("openclaw.sqliteWorkerPrepareAdmitted");
+export const SQLITE_WORKER_OPERATION_CLEANUP = Symbol.for("openclaw.sqliteWorkerOperationCleanup");
 export const SQLITE_WORKER_CLOSE_RECEIPT = Symbol.for("openclaw.sqliteWorkerCloseReceipt");
 
 /** Internal preparation and cleanup facts; public SDK operation and close contracts stay unchanged. */
 export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperations> =
   SqliteWorkerBackend<Operations> & {
     [SQLITE_WORKER_PREPARE_COMMAND]?(commandType: keyof Operations): void | Promise<void>;
+    [SQLITE_WORKER_PREPARE_ADMITTED]?(
+      command: SqliteWorkerCommand<Operations>,
+    ): void | Promise<void>;
+    [SQLITE_WORKER_OPERATION_CLEANUP]?(command: SqliteWorkerCommand<Operations>): void;
     [SQLITE_WORKER_CLOSE_RECEIPT]?(): SqliteWorkerCloseReceipt | undefined;
   };
 
@@ -50,11 +62,6 @@ export type SqliteWorkerRequest = {
   id: number;
   actor: number;
   stateContext?: SqliteWorkerStateContext;
-  gatewaySchemaFence?: MessagePort;
-  maintenanceSchemaFence?: MessagePort;
-  stateLifecycle?: MessagePort;
-  workerStateLifecycle?: { deadlineNs: bigint };
-  lifecyclePreparation?: MessagePort;
   operationAdmission?: MessagePort;
   stateDatabasePath?: string;
 } & (
@@ -63,6 +70,7 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
+      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;
@@ -85,6 +93,8 @@ export type SqliteWorkerReply = {
       transfer?: "start" | "frame";
       input?: "next";
       closeReceipt?: SqliteWorkerCloseReceipt;
+      /** Optional wire fact; the native-runtime owner validates it before sibling inheritance. */
+      nativeRuntimeAdmission?: unknown;
     }
   | {
       ok: false;

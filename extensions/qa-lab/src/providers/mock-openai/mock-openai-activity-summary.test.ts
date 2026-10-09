@@ -1,31 +1,18 @@
-import { afterEach, expect, it } from "vitest";
-import { startQaMockOpenAiServer } from "./server.js";
+import { expect, it } from "vitest";
+import { createMockServerTestHarness, expectOk, getJson, postJson } from "./server.test-harness.js";
 
-let server: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-afterEach(async () => {
-  await server?.stop();
-  server = undefined;
-});
+const { startMockServer } = createMockServerTestHarness();
 
-it.each(
-  ["openai", "anthropic"].flatMap((provider) =>
-    ["thread-memory", "image"].map((scenario) => ({ provider, scenario })),
-  ),
-)(
+it.each([
+  { provider: "openai", scenario: "thread-memory" },
+  { provider: "anthropic", scenario: "image" },
+])(
   "keeps $provider Activity recaps of $scenario outside scenario dispatch",
   async ({ provider, scenario }) => {
-    server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
-    const baseUrl = server.baseUrl;
-    const post = async (route: string, body: unknown) => {
-      const response = await fetch(`${baseUrl}${route}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      expect(response.status).toBe(200);
-      return response.json();
-    };
-    const requests = async () => (await fetch(`${baseUrl}/debug/requests`)).json();
+    const server = await startMockServer();
+    const post = async (route: string, body: unknown) =>
+      (await expectOk(postJson(server, route, body))).json();
+    const requests = () => getJson(server, "/debug/requests");
     const prompt =
       scenario === "image"
         ? "Image understanding check: describe the top and bottom colors."

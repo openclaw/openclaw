@@ -16,9 +16,10 @@ import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {
   collectCategorizedChildRootRows,
   collectSidebarSessionRowsByKey,
-  someSidebarSessionInTree,
+  findSidebarSessionInTree,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
+import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import {
   collectPromotedMainChildRows,
   collectSidebarSessionChildKeys,
@@ -105,6 +106,7 @@ export function projectSidebarAgentSessionRows({
       : host.sessionData,
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
         key,
@@ -269,12 +271,17 @@ export function projectSidebarAgentSessionRows({
     selectedFallback &&
     !isSubagentSessionKey(selectedFallback.key) &&
     (!grouped || visibleRowsByKey.has(selectedFallback.key)) &&
-    !someSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
+    !findSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
   ) {
     projected.unshift(navigationState.toSidebarSession(selectedFallback));
   }
   return projected;
 }
+
+export type SidebarHomeSession = SidebarRecentSession & {
+  /** Filtered metadata is distinct from the always-available Home navigation and child discovery. */
+  metadataVisible: boolean;
+};
 
 /** Home navigation owns its own state; persistent child conversations own separate rows. */
 export function projectSidebarHomeSession({
@@ -285,13 +292,13 @@ export function projectSidebarHomeSession({
   navigationState,
   resolveAttention,
 }: {
-  host: AgentSessionRowsHost;
+  host: AgentSessionRowsHost & { readonly sessionOwnerFilterId: string | null };
   row: GatewaySessionRow;
   agentId: string;
   result?: SessionsListResult | null;
   navigationState: SidebarSessionNavigationState;
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
-}): SidebarRecentSession {
+}): SidebarHomeSession {
   const visibility = projectSidebarArchiveVisibility({
     sessionData:
       result !== undefined
@@ -307,6 +314,7 @@ export function projectSidebarHomeSession({
         : host.sessionData,
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
@@ -327,12 +335,29 @@ export function projectSidebarHomeSession({
       isChild ? navigationState.toSidebarSession(session, true) : own,
   })[0]!;
   if (result === undefined) {
-    return home;
+    return { ...home, metadataVisible: true };
   }
+  const metadataVisible =
+    row.kind !== "unknown" &&
+    sessionMatchesArchivedFilter(row, host.sessionsStatusFilter) &&
+    !visibility.isSessionHidden(row) &&
+    (!host.sessionInvolvingMeFilterActive ||
+      result?.sessions.some((candidate) => areUiSessionKeysEquivalent(candidate.key, row.key)) ===
+        true) &&
+    applySidebarSessionOwnerFilter({
+      projected: [own],
+      ownerFacet: result?.owners,
+      selectedOwnerId: host.sessionOwnerFilterId,
+      self: host.sessionDataContext?.gateway.snapshot.selfUser,
+    }).rows.length > 0;
   // Team mode promotes persistent Home children, so the header must not count them twice.
   return {
     ...home,
     ...home.subagentSummary,
+    metadataVisible,
+    // The agent avatar owns decorative identity; metadata keeps attribution, not a second icon.
+    icon: undefined,
+    channelAvatarUrl: undefined,
     attention: summarizeSidebarSessionAttention([
       own.attention,
       home.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,

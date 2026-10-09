@@ -10,6 +10,7 @@ import {
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 
 // Core owns this session-store error; Memory Core must preserve its exact code
@@ -30,33 +31,25 @@ export async function getMemoryManagerContextWithPurpose(params: {
   agentId: string;
   purpose?: "default" | "status" | "cli";
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
-      debug?: NonNullable<MemorySearchManagerResult["debug"]>;
+      debug: MemorySearchManagerResult["debug"];
     }
   | {
       error: string | undefined;
     }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
-  const startedAt = Date.now();
   const { manager, debug, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
     purpose: params.purpose,
     ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
+    runInBackgroundContext: params.runInBackgroundContext,
   });
-  return manager
-    ? {
-        manager,
-        debug: {
-          backend: debug?.backend ?? "builtin",
-          purpose: debug?.purpose ?? params.purpose ?? "default",
-          managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
-        },
-      }
-    : { error };
+  return manager ? { manager, debug } : { error };
 }
 
 export function createMemoryTool(params: {
@@ -75,6 +68,7 @@ export function createMemoryTool(params: {
     name: params.contract.name,
     description: params.contract.describe(ctx.sources),
     parameters: params.contract.parameters,
+    prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
       // A live getter makes missing or disabled current config a revocation.

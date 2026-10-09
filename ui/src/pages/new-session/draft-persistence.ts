@@ -325,12 +325,7 @@ export class NewSessionDraftPersistence {
   }
 
   adoptHandoff(handoff: NewSessionDraftHandoff) {
-    const scope = this.scope();
-    if (
-      scope &&
-      handoff.scope &&
-      durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(handoff.scope)
-    ) {
+    if (handoff.scope && this.matchesScope(handoff.scope)) {
       this.mutation = handoff.mutation;
       this.revision = Math.max(this.revision, handoff.revision);
       if (handoff.pendingEdit && !handoff.mutation.committedRevision) {
@@ -347,14 +342,7 @@ export class NewSessionDraftPersistence {
   ): Promise<void> {
     submitted.mutation.retired = true;
     const { scope } = submitted;
-    const currentScope = this.scope();
-    if (
-      this.mutation === submitted.mutation &&
-      ((!scope && !currentScope) ||
-        (scope &&
-          currentScope &&
-          durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(currentScope)))
-    ) {
+    if (this.mutation === submitted.mutation && this.matchesScope(scope)) {
       this.modelSelection?.retire();
       consume?.();
     }
@@ -373,12 +361,11 @@ export class NewSessionDraftPersistence {
         reportDurableComposerStorageError(scope, this.onStorageError);
         return;
       }
-      const currentRevision =
-        (current.status === "found" ? current.draft.revision : current.revision) ?? 0;
-      const currentWriteId = current.status === "found" ? current.draft.writeId : current.writeId;
       if (current.status !== "found" || !submitted.writeIds.has(current.draft.writeId)) {
         return;
       }
+      const currentRevision = current.draft.revision;
+      const currentWriteId = current.draft.writeId;
       const revision = nextDraftRevision(currentRevision);
       const writeId = `clear:${revision}`;
       const { result } = await writeDurableComposerSnapshot({
@@ -504,6 +491,14 @@ export class NewSessionDraftPersistence {
     };
   }
 
+  private matchesScope(scope: DurableComposerDraftScope | null): boolean {
+    const current = this.scope();
+    return scope === null
+      ? current === null
+      : current !== null &&
+          durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(current);
+  }
+
   private snapshot(): PendingDraftSnapshot | null {
     const scope = this.scope();
     if (!scope || this.revision <= 0 || this.mutation.retired) {
@@ -541,23 +536,18 @@ export class NewSessionDraftPersistence {
     signature: string,
   ): boolean {
     const current = this.read();
-    const currentScope = this.scope();
-    if (
-      generation !== this.restoreGeneration ||
-      mutationGeneration !== this.mutationGeneration ||
-      !currentScope ||
-      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(currentScope) ||
-      signature !==
+    return (
+      generation === this.restoreGeneration &&
+      mutationGeneration === this.mutationGeneration &&
+      this.matchesScope(scope) &&
+      signature ===
         chatAttachmentDraftSignature(
           current.message,
           current.attachments,
           undefined,
           current.mentions,
         )
-    ) {
-      return false;
-    }
-    return true;
+    );
   }
 
   private async restoreScope(
@@ -694,18 +684,12 @@ export class NewSessionDraftPersistence {
     revision: number,
     writeId?: string,
   ) {
-    const identity = durableComposerScopeIdentity(scope);
     const lineage = this.lineage(scope);
     lineage.revision = revision;
     if (writeId) {
       lineage.writeId = writeId;
     }
-    const currentScope = this.scope();
-    if (
-      currentScope &&
-      durableComposerScopeIdentity(currentScope) === identity &&
-      revision > this.revision
-    ) {
+    if (this.matchesScope(scope) && revision > this.revision) {
       this.revision = revision;
     }
   }

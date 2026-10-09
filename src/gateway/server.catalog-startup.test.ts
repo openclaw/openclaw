@@ -3,7 +3,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
-  getRemoteModelCatalogPricing,
+  getActiveRemoteModelCatalog,
   getRemoteModelCatalogProviderOverlay,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
@@ -37,12 +37,13 @@ describe("Gateway startup catalog", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog: read,
     });
-    const pending = createDeferred<never>();
+    const pending = createDeferred();
     const stopped = new Error("fixture stops bootstrap");
     const prepare = vi
       .spyOn(bootstrap, "prepareGatewayServerBootstrap")
-      .mockImplementationOnce(() => {
-        return pending.promise;
+      .mockImplementationOnce(async () => {
+        await pending.promise;
+        throw stopped;
       });
     const startup = startGatewayServerCore(0).catch((error: unknown) => error);
     try {
@@ -57,7 +58,7 @@ describe("Gateway startup catalog", () => {
       expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
         absent ? undefined : bundle.providers.anthropic,
       );
-      expect(getRemoteModelCatalogPricing({})).toEqual(
+      expect(getActiveRemoteModelCatalog({})?.pricing).toEqual(
         absent
           ? undefined
           : {
@@ -65,7 +66,7 @@ describe("Gateway startup catalog", () => {
             },
       );
     } finally {
-      pending.reject(stopped);
+      pending.resolve();
       const outcome = await startup;
       prepare.mockRestore();
       setRemoteModelCatalogOverlaySourcesForTest();
@@ -103,7 +104,7 @@ describe("Gateway provider settings startup", () => {
         try {
           const port = await getFreePort();
           await state.writeConfig({
-            agents: { entries: { main: { default: true } } },
+            agents: { entries: { main: {} } },
             models: { providers: { openai: { apiKey: "synthetic-provider-key" }, codex: {} } },
             channels: { telegram: { botToken: "123456:synthetic-test-token" } },
             gateway: { auth: { mode: "token", token } },

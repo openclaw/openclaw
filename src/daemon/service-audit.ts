@@ -1,4 +1,3 @@
-/** Audits installed daemon service definitions for drift and repair candidates. */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -25,6 +24,7 @@ import {
   readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
+import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 
 export type {
   GatewayServiceCommand,
@@ -85,10 +85,11 @@ function isOpaquePosixShellInlineCommand(programArguments: string[]): boolean {
 }
 
 function auditGatewayCommand(programArguments: string[] | undefined, issues: ServiceConfigIssue[]) {
-  if (!programArguments || programArguments.length === 0) {
-    return;
-  }
-  if (!programArguments.includes("gateway") && !isOpaquePosixShellInlineCommand(programArguments)) {
+  if (
+    programArguments?.length &&
+    !programArguments.includes("gateway") &&
+    !isOpaquePosixShellInlineCommand(programArguments)
+  ) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
       message: "Service command does not include the gateway subcommand",
@@ -189,7 +190,11 @@ function auditManagedServiceEnvironment(
   issues: ServiceConfigIssue[],
   expectedManagedServiceEnvKeys?: Iterable<string>,
 ) {
-  const inlineKeys = collectInlineManagedServiceEnvKeys(command, expectedManagedServiceEnvKeys);
+  // Reinstall can migrate the managed base, but never rewrites operator drop-ins.
+  const inlineKeys = collectInlineManagedServiceEnvKeys(
+    resolveManagedGatewayServiceCommand(command),
+    expectedManagedServiceEnvKeys,
+  );
   if (inlineKeys.length === 0) {
     return;
   }
@@ -239,26 +244,6 @@ export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string
   return normalizeOptionalString(command.environment?.OPENCLAW_GATEWAY_TOKEN);
 }
 
-function getEquivalentMinimalPathEntries(
-  entry: string,
-  platform: NodeJS.Platform,
-  normalizedExpected: Set<string>,
-): string[] {
-  if (platform !== "linux") {
-    return [];
-  }
-  const equivalent = entry.endsWith("/aliases/default/bin")
-    ? `${entry.slice(0, -"/aliases/default/bin".length)}/current/bin`
-    : entry.endsWith("/current/bin")
-      ? `${entry.slice(0, -"/current/bin".length)}/aliases/default/bin`
-      : undefined;
-  if (!equivalent) {
-    return [];
-  }
-  const normalizedEquivalent = normalizeServicePathEntry(equivalent, platform);
-  return normalizedExpected.has(normalizedEquivalent) ? [equivalent] : [];
-}
-
 function auditGatewayServicePath(
   command: GatewayServiceCommand,
   issues: ServiceConfigIssue[],
@@ -266,13 +251,10 @@ function auditGatewayServicePath(
   platform: NodeJS.Platform,
   expectedServicePath?: string,
 ) {
-  if (!command) {
+  if (!command || platform === "win32") {
     return;
   }
-  if (platform === "win32") {
-    return;
-  }
-  const servicePath = command?.environment?.PATH;
+  const servicePath = command.environment?.PATH;
   if (!servicePath) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayPathMissing,
@@ -299,8 +281,19 @@ function auditGatewayServicePath(
     if (normalizedParts.has(normalized)) {
       return false;
     }
-    return !getEquivalentMinimalPathEntries(entry, platform, normalizedExpected).some(
-      (equivalent) => normalizedParts.has(normalizeServicePathEntry(equivalent, platform)),
+    if (platform !== "linux") {
+      return true;
+    }
+    const equivalent = entry.endsWith("/aliases/default/bin")
+      ? `${entry.slice(0, -"/aliases/default/bin".length)}/current/bin`
+      : entry.endsWith("/current/bin")
+        ? `${entry.slice(0, -"/current/bin".length)}/aliases/default/bin`
+        : undefined;
+    const normalizedEquivalent = equivalent && normalizeServicePathEntry(equivalent, platform);
+    return !(
+      normalizedEquivalent &&
+      normalizedExpected.has(normalizedEquivalent) &&
+      normalizedParts.has(normalizedEquivalent)
     );
   });
   if (missing.length > 0) {
@@ -329,11 +322,7 @@ function auditGatewayServicePath(
   }
 }
 
-/**
- * Check if the service's embedded token differs from the config file token.
- * Returns an issue if drift is detected (service will use old token after restart).
- * The invoking CLI selects recovery advice for its installation.
- */
+/** The invoking CLI selects recovery advice for its installation. */
 export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
@@ -341,12 +330,7 @@ export function checkTokenDrift(params: {
   const serviceToken = normalizeOptionalString(params.serviceToken);
   const configToken = normalizeOptionalString(params.configToken);
 
-  // Tokenless service units are canonical; no drift to report.
-  if (!serviceToken) {
-    return null;
-  }
-
-  if (configToken && serviceToken !== configToken) {
+  if (serviceToken && configToken && serviceToken !== configToken) {
     return {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:
@@ -433,10 +417,11 @@ export async function auditGatewayServiceConfig(params: {
     definitionDriftError = "Service definition inspection could not be completed.";
   }
 
-  const notes = {
+  return {
+    ok: issues.length === 0,
+    issues,
     ...(runtimeNote ? { runtimeNote } : {}),
     ...(definitionDrift.length ? { definitionDrift } : {}),
     ...(definitionDriftError ? { definitionDriftError } : {}),
   };
-  return { ok: issues.length === 0, issues, ...notes };
 }

@@ -1,7 +1,9 @@
-/**
- * Projects provider assistant messages into ordered visible stream state.
- */
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseReplyDirectives,
@@ -10,14 +12,16 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
-import { findCodeOwnership } from "../shared/text/code-regions.js";
 import { trimTextPreservingCode } from "../shared/text/text-projection.js";
+import {
+  findDirectiveCodePrefix,
+  type StreamDirectiveCodePrefix,
+} from "../utils/directive-tags.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
-  StreamDirectiveCodePrefix,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   extractAssistantCommentaryText,
@@ -36,71 +40,59 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-const RESPONSES_API_IDS = new Set([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
-
-export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return RESPONSES_API_IDS.has(api);
+function readAssistantMessageApi(message: AgentMessage | undefined) {
+  return message?.role === "assistant" ? normalizeOptionalString(message.api) : undefined;
 }
 
-export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return api === "anthropic-messages";
+export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
+  return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function isAssistantTextPhasePending(
+  message: AgentMessage | undefined,
+  eventType: string,
+): boolean {
+  const api = readAssistantMessageApi(message);
+  return (
+    api === "ollama" ||
+    isOpenAiCompletionsAssistantMessage(message) ||
+    (api === "anthropic-messages" && eventType !== "text_end")
+  );
 }
 
 export function extractStandaloneMessageToolText(
   text: string,
   params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
 ): string | undefined {
-  try {
-    if (!params.allowCurrentSourceReply && !params.allowRoutedReply) {
-      return undefined;
-    }
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) {
-      return undefined;
-    }
-    const record = asRecord(JSON.parse(trimmed) as unknown);
-    const args = asRecord(record?.arguments);
-    const hasRoute = Boolean(
-      normalizeOptionalString(args?.target) ||
-      normalizeOptionalString(args?.to) ||
-      normalizeOptionalString(args?.channel) ||
-      normalizeOptionalString(args?.accountId) ||
-      Array.isArray(args?.targets),
-    );
-    if (
-      normalizeOptionalString(record?.name) !== "message" ||
-      normalizeOptionalString(args?.action) !== "send" ||
-      (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
-    ) {
-      return undefined;
-    }
-    return normalizeOptionalString(args?.message);
-  } catch {
+  if (!params.allowCurrentSourceReply && !params.allowRoutedReply) {
     return undefined;
   }
+  const record = safeParseJsonRecord(text.trim());
+  const args = asRecord(record?.arguments);
+  const hasRoute = Boolean(
+    normalizeOptionalString(args?.target) ||
+    normalizeOptionalString(args?.to) ||
+    normalizeOptionalString(args?.channel) ||
+    normalizeOptionalString(args?.accountId) ||
+    Array.isArray(args?.targets),
+  );
+  if (
+    normalizeOptionalString(record?.name) !== "message" ||
+    normalizeOptionalString(args?.action) !== "send" ||
+    (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
+  ) {
+    return undefined;
+  }
+  return normalizeOptionalString(args?.message);
+}
+
+function isAssistantTextBlock(value: unknown): value is { type: "text"; textSignature?: unknown } {
+  return asOptionalObjectRecord(value)?.type === "text";
 }
 
 export function resolveAssistantStreamItemId(params: {
@@ -111,31 +103,18 @@ export function resolveAssistantStreamItemId(params: {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const contentIndex =
-    typeof params.contentIndex === "number" &&
-    Number.isInteger(params.contentIndex) &&
-    params.contentIndex >= 0
-      ? params.contentIndex
-      : undefined;
+  const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
-  const indexedRecord =
-    indexedBlock && typeof indexedBlock === "object"
-      ? (indexedBlock as { type?: unknown })
-      : undefined;
-  const hasIndexedTextBlock = indexedRecord?.type === "text";
+  const hasIndexedTextBlock = isAssistantTextBlock(indexedBlock);
   const candidateStart =
     hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
   const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
   for (let index = candidateStart; index >= candidateEnd; index -= 1) {
     const block = content[index];
-    if (!block || typeof block !== "object") {
+    if (!isAssistantTextBlock(block)) {
       continue;
     }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
-      continue;
-    }
-    const signature = parseAssistantTextSignature(record);
+    const signature = parseAssistantTextSignature(block);
     if (signature?.id) {
       return signature.id;
     }
@@ -156,23 +135,16 @@ export function resolveAssistantStreamBlockIndex(
     return undefined;
   }
   const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
-  if (indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text") {
+  if (isAssistantTextBlock(indexedBlock)) {
     return contentIndex;
   }
-  if (itemId) {
-    for (let index = message.content.length - 1; index >= 0; index -= 1) {
-      const candidate = message.content[index];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        candidate.type === "text" &&
-        parseAssistantTextSignature(candidate)?.id === itemId
-      ) {
-        return index;
-      }
-    }
-  }
-  return undefined;
+  const index = itemId
+    ? message.content.findLastIndex(
+        (candidate) =>
+          isAssistantTextBlock(candidate) && parseAssistantTextSignature(candidate)?.id === itemId,
+      )
+    : -1;
+  return index >= 0 ? index : undefined;
 }
 
 export function scopeAssistantMessageToStreamBlock(
@@ -262,7 +234,9 @@ export function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
-export function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): boolean {
+export function hasMessageToolOnlySourceDelivery(
+  ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+): boolean {
   return (
     ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
     (ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -289,74 +263,7 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  if (accumulatedText.startsWith(content)) {
-    return "";
-  }
-  if (!accumulatedText.includes(content)) {
-    return content;
-  }
-  return "";
-}
-
-function hasDirectiveCodePrefixOpportunity(source: string, delta: string): boolean {
-  if (!delta) {
-    return false;
-  }
-  const deltaStart = source.length - delta.length;
-  const start = Math.max(0, deltaStart - 4);
-  let separator = -1;
-  // A following line can close block code without a blank separator; ownership proves stability.
-  for (const match of source.slice(start).matchAll(/(?:\r\n|\n|\r)[^\S\r\n]*\S/g)) {
-    if (start + match.index + match[0].length > deltaStart) {
-      separator = start + match.index;
-    }
-  }
-  if (separator === -1) {
-    return false;
-  }
-  const lastMarker = source.lastIndexOf("[[");
-  return lastMarker !== -1 && separator > lastMarker;
-}
-
-function findDirectiveCodePrefix(source: string): StreamDirectiveCodePrefix | undefined {
-  const { regions, retainStart, completedParagraphs } = findCodeOwnership(source);
-  let regionIndex = 0;
-  let paragraphIndex = 0;
-  let end = 0;
-  for (
-    let marker = source.indexOf("[[");
-    marker !== -1;
-    marker = source.indexOf("[[", marker + 1)
-  ) {
-    let region = regions[regionIndex];
-    while (region && region.end <= marker) {
-      region = regions[++regionIndex];
-    }
-    let paragraph = completedParagraphs[paragraphIndex];
-    while (paragraph && paragraph.end <= marker) {
-      paragraph = completedParagraphs[++paragraphIndex];
-    }
-    if (!region || region.start > marker || region.end < marker + 2) {
-      return undefined;
-    }
-    if (region.block) {
-      if (region.end > retainStart) {
-        return undefined;
-      }
-      end = region.end;
-      continue;
-    }
-    if (
-      !paragraph ||
-      paragraph.hasReferenceCandidate ||
-      paragraph.start > region.start ||
-      paragraph.end < region.end
-    ) {
-      return undefined;
-    }
-    end = paragraph.end;
-  }
-  return end ? { end, checkedRawLength: source.length } : undefined;
+  return accumulatedText.includes(content) ? "" : content;
 }
 
 export function resolveStreamingReply(params: {
@@ -455,10 +362,9 @@ export function resolveStreamingReply(params: {
       text === params.next &&
       !parsed.isSilent &&
       !hasReplyDirectiveMetadata(parsed) &&
-      !parsed.mediaUrls?.length &&
-      hasDirectiveCodePrefixOpportunity(source, params.visibleDelta)
+      !parsed.mediaUrls?.length
     ) {
-      const prefix = findDirectiveCodePrefix(source);
+      const prefix = findDirectiveCodePrefix(source, params.visibleDelta);
       if (prefix && params.next.startsWith(source.slice(0, prefix.end))) {
         // Both raw and projected appends retain this canonical code prefix.
         directiveCodePrefix = prefix;

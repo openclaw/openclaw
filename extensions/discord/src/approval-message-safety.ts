@@ -48,20 +48,16 @@ function escapeDiscordApprovalDisplayCharacter(character: string): string {
 /** Keep opaque approval metadata bounded, single-line, and inert in Discord Markdown. */
 export function formatDiscordApprovalDisplayValue(value: string, maxChars = 200): string {
   const limit = Number.isFinite(maxChars) ? Math.max(0, Math.trunc(maxChars)) : 200;
-  const escapedParts = Array.from(value, escapeDiscordApprovalDisplayCharacter);
-  const escaped = escapedParts.join("");
-  if (escaped.length <= limit) {
-    return escaped;
-  }
-  if (limit <= 3) {
-    return ".".repeat(limit);
-  }
+  let escaped = "";
   let bounded = "";
-  for (const part of escapedParts) {
-    if (bounded.length + part.length > limit - 3) {
-      break;
+  for (const character of value) {
+    escaped += escapeDiscordApprovalDisplayCharacter(character);
+    if (escaped.length <= limit - 3) {
+      bounded = escaped;
     }
-    bounded += part;
+    if (escaped.length > limit) {
+      return limit <= 3 ? ".".repeat(limit) : `${bounded}...`;
+    }
   }
-  return `${bounded}...`;
+  return escaped;
 }

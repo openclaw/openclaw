@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Mantis evidence artifact handling.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root } from "openclaw/plugin-sdk/security-runtime";
@@ -43,38 +42,24 @@ const MANTIS_STABLE_ENTRIES = [
 
 type MantisOutputRoot = Pick<
   Awaited<ReturnType<typeof root>>,
-  "exists" | "list" | "mkdir" | "move" | "remove" | "stat"
+  "exists" | "mkdir" | "move" | "remove" | "stat"
 >;
 
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function isNotFoundFsSafeError(error: unknown): boolean {
-  return (
-    typeof error === "object" && error !== null && "code" in error && error.code === "not-found"
-  );
-}
-
 async function removeMantisOutputTree(
   outputRoot: MantisOutputRoot,
   relativePath: string,
 ): Promise<void> {
-  let entry: Awaited<ReturnType<MantisOutputRoot["stat"]>>;
-  try {
-    entry = await outputRoot.stat(relativePath);
-  } catch (error) {
-    if (isNotFoundFsSafeError(error)) {
-      return;
-    }
-    throw error;
-  }
-  if (entry.isDirectory && !entry.isSymbolicLink) {
-    for (const child of await outputRoot.list(relativePath)) {
-      await removeMantisOutputTree(outputRoot, path.posix.join(relativePath, child));
-    }
-  }
-  await outputRoot.remove(relativePath);
+  await outputRoot.remove(relativePath, {
+    recursive: true,
+    force: true,
+    order: "sorted",
+    maxEntries: Infinity,
+    maxDepth: Infinity,
+  });
 }
 
 export async function createMantisRunStaging(params: {
@@ -151,21 +136,6 @@ async function rollbackMantisStableOutput(params: {
   return { errors: rollbackErrors, retainedBackupEntries };
 }
 
-function createMantisStableRollbackError(
-  publicationError: unknown,
-  rollbackErrors: readonly unknown[],
-  retainedBackupEntries: readonly string[],
-): AggregateError {
-  const retained = retainedBackupEntries.length
-    ? ` Unrestored backups were retained under .mantis-previous-* (${retainedBackupEntries.join(", ")}).`
-    : "";
-  return new AggregateError(
-    [publicationError, ...rollbackErrors],
-    `Mantis stable artifact publication failed and rollback failed.${retained}`,
-    { cause: publicationError },
-  );
-}
-
 export async function publishMantisRunOutput(params: {
   outputRoot: MantisOutputRoot;
   runId: string;
@@ -219,7 +189,14 @@ export async function publishMantisRunOutput(params: {
       staging: params.staging,
     });
     if (rollback.errors.length > 0) {
-      throw createMantisStableRollbackError(error, rollback.errors, rollback.retainedBackupEntries);
+      const retained = rollback.retainedBackupEntries.length
+        ? ` Unrestored backups were retained under .mantis-previous-* (${rollback.retainedBackupEntries.join(", ")}).`
+        : "";
+      throw new AggregateError(
+        [error, ...rollback.errors],
+        `Mantis stable artifact publication failed and rollback failed.${retained}`,
+        { cause: error },
+      );
     }
     throw error;
   }
@@ -252,25 +229,6 @@ function remapPublishedArtifactPath(params: {
     return params.artifactPath;
   }
   return path.join(params.publishedLaneDir, relativePath);
-}
-
-function resolvePublishedArtifactPath(params: {
-  artifactPath: string | undefined;
-  laneOutputDir: string;
-  laneRepoRoot: string;
-  publishedLaneDir: string;
-}): string | undefined {
-  if (!params.artifactPath) {
-    return undefined;
-  }
-  return remapPublishedArtifactPath({
-    ...params,
-    artifactPath: resolveQaArtifactPath(
-      params.laneRepoRoot,
-      params.laneOutputDir,
-      params.artifactPath,
-    ),
-  });
 }
 
 export function remapMantisLaneResult(params: {
@@ -340,34 +298,10 @@ async function readNormalizedLaneResult(params: {
   };
 }
 
-export async function readMantisLaneResult(params: {
-  laneOutputDir: string;
-  laneRepoRoot: string;
+async function readLegacyLaneSummary(params: {
   publishedLaneDir: string;
   scenario: string;
-}): Promise<LaneResult> {
-  const normalized = await readNormalizedLaneResult(params);
-  if (normalized) {
-    return {
-      outputDir: params.publishedLaneDir,
-      scenarioDetails: normalized.details,
-      screenshotPath: resolvePublishedArtifactPath({
-        artifactPath: normalized.screenshotPath,
-        laneOutputDir: params.laneOutputDir,
-        laneRepoRoot: params.laneRepoRoot,
-        publishedLaneDir: params.publishedLaneDir,
-      }),
-      status: normalized.status,
-      summaryPath: normalized.summaryPath,
-      videoPath: resolvePublishedArtifactPath({
-        artifactPath: normalized.videoPath,
-        laneOutputDir: params.laneOutputDir,
-        laneRepoRoot: params.laneRepoRoot,
-        publishedLaneDir: params.publishedLaneDir,
-      }),
-    };
-  }
-
+}): Promise<NormalizedScenarioSummary> {
   const summaryPath = path.join(params.publishedLaneDir, "discord-qa-summary.json");
   const parsed: unknown = JSON.parse(await fs.readFile(summaryPath, "utf8"));
   const scenarios =
@@ -379,24 +313,40 @@ export async function readMantisLaneResult(params: {
     ? scenarioSummary.artifactPaths
     : undefined;
   return {
-    outputDir: params.publishedLaneDir,
-    scenarioDetails:
-      typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
-    screenshotPath: resolvePublishedArtifactPath({
-      artifactPath:
-        typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
-      laneOutputDir: params.laneOutputDir,
-      laneRepoRoot: params.laneRepoRoot,
-      publishedLaneDir: params.publishedLaneDir,
-    }),
+    details: typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
+    screenshotPath:
+      typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
     status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
     summaryPath,
-    videoPath: resolvePublishedArtifactPath({
-      artifactPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
-      laneOutputDir: params.laneOutputDir,
-      laneRepoRoot: params.laneRepoRoot,
-      publishedLaneDir: params.publishedLaneDir,
-    }),
+    videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
+  };
+}
+
+export async function readMantisLaneResult(params: {
+  laneOutputDir: string;
+  laneRepoRoot: string;
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<LaneResult> {
+  const summary = (await readNormalizedLaneResult(params)) ?? (await readLegacyLaneSummary(params));
+  const resolveArtifact = (artifactPath: string | undefined) =>
+    artifactPath
+      ? remapPublishedArtifactPath({
+          ...params,
+          artifactPath: resolveQaArtifactPath(
+            params.laneRepoRoot,
+            params.laneOutputDir,
+            artifactPath,
+          ),
+        })
+      : undefined;
+  return {
+    outputDir: params.publishedLaneDir,
+    scenarioDetails: summary.details,
+    screenshotPath: resolveArtifact(summary.screenshotPath),
+    status: summary.status,
+    summaryPath: summary.summaryPath,
+    videoPath: resolveArtifact(summary.videoPath),
   };
 }
 

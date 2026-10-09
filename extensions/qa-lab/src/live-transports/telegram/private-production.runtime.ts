@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { root as openRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -161,9 +162,7 @@ async function readAcknowledgement(params: {
         throw error;
       }
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    await sleep(250);
   }
   throw new Error("Timed out waiting for Telegram.app send and native reply proof.");
 }

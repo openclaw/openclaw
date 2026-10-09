@@ -14,10 +14,8 @@ type ConfiguredBindingResolution = NonNullable<
 >;
 
 type DiscordNativeInteractionRouteState = {
-  route: ResolvedAgentRoute;
   effectiveRoute: ResolvedAgentRoute;
   boundSessionKey?: string;
-  configuredRoute: ResolvedConfiguredBindingRoute | null;
   configuredBinding: ConfiguredBindingResolution | null;
 };
 
@@ -33,17 +31,7 @@ export function resolveDiscordNativeInteractionRouteState(params: {
   parentConversationId?: string;
   threadBinding?: ThreadBindingRecord;
 }): DiscordNativeInteractionRouteState {
-  const route = resolveDiscordBoundConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    guildId: params.guildId,
-    memberRoleIds: params.memberRoleIds,
-    isDirectMessage: params.isDirectMessage,
-    isGroupDm: params.isGroupDm,
-    directUserId: params.directUserId,
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
+  const route = resolveDiscordBoundConversationRoute(params);
   const configuredRoute =
     params.threadBinding == null
       ? resolveConfiguredBindingRoute({
@@ -67,11 +55,5 @@ export function resolveDiscordNativeInteractionRouteState(params: {
     configuredRoute,
     matchedBy: configuredBinding ? "binding.channel" : undefined,
   });
-  return {
-    route,
-    effectiveRoute,
-    boundSessionKey,
-    configuredRoute,
-    configuredBinding,
-  };
+  return { effectiveRoute, boundSessionKey, configuredBinding };
 }

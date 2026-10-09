@@ -1,6 +1,10 @@
 import type fs from "node:fs";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import {
+  appendConfigAuditRecordSync,
+  captureConfigAuditAppender,
+  createConfigObserveAuditRecord,
+} from "./io.audit.js";
 import {
   captureConfigHealthStateStore,
   supersedeConfigHealthObservations,
@@ -14,7 +18,6 @@ import type {
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
-  createConfigObserveAuditRecord,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
@@ -98,8 +101,14 @@ export async function observeConfigSnapshot(
     return;
   }
   assertCurrent?.();
+  const superseded = new Error("Config audit observation was superseded");
   try {
     using health = captureConfigHealthStateStore(deps, snapshot.path, assertCurrent);
+    const appendAudit = captureConfigAuditAppender(deps, () => {
+      if (!health.isCurrent()) {
+        throw superseded;
+      }
+    });
     const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
     if (!health.isCurrent()) {
       return;
@@ -142,24 +151,19 @@ export async function observeConfigSnapshot(
       return;
     }
     deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-    await appendConfigAuditRecord(
-      {
-        env: deps.env,
-        homedir: deps.homedir,
-        record: createConfigObserveAuditRecord({
-          configPath: snapshot.path,
-          valid: snapshot.valid,
-          current,
-          suspicious,
-          lastKnownGood: entry.lastKnownGood,
-          backup,
-        }),
-      },
-      assertCurrent,
+    await appendAudit(
+      createConfigObserveAuditRecord({
+        configPath: snapshot.path,
+        valid: snapshot.valid,
+        current,
+        suspicious,
+        lastKnownGood: entry.lastKnownGood,
+        backup,
+      }),
     );
     await health.update({ lastObservedSuspiciousSignature: signature }, healthSnapshot);
   } catch (error) {
-    if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+    if (error === superseded || isStateDatabaseReadAdmissionInvalidatedError(error)) {
       return;
     }
     throw error;

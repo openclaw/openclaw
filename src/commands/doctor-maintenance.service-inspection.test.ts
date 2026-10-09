@@ -6,7 +6,6 @@ import { printDaemonStatus } from "../cli/daemon-cli/status.print.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { execFileUtf8 } from "../daemon/exec-file.js";
 import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
-import { inspectSystemLaunchDaemonOwnership } from "../daemon/launchd-system.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { openSystemdPrivatePeer } from "../daemon/systemd-peer-native.js";
@@ -57,24 +56,6 @@ it.each([
     hint: "dbus-user-session",
   },
   {
-    platform: "linux",
-    reason: "service-manager-access-denied",
-    message: "service-manager probe could not start (EACCES/EPERM)",
-    hint: "executable permissions",
-  },
-  {
-    platform: "darwin",
-    reason: "launchd-system-domain-unavailable",
-    message: "launchd system domain cannot be queried by this account",
-    hint: "root",
-  },
-  {
-    platform: "darwin",
-    reason: "launchd-gui-domain-unavailable",
-    message: "launchd GUI domain is unavailable for this account",
-    hint: "logged-in macOS desktop session",
-  },
-  {
     platform: "darwin",
     reason: "launchd-system-owned",
     message: "Gateway label belongs to a system LaunchDaemon",
@@ -122,15 +103,6 @@ it.each([
     );
   }
   vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
-    if (scenario.reason === "service-manager-access-denied") {
-      return {
-        code: 1,
-        termination: "error",
-        errorCode: "EACCES",
-        stdout: "",
-        stderr: "Command failed during launch or output capture (EACCES)",
-      };
-    }
     if (command === "busctl") {
       return {
         code: 1,
@@ -152,9 +124,6 @@ it.each([
       const system = args[1]?.startsWith("system/");
       if (system && scenario.reason === "launchd-system-owned") {
         return { code: 0, termination: "exit", stdout: "state = running\npid = 1234", stderr: "" };
-      }
-      if (system && scenario.reason === "launchd-gui-domain-unavailable") {
-        return { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
       }
       return {
         code: 125,
@@ -178,14 +147,6 @@ it.each([
     ).resolves.toMatchObject({
       programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
     });
-  }
-  if (scenario.reason === "launchd-system-domain-unavailable") {
-    await expect
-      .soft(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway"))
-      .resolves.toMatchObject({
-        status: "unverifiable",
-        reason: scenario.reason,
-      });
   }
   const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
     root: home,

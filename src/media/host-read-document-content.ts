@@ -1,28 +1,16 @@
 import { getFileExtension, normalizeMimeType } from "@openclaw/media-core/mime";
 
-function getTextStats(text: string): { printableRatio: number } {
-  if (!text) {
-    return { printableRatio: 0 };
-  }
+function textPrintableRatio(text: string): number {
   let printable = 0;
-  let control = 0;
+  let total = 0;
   for (const char of text) {
+    total += 1;
     const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13 || code === 32) {
+    if (code === 9 || code === 10 || code === 13 || (code >= 32 && (code < 0x7f || code > 0x9f))) {
       printable += 1;
-      continue;
     }
-    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
-      control += 1;
-      continue;
-    }
-    printable += 1;
   }
-  const total = printable + control;
-  if (total === 0) {
-    return { printableRatio: 0 };
-  }
-  return { printableRatio: printable / total };
+  return total === 0 ? 0 : printable / total;
 }
 
 function hasSingleByteTextShape(buffer: Buffer): boolean {
@@ -46,12 +34,9 @@ function hasSingleByteTextShape(buffer: Buffer): boolean {
 }
 
 function decodeHostReadText(buffer: Buffer): string | undefined {
-  if (buffer.length === 0) {
-    return "";
-  }
   // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
   // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
-  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
+  // an attacker can prepend a BOM and get a printable ratio near 1.0 on pure
   // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
   // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
   // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
@@ -77,15 +62,16 @@ export function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   if (text === undefined) {
     return undefined;
   }
-  const { printableRatio } = getTextStats(text);
-  return printableRatio > 0.95 ? text : undefined;
+  return textPrintableRatio(text) > 0.95 ? text : undefined;
 }
 
 // FictionBook documents carry a fixed namespace on their root element. Match only that
 // root (after an optional BOM, XML declaration, comments, or doctype) so host-read
 // accepts demonstrable FictionBook content rather than every text-valid XML file.
+// Consume complete quoted values so a literal `>` inside one cannot end the tag.
+// Do not skip DTD internal subsets: their entity values can contain decoy root tags.
 const FICTIONBOOK_ROOT_RE =
-  /^\uFEFF?(?:\s*(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>))*\s*<(?:(?<prefix>[A-Za-z_][\w.-]*):)?FictionBook(?=[\s/>])(?<attributes>[^>]*)>/u;
+  /^\uFEFF?(?:\s*(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE(?:[^>"'\[]|"[^"]*"|'[^']*')*>))*\s*<(?:(?<prefix>[A-Za-z_][\w.-]*):)?FictionBook(?=[\s/>])(?<attributes>(?:[^>"']|"[^"]*"|'[^']*')*)>/u;
 const FICTIONBOOK_NAMESPACE = "http://www.gribuser.ru/xml/fictionbook/2.0";
 const XML_ROOT_ATTRIBUTE_RE =
   /\s+(?<name>[A-Za-z_:][\w:.-]*)\s*=\s*(?<quote>["'])(?<value>[\s\S]*?)\k<quote>/guy;

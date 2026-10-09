@@ -45,6 +45,15 @@ export function hasRepairableServiceDefinitionDrift(audit: ServiceConfigAudit): 
   );
 }
 
+export function isPreservedLaunchdTimeoutWarning(audit: ServiceConfigAudit): boolean {
+  return (
+    audit.issues.every((issue) => issue.code === "launchd-stop-timeout") &&
+    audit.definitionDrift?.some(
+      (finding) => finding.kind === "preserved" && finding.key === "ExitTimeOut",
+    ) === true
+  );
+}
+
 /** Native policy repair must not auto-approve unrelated command or credential changes. */
 export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolean {
   const policyCodes: ReadonlySet<string> = new Set([
@@ -56,6 +65,7 @@ export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolea
     SERVICE_AUDIT_CODES.systemdStopTimeout,
     "launchd-run-at-load",
     "launchd-keep-alive",
+    "launchd-stop-timeout",
     "launchd-env-wrapper-outdated",
   ]);
   return audit.issues.every((issue) => policyCodes.has(issue.code));
@@ -66,21 +76,19 @@ export function isOperatorOwnedEnvironmentIssue(
   command: GatewayServiceCommandConfig,
   environmentValueSources: GatewayServiceInstallArgs["environmentValueSources"],
 ): boolean {
+  const hasOverride = (keys: readonly string[]) =>
+    hasGatewayServiceEnvironmentOverride(command, keys, { environmentValueSources });
   switch (issue.code) {
     case SERVICE_AUDIT_CODES.gatewayPathMissing:
     case SERVICE_AUDIT_CODES.gatewayPathMissingDirs:
     case SERVICE_AUDIT_CODES.gatewayPathNonMinimal:
-      return hasGatewayServiceEnvironmentOverride(command, ["PATH"], { environmentValueSources });
+      return hasOverride(["PATH"]);
     case SERVICE_AUDIT_CODES.gatewayTokenEmbedded:
     case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
     case SERVICE_AUDIT_CODES.gatewayTokenDrift:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
-        environmentValueSources,
-      });
+      return hasOverride(["OPENCLAW_GATEWAY_TOKEN"]);
     case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
-        environmentValueSources,
-      });
+      return hasOverride(["OPENCLAW_GATEWAY_PASSWORD"]);
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
         environmentValueSources,

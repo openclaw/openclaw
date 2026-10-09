@@ -889,12 +889,27 @@ describe("agents tools panel (browser)", () => {
     {
       name: "base exec alias and direct deny",
       tools: { allow: [" BASH "], deny: ["exec"] },
-      expected: { exec: false, apply_patch: true, write: false },
+      expected: { exec: false, apply_patch: false, write: false },
     },
     {
       name: "override exec deny",
       tools: { profile: "full", deny: ["exec"] },
-      expected: { exec: false, apply_patch: false, write: true },
+      expected: { exec: false, apply_patch: true, write: true },
+    },
+    {
+      name: "base write allow includes patching",
+      tools: { allow: ["write"] },
+      expected: { write: true, apply_patch: true, exec: false },
+    },
+    {
+      name: "override write allow includes patching",
+      tools: { profile: "minimal", alsoAllow: ["write"] },
+      expected: { write: true, apply_patch: true, exec: false },
+    },
+    {
+      name: "explicit patch deny wins over write allow",
+      tools: { profile: "minimal", alsoAllow: ["write"], deny: ["apply_patch"] },
+      expected: { write: true, apply_patch: false },
     },
     {
       name: "group expansion and direct deny",
@@ -907,7 +922,7 @@ describe("agents tools panel (browser)", () => {
       renderAgentTools(
         createBaseParams({
           configForm: {
-            agents: { entries: { main: { default: true, tools } } },
+            agents: { entries: { main: { tools } } },
           },
           toolsCatalogResult: {
             agentId: "main",

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -16,7 +17,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { createTaskRecord, deleteTaskRecordById } from "../tasks/task-registry.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   attachManagedOutgoingMediaToMessage,
@@ -25,13 +25,11 @@ import {
 } from "./managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
 import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
@@ -172,7 +170,7 @@ describe("Gateway agent and artifact APIs", () => {
           gateway: { auth: { mode: "token", token } },
           agents: {
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
             },
           },
         },
@@ -197,17 +195,35 @@ describe("Gateway agent and artifact APIs", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getGatewayE2ePortBlock();
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-    let server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
+    const claim = await acquireGatewayE2ePortBlock();
+    // Restarts reuse the port, so the claim outlives each server.
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let releaseClaim: (() => Promise<void>) | undefined = claim.release;
+    cleanup.push(async () => {
+      await server?.close();
+      await releaseClaim?.();
     });
-    cleanup.push(() => server.close());
+    const startServer = () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      }).catch((error: unknown) => {
+        // Incomplete startup rollback can leave the listener bound; keep the port claimed.
+        if (
+          collectNestedErrorCandidates(error).some(
+            (cause) => cause instanceof GatewayStartupCleanupError,
+          )
+        ) {
+          releaseClaim = undefined;
+        }
+        throw error;
+      });
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+    server = await startServer();
 
     let client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token,
       clientDisplayName: "gateway agent artifact APIs",
       scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -216,16 +232,13 @@ describe("Gateway agent and artifact APIs", () => {
     cleanup.push(() => disconnectGatewayClient(client));
     const restartGateway = async (clientDisplayName: string) => {
       await disconnectGatewayClient(client);
-      await server.close();
+      await server?.close();
+      server = undefined;
       clearRuntimeConfigSnapshot();
       clearConfigCache();
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      server = await startServer();
       client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token,
         clientDisplayName,
         scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -354,23 +367,6 @@ describe("Gateway agent and artifact APIs", () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    const task = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      agentId: "main",
-      requesterAgentId: "main",
-      task: "produce a managed artifact",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    cleanup.push(() => {
-      deleteTaskRecordById(task.taskId);
-    });
     const documentFixtures = [
       {
         name: "artifact.json",
@@ -413,17 +409,16 @@ describe("Gateway agent and artifact APIs", () => {
         __openclaw: {
           id: messageId,
           seq: 1,
-          messageTaskId: task.taskId,
         },
       } as never,
     });
     expect(
-      attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
+      await attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
     ).toBe(true);
 
     await disconnectGatewayClient(client);
     client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token,
       clientDisplayName: "gateway artifact APIs after reload",
       scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -433,7 +428,6 @@ describe("Gateway agent and artifact APIs", () => {
       artifacts: Array<{
         id: string;
         sessionKey: string;
-        taskId?: string;
         type: string;
         title: string;
         mimeType?: string;
@@ -441,7 +435,7 @@ describe("Gateway agent and artifact APIs", () => {
       }>;
     };
     const reloadedArtifactList = await client.request<ArtifactList>("artifacts.list", {
-      taskId: task.taskId,
+      sessionKey,
     });
     expect(reloadedArtifactList.artifacts.map((artifact) => artifact.title)).toEqual([
       "artifact.json",
@@ -453,14 +447,13 @@ describe("Gateway agent and artifact APIs", () => {
     await restartGateway("gateway artifact APIs after document restart");
     expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     const artifactList = await client.request<ArtifactList>("artifacts.list", {
-      taskId: task.taskId,
+      sessionKey,
     });
     expect(artifactList.artifacts).toHaveLength(2);
     for (const fixture of documentFixtures) {
       const artifact = artifactList.artifacts.find((entry) => entry.title === fixture.name);
       expect(artifact).toMatchObject({
         sessionKey,
-        taskId: task.taskId,
         type: "file",
         title: fixture.name,
         mimeType: fixture.mimeType,
@@ -468,10 +461,10 @@ describe("Gateway agent and artifact APIs", () => {
       });
       await expect(
         client.request("artifacts.get", {
-          taskId: task.taskId,
+          sessionKey,
           artifactId: artifact?.id,
         }),
-      ).resolves.toMatchObject({ artifact: { id: artifact?.id, taskId: task.taskId } });
+      ).resolves.toMatchObject({ artifact: { id: artifact?.id, sessionKey } });
 
       const download = await client.request<{ url: string; expiresAt: string }>(
         "artifacts.download",
@@ -482,7 +475,7 @@ describe("Gateway agent and artifact APIs", () => {
       );
       expect(download.url).toContain("mediaTicket=");
       expect(download.expiresAt).toBeTruthy();
-      const downloadUrl = `http://127.0.0.1:${port}${download.url}`;
+      const downloadUrl = `http://127.0.0.1:${claim.port}${download.url}`;
       const response = await fetch(downloadUrl);
       expect(response.status).toBe(200);
       expect(Buffer.from(await response.arrayBuffer())).toEqual(fixture.body);
@@ -504,11 +497,11 @@ describe("Gateway agent and artifact APIs", () => {
     ).rejects.toThrow(/artifact not found/i);
     await expect(
       client.request("artifacts.get", {
-        taskId: task.taskId,
-        agentId: "other",
+        sessionKey,
+        agentId: createdAgent.agentId,
         artifactId: artifact.id,
       }),
-    ).rejects.toThrow(/artifact not found/i);
+    ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
 
     await expect(
       client.request("agents.delete", {

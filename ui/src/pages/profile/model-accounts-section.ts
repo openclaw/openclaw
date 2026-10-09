@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
@@ -67,18 +67,9 @@ export type ModelAccountsSectionProps = {
   onConnectCheck: () => void;
 };
 
-function inputValue(event: Event): string {
-  // SAFETY: each @input listener below is bound to its own text input element.
-  return (event.target as HTMLInputElement).value;
-}
-
 function gatewayEndpoint(gatewayUrl: string): string {
-  try {
-    const url = new URL(gatewayUrl);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return t("profilePage.modelAccounts.gatewayUnavailable");
-  }
+  const url = URL.parse(gatewayUrl);
+  return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
 }
 
 function accountIdDetail(accounts: UserModelAccount[], account: UserModelAccount) {
@@ -92,54 +83,52 @@ function accountIdDetail(accounts: UserModelAccount[], account: UserModelAccount
     : "";
 }
 
-function renderLinkedRow(props: ModelAccountsSectionProps, link: UserProfileAuthLink) {
-  const account = props.accounts.find(
-    (candidate) => candidate.authProfileId === link.authProfileId,
+function renderAccountRow(
+  props: ModelAccountsSectionProps,
+  row: { kind: "linked"; link: UserProfileAuthLink } | { kind: "saved"; account: UserModelAccount },
+) {
+  const linked = row.kind === "linked";
+  const reference = row.kind === "linked" ? row.link : row.account;
+  const account =
+    row.kind === "linked"
+      ? props.accounts.find((candidate) => candidate.authProfileId === row.link.authProfileId)
+      : row.account;
+  const label =
+    row.kind === "linked"
+      ? (account?.label ?? t("profilePage.modelAccounts.gatewayAccount"))
+      : row.account.label;
+  const provider = providerDisplayLabel(reference.provider);
+  const action = t(
+    linked ? "profilePage.modelAccounts.unlinkAction" : "profilePage.modelAccounts.selectAction",
   );
   return renderSettingsRow({
     title: html`
-      <span class="model-accounts__id"
-        >${account?.label ?? t("profilePage.modelAccounts.gatewayAccount")}</span
-      >
-      <span class="model-accounts__provider">${providerDisplayLabel(link.provider)}</span>
+      <span class="model-accounts__id">${label}</span>
+      <span class="model-accounts__provider">${provider}</span>
     `,
-    description: html`${t("profilePage.modelAccounts.linkedDescription")}${
-      account ? accountIdDetail(props.accounts, account) : ""
-    }`,
+    description: html`${
+      row.kind === "linked"
+        ? t("profilePage.modelAccounts.linkedDescription")
+        : t(`profilePage.modelAccounts.authTypes.${row.account.authType}`)
+    }${account ? accountIdDetail(props.accounts, account) : ""}`,
     control: html`
-      ${renderSettingsStatus({ kind: "ok", label: t("profilePage.modelAccounts.linkedStatus") })}
+      ${linked ? renderSettingsStatus({ kind: "ok", label: t("profilePage.modelAccounts.linkedStatus") }) : nothing}
       <button
         type="button"
-        class="btn btn--sm profile-auth-link-unlink"
-        aria-label=${`${t("profilePage.modelAccounts.unlinkAction")}: ${providerDisplayLabel(link.provider)} · ${account?.label ?? link.authProfileId}`}
+        class="btn btn--sm ${linked ? "profile-auth-link-unlink" : "profile-auth-account-select"}"
+        data-auth-profile-id=${linked ? nothing : reference.authProfileId}
+        aria-label=${
+          linked
+            ? `${action}: ${provider} · ${account?.label ?? reference.authProfileId}`
+            : `${action}: ${provider} · ${label} (${reference.authProfileId})`
+        }
         ?disabled=${props.busy}
-        @click=${() => props.onUnlink(link.provider)}
+        @click=${() =>
+          linked
+            ? props.onUnlink(reference.provider)
+            : props.onSelectAccount(reference.authProfileId)}
       >
-        ${t("profilePage.modelAccounts.unlinkAction")}
-      </button>
-    `,
-  });
-}
-
-function renderSavedAccountRow(props: ModelAccountsSectionProps, account: UserModelAccount) {
-  return renderSettingsRow({
-    title: html`
-      <span class="model-accounts__id">${account.label}</span>
-      <span class="model-accounts__provider">${providerDisplayLabel(account.provider)}</span>
-    `,
-    description: html`${t(
-      `profilePage.modelAccounts.authTypes.${account.authType}`,
-    )}${accountIdDetail(props.accounts, account)}`,
-    control: html`
-      <button
-        type="button"
-        class="btn btn--sm profile-auth-account-select"
-        data-auth-profile-id=${account.authProfileId}
-        aria-label=${`${t("profilePage.modelAccounts.selectAction")}: ${providerDisplayLabel(account.provider)} · ${account.label} (${account.authProfileId})`}
-        ?disabled=${props.busy}
-        @click=${() => props.onSelectAccount(account.authProfileId)}
-      >
-        ${t("profilePage.modelAccounts.selectAction")}
+        ${action}
       </button>
     `,
   });
@@ -260,7 +249,9 @@ function renderManualLinkRow(props: ModelAccountsSectionProps) {
           .value=${props.linkDraft}
           placeholder=${t("profilePage.modelAccounts.inputPlaceholder")}
           ?disabled=${props.busy}
-          @input=${(event: Event) => props.onLinkDraftInput(inputValue(event))}
+          @input=${(event: Event) =>
+            // SAFETY: This listener is bound to the native text input above.
+            props.onLinkDraftInput((event.target as HTMLInputElement).value)}
         />
         <button
           type="submit"
@@ -279,11 +270,11 @@ function renderModelAccountRows(props: ModelAccountsSectionProps) {
     ${
       props.links.length === 0
         ? renderSettingsEmpty(t("profilePage.modelAccounts.empty"))
-        : props.links.map((link) => renderLinkedRow(props, link))
+        : props.links.map((link) => renderAccountRow(props, { kind: "linked", link }))
     }
     ${props.accounts
       .filter((account) => !account.selected)
-      .map((account) => renderSavedAccountRow(props, account))}
+      .map((account) => renderAccountRow(props, { kind: "saved", account }))}
     ${
       props.hasMore
         ? renderSettingsRow({
@@ -300,20 +291,16 @@ function renderModelAccountRows(props: ModelAccountsSectionProps) {
         : ""
     }
     ${renderSignIn(props)} ${props.showManualLink ? renderManualLinkRow(props) : ""}
-    ${
-      props.notice
-        ? html`<div class="settings-row model-accounts-notice" role="status">
-            <span class="settings-row__desc">${props.notice}</span>
+    ${(["notice", "error"] as const).map((kind) =>
+      props[kind]
+        ? html`<div
+            class="settings-row model-accounts-${kind}"
+            role=${kind === "notice" ? "status" : "alert"}
+          >
+            <span class="settings-row__desc">${props[kind]}</span>
           </div>`
-        : ""
-    }
-    ${
-      props.error
-        ? html`<div class="settings-row model-accounts-error" role="alert">
-            <span class="settings-row__desc">${props.error}</span>
-          </div>`
-        : ""
-    }
+        : "",
+    )}
     ${
       props.inventoryError
         ? html`<div class="settings-row model-accounts-error" role="alert">

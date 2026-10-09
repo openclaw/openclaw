@@ -1,5 +1,3 @@
-// Gateway HTTP session history endpoint.
-// Serves JSON and SSE history snapshots backed by session transcripts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -40,11 +38,11 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSessionHistoryUnavailableMessage } from "./session-history-error.js";
-import { resolveCursorSeq } from "./session-history-snapshot.js";
 import {
   readSessionHistorySnapshotAsync,
   SessionHistorySseState,
 } from "./session-history-state.js";
+import { resolveCursorSeq } from "./session-history-tail.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
@@ -91,10 +89,6 @@ function resolveSessionHistoryPath(url: URL): SessionHistoryPathResolution {
   } catch {
     return { error: "invalid-session-key", matched: true };
   }
-}
-
-function shouldStreamSse(req: IncomingMessage): boolean {
-  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
 }
 
 function resolveLimit(url: URL): Result<number | undefined, string> {
@@ -170,7 +164,6 @@ export async function handleSessionHistoryHttpRequest(
     req,
     res,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -327,7 +320,7 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const stream = shouldStreamSse(req);
+  const stream = hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
   if (
     !(await publishAuthorizedHistory((presentation) => {
       if (!stream) {
@@ -407,17 +400,7 @@ export async function handleSessionHistoryHttpRequest(
     if (streamResources.heartbeat) {
       clearInterval(streamResources.heartbeat);
     }
-    if (streamResources.unsubscribe) {
-      streamResources.unsubscribe();
-    }
-  }
-
-  function detachStreamListeners() {
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
-    res.off("close", handleResponseStreamClose);
-    res.off("finish", handleResponseStreamFinish);
-    res.off("error", handleResponseStreamError);
+    streamResources.unsubscribe?.();
   }
 
   function closeStream() {
@@ -449,7 +432,11 @@ export async function handleSessionHistoryHttpRequest(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    detachStreamListeners();
+    req.off("close", handleRequestStreamClose);
+    req.off("error", handleRequestStreamError);
+    res.off("close", handleResponseStreamClose);
+    res.off("finish", handleResponseStreamFinish);
+    res.off("error", handleResponseStreamError);
   }
 
   function handleResponseStreamError(error: Error) {
@@ -563,16 +550,19 @@ export async function handleSessionHistoryHttpRequest(
     pendingRefresh = undefined;
     queueStreamWork(async () => {
       let refresh = false;
+      const append = sseState.shouldRefreshForTranscriptPath(updatePath)
+        ? undefined
+        : await sseState.prepareInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+            messageSeq: update.messageSeq,
+          });
       await publishStream((presentation) => {
-        refresh = sseState.shouldRefreshForTranscriptPath(updatePath);
-        if (refresh) {
+        if (!append) {
+          refresh = true;
           return;
         }
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
-        });
+        const nextEvent = append();
         refresh = nextEvent?.shouldRefresh === true;
         if (refresh || nextEvent?.message === undefined) {
           return;

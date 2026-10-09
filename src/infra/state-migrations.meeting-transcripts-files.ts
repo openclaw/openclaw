@@ -22,7 +22,6 @@ const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
 export type LegacyMeetingTranscriptSnapshot = {
   sourceDir: string;
   relativeDir: string;
-  stageKey: string;
   session: TranscriptSessionDescriptor;
   utteranceCount: number;
   summary?: TranscriptsSummary;
@@ -160,7 +159,7 @@ function legacyTranscriptRelativeDir(session: TranscriptSessionDescriptor): stri
   }
   const legacySegment =
     session.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-  return path.normalize(path.join(date, legacySegment));
+  return path.join(date, legacySegment);
 }
 
 async function optionalRegularFile(filePath: string): Promise<boolean> {
@@ -287,13 +286,12 @@ export function readStagedMeetingTranscriptUtterances(params: {
   stageDatabase: DatabaseSync;
   stageKey: string;
   start: number;
-  limit: number;
 }): TranscriptUtterance[] {
   return params.stageDatabase
     .prepare(
       "SELECT utterance_json FROM staged_utterances WHERE stage_key = ? AND sequence >= ? ORDER BY sequence ASC LIMIT ?",
     )
-    .all(params.stageKey, params.start, params.limit)
+    .all(params.stageKey, params.start, LEGACY_UTTERANCE_INSERT_CHUNK_SIZE)
     .map((row) => JSON.parse(String(row.utterance_json)) as TranscriptUtterance);
 }
 
@@ -306,10 +304,6 @@ async function snapshotFile(filePath: string): Promise<{
   }
   const stat = await fs.stat(filePath);
   return { hash: await sha256File(filePath), sizeBytes: stat.size };
-}
-
-async function snapshotSourceFiles(files: string[]) {
-  return await Promise.all(files.map(snapshotFile));
 }
 
 function sourceFilesHash(
@@ -338,7 +332,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const summaryJsonPath = path.join(sourceDir, "summary.json");
   const summaryMarkdownPath = path.join(sourceDir, "summary.md");
   const files = [metadataPath, transcriptPath, summaryJsonPath, summaryMarkdownPath];
-  const beforeSnapshots = await snapshotSourceFiles(files);
+  const beforeSnapshots = await Promise.all(files.map(snapshotFile));
   if (!beforeSnapshots[0]?.hash) {
     throw new Error(`legacy transcript session is missing metadata.json: ${sourceDir}`);
   }
@@ -368,7 +362,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
     throw new Error(`legacy transcript summary session mismatch at ${summaryJsonPath}`);
   }
 
-  const fileSnapshots = await snapshotSourceFiles(files);
+  const fileSnapshots = await Promise.all(files.map(snapshotFile));
   if (
     fileSnapshots.some(
       (snapshot, index) =>
@@ -382,7 +376,6 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   return {
     sourceDir,
     relativeDir: params.relativeDir,
-    stageKey: params.relativeDir,
     session,
     utteranceCount,
     summary,
@@ -541,7 +534,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
       (fileName) => path.join(snapshot.sourceDir, fileName),
     );
-    const fileSnapshots = await snapshotSourceFiles(files);
+    const fileSnapshots = await Promise.all(files.map(snapshotFile));
     const currentHash = sourceFilesHash(files, fileSnapshots);
     if (currentHash !== snapshot.sourceHash) {
       return false;
@@ -556,7 +549,7 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;
-}): Promise<string> {
+}): Promise<void> {
   await validateMeetingTranscriptRoot(params.sourceRoot);
   const currentRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(params.sourceRoot);
   const expectedRelativeDirs = params.expectedRelativeDirs.toSorted((a, b) => a.localeCompare(b));
@@ -584,7 +577,6 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   } catch (error) {
     throw new LegacyMeetingTranscriptArchiveMovedError(error);
   }
-  return params.archiveRoot;
 }
 
 export class LegacyMeetingTranscriptArchiveMovedError extends Error {
@@ -709,16 +701,4 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
   }
-}
-
-export async function archiveDivergentMeetingTranscriptExport(params: {
-  sourceRoot: string;
-  relativeDir: string;
-  recoveryRoot: string;
-}): Promise<string> {
-  const source = path.join(params.sourceRoot, params.relativeDir);
-  const destination = path.join(params.recoveryRoot, params.relativeDir);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.rename(source, destination);
-  return destination;
 }

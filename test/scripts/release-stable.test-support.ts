@@ -13,8 +13,8 @@ export const PHASES = [
   "cut",
   "validate",
   "publish",
-  "sync-beta",
   "flip-github",
+  "sync-beta",
   "macos",
   "closeout",
 ] as const;
@@ -28,7 +28,23 @@ export type FakeStep = {
   exit?: number;
   times?: number;
   verifyLock?: boolean;
-  request?: { phase: string; run?: { id: number; attempt: number } };
+  request?: {
+    kind?: string;
+    refs?: { workflow: string };
+    phase: string;
+    run?: { id: number; attempt: number };
+    admission?: { workflowSha: string; workflowRef: string };
+    request?: {
+      targetSha: string;
+      targetContextRef: string;
+      workflowSha: string;
+      trustedWorkflowRef: string;
+      targetVersion: string;
+      repository: string;
+      inputs: { release_profile: string };
+      effectiveSoak: boolean;
+    };
+  };
 };
 type FakeCall = { bin: string; args: string[] };
 
@@ -67,7 +83,7 @@ export function phaseState(phase: ReleasePhase): ReleaseState {
       closeout: { status: "completed" },
     },
     cut: { cutSha: CUT_SHA, releaseSha: CUT_SHA },
-    validate: { continues: 0 },
+    validate: {},
     publish: { approvedGates: [] },
     syncBeta: {},
     flipGithub: {},
@@ -86,9 +102,6 @@ export function postState(phase: ReleasePhase): ReleaseState {
     toolingTag: "release-publish/bbbbbbbbbbbb-123",
     runId: "101",
     runAttempt: 1,
-    continues: 0,
-    stableSoakWaiver: "Operator-approved fixture's waiver; $no_shell `execution`",
-    laneWaiver: "Deferred fixture lanes",
   };
   state.publish = {
     approvedGates: [],
@@ -102,8 +115,7 @@ export function postState(phase: ReleasePhase): ReleaseState {
     probedAt: state.startedAt,
     parentSyncsBetaDistTag: false,
     parentSweepsStaleChildren: false,
-    parentApprovalReceipt: false,
-    closeoutResolvesWaivers: false,
+    childNpmPublishEnvironment: false,
   };
   return state;
 }
@@ -183,7 +195,6 @@ export function closeoutMain(version = RELEASE, notes = `## ${RELEASE}\n`): Fake
   ];
 }
 
-export const PUBLISH_WAIVER = "Operator's waiver; $NO_SHELL `no_shell`; approved=yes";
 export const CANDIDATE_COMMAND =
   String.raw`gh workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref release-publish/bbbbbbbbbbbb-123 \
   -f tag=v2026.9.6 \
@@ -191,9 +202,8 @@ export const CANDIDATE_COMMAND =
   -f full_release_validation_run_attempt=3 \
   -f npm_dist_tag=latest \
   -f plugin_publish_scope=all-publishable \
-  -f 'stable_soak_waiver=Operator'\''s waiver; $NO_SHELL \`no_shell\`; approved=yes' \
-  -f 'lane_waiver=Deferred fixture lanes' \
   -f publish_openclaw_npm=true \
+  -f finalize_release_before_docker=true \
   -f wait_for_clawhub=true`.replaceAll("\\`", "`");
 
 export const publishParentRun = () => ({
@@ -222,13 +232,12 @@ export const publishChild = (
   display_title: name,
 });
 
-export function publishState(receipt = false): ReleaseState {
+export function publishState(npmPublishEnvironment = false): ReleaseState {
   const state = postState("publish");
   delete state.publish.publishRunId;
   delete state.publish.npmVisibleAt;
-  state.validate.stableSoakWaiver = PUBLISH_WAIVER;
   if (state.capabilities) {
-    state.capabilities.parentApprovalReceipt = receipt;
+    state.capabilities.childNpmPublishEnvironment = npmPublishEnvironment;
   }
   return state;
 }
@@ -245,7 +254,7 @@ export function publishPreparation(createTag = false): FakeStep[] {
     ),
     ...(createTag
       ? [
-          step("git", ["tag", "-a", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
+          step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
           step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
         ]
       : []),
@@ -324,6 +333,10 @@ if (expected.request) {
   const target = resolve(args[index + 1]);
   if (!target.startsWith(resolve(root) + sep)) throw new Error('Request escaped fixture');
   mkdirSync(dirname(target), { recursive: true });
+  if (expected.request.request) {
+    expected.request.request.trustedWorkflowRef = args[args.indexOf('--trusted-workflow-ref') + 1];
+    if (expected.request.admission) expected.request.admission.workflowRef = args[args.indexOf('--admission-workflow-ref') + 1];
+  }
   writeFileSync(target, JSON.stringify(expected.request));
 }
 process.stdout.write(expected.stdout ?? '');
@@ -404,3 +417,13 @@ process.exit(expected.exit ?? 0);
     },
   };
 }
+
+// Shape written by probeCapabilities before strict publication removed waiver support.
+export const legacyCapabilities = (closeoutResolvesWaivers: boolean) => ({
+  parentSyncsBetaDistTag: false,
+  parentSweepsStaleChildren: false,
+  parentApprovalReceipt: false,
+  closeoutResolvesWaivers,
+  probedAt: "2026-09-24T00:00:00.000Z",
+  toolingSha: TOOLING_SHA,
+});

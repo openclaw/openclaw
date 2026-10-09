@@ -3,7 +3,9 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+import { composeSessionTranscriptWriteAssertion } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
+import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
@@ -33,7 +35,9 @@ export async function runCodexSettledTurnFinalization(
   options: CodexBoundedTurnOptions,
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   const { attempt, settledAttempt } = operation;
-  const assertActive = () => attempt.abortSignal?.throwIfAborted();
+  const assertActive = composeSessionTranscriptWriteAssertion([], () =>
+    attempt.abortSignal?.throwIfAborted(),
+  );
   assertActive();
   const finalizationContext = settledAttempt.settledTurnFinalizationContext;
   if (!(finalizationContext instanceof CodexSettledTurnContext)) {
@@ -78,7 +82,10 @@ export async function runCodexSettledTurnFinalization(
     developerInstructions: FINALIZER_DEVELOPER_INSTRUCTIONS,
     input: [{ type: "text", text: attempt.prompt, text_elements: [] }],
     requiredModalities: ["text"],
-    isolation: "private-stdio",
+    isolation: resolveCodexBoundedTurnIsolation({
+      ...options,
+      requireIsolatedAuth: Boolean(authHandoff.preparedAuth || authHandoff.authProfileId),
+    }),
     historyItems,
     requireNoExternalCapabilities: true,
     allowEmptyText: true,

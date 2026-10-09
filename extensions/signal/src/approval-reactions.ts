@@ -1,4 +1,3 @@
-// Signal plugin module implements approval reactions behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -194,7 +193,6 @@ export async function registerSignalApprovalReactionTarget(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;
-  routeAllowed: boolean;
   ttlMs?: number;
 }): Promise<SignalApprovalReactionTarget | null> {
   const key = buildReactionTargetKey(params);
@@ -210,8 +208,9 @@ export async function registerSignalApprovalReactionTarget(params: {
     allowedDecisions: params.allowedDecisions,
   }).map((binding) => binding.decision);
   if (
-    !params.routeAllowed ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     !key ||
     !approvalId ||
     allowedDecisions.length === 0
@@ -329,7 +328,6 @@ export async function registerSignalApprovalReactionTargetForDeliveredPayload(pa
   results: readonly SignalApprovalDeliveryResult[];
   targetAuthor?: string | null;
   targetAuthorUuid?: string | null;
-  ttlMs?: number;
 }): Promise<boolean> {
   if (normalizeLowercaseStringOrEmpty(params.target.channel) !== "signal") {
     return false;
@@ -384,8 +382,6 @@ export async function registerSignalApprovalReactionTargetForDeliveredPayload(pa
         allowedDecisions: metadata.allowedDecisions,
         targetAuthorKeys,
         route,
-        routeAllowed: true,
-        ttlMs: params.ttlMs,
       }),
     );
   }
@@ -466,7 +462,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
   actorId?: string | null;
   targetAuthor?: string | null;
   targetAuthorUuid?: string | null;
-  gatewayUrl?: string;
   logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
   const target = await resolveSignalApprovalReactionTargetWithPersistence({
@@ -505,7 +500,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
       channel: "signal",
       accountId: params.accountId,
       senderId: actorId,
-      gatewayUrl: params.gatewayUrl,
     },
     approvers: getSignalApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
     authorizeActorAction: (input) => signalApprovalAuth.authorizeActorAction(input),

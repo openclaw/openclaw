@@ -1,4 +1,5 @@
 import type { MarkdownIt, Token } from "markdown-it";
+import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import {
   markdownGitHubAliases,
   type MarkdownGitHubAliases,
@@ -6,6 +7,7 @@ import {
 } from "./markdown-github-repositories.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
+import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 
 // Keep item numbers aligned with parseGitHubItemPath; short numbers need a keyword.
 // A trailing `.` or `-` only disqualifies when it continues into a word (`#12.txt`,
@@ -101,6 +103,33 @@ function referenceTextContexts(children: readonly Token[]) {
   return contexts;
 }
 
+function linkedItemRepositories(children: readonly Token[]) {
+  const repositories = new Map<string, MarkdownGitHubRepository | null>();
+  // Only explicit links in this inline block lend context. Do not carry a
+  // repository across paragraphs, quoted examples, or streamed block boundaries.
+  for (const token of children) {
+    if (token.type !== "link_open") {
+      continue;
+    }
+    const href = token.attrGet("href");
+    const target = typeof href === "string" ? parseGitHubLinkTarget(href) : null;
+    if (!target) {
+      continue;
+    }
+    const key = `${target.kind}:${target.number}`;
+    const repository = { owner: target.owner.toLowerCase(), repo: target.repo.toLowerCase() };
+    const previous = repositories.get(key);
+    repositories.set(
+      key,
+      previous === undefined ||
+        (previous?.owner === repository.owner && previous.repo === repository.repo)
+        ? repository
+        : null,
+    );
+  }
+  return repositories;
+}
+
 export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
   markdownParser.core.ruler.before("web-link-classes", "github-item-refs", (state) => {
     // SAFETY: markdown.ts supplies normalized render options as markdown-it's untyped env.
@@ -118,6 +147,7 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
         continue;
       }
       const contexts = referenceTextContexts(children);
+      const linkedRepositories = linkedItemRepositories(children);
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {
@@ -125,69 +155,63 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
         }
         const context = contexts.get(token);
         if (context) {
-          const replacements: Token[] = [];
-          let cursor = 0;
-          const text = (content: string) => {
-            const label = new state.Token("text", "", 0);
-            label.content = content;
-            replacements.push(label);
-          };
-          for (const match of token.content.matchAll(GITHUB_ITEM_REF_RE)) {
-            const number = match[1];
-            if (!number) {
-              continue;
-            }
-            const end = match.index + match[0].length;
-            const referenceStart = match.index;
-            const startInRun = context.offset + referenceStart;
-            const endInRun = context.offset + end;
-            const content = context.run.content;
-            const preceding = content.slice(context.run.scannedTo, startInRun);
-            const direct = qualifiedRepository(preceding);
-            const keywordEnd = direct ? startInRun - direct.length : startInRun;
-            const prefix = content
-              .slice(context.run.scannedTo, keywordEnd)
-              .match(GITHUB_ITEM_KEYWORD_RE);
-            // A prior number cannot be part of the next adjacent keyword.
-            context.run.scannedTo = endInRun;
-            const keyword =
-              prefix && hasMarkdownLinkBoundaries(content, keywordEnd - prefix[0].length, endInRun)
-                ? prefix[1]
-                : undefined;
-            if (
-              (!keyword && !direct && number.length < 4) ||
-              !hasMarkdownLinkBoundaries(content, keywordEnd, endInRun) ||
-              /^[.-]\w/.test(content.slice(endInRun))
-            ) {
-              continue;
-            }
-            const repository =
-              direct?.repository ??
-              (keyword
-                ? referenceRepository(
-                    preceding.slice(0, -prefix![0].length),
-                    aliases,
-                    env?.githubRepo,
-                  )
-                : env?.githubRepo);
-            if (!repository) {
-              continue;
-            }
-            const base = `https://github.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
-            const path = keyword && /^(?:pr|pull)/i.test(keyword) ? "pull" : "issues";
-            const open = new state.Token("link_open", "a", 1);
-            open.attrSet("href", `${base}/${path}/${number}`);
-            text(token.content.slice(cursor, referenceStart));
-            replacements.push(open);
-            text(`#${number}`);
-            replacements.push(new state.Token("link_close", "a", -1));
-            cursor = end;
-          }
-          if (cursor) {
-            text(token.content.slice(cursor));
-            children.splice(index, 1, ...replacements);
-            index += replacements.length - 1;
-          }
+          index = replaceMarkdownTextMatches(
+            state,
+            children,
+            index,
+            GITHUB_ITEM_REF_RE,
+            (match) => {
+              const number = match[1];
+              if (!number) {
+                return null;
+              }
+              const end = match.index + match[0].length;
+              const referenceStart = match.index;
+              const startInRun = context.offset + referenceStart;
+              const endInRun = context.offset + end;
+              const content = context.run.content;
+              const preceding = content.slice(context.run.scannedTo, startInRun);
+              const direct = qualifiedRepository(preceding);
+              const keywordEnd = direct ? startInRun - direct.length : startInRun;
+              const prefix = content
+                .slice(context.run.scannedTo, keywordEnd)
+                .match(GITHUB_ITEM_KEYWORD_RE);
+              // A prior number cannot be part of the next adjacent keyword.
+              context.run.scannedTo = endInRun;
+              const keyword =
+                prefix &&
+                hasMarkdownLinkBoundaries(content, keywordEnd - prefix[0].length, endInRun)
+                  ? prefix[1]
+                  : undefined;
+              if (
+                (!keyword && !direct && number.length < 4) ||
+                !hasMarkdownLinkBoundaries(content, keywordEnd, endInRun) ||
+                /^[.-]\w/.test(content.slice(endInRun))
+              ) {
+                return null;
+              }
+              const kind = keyword && /^(?:pr|pull)/i.test(keyword) ? "pull" : "issue";
+              const linkedKey = `${kind}:${number}`;
+              const fallback = linkedRepositories.has(linkedKey)
+                ? linkedRepositories.get(linkedKey)
+                : env?.githubRepo;
+              const repository =
+                direct?.repository ??
+                (keyword
+                  ? referenceRepository(preceding.slice(0, -prefix![0].length), aliases, fallback)
+                  : fallback);
+              if (!repository) {
+                return null;
+              }
+              const base = `https://github.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
+              const path = kind === "pull" ? "pull" : "issues";
+              const open = new state.Token("link_open", "a", 1);
+              open.attrSet("href", `${base}/${path}/${number}`);
+              const label = new state.Token("text", "", 0);
+              label.content = `#${number}`;
+              return [open, label, new state.Token("link_close", "a", -1)];
+            },
+          );
         }
       }
     }

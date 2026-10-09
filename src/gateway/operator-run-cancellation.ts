@@ -18,16 +18,9 @@ import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
   GatewayRequestContext,
-  | "agentRunSeq"
-  | "broadcast"
-  | "cancelRunBoundApprovals"
-  | "chatAbortControllers"
+  | keyof Parameters<typeof createChatAbortOps>[0]
   | "chatQueuedTurns"
-  | "chatRunState"
-  | "getRuntimeConfig"
   | "logGateway"
-  | "nodeSendToSession"
-  | "removeChatRun"
   | "trackExecution"
 >;
 
@@ -101,6 +94,7 @@ function createGatewayOperatorRunCancellation(params: {
       runId,
       sessionKey: queued.sessionKey,
       stopReason: "rpc",
+      diagnosticReason: "authority-revoked",
     });
   };
   const cancel = async () => {
@@ -134,6 +128,7 @@ function createGatewayOperatorRunCancellation(params: {
       runId,
       sessionKey,
       stopReason: "rpc",
+      diagnosticReason: "authority-revoked",
       onAbortCommitted: () => deferAbortedPartialPersistence(snapshot, context),
     });
     if (!aborted) {

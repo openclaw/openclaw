@@ -1,10 +1,7 @@
 // Worker-owned GPT-Live media: werift transport, WASM Opus and packet pacing.
 import { randomInt } from "node:crypto";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createStreamingPcmResampler,
-  resamplePcm,
-} from "openclaw/plugin-sdk/realtime-voice-provider";
+import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice-provider";
 import {
   OpenAIQuicksilverAudioClock,
   OpenAIQuicksilverPendingAudio,
@@ -60,38 +57,15 @@ export type OpenAIQuicksilverAudioPeerContract = {
   close(): void;
 };
 
-function pcmBufferToInt16(pcm: Buffer): Int16Array {
-  const samples = new Int16Array(Math.floor(pcm.length / 2));
-  for (let index = 0; index < samples.length; index += 1) {
-    samples[index] = pcm.readInt16LE(index * 2);
-  }
-  return samples;
-}
-
-function convertRelayPcmToQuicksilverPcm(pcm24kMono: Buffer): Int16Array {
-  return duplicateMonoToStereo(resamplePcm(pcm24kMono, RELAY_SAMPLE_RATE, QUICKSILVER_SAMPLE_RATE));
-}
-
 function duplicateMonoToStereo(pcm48kMono: Buffer): Int16Array {
-  const mono48k = pcmBufferToInt16(pcm48kMono);
-  const stereo48k = new Int16Array(mono48k.length * QUICKSILVER_CHANNELS);
-  for (let index = 0; index < mono48k.length; index += 1) {
-    const sample = mono48k[index] ?? 0;
+  const frameCount = Math.floor(pcm48kMono.length / 2);
+  const stereo48k = new Int16Array(frameCount * QUICKSILVER_CHANNELS);
+  for (let index = 0; index < frameCount; index += 1) {
+    const sample = pcm48kMono.readInt16LE(index * 2);
     stereo48k[index * 2] = sample;
     stereo48k[index * 2 + 1] = sample;
   }
   return stereo48k;
-}
-
-function convertQuicksilverPcmToRelayPcm(pcm48kStereo: Int16Array): Buffer {
-  const frameCount = Math.floor(pcm48kStereo.length / QUICKSILVER_CHANNELS);
-  const mono48k = Buffer.alloc(frameCount * 2);
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    const left = pcm48kStereo[frame * 2] ?? 0;
-    const right = pcm48kStereo[frame * 2 + 1] ?? 0;
-    mono48k.writeInt16LE(Math.round((left + right) / 2), frame * 2);
-  }
-  return resamplePcm(mono48k, QUICKSILVER_SAMPLE_RATE, RELAY_SAMPLE_RATE);
 }
 
 function forwardSequenceDistance(expected: number, sequenceNumber: number): number {
@@ -164,14 +138,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       await cleanup();
       throw error;
     }
-  }
-
-  static convertRelayPcm(pcm24kMono: Buffer): Int16Array {
-    return convertRelayPcmToQuicksilverPcm(pcm24kMono);
-  }
-
-  static convertQuicksilverPcm(pcm48kStereo: Int16Array): Buffer {
-    return convertQuicksilverPcmToRelayPcm(pcm48kStereo);
   }
 
   private connected = false;
@@ -281,8 +247,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         this.flushInboundReorderWindow(state, true);
       }
     } catch (error) {
-      this.audioClock.stop();
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.fail(error);
     } finally {
       this.discardingInboundAudio = false;
       // The streaming filter also retains pre-clear PCM. Do not carry that tail
@@ -321,6 +286,11 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private reportMediaError(error: unknown): void {
     const report = this.state.callbacks.onMediaError ?? this.state.callbacks.onError;
     report(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+  }
+
+  private fail(error: unknown): void {
+    this.audioClock.stop();
+    this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
   }
 
   private handleInboundRtp(packet: WeriftRtpPacket): void {
@@ -363,8 +333,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
-      this.audioClock.stop();
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.fail(error);
     }
   }
 
@@ -440,8 +409,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.flushInboundReorderWindow(state, true);
       } catch (error) {
-        this.audioClock.stop();
-        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+        this.fail(error);
       }
     }, INBOUND_REORDER_DEPTH * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS);
     state.flushTimer.unref?.();
@@ -538,10 +506,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
           // A successful send restores usability. Another failure without one
           // means the transport cannot sustain packet-level recovery.
           if (this.outboundPacketFailed) {
-            this.audioClock.stop();
-            this.state.callbacks.onError(
-              toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"),
-            );
+            this.fail(error);
             return;
           }
           this.outboundPacketFailed = true;
@@ -549,8 +514,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         },
       );
     } catch (error) {
-      this.audioClock.stop();
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.fail(error);
     }
   }
 

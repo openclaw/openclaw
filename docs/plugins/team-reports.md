@@ -87,11 +87,16 @@ openclaw team-reports status --json
 openclaw dashboard
 ```
 
-On startup, yesterday triggers a catch-up run after 60 seconds unless a
-successful run started at or after that day's closing UTC midnight and includes
-that day. A completed manual run after close also satisfies catch-up, including
-one that finishes during the startup delay or deferred wait. A successful run
-that started while the day was still open does not satisfy closed-day catch-up.
+Startup does not trigger a report job. The first scheduled run collects yesterday's
+closed report and today's partial report, plus the day before startup when that run
+falls after the next UTC midnight, reusing healthy closed daily reports from
+the same organization scope. This also recovers partially failed runs without
+recollecting accepted closed days. Manual generation still refreshes the requested
+day. Week and month reports use stored daily activity.
+Collection and aggregation run in workers, with bounded batches staged in the
+plugin's SQLite connection. Scratch activity disappears when that connection closes;
+accepted report history and retention are unchanged.
+
 Status shows the run, stored periods, next scheduled times, and source warnings.
 To request a report immediately, use:
 
@@ -303,7 +308,7 @@ is a sibling of `config`, not a field inside it:
     // Keep your github and identity configuration here.
     summaries: {
       enabled: true,
-      model: "openai/gpt-6-astra",
+      model: "openai/gpt-5.6-sol",
       reasoning: "high",
     },
   },
@@ -338,7 +343,10 @@ call. Collection is stored before summarization, which may take several minutes.
 
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a
-45-minute deadline. Stopping the service cancels its timers and waits up to
+45-minute deadline. Automatic collection waits at least five minutes after the
+service starts. Intraday boundaries inside that window are skipped; a closed-day
+run due inside the window waits until its end. Later runs keep their usual cadence.
+Stopping the service cancels its timers and waits up to
 30 seconds for active work, then cancels remote collection and summarization.
 Any database operation already in progress and the final run outcome finish
 before storage closes.
@@ -433,8 +441,8 @@ allowed by `plugins.allow` if present, and the Control UI session has
 unavailable after fixing its configuration, run `openclaw plugins reload team-reports`.
 For an unavailable frame, check HTTPS or trusted loopback access and third-party-cookie policy.
 
-**There are no reports yet.** Run `openclaw team-reports status --json`. Startup
-catch-up waits 60 seconds, and collection or model calls may still be running.
+**There are no reports yet.** Run `openclaw team-reports status --json`. The first
+automatic collection waits for its scheduled time, and collection or model calls may still be running.
 Use `generate --intraday` for today's partial report. `/latest/` requires at
 least one closed daily report.
 

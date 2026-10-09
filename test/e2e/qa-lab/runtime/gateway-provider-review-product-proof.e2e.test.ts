@@ -10,6 +10,10 @@ import { rawDataToString } from "../../../../packages/gateway-client/src/websock
 import type { ResponseFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../../../src/agents/internal-runtime-context.js";
+import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -55,13 +59,23 @@ type SessionDescription = {
 };
 
 function userTexts(body: ProviderRequest): string[] {
-  return body.input
-    .filter((item) => item.role === "user")
-    .map((item) =>
-      typeof item.content === "string"
-        ? item.content
-        : (item.content ?? []).map((part) => part.text ?? "").join(""),
-    );
+  return (
+    body.input
+      .filter((item) => item.role === "user")
+      .map((item) =>
+        typeof item.content === "string"
+          ? item.content
+          : (item.content ?? []).map((part) => part.text ?? "").join(""),
+      )
+      // Runtime context has its own user-role carrier; it is not a conversation turn.
+      .filter(
+        (text) =>
+          !(
+            text.startsWith(`${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`) &&
+            text.endsWith(`\n${INTERNAL_RUNTIME_CONTEXT_END}`)
+          ),
+      )
+  );
 }
 
 async function connectOperator(gateway: OpenClawTestInstance, email: string, signal: AbortSignal) {

@@ -1,20 +1,13 @@
-/**
- * View-model for tool-call rows.
- *
- * Classifies a tool call into a small set of presentation kinds (command,
- * read, edit, write, search, fetch, generic) across the arg spellings used by
- * the OpenClaw session tools and foreign harnesses (Claude/Codex style).
- */
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
-  countTextLines,
   joinDiffSections,
   parseDiffDetailsString,
+  splitDiffLines,
   type DiffLine,
   type DiffStat,
 } from "./tool-call-diff.ts";
@@ -40,7 +33,6 @@ export type ToolCallView = {
   target?: string;
   /** Dimmed secondary detail (directory, query scope, URL host…). */
   targetDetail?: string;
-  /** Inline diff rows for edit/write calls. */
   diff?: DiffLine[];
   stat?: DiffStat;
   /** Producer-recorded operations for patch rows. */
@@ -48,20 +40,27 @@ export type ToolCallView = {
 };
 
 const COMMAND_TOOL_NAMES = new Set(["bash", "exec", "shell", "run_command", "run_terminal_cmd"]);
-const READ_TOOL_NAMES = new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"]);
-const EDIT_TOOL_NAMES = new Set([
-  "edit",
-  "edit_file",
-  "multiedit",
-  "multi_edit",
-  "notebookedit",
-  "notebook_edit",
-]);
 const TEXT_EDITOR_TOOL_NAMES = new Set(["str_replace_editor", "str_replace_based_edit_tool"]);
-const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
-const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
-const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
+const TOOL_KINDS: ReadonlyArray<readonly [ToolCallKind, ReadonlySet<string>]> = [
+  ["command", COMMAND_TOOL_NAMES],
+  ["read", new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"])],
+  [
+    "edit",
+    new Set([
+      "edit",
+      "edit_file",
+      "multiedit",
+      "multi_edit",
+      "notebookedit",
+      "notebook_edit",
+      ...PATCH_TOOL_NAMES,
+    ]),
+  ],
+  ["write", new Set(["write", "write_file", "create_file"])],
+  ["search", new Set(["grep", "find", "glob", "ls", "list", "codebase_search"])],
+  ["fetch", new Set(["web_fetch", "webfetch", "fetch"])],
+];
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
   return (
@@ -84,15 +83,16 @@ function splitPathForDisplay(path: string): { base: string; dir?: string } {
   return { base: normalized.slice(slash + 1), dir: normalized.slice(0, slash) };
 }
 
-type EditPair = { oldText: string; newText: string };
-
-type ResolvedEditDiff = { lines: DiffLine[]; stat?: DiffStat };
+type ResolvedEditDiff = { diff: DiffLine[]; stat?: DiffStat };
 
 const MAX_LOCAL_DIFF_PAIRS = 8;
 const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
 
-function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; truncated: boolean } {
-  const pairs: EditPair[] = [];
+function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  if (!args) {
+    return null;
+  }
+  const pairs: { oldText: string; newText: string }[] = [];
   let inputChars = 0;
   let truncated = false;
   const edits = Array.isArray(args.edits) ? args.edits : [args];
@@ -117,7 +117,18 @@ function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; trun
       pairs.push({ oldText, newText });
     }
   }
-  return { pairs, truncated };
+  if (pairs.length === 0) {
+    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
+  }
+  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
+  const result = joinDiffSections(sections, { truncated });
+  if (result.lines.length === 0) {
+    return null;
+  }
+  return {
+    diff: result.lines,
+    ...(result.kind === "complete" ? { stat: result.stat } : {}),
+  };
 }
 
 function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
@@ -131,51 +142,20 @@ function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
     return null;
   }
   return {
-    lines: lines.lines,
+    diff: lines.lines,
     ...(lines.kind === "complete" ? { stat: lines.stat } : {}),
   };
 }
 
-function resolveEditDiff(source: ToolCallViewSource): ResolvedEditDiff | null {
-  const fromDetails = readDetailsDiff(source.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const args = asRecord(source.args);
-  if (!args) {
-    return null;
-  }
-  const { pairs, truncated } = readEditPairs(args);
-  if (pairs.length === 0) {
-    return truncated ? { lines: [{ kind: "skip", text: "" }] } : null;
-  }
-  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
-  const result = joinDiffSections(sections, { truncated });
-  if (result.lines.length === 0) {
-    return null;
-  }
-  return {
-    lines: result.lines,
-    ...(result.kind === "complete" ? { stat: result.stat } : {}),
-  };
-}
-
-function resolveInsertionDiff(
-  source: ToolCallViewSource,
-  args: Record<string, unknown> | null,
-): ResolvedEditDiff | null {
-  const fromDetails = readDetailsDiff(source.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const insertText = args ? readNonBlankString(args.insert_text) : undefined;
+function resolveInsertionDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  const insertText = readNonBlankString(args?.insert_text);
   if (!insertText) {
     return null;
   }
   const lines = computeLineDiff("", insertText).lines;
   // The text is known, but its surrounding file context is not. Omit an exact
   // stat rather than implying this preview represents the final placement.
-  return lines.length > 0 ? { lines } : null;
+  return lines.length > 0 ? { diff: lines } : null;
 }
 
 function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
@@ -210,10 +190,6 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
   };
 }
 
-function normalizeKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
 function resolveToolCallKind(
   key: string,
   args: Record<string, unknown> | null,
@@ -233,23 +209,10 @@ function resolveToolCallKind(
         return "generic";
     }
   }
-  if (COMMAND_TOOL_NAMES.has(key)) {
-    return "command";
-  }
-  if (READ_TOOL_NAMES.has(key)) {
-    return "read";
-  }
-  if (EDIT_TOOL_NAMES.has(key) || PATCH_TOOL_NAMES.has(key)) {
-    return "edit";
-  }
-  if (WRITE_TOOL_NAMES.has(key)) {
-    return "write";
-  }
-  if (SEARCH_TOOL_NAMES.has(key)) {
-    return "search";
-  }
-  if (FETCH_TOOL_NAMES.has(key)) {
-    return "fetch";
+  for (const [kind, names] of TOOL_KINDS) {
+    if (names.has(key)) {
+      return kind;
+    }
   }
   // Arg-shape fallback for harness-specific command tools.
   if (args && typeof args.command === "string" && Object.keys(args).length <= 3) {
@@ -267,38 +230,28 @@ const toolCallViewCache = new WeakMap<
 >();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
-  const args = asRecord(source.args);
+  const call = unwrapToolCallForDisplay(source);
+  const args = asRecord(call.args);
   const cacheKey = args ?? asRecord(source.details);
-  const name = normalizeKey(source.name);
+  const name = call.name.trim().toLowerCase();
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
     if (cached && cached.details === source.details && cached.name === name) {
       return cached.view;
     }
   }
-  const view = buildToolCallView(source, args);
+  const view = buildToolCallView(source, args, name);
   if (cacheKey) {
     toolCallViewCache.set(cacheKey, { details: source.details, name, view });
   }
   return view;
 }
 
-/**
- * Strip the `sh -lc '<command>'` wrapper harnesses add around agent commands
- * so rows show the command the model actually wrote. Display-only.
- */
-function unwrapShellWrapperCommand(command: string): string {
-  const match = command.match(
-    /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
-  );
-  return match?.[2] ?? command;
-}
-
 function buildToolCallView(
   source: ToolCallViewSource,
   args: Record<string, unknown> | null,
+  key: string,
 ): ToolCallView {
-  const key = normalizeKey(source.name);
   const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
     ? readNonBlankString(args?.command)?.trim().toLowerCase()
     : undefined;
@@ -306,10 +259,14 @@ function buildToolCallView(
 
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;
+    // Display the inner command from a harness's sh -lc wrapper.
+    const shellWrapper = command?.match(
+      /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
+    );
     return {
       kind,
       title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
-      command: command ? unwrapShellWrapperCommand(command) : command,
+      command: shellWrapper?.[2] ?? command,
       code: resolveExecCode(args),
     };
   }
@@ -329,25 +286,18 @@ function buildToolCallView(
       return view;
     }
 
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return { ...view, ...authoritativeDiff };
+    }
     if (kind === "edit") {
       const diff =
         editorCommand === "insert"
-          ? resolveInsertionDiff(source, args)
+          ? resolveInsertionDiff(args)
           : editorCommand === "undo_edit"
-            ? readDetailsDiff(source.details)
-            : resolveEditDiff(source);
-      return {
-        ...view,
-        ...(diff ? { diff: diff.lines, ...(diff.stat ? { stat: diff.stat } : {}) } : {}),
-      };
-    }
-    const authoritativeDiff = readDetailsDiff(source.details);
-    if (authoritativeDiff) {
-      return {
-        ...view,
-        diff: authoritativeDiff.lines,
-        ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
-      };
+            ? null
+            : resolveEditDiff(args);
+      return { ...view, ...diff };
     }
     const details = asRecord(source.details);
     if (details?.changed === false) {
@@ -368,7 +318,7 @@ function buildToolCallView(
       // Present details need created=true before zero removals are authoritative.
       ...(details && details.created !== true
         ? {}
-        : { stat: { added: countTextLines(content), removed: 0 } }),
+        : { stat: { added: splitDiffLines(content).length, removed: 0 } }),
     };
   }
 

@@ -1,7 +1,10 @@
-// Installs fatal and transient unhandled rejection/exception handlers.
 import process from "node:process";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { restoreRuntimeTerminalState } from "../runtime.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { isAbortError } from "./abort-signal.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import { extractErrorCode, formatUncaughtError, readErrorCause, readErrorName } from "./errors.js";
@@ -10,8 +13,7 @@ import { isTransientNetworkError } from "./retryable-network-errors.js";
 
 export { isTransientNetworkError } from "./retryable-network-errors.js";
 
-type UnhandledRejectionHandler = (reason: unknown) => boolean;
-type UncaughtExceptionHandler = (error: unknown) => boolean;
+type ErrorHandler = (error: unknown) => boolean;
 
 // Plugins resolve `openclaw/plugin-sdk/runtime` through their own staged
 // `node_modules`, which loads a separate copy of this module. To keep registry
@@ -19,18 +21,10 @@ type UncaughtExceptionHandler = (error: unknown) => boolean;
 const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
 const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
 function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
-  const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
-  let handlers = g[globalKey];
-  if (!(handlers instanceof Set)) {
-    handlers = new Set<UnhandledRejectionHandler>();
-    g[globalKey] = handlers;
-  }
+  const handlers = resolveGlobalSingleton(globalKey, () => new Set<ErrorHandler>());
   return {
-    register(handler: UnhandledRejectionHandler): () => void {
-      handlers.add(handler);
-      return () => {
-        handlers.delete(handler);
-      };
+    register(handler: ErrorHandler): () => void {
+      return registerListener(handlers, handler);
     },
     isHandled(error: unknown): boolean {
       for (const handler of handlers) {
@@ -112,76 +106,22 @@ const TRANSIENT_SQLITE_MESSAGE_SNIPPETS = [
   "disk i/o error",
 ];
 
-function hasSqliteSignal(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
+function hasSqliteSignal(err: unknown): err is Record<string, unknown> {
+  const record = asOptionalObjectRecord(err);
+  if (!record) {
     return false;
   }
-
-  const code = extractErrorCode(err);
-  if (typeof code === "string") {
-    const normalizedCode = code.trim().toUpperCase();
-    if (normalizedCode === "ERR_SQLITE_ERROR" || normalizedCode.startsWith("SQLITE_")) {
-      return true;
-    }
-  }
-
-  const name = normalizeLowercaseStringOrEmpty(readErrorName(err));
-  if (name.includes("sqlite")) {
-    return true;
-  }
-
-  const message =
-    "message" in err && typeof err.message === "string"
-      ? normalizeLowercaseStringOrEmpty(err.message)
-      : "";
-  if (message.includes("sqlite")) {
-    return true;
-  }
-
-  return false;
-}
-
-function isBenignUncaughtNetworkMessage(message: string): boolean {
-  if (BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE.test(message)) {
-    return true;
-  }
-
-  // `ws` emits this exact Error when close()/terminate() aborts a CONNECTING socket.
-  // Keep exact matching so arbitrary WebSocket errors still take the fatal path.
-  return message === WS_PRE_HANDSHAKE_CLOSE_MESSAGE;
-}
-
-function extractNumericErrorCode(err: unknown, key: "errno" | "errcode"): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const value = (err as Record<"errno" | "errcode", unknown>)[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
+  const code = extractErrorCode(err)?.trim().toUpperCase();
+  return (
+    code === "ERR_SQLITE_ERROR" ||
+    code?.startsWith("SQLITE_") === true ||
+    normalizeLowercaseStringOrEmpty(readErrorName(err)).includes("sqlite") ||
+    normalizeLowercaseStringOrEmpty(record.message).includes("sqlite")
+  );
 }
 
 function extractErrorCodeWithCause(err: unknown): string | undefined {
-  const direct = extractErrorCode(err);
-  if (direct) {
-    return direct;
-  }
-  return extractErrorCode(readErrorCause(err));
-}
-
-function isFatalError(err: unknown): boolean {
-  const code = extractErrorCodeWithCause(err);
-  return code !== undefined && FATAL_ERROR_CODES.has(code);
-}
-
-function isConfigError(err: unknown): boolean {
-  const code = extractErrorCodeWithCause(err);
-  return code !== undefined && CONFIG_ERROR_CODES.has(code);
+  return extractErrorCode(err) || extractErrorCode(readErrorCause(err));
 }
 
 export function isTransientSqliteError(err: unknown): boolean {
@@ -199,24 +139,17 @@ export function isTransientSqliteError(err: unknown): boolean {
       continue;
     }
 
-    const sqliteErrcode = extractNumericErrorCode(candidate, "errcode");
+    const value = candidate.errcode;
+    const sqliteErrcode = asFiniteNumber(
+      typeof value === "string" && value.trim() ? Number(value) : value,
+    );
     if (sqliteErrcode !== undefined && TRANSIENT_SQLITE_ERRCODES.has(sqliteErrcode)) {
       return true;
     }
 
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-
-    const messageParts = [
-      (candidate as { message?: unknown }).message,
-      (candidate as { errstr?: unknown }).errstr,
-    ];
+    const messageParts = [candidate.message, candidate.errstr];
     for (const rawMessage of messageParts) {
       const message = normalizeLowercaseStringOrEmpty(rawMessage);
-      if (!message) {
-        continue;
-      }
       if (TRANSIENT_SQLITE_MESSAGE_CODE_RE.test(message)) {
         return true;
       }
@@ -229,17 +162,8 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
-/**
- * Checks if an error is a transient file watcher error that shouldn't crash the gateway.
- * These are typically resource exhaustion issues (e.g., inotify watches exhausted) that
- * can be recovered from by degrading to manual sync mode.
- *
- * Note: ENOSPC is a general POSIX error code (disk full, write failures, etc.).
- * To avoid misclassifying unrelated storage failures, we require both the ENOSPC code
- * AND a watch/inotify-related message indicator, similar to how hasSqliteSignal gates
- * SQLite errors.
- */
-export function isTransientFileWatchError(err: unknown): boolean {
+/** Requires watcher evidence so ordinary ENOSPC storage failures remain fatal. */
+function isTransientFileWatchError(err: unknown): boolean {
   if (!err) {
     return false;
   }
@@ -247,7 +171,6 @@ export function isTransientFileWatchError(err: unknown): boolean {
   const hasFileWatchSignal = (message: string) =>
     message.includes("inotify") ||
     message.includes("watcher") ||
-    message.includes("file watcher") ||
     message.includes("watch limit") ||
     message.includes("max watches");
   const hasFileWatchExhaustionSignal = (message: string) =>
@@ -258,15 +181,13 @@ export function isTransientFileWatchError(err: unknown): boolean {
     message.includes("max watches");
 
   for (const candidate of collectNestedErrorCandidates(err)) {
-    // Skip non-object candidates early
-    if (!candidate || typeof candidate !== "object") {
+    const record = asOptionalObjectRecord(candidate);
+    if (!record) {
       continue;
     }
 
     const code = extractErrorCodeOrErrno(candidate);
-    const rawMessage =
-      "message" in candidate && typeof candidate.message === "string" ? candidate.message : "";
-    const message = normalizeLowercaseStringOrEmpty(rawMessage);
+    const message = normalizeLowercaseStringOrEmpty(record.message);
 
     // ENOSPC requires both the code AND a watch/inotify message indicator
     // to avoid misclassifying general disk-full errors as transient watcher errors.
@@ -274,15 +195,11 @@ export function isTransientFileWatchError(err: unknown): boolean {
       if (hasFileWatchSignal(message)) {
         return true;
       }
-      // ENOSPC without watch indicator is not classified here
       continue;
     }
 
     // Without an ENOSPC code, only classify explicit watcher resource exhaustion.
     // Generic "file watcher failed" labels can wrap permission/config/runtime failures.
-    if (!message) {
-      continue;
-    }
     if (
       (message.includes("no space left on device") && hasFileWatchSignal(message)) ||
       hasFileWatchExhaustionSignal(message)
@@ -300,7 +217,7 @@ export function isTransientUnhandledRejectionError(err: unknown): boolean {
   );
 }
 
-function isBenignUncaughtNetworkException(err: unknown): boolean {
+export function isBenignUncaughtExceptionError(err: unknown): boolean {
   for (const candidate of collectNestedErrorCandidates(err)) {
     // Undici emits this bare TypeError when a response body aborts after request start.
     // Keep the shape exact so unrelated "terminated" errors still take the fatal path.
@@ -312,38 +229,31 @@ function isBenignUncaughtNetworkException(err: unknown): boolean {
     }
 
     const code = extractErrorCodeOrErrno(candidate);
-    if (code && BENIGN_UNCAUGHT_EXCEPTION_NETWORK_CODES.has(code)) {
+    if (
+      code &&
+      (BENIGN_UNCAUGHT_EXCEPTION_NETWORK_CODES.has(code) ||
+        BENIGN_UNCAUGHT_EXCEPTION_CODES.has(code))
+    ) {
       return true;
     }
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    const message = normalizeLowercaseStringOrEmpty((candidate as { message?: unknown }).message);
-    if (message && isBenignUncaughtNetworkMessage(message)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function isBenignUncaughtExceptionError(err: unknown): boolean {
-  if (isBenignUncaughtNetworkException(err)) {
-    return true;
-  }
-  for (const candidate of collectNestedErrorCandidates(err)) {
-    const code = extractErrorCodeOrErrno(candidate);
-    if (code && BENIGN_UNCAUGHT_EXCEPTION_CODES.has(code)) {
+    const message = normalizeLowercaseStringOrEmpty(asOptionalObjectRecord(candidate)?.message);
+    // `ws` emits this exact Error when close()/terminate() aborts a CONNECTING socket.
+    // Keep exact matching so arbitrary WebSocket errors still take the fatal path.
+    if (
+      BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE.test(message) ||
+      message === WS_PRE_HANDSHAKE_CLOSE_MESSAGE
+    ) {
       return true;
     }
   }
   return false;
 }
 
-export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
+export function registerUnhandledRejectionHandler(handler: ErrorHandler): () => void {
   return rejectionRegistry.register(handler);
 }
 
-export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+export function registerUncaughtExceptionHandler(handler: ErrorHandler): () => void {
   return exceptionRegistry.register(handler);
 }
 
@@ -370,23 +280,22 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
-    // AbortError is typically an intentional cancellation (e.g., during shutdown)
-    // Log it but don't crash - these are expected during graceful shutdown
+    // Cancellation during shutdown is expected.
     if (isAbortError(reason)) {
       console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
       return;
     }
 
-    if (isFatalError(reason)) {
+    const code = extractErrorCodeWithCause(reason);
+    if (code !== undefined && FATAL_ERROR_CODES.has(code)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
       exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
       return;
     }
 
-    if (isConfigError(reason)) {
+    if (code !== undefined && CONFIG_ERROR_CODES.has(code)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      const exitCode =
-        extractErrorCodeWithCause(reason) === INVALID_CONFIG_ERROR_CODE ? EXIT_CONFIG_ERROR : 1;
+      const exitCode = code === INVALID_CONFIG_ERROR_CODE ? EXIT_CONFIG_ERROR : 1;
       exitWithTerminalRestore("configuration error", reason, "configuration_error", exitCode);
       return;
     }

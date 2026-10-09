@@ -50,6 +50,7 @@ export function buildNativeHookRelayCommandPlan(
         relayId: params.relayId,
         generation: params.generation,
         stateDbPath,
+        remoteCredentialPath: options?.remoteCredentialPath,
         event,
         nice: params.command?.nice,
         timeoutMs: resolveNativeHookRelayCommandTimeoutMs(

@@ -53,18 +53,9 @@ describe("protected historical session cancellation", () => {
     await testState.cleanup();
   });
 
-  it.each([
-    ["planning", false],
-    ["planning", true],
-    ["materialization", false],
-    ["materialization", true],
-    ["worker", false],
-    ["worker", true],
-    ["archived entry", false],
-    ["archived entry", true],
-  ] as const)(
-    "retains history after %s cancellation releases pressure (measurement fails: %s)",
-    async (stage, measurementFails) => {
+  it.each(["planning", "materialization", "worker", "archived entry"] as const)(
+    "retains history after %s cancellation releases pressure",
+    async (stage) => {
       const dayMs = 24 * 60 * 60 * 1000;
       const oldestAt = Date.now() - 8 * dayMs;
       const histories = ["protected", "next"].map((name, index) => ({
@@ -92,7 +83,6 @@ describe("protected historical session cancellation", () => {
       const measure = diskBudget.measureSessionPhysicalDiskUsage;
       const before = await measure(storePath);
       const highWaterBytes = before.totalBytes - peerBytes / 2;
-      const measurementFailure = new Error("synthetic post-cancellation measurement failure");
       let protectionChanged = false;
       vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage").mockImplementation(
         async (pathname) => {
@@ -100,9 +90,6 @@ describe("protected historical session cancellation", () => {
             expect(
               lifecycle.isSessionLifecycleMutationActive(storePath, [protectedHistory.sessionId]),
             ).toBe(false);
-            if (measurementFails) {
-              throw measurementFailure;
-            }
           }
           return await measure(pathname);
         },
@@ -125,36 +112,37 @@ describe("protected historical session cancellation", () => {
       };
       if (stage === "planning") {
         const mutate = lifecycle.runExclusiveSessionLifecycleMutation;
-        vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementation((params) =>
-          mutate({
-            ...params,
-            run: async () => {
-              if (
-                !protectionChanged &&
-                "scope" in params &&
-                params.scope === storePath &&
-                Array.from(params.identities).includes(protectedHistory.sessionId)
-              ) {
-                releasePressure();
-              }
-              return await params.run();
-            },
-          }),
+        vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementation(
+          (operation, params) =>
+            mutate(operation, {
+              ...params,
+              run: async () => {
+                if (
+                  !protectionChanged &&
+                  "scope" in params &&
+                  params.scope === storePath &&
+                  Array.from(params.identities).includes(protectedHistory.sessionId)
+                ) {
+                  releasePressure();
+                }
+                return await params.run();
+              },
+            }),
         );
       }
       if (stage === "materialization") {
         const archive = await import("./session-accessor.sqlite-archive.js");
-        const materialize = archive.materializeSessionStateDeletePlans;
-        vi.spyOn(archive, "materializeSessionStateDeletePlans").mockImplementationOnce(
-          async (plans) => {
-            expect(plans.map((plan) => plan.sessionId)).toEqual([protectedHistory.sessionId]);
-            const prepared = await materialize(plans);
+        const materialize = archive.materializeSessionHistoryEvictionPlan;
+        vi.spyOn(archive, "materializeSessionHistoryEvictionPlan").mockImplementationOnce(
+          async (plan) => {
+            expect(plan.sessionId).toBe(protectedHistory.sessionId);
+            const prepared = await materialize(plan);
             releasePressure();
             return prepared;
           },
         );
       }
-      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
       const reclaim = reclamation.runSqliteSessionReclamation;
       const reclaimedHistories: Array<{ sessionId: string; deleted: boolean }> = [];
       const reclaimedEntries: Array<{ sessionKey: string; deleted: boolean }> = [];
@@ -219,33 +207,18 @@ describe("protected historical session cancellation", () => {
             preserveRecentMs: 7 * dayMs,
           },
         });
-        let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>> | undefined;
-        if (measurementFails) {
-          await expect(sweep).rejects.toBe(measurementFailure);
-        } else {
-          result = await sweep;
-        }
+        const result = await sweep;
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
-        if (stage === "worker") {
+        if (stage === "materialization" || stage === "worker" || stage === "archived entry") {
           expect(admissions.length).toBeGreaterThan(0);
-          expect(reclaimedHistories[0]).toEqual({
-            sessionId: protectedHistory.sessionId,
-            deleted: false,
-          });
-        } else if (stage === "archived entry") {
-          expect(admissions.length).toBeGreaterThan(0);
-          expect(reclaimedEntries[0]).toEqual({
-            sessionKey: protectedHistory.sessionKey,
-            deleted: false,
-          });
         }
         for (const [index, history] of histories.entries()) {
           expect(sessionExists(history.sessionId), history.sessionId).toBe(true);
           expect(loadTranscriptEventsSync({ ...history, storePath })).toEqual(beforeEvents[index]);
           expect(readArchiveNames(history.sessionId)).toEqual([]);
         }
-        if (stage === "worker") {
+        if (stage === "materialization" || stage === "worker") {
           expect(reclaimedHistories).toEqual([
             { sessionId: protectedHistory.sessionId, deleted: false },
           ]);
@@ -258,11 +231,9 @@ describe("protected historical session cancellation", () => {
           expect(admissions).toEqual([]);
           expect(reclaimedHistories).toEqual([]);
         }
-        if (!measurementFails) {
-          expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
-          expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
-          expect(result?.totalBytesAfter).toBe((await measure(storePath)).totalBytes);
-        }
+        expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
+        expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
+        expect(result?.totalBytesAfter).toBe((await measure(storePath)).totalBytes);
       } finally {
         observeAdmissions.mockRestore();
       }

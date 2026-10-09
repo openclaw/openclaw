@@ -25,8 +25,7 @@ import {
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
-  buildSlackPresentationBlocks,
-  canRenderSlackPresentation,
+  buildSlackPresentationBlocksIfComplete,
   resolveSlackBlockOffsets,
   type SlackBlock,
   type SlackBlockRenderOptions,
@@ -38,16 +37,7 @@ import {
   hasSlackNativeDataBlock,
 } from "./native-data-blocks.js";
 import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
-import {
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-} from "./reply-action-ids.js";
+import { SLACK_BUTTON_ACTION_IDS, SLACK_SELECT_ACTION_IDS } from "./reply-action-ids.js";
 
 export type SlackReplyBlockSegment =
   | { kind: "blocks"; blocks: SlackBlock[] }
@@ -387,37 +377,29 @@ function resolvePresentationRenderOptions(
   };
 }
 
-function renderNativePresentation(
-  presentation: MessagePresentation,
-  options: SlackBlockRenderOptions,
-): SlackBlock[] | undefined {
-  if (!canRenderSlackPresentation(presentation, options)) {
-    return undefined;
-  }
-  const blocks = buildSlackPresentationBlocks(presentation, options);
-  return blocks.length > 0 ? blocks : undefined;
-}
-
 function appendPresentationPart(
   segments: SlackReplyBlockSegment[],
   presentation: MessagePresentation,
   questionOptionIndices?: AskUserQuestionOptionIndices,
 ): void {
   const currentBlocks = readLastBlockSegment(segments);
-  const currentRendered = renderNativePresentation(presentation, {
+  const currentRendered = buildSlackPresentationBlocksIfComplete(presentation, {
     ...resolvePresentationRenderOptions(segments, "current"),
     questionOptionIndices,
   });
-  if (currentRendered && currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS) {
+  if (
+    currentRendered?.length &&
+    currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS
+  ) {
     appendBlockSegment(segments, currentRendered);
     return;
   }
 
-  const freshRendered = renderNativePresentation(presentation, {
+  const freshRendered = buildSlackPresentationBlocksIfComplete(presentation, {
     ...resolvePresentationRenderOptions(segments, "new-message"),
     questionOptionIndices,
   });
-  if (freshRendered) {
+  if (freshRendered?.length) {
     appendBlockSegment(segments, freshRendered, true);
     return;
   }
@@ -430,18 +412,8 @@ function appendPresentationPart(
   );
 }
 
-const SLACK_BUTTON_CONTROL_ACTION_IDS = [
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-] as const;
-const SLACK_SELECT_CONTROL_ACTION_IDS = [
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-] as const;
+const SLACK_BUTTON_CONTROL_ACTION_IDS = Object.values(SLACK_BUTTON_ACTION_IDS);
+const SLACK_SELECT_CONTROL_ACTION_IDS = Object.values(SLACK_SELECT_ACTION_IDS);
 
 function readGeneratedSlackControlRowKey(block: SlackBlock): string | undefined {
   const record = block as { block_id?: unknown; elements?: unknown; type?: unknown };

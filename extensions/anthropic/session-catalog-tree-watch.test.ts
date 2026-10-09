@@ -1,193 +1,80 @@
-import { EventEmitter } from "node:events";
-import fs from "node:fs";
-import promises from "node:fs/promises";
-import os from "node:os";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createDirtyDirectoryWatch,
-  type DirtyDirectoryWatch,
-} from "./session-catalog-tree-watch.js";
-import { createClaudeCatalogWatchDriver } from "./session-catalog-watch.test-support.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as observation from "openclaw/plugin-sdk/file-access-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDirtyDirectoryWatch } from "./session-catalog-tree-watch.js";
 
-const armed = (watch: DirtyDirectoryWatch) =>
-  vi.waitFor(() => expect(watch.takeDirty()).toBeInstanceOf(Set), { timeout: 2_000, interval: 25 });
-
-describe("Claude project directory watch", () => {
-  let root: string;
-  let watch: DirtyDirectoryWatch | undefined;
-
-  beforeEach(async () => {
-    root = await promises.realpath(await promises.mkdtemp(path.join(os.tmpdir(), "claude-watch-")));
-  });
-
-  afterEach(async () => {
-    watch?.close();
-    watch = undefined;
-    vi.restoreAllMocks();
-    await promises.rm(root, { recursive: true, force: true });
-  });
-
-  it.each([1000.1, 65530.12])(
-    "arms at the deadline with a fractional clock starting at %s",
-    (start) => {
-      const driver = createClaudeCatalogWatchDriver(root);
-      const clock = vi.spyOn(performance, "now").mockReturnValue(start);
-      watch = createDirtyDirectoryWatch(path.join(root, "projects"));
-      watch.observeChildDirectories(["changed"]);
-      clock.mockReturnValue(start + 249);
-      expect(watch.takeDirty()).toBe("all");
-      expect(watch.takeDirty()).toBe("all");
-      clock.mockReturnValue(start + 250);
-      expect(watch.takeDirty()).toBe("all");
-      expect(watch.takeDirty()).toEqual(new Set());
-      driver.change("projects/changed/session.jsonl");
-      expect(watch.takeDirty()).toEqual(new Set(["changed"]));
-      expect(watch.takeDirty()).toEqual(new Set());
-    },
-  );
-
-  it("reports dirty children for transcript writes and new project directories", async () => {
-    if (process.platform === "darwin") {
-      // Let FSEvents observe the new fixture directory through its existing parent
-      // before asking a new stream to watch that directory's descendants.
-      const reported = new Set<string>();
-      const parentWatch = fs.watch(
-        path.dirname(root),
-        { recursive: true, persistent: false },
-        (_event, name) => {
-          if (name) {
-            reported.add(name);
-          }
-        },
-      );
-      try {
-        // fs.watch returns before its FSEvents stream is live. Keep emitting a
-        // fixture-only probe until the parent actually observes it, then create
-        // the directory whose one-shot birth event must not be lost.
-        const probe = path.join(root, ".watch-ready");
-        await vi.waitFor(
-          async () => {
-            await promises.appendFile(probe, ".");
-            expect(reported).toContain(`${path.basename(root)}/.watch-ready`);
-          },
-          { timeout: 2_000, interval: 25 },
-        );
-        await promises.mkdir(path.join(root, "existing"));
-        await vi.waitFor(() => expect(reported).toContain(`${path.basename(root)}/existing`), {
-          timeout: 2_000,
-          interval: 25,
-        });
-      } finally {
-        parentWatch.close();
-      }
-    } else {
-      await promises.mkdir(path.join(root, "existing"));
-    }
-    watch = createDirtyDirectoryWatch(root);
-    watch.observeChildDirectories(["existing"]);
-    await armed(watch);
-    const transcript = path.join(root, "existing", "session.jsonl");
-    await promises.writeFile(transcript, "{}\n");
-    await vi.waitFor(() => expect(watch?.takeDirty()).toEqual(new Set(["existing"])), {
-      timeout: 2_000,
-      interval: 25,
-    });
-    await promises.appendFile(transcript, "{}\n");
-    await vi.waitFor(() => expect(watch?.takeDirty()).toEqual(new Set(["existing"])), {
-      timeout: 2_000,
-      interval: 25,
-    });
-    await promises.mkdir(path.join(root, "new"));
-    await vi.waitFor(() => expect(watch?.takeDirty()).toContain("new"), {
-      timeout: 2_000,
-      interval: 25,
-    });
-  });
-
-  it("arms controlled event delivery independently of a fractional host clock", async () => {
-    const projects = path.join(root, "projects");
-    await promises.mkdir(path.join(projects, "existing"), { recursive: true });
-    vi.spyOn(performance, "now").mockReturnValue(1000.1);
-    const driver = createClaudeCatalogWatchDriver(root);
-    watch = createDirtyDirectoryWatch(projects);
-    watch.observeChildDirectories(["existing"]);
-
-    expect(watch.takeDirty()).toBe("all");
-    driver.arm();
-    expect(watch.takeDirty()).toBe("all");
-    expect(watch.takeDirty()).toEqual(new Set());
-
-    driver.change("projects/existing/session.jsonl");
-    expect(watch.takeDirty()).toEqual(new Set(["existing"]));
-    expect(watch.takeDirty()).toEqual(new Set());
-  });
-
-  it("keeps Linux child coverage after file renames and skipped missing directories", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    class Watcher extends EventEmitter {
-      close = vi.fn();
-      ref() {
-        return this;
-      }
-      unref() {
-        return this;
-      }
-    }
-    const watched = new Map<string, Watcher>();
-    vi.spyOn(fs, "watch").mockImplementation(
-      (
-        target: fs.PathLike,
-        options: fs.WatchOptions | fs.WatchListener<string>,
-        listener?: fs.WatchListener<string>,
-      ) => {
-        if (target === path.join(root, "missing")) {
-          throw Object.assign(new Error("directory removed"), { code: "ENOENT" });
-        }
-        const handle = new Watcher();
-        const callback = listener ?? (typeof options === "function" ? options : undefined);
-        if (callback) {
-          handle.on("change", callback);
-        }
-        watched.set(String(target), handle);
-        return handle;
-      },
-    );
-    watch = createDirtyDirectoryWatch(root);
-    watch.observeChildDirectories(["missing", "existing"]);
-    // Unarmed takes request a full read; arm by elapsing the settle window on the monotonic clock.
-    expect(watch.takeDirty()).toBe("all");
-    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10_000);
-    expect(watch.takeDirty()).toBe("all");
-    expect(watch.takeDirty()).toEqual(new Set());
-    const child = watched.get(path.join(root, "existing"));
-    child?.emit("change", "rename", "session.jsonl");
-    expect(watch.takeDirty()).toEqual(new Set(["existing"]));
-    expect(child?.close).not.toHaveBeenCalled();
-    child?.emit("change", "change", "session.jsonl");
-    expect(watch.takeDirty()).toEqual(new Set(["existing"]));
-    watched.get(root)?.emit("change", "rename", "existing");
-    expect(child?.close).toHaveBeenCalledOnce();
-    watch.observeChildDirectories(["existing"]);
-    expect(watched.get(path.join(root, "existing"))).not.toBe(child);
-  });
-
-  it("requests a full read instead of throwing when watcher creation fails", () => {
-    const attach = vi.spyOn(fs, "watch").mockImplementation(() => {
-      throw new Error("watch capacity exhausted");
-    });
-    watch = createDirtyDirectoryWatch(root);
-    expect(watch.takeDirty()).toBe("all");
-    expect(watch.takeDirty()).toBe("all");
-    expect(attach).toHaveBeenCalledTimes(1);
-  });
-
-  it("closes idempotently without reattaching on later takes", () => {
-    const attach = vi.spyOn(fs, "watch");
-    watch = createDirtyDirectoryWatch(root);
-    watch.close();
-    watch.close();
-    expect(watch.takeDirty()).toBe("all");
-    expect(attach).toHaveBeenCalledTimes(1);
-  });
+vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
+}));
+const temp = useAutoCleanupTempDirTracker(afterEach);
+const owners: Array<ReturnType<typeof createDirtyDirectoryWatch>> = [];
+afterEach(async () => {
+  await Promise.all(owners.splice(0).map((owner) => owner.close()));
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+it.each([2, 3])(
+  "invalidates catalog reads at depth %s and recovers lost coverage",
+  async (depth) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let created = createDeferred<observation.WatchSubscription>();
+    const original = observation.watch;
+    const attach = vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
+      expect(options.persistent).toBe(false);
+      const subscription = original(authority, { ...options, mode: "poll" });
+      created.resolve(subscription);
+      return subscription;
+    });
+    const home = temp.make("claude-watch-");
+    const directory = path.join(home, "projects");
+    const source = path.join(directory, "existing", ...(depth === 3 ? ["workspace"] : []));
+    await fs.mkdir(path.join(source, "subagents"), { recursive: true });
+    const file = path.join(source, "session.jsonl");
+    await fs.writeFile(file, "{}\n");
+    const owner = createDirtyDirectoryWatch(directory, depth);
+    owners.push(owner);
+    expect(owner.takeDirty()).toBe("all");
+    const subscription = await created.promise;
+    await subscription.ready;
+    await subscription.reconcile();
+    expect(owner.takeDirty()).toBe("all");
+    expect(owner.takeDirty()).toEqual(new Set());
+
+    await fs.appendFile(file, "changed\n");
+    await subscription.reconcile();
+    expect(owner.takeDirty()).toEqual(new Set(["existing"]));
+    expect(owner.takeDirty()).toEqual(new Set());
+    await fs.writeFile(path.join(source, "subagents", "ignored.jsonl"), "{}\n");
+    await subscription.reconcile();
+    expect(owner.takeDirty()).toEqual(new Set());
+
+    await fs.mkdir(path.join(directory, "new"));
+    await subscription.reconcile();
+    expect(owner.takeDirty()).toEqual(new Set(["new"]));
+    await fs.rm(file);
+    await subscription.reconcile();
+    expect(owner.takeDirty()).toEqual(new Set(["existing"]));
+
+    await fs.rename(directory, path.join(home, "retired"));
+    await expect(subscription.reconcile()).rejects.toThrow();
+    expect(owner.takeDirty()).toBe("all");
+    expect(attach).toHaveBeenCalledTimes(1);
+    await fs.mkdir(directory);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
+    created = createDeferred<observation.WatchSubscription>();
+    expect(owner.takeDirty()).toBe("all");
+    const replacement = await created.promise;
+    await replacement.ready;
+    await replacement.reconcile();
+    expect(owner.takeDirty()).toBe("all");
+    expect(owner.takeDirty()).toEqual(new Set());
+    await owner.close();
+    expect(replacement.health().state).toBe("closed");
+    expect(owner.takeDirty()).toBe("all");
+    expect(attach).toHaveBeenCalledTimes(2);
+  },
+);

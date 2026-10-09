@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -16,6 +23,13 @@ import {
 
 let fixtureCompletion: Promise<void> | undefined;
 let releaseFixture: (() => void) | undefined;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     // Vitest cancellation can finish the test before its async body reaches finally.
@@ -35,12 +49,31 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-async function waitForFile(file: string): Promise<void> {
-  await expect
-    .poll(async () => fs.readFile(file, "utf8").catch(() => ""), {
-      timeout: 10_000,
-    })
-    .not.toBe("");
+async function fixtureEventBeforeSettlement(
+  file: string,
+  operation: PromiseLike<unknown>,
+): Promise<void> {
+  const readReady = () =>
+    fs.readFile(file, "utf8").catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return "";
+      }
+      throw error;
+    });
+  // The first-commit record precedes replies and exit; receipt delivery uses a separate pipe.
+  const settled = Promise.resolve(operation).then(
+    async () => {
+      if (!(await readReady())) {
+        throw new Error(`Independent WAL writer exited before publishing ${file}`);
+      }
+    },
+    async (error: unknown) => {
+      if (!(await readReady())) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(file, "ready"), settled]);
 }
 
 async function readWriterGeneration(file: string): Promise<number> {
@@ -49,7 +82,7 @@ async function readWriterGeneration(file: string): Promise<number> {
   return Number(generations.at(-2) ?? -1);
 }
 
-it.for(["inventory", "snapshot"] as const)(
+it.for(["snapshot", "discover"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   { timeout: 30_000 },
   async (mode, { signal }) => {
@@ -88,6 +121,7 @@ it.for(["inventory", "snapshot"] as const)(
         }
       }
       await fs.mkdir(candidateRoot);
+      await fs.mkdir(targetStateDir);
       await fs.writeFile(path.join(candidateRoot, "package.json"), '{"type":"module"}');
       const ready = path.join(root, "writer-ready");
       const stop = path.join(root, "writer-stop");
@@ -99,12 +133,12 @@ it.for(["inventory", "snapshot"] as const)(
       import fs from "node:fs";
       import { DatabaseSync } from "node:sqlite";
       import { setTimeout as sleep } from "node:timers/promises";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       const files = ${JSON.stringify([shared, agent])};
       const stores = files.map(file => new DatabaseSync(file));
       try {
-        for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 128;");
+        for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 1;");
         fs.writeFileSync(${JSON.stringify(progress)}, "");
-        fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
         let generation = 0;
         while (!fs.existsSync(${JSON.stringify(stop)})) {
           for (const db of stores) {
@@ -113,6 +147,10 @@ it.for(["inventory", "snapshot"] as const)(
             db.exec("COMMIT");
           }
           fs.appendFileSync(${JSON.stringify(progress)}, String(generation++) + "\\n");
+          if (generation === 1) {
+            fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+            sendReceipt(${JSON.stringify(ready)}, "ready");
+          }
           for (const file of files) {
             if (fs.statSync(file + "-wal").size > 16 * 1024 * 1024) {
               throw new Error("bounded writer WAL exceeded 16 MiB");
@@ -167,6 +205,7 @@ it.for(["inventory", "snapshot"] as const)(
       const input = {
         stateDir,
         targetStateDir,
+        stagingRoot: targetStateDir,
         candidateRoot,
         config: {},
         env: {
@@ -202,13 +241,24 @@ it.for(["inventory", "snapshot"] as const)(
         maxOutputBytes: { stdout: 4096, stderr: 4096 },
       });
       try {
-        await waitForFile(ready);
-        await expect
-          .poll(() => readWriterGeneration(progress), { timeout: 10_000 })
-          .toBeGreaterThanOrEqual(0);
+        await withinTest(fixtureEventBeforeSettlement(ready, writing), signal);
+        expect(await readWriterGeneration(progress)).toBeGreaterThanOrEqual(0);
         const before = await readWriterGeneration(progress);
         const result = await runWorker({ mode, ...admission });
         expect(result.code, result.stderr.toString()).toBe(0);
+        const progressFrames = result.stderr
+          .toString()
+          .split("\n")
+          .filter((line) => line.startsWith("State schema progress: "))
+          .map((line) => JSON.parse(line.slice("State schema progress: ".length)));
+        const completed = progressFrames.filter((entry) => entry.snapshot?.status === "completed");
+        expect(completed).toHaveLength(mode === "snapshot" ? 2 : 1);
+        for (const { snapshot } of completed) {
+          expect(snapshot.copiedBytes).toBeGreaterThan(4194304);
+          expect(snapshot.copiedPages).toBeGreaterThan(0);
+          expect(snapshot.copiedPages).toBe(snapshot.totalPages);
+          expect(snapshot.elapsedMs).toBeGreaterThanOrEqual(0);
+        }
         // One fresh materialization per source; verification consumes that private image.
         expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
           mode === "snapshot" ? 2 : 1,
@@ -219,11 +269,10 @@ it.for(["inventory", "snapshot"] as const)(
         await fs.writeFile(stop, "stop");
         await writing;
         const after = await readWriterGeneration(progress);
-        if (mode === "inventory") {
-          const inventory = UpdateCandidateSnapshotInventorySchema.parse(
-            JSON.parse(result.stdout.toString()),
-          );
-          expect([...inventory.databases.keys()]).toEqual(expect.arrayContaining([shared, agent]));
+        if (mode === "discover") {
+          expect(JSON.parse(result.stdout.toString())).toMatchObject({
+            sharedVersion: { path: shared, userVersion: 3 },
+          });
         } else {
           const snapshot = UpdateCandidateStateSnapshotSchema.parse(
             JSON.parse(result.stdout.toString()),

@@ -209,9 +209,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
       capture,
       requireTab: async (tabId, epoch, afterNavigation = false) => {
         assertCurrent();
-        const tab = afterNavigation
-          ? await policy.requireTabAfterNavigation(tabId, epoch)
-          : await policy.requireTab(tabId, epoch);
+        const tab = await policy.requireTab(tabId, epoch, afterNavigation);
         assertCurrent();
         return tab;
       },

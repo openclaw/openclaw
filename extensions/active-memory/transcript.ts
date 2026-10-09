@@ -1,10 +1,13 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { asPositiveFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
+  asFiniteNumber,
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { clampInt } from "./config.js";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readExplicitMemoryEvidence,
   readStructuredMemoryEvidenceFromContent,
@@ -23,32 +26,26 @@ import {
   type TranscriptReadLimits,
 } from "./types.js";
 
-function resolveTranscriptReadLimits(
+export function resolveTranscriptReadLimits(
   limits?: TranscriptReadLimits,
 ): Required<TranscriptReadLimits> {
   return {
-    maxChars: clampInt(
-      limits?.maxChars,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-      1,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-    ),
-    maxLines: clampInt(
-      limits?.maxLines,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-    ),
-    maxBytes: clampInt(
-      limits?.maxBytes,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-    ),
+    maxChars: resolveIntegerOption(limits?.maxChars, DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS, {
+      min: 1,
+      max: DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
+    }),
+    maxLines: resolveIntegerOption(limits?.maxLines, DEFAULT_TRANSCRIPT_READ_MAX_LINES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_LINES,
+    }),
+    maxBytes: resolveIntegerOption(limits?.maxBytes, DEFAULT_TRANSCRIPT_READ_MAX_BYTES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
+    }),
   };
 }
 
-async function streamActiveMemoryTranscriptRecords(params: {
+export async function streamActiveMemoryTranscriptRecords(params: {
   source: ActiveMemoryTranscriptSource;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
@@ -98,18 +95,15 @@ function extractActiveMemorySearchDebug(
     configuredMode: normalizeOptionalString(debug?.configuredMode),
     effectiveMode: normalizeOptionalString(debug?.effectiveMode),
     fallback: normalizeOptionalString(debug?.fallback),
-    searchMs:
-      typeof debug?.searchMs === "number" && Number.isFinite(debug.searchMs)
-        ? debug.searchMs
-        : undefined,
-    hits: typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+    searchMs: asFiniteNumber(debug?.searchMs),
+    hits: asFiniteNumber(debug?.hits),
     warning,
     action,
     error,
   };
 }
 
-function readMemoryResultFromSessionRecord(
+export function readMemoryResultFromSessionRecord(
   value: unknown,
   toolsAllow: readonly string[] = [
     ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
@@ -156,14 +150,11 @@ type ActiveMemoryHookDeadline = {
   stop: () => void;
 };
 
-function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
+export function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let deadlineAt = 0;
-  let resolveTimeout: (value: symbol) => void = () => {};
-  const promise = new Promise<symbol>((resolve) => {
-    resolveTimeout = resolve;
-  });
+  const { promise, resolve: resolveTimeout } = createDeferred<symbol>();
   const stop = () => {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -184,6 +175,13 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const remainingMs = () =>
     timeoutId ? Math.max(0, Math.floor(deadlineAt - performance.now())) : 0;
   return { arm, promise, remainingMs, stop };
+}
+
+function hasExpandedSummary(details: Record<string, unknown> | undefined): boolean {
+  return (
+    asPositiveFiniteNumber(details?.expandedSummaryCount) !== undefined &&
+    Boolean(normalizeOptionalString(details?.answer))
+  );
 }
 
 function hasUsableMemoryResult(
@@ -211,11 +209,7 @@ function hasUsableMemoryResult(
     return text !== undefined ? text.length > 0 : /"text"\s*:\s*"(?!")/.test(content);
   }
   if (toolName === "lcm_grep") {
-    if (
-      typeof details?.totalMatches === "number" &&
-      Number.isFinite(details.totalMatches) &&
-      details.totalMatches > 0
-    ) {
+    if (asPositiveFiniteNumber(details?.totalMatches) !== undefined) {
       return true;
     }
     return /^## LCM Grep Results[\s\S]*^\*\*Total matches:\*\*\s+[1-9]\d*$/m.test(content);
@@ -228,25 +222,9 @@ function hasUsableMemoryResult(
     return /^LCM_SUMMARY \S+/m.test(content) || /^## LCM File: \S+/m.test(content);
   }
   if (toolName === "lcm_expand_query") {
-    if (
-      typeof details?.expandedSummaryCount === "number" &&
-      Number.isFinite(details.expandedSummaryCount) &&
-      details.expandedSummaryCount > 0 &&
-      Boolean(normalizeOptionalString(details?.answer))
-    ) {
-      return true;
-    }
-    try {
-      const parsed = asOptionalRecord(JSON.parse(content));
-      return (
-        typeof parsed?.expandedSummaryCount === "number" &&
-        Number.isFinite(parsed.expandedSummaryCount) &&
-        parsed.expandedSummaryCount > 0 &&
-        Boolean(normalizeOptionalString(parsed?.answer))
-      );
-    } catch {
-      return false;
-    }
+    return (
+      hasExpandedSummary(details) || hasExpandedSummary(asOptionalRecord(safeParseJson(content)))
+    );
   }
   const normalizedContent = normalizeOptionalString(content);
   const explicitEvidence = details ? readExplicitMemoryEvidence(details) : undefined;
@@ -258,10 +236,3 @@ function hasUsableMemoryResult(
   // the lookup was empty; explicit failures are rejected above.
   return Boolean(normalizedContent) && explicitEvidence !== false && structuredEvidence !== false;
 }
-
-export {
-  createActiveMemoryHookDeadline,
-  readMemoryResultFromSessionRecord,
-  resolveTranscriptReadLimits,
-  streamActiveMemoryTranscriptRecords,
-};

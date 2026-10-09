@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { ImageLightboxGalleryController } from "../../../components/image-lightbox-gallery.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { createMessageGroup, createUserMessage } from "./chat-message.test-support.ts";
-import { renderMessageGroup } from "./chat-message.ts";
 
 let container: HTMLDivElement;
 let onRequestUpdate: () => void;
@@ -26,6 +26,46 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+
+function stubImageDecoding(blobPrefix: string, decode: () => Promise<void>) {
+  let blobIndex = 0;
+  const NativeUrl = URL;
+  vi.stubGlobal(
+    "URL",
+    class extends NativeUrl {
+      static override createObjectURL = () => `${blobPrefix}-${blobIndex++}`;
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  vi.stubGlobal(
+    "Image",
+    class {
+      src = "";
+      decode = decode;
+    },
+  );
+}
+
+function imageResponse() {
+  return new Response("png", { headers: { "Content-Type": "image/png" } });
+}
+
+function createGallery() {
+  const controller = new ImageLightboxGalleryController(vi.fn());
+  let opened: ImageLightboxItem | undefined;
+  return {
+    controller,
+    onOpenImage: vi.fn((item: ImageLightboxItem) => {
+      opened?.release?.();
+      opened = item;
+      controller.reset(item.gallery, item);
+    }),
+    dispose: () => {
+      controller.dispose();
+      opened?.release?.();
+    },
+  };
+}
 
 describe("message image gallery loading", () => {
   it("renders canonical inbound transcript images through the authenticated media route", async () => {
@@ -87,10 +127,15 @@ describe("message image gallery loading", () => {
     ).toBe(expectedSrc);
     const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button");
     expect(tile).not.toBeNull();
+    expect(tile?.getAttribute("aria-label")).toBe(`Open image ${filename}`);
+    expect(container.querySelector(".chat-message-image")?.getAttribute("alt")).toBe(filename);
     tile!.click();
     await opened.promise;
     expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: new URL(expectedSrc, window.location.href).href }),
+      expect.objectContaining({
+        src: new URL(expectedSrc, window.location.href).href,
+        title: filename,
+      }),
     );
   });
 
@@ -100,34 +145,12 @@ describe("message image gallery loading", () => {
     const decoded = createDeferred();
     const decode = vi.fn(() => decoded.promise);
     const blobPrefix = `blob:progressive-${crypto.randomUUID()}`;
-    let blobIndex = 0;
-    const NativeUrl = URL;
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = () => `${blobPrefix}-${blobIndex++}`;
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    vi.stubGlobal(
-      "Image",
-      class {
-        src = "";
-        decode = decode;
-      },
-    );
-    const imageResponse = () => new Response("png", { headers: { "Content-Type": "image/png" } });
+    stubImageDecoding(blobPrefix, decode);
     const fetch = vi.fn((url: string) =>
       url === source ? full.promise : Promise.resolve(imageResponse()),
     );
     vi.stubGlobal("fetch", fetch);
-    const controller = new ImageLightboxGalleryController(vi.fn());
-    let opened: ImageLightboxItem | undefined;
-    const onOpenImage = vi.fn((item: ImageLightboxItem) => {
-      opened?.release?.();
-      opened = item;
-      controller.reset(item.gallery, item);
-    });
+    const { controller, onOpenImage, dispose } = createGallery();
     try {
       render(
         renderMessageImages([{ url: source, alt: "Detailed screenshot" }], {
@@ -157,44 +180,20 @@ describe("message image gallery loading", () => {
     } finally {
       full.resolve(new Response(null, { status: 503 }));
       decoded.resolve();
-      controller.dispose();
-      opened?.release?.();
+      dispose();
     }
   });
 
   it("keeps the preview when reopening an original the browser cannot decode", async () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const blobPrefix = `blob:unsupported-${crypto.randomUUID()}`;
-    let blobIndex = 0;
-    const NativeUrl = URL;
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = () => `${blobPrefix}-${blobIndex++}`;
-        static override revokeObjectURL = vi.fn();
-      },
-    );
     const decode = vi.fn(async () => {
       throw new Error("Unsupported image format");
     });
-    vi.stubGlobal(
-      "Image",
-      class {
-        src = "";
-        decode = decode;
-      },
-    );
-    const fetch = vi.fn(
-      async (_url: string) => new Response("image", { headers: { "Content-Type": "image/png" } }),
-    );
+    stubImageDecoding(blobPrefix, decode);
+    const fetch = vi.fn(async (_url: string) => imageResponse());
     vi.stubGlobal("fetch", fetch);
-    const controller = new ImageLightboxGalleryController(vi.fn());
-    let opened: ImageLightboxItem | undefined;
-    const onOpenImage = (item: ImageLightboxItem) => {
-      opened?.release?.();
-      opened = item;
-      controller.reset(item.gallery, item);
-    };
+    const { controller, onOpenImage, dispose } = createGallery();
     try {
       render(
         renderMessageImages([{ url: source, alt: "Original in unsupported format" }], {
@@ -216,8 +215,7 @@ describe("message image gallery loading", () => {
       expect(controller.current?.src).toBe(`${blobPrefix}-0`);
       expect(fetch.mock.calls.filter(([url]) => url === source)).toHaveLength(1);
     } finally {
-      controller.dispose();
-      opened?.release?.();
+      dispose();
     }
   });
 
@@ -227,23 +225,7 @@ describe("message image gallery loading", () => {
       vi.useFakeTimers();
       const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
       const blobPrefix = `blob:gallery-${crypto.randomUUID()}`;
-      let blobIndex = 0;
-      const NativeUrl = URL;
-      vi.stubGlobal(
-        "URL",
-        class extends NativeUrl {
-          static override createObjectURL = () => `${blobPrefix}-${blobIndex++}`;
-          static override revokeObjectURL = vi.fn();
-        },
-      );
-      vi.stubGlobal(
-        "Image",
-        class {
-          src = "";
-          async decode() {}
-        },
-      );
-      const imageResponse = () => new Response("png", { headers: { "Content-Type": "image/png" } });
+      stubImageDecoding(blobPrefix, async () => {});
       const fetchFull = vi.fn(async () => new Response(null, { status: 503 }));
       vi.stubGlobal(
         "fetch",
@@ -257,7 +239,7 @@ describe("message image gallery loading", () => {
             renderMessageImages(
               [
                 { url: "data:image/png;base64,cG5n", alt: "First image" },
-                { url: source, alt: "Managed neighbor" },
+                { url: source, alt: "Managed neighbor", fileName: "neighbor.png" },
               ],
               { onOpenImage, onRequestUpdate },
             ),
@@ -323,7 +305,7 @@ describe("message image gallery loading", () => {
         renderMessageImages(
           [
             { url: "data:image/png;base64,cG5n", alt: "First image" },
-            { url: localSource, alt: "Local neighbor" },
+            { url: localSource, fileName: "Local neighbor.png" },
           ],
           { onOpenImage, onRequestUpdate, sessionKey: "main", resourceBasePath: "/openclaw" },
         ),
@@ -366,7 +348,7 @@ describe("message image gallery loading", () => {
       if (removeOwner) {
         expect(result).toBeNull();
       } else {
-        expect(result?.title).toBe("Local neighbor");
+        expect(result?.title).toBe("Local neighbor.png");
         const url = new URL(result!.src, window.location.href);
         expect(url.pathname).toBe("/openclaw/__openclaw__/assistant-media");
         expect(url.searchParams.get("source")).toBe(localSource);

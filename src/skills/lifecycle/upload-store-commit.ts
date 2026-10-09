@@ -59,6 +59,7 @@ function toCommitResult(row: SkillUploadMetadataRow, requestedSha: string | unde
 export function commitSkillUploadInDatabase(
   params: { uploadId: string; requestedSha?: string },
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  admit?: (stage: "transaction" | "commit") => void,
 ) {
   const { uploadId, requestedSha } = params;
   const row = requireUploadMetadata(uploadId, options);
@@ -97,6 +98,7 @@ export function commitSkillUploadInDatabase(
     | { expired: true }
     | { expired: false; result: ReturnType<typeof toCommitResult> };
   const outcome = runOpenClawStateWriteTransaction(({ db }): CommitOutcome => {
+    admit?.("transaction");
     const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
     const current = executeSqliteQueryTakeFirstSync(
       db,
@@ -108,9 +110,11 @@ export function commitSkillUploadInDatabase(
     const committedAt = Date.now();
     if (!isFutureDateTimestampMs(current.expires_at, { nowMs: committedAt })) {
       deleteExpiredSkillUploadUnlessLeasedInDatabase(db, { uploadId, nowMs: committedAt });
+      admit?.("commit");
       return { expired: true };
     }
     if (current.committed === 1) {
+      admit?.("commit");
       return { expired: false, result: toCommitResult(current, requestedSha) };
     }
     if (current.received_bytes !== current.size_bytes || current.size_bytes !== archive.length) {
@@ -132,6 +136,7 @@ export function commitSkillUploadInDatabase(
       db,
       kysely.deleteFrom("skill_upload_chunks").where("upload_id", "=", uploadId),
     );
+    admit?.("commit");
     return {
       expired: false,
       result: {

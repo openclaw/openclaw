@@ -4,7 +4,9 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
+  TALK_READY_HISTORY_MESSAGE,
   videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,7 +18,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("replaces the call through the voice picker while preserving captions and agent work", async () => {
+  it("keeps the composer free of voice settings while preserving agent-requested voice changes", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const clientSession = {
         provider: "openai",
@@ -35,14 +37,15 @@ suite.define(() => {
         canChange: true,
       };
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": clientSession,
-          "talk.voice.get": selection,
         },
       });
       await installOpenAiTalkFixture(page);
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       const openAudio = async () => {
         await page.waitForFunction(() => {
@@ -66,8 +69,8 @@ suite.define(() => {
       };
       await gateway.waitForRequest("talk.client.create");
       await openAudio();
-      const picker = page.locator(".chat-talk-voice-picker");
-      await expect.poll(() => picker.textContent()).toContain("marin");
+      await page.getByRole("button", { name: "Stop voice input" }).waitFor();
+      expect(await page.locator(".chat-talk-voice-picker").count()).toBe(0);
       const transcript = async (text: string) => {
         await dispatchOpenAiTalkEvent(page, {
           type: "conversation.item.added",
@@ -107,18 +110,12 @@ suite.define(() => {
       });
       const stopRun = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stopRun.isVisible()).toBe(true);
-      await page.screenshot({ path: path.join(suite.artifactDir, "01-before-voice-change.png") });
-
-      await gateway.deferNext("talk.voice.set");
-      await picker.getByRole("button").click();
-      await picker.getByRole("option", { name: "alloy" }).waitFor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "02-voice-choices.png") });
-      await picker.locator('[data-value="alloy"]').click();
-      expect((await gateway.waitForRequest("talk.voice.set")).params).toEqual({
-        sessionKey: selection.sessionKey,
-        voiceSessionId: selection.voiceSessionId,
-        voice: "alloy",
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(suite.artifactDir, "01-active-call.png"),
       });
+
+      // The agent can still request a voice handoff through the Gateway event.
       await gateway.deferNext("talk.client.create");
       await gateway.emitGatewayEvent("talk.voice.change", {
         sessionKey: selection.sessionKey,
@@ -135,12 +132,10 @@ suite.define(() => {
         voiceChangeId: "voice-change",
       });
       expect(await gateway.getRequests("talk.voice.complete")).toHaveLength(0);
-      expect(await picker.getByRole("button").isDisabled()).toBe(true);
       expect(await stopRun.isVisible()).toBe(true);
       expect(await captions.textContent()).toContain("Keep working while I change your voice.");
 
       const applied = { ...selection, voiceSessionId: "voice-replacement", voice: "alloy" };
-      await gateway.setMethodResponse("talk.voice.get", applied);
       await gateway.resolveDeferred("talk.client.create", {
         ...clientSession,
         voiceSessionId: applied.voiceSessionId,
@@ -151,18 +146,84 @@ suite.define(() => {
         voiceSessionId: applied.voiceSessionId,
         outcome: "ready",
       });
-      await gateway.resolveDeferred("talk.voice.set", { ...applied, status: "applied" });
-      await expect.poll(() => picker.getByRole("button").isEnabled()).toBe(true);
-      expect(await picker.textContent()).toContain("alloy");
       await transcript("The new voice is ready.");
       await expect.poll(() => captions.textContent()).toContain("The new voice is ready.");
       expect(await captions.textContent()).toContain("Keep working while I change your voice.");
       expect(await stopRun.isVisible()).toBe(true);
-      await page.screenshot({ path: path.join(suite.artifactDir, "03-after-voice-change.png") });
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(suite.artifactDir, "03-after-voice-change.png"),
+      });
       await page.getByRole("button", { name: "Stop voice input" }).click();
-      await expect.poll(() => picker.count()).toBe(0);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Stop voice input" }).count())
+        .toBe(0);
+      expect(await gateway.getRequests("talk.voice.get")).toHaveLength(0);
+      expect(await gateway.getRequests("talk.voice.set")).toHaveLength(0);
       expect(await stopRun.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    });
+  });
+
+  it("keeps the speaker voice editable and saved in Talk settings", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const config = {
+        talk: { realtime: { provider: "openai", model: "gpt-realtime", speakerVoice: "marin" } },
+      };
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": {
+            exists: true,
+            valid: true,
+            config,
+            raw: JSON.stringify(config),
+            hash: "voice-settings",
+          },
+          "config.schema": {
+            schema: {
+              type: "object",
+              properties: { talk: { type: "object", additionalProperties: true } },
+            },
+            uiHints: {},
+            version: "test",
+          },
+          "talk.catalog": {
+            realtime: {
+              activeProvider: "openai",
+              ready: true,
+              providers: [
+                {
+                  id: "openai",
+                  label: "OpenAI",
+                  configured: true,
+                  models: ["gpt-realtime"],
+                  voices: ["alloy", "marin"],
+                  transports: ["webrtc"],
+                },
+              ],
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/talk`);
+      const voice = page.getByRole("combobox", { name: "Speaker voice", exact: true });
+      await expect.poll(() => voice.inputValue()).toBe("marin");
+      await voice.selectOption("alloy");
+      const save = await gateway.waitForRequest("config.set");
+      expect(save.params).toMatchObject({ raw: expect.any(String) });
+      const raw = (save.params as { raw: string }).raw;
+      expect(JSON.parse(raw)).toMatchObject({
+        talk: { realtime: { speakerVoice: "alloy" } },
+      });
+      await expect
+        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .toContain("Saved");
+      await page.reload();
+      await expect.poll(() => voice.inputValue()).toBe("alloy");
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(suite.artifactDir, "04-talk-settings.png"),
+      });
     });
   });
 });

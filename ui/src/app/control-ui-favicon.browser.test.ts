@@ -7,6 +7,7 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import {
+  applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
   applyControlUiPresentation,
 } from "./control-ui-environment-presentation.runtime.ts";
@@ -77,6 +78,7 @@ describe("favicon presentation ownership", () => {
   afterEach(() => {
     setCurrentThemeBranding({ mascot: "claw", critters: [] });
     document.documentElement.dataset.themeMascot = "claw";
+    applyControlUiFaviconImage(null);
     applyControlUiFaviconStatus("idle");
     applyControlUiPresentation({ environment: null });
     svgIcon.remove();
@@ -105,6 +107,62 @@ describe("favicon presentation ownership", () => {
     }
     setCurrentThemeBranding(previousBranding);
     vi.restoreAllMocks();
+  });
+
+  it("keeps personal artwork SVG-preferred without cropping or changing its status colors", async () => {
+    const artwork = new Image();
+    artwork.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>')}`;
+    await artwork.decode();
+    const decode = vi.spyOn(HTMLImageElement.prototype, "decode");
+    applyControlUiFaviconImage(artwork);
+    applyControlUiPresentation({
+      environment: { label: "Preview", color: "blue" },
+      seamColor: "#5078a0",
+    });
+    await Promise.resolve();
+    const idleHref = svgIcon.href;
+    // Firefox prefers any queued SVG candidate over a newer PNG, including a
+    // default restored briefly while personal artwork is being decoded.
+    expect(idleHref).toMatch(/^data:image\/svg\+xml,/u);
+    expect([svgIcon.type, pngIcon.type]).toEqual(["image/svg+xml", "image/svg+xml"]);
+    expect(decode).not.toHaveBeenCalled();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const drawing = canvas.getContext("2d")!;
+    for (const [status, dot] of [
+      ["working", [80, 120, 160]],
+      ["attention", [210, 150, 60]],
+      ["done", [100, 180, 120]],
+      ["disconnected", [130, 130, 130]],
+    ] as const) {
+      decode.mockClear();
+      const changed = createDeferred();
+      const observer = new MutationObserver(() => changed.resolve());
+      observer.observe(svgIcon, { attributes: true, attributeFilter: ["href"] });
+      try {
+        applyControlUiFaviconStatus(status);
+        await changed.promise;
+      } finally {
+        observer.disconnect();
+      }
+      expect(decode).not.toHaveBeenCalled();
+      const image = new Image();
+      image.src = svgIcon.href;
+      await image.decode();
+      drawing.clearRect(0, 0, 32, 32);
+      drawing.drawImage(image, 0, 0);
+      expect([...drawing.getImageData(8, 12, 1, 1).data]).toEqual([180, 40, 110, 255]);
+      expect(drawing.getImageData(16, 1, 1, 1).data[3]).toBe(0);
+      expect([...drawing.getImageData(25, 25, 1, 1).data]).toEqual([...dot, 255]);
+      expect(pngIcon.href).toBe(svgIcon.href);
+    }
+    applyControlUiFaviconStatus("idle");
+    await Promise.resolve();
+    expect(svgIcon.href).toBe(idleHref);
+    applyControlUiFaviconImage(null);
+    expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
+    applyControlUiPresentation({ environment: null });
+    expectOriginals();
   });
 
   function expectOriginals() {
@@ -188,6 +246,13 @@ describe("favicon presentation ownership", () => {
         agentSelection: selection,
         sessions,
         overlays,
+        theme: { settings: {}, subscribe: () => () => {} },
+        agents: { state: { agentsList: null }, subscribe: () => () => {} },
+        agentIdentity: {
+          get: () => null,
+          ensure: async () => {},
+          subscribe: () => () => {},
+        },
       });
       await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
       const styleReads = vi.spyOn(globalThis, "getComputedStyle");

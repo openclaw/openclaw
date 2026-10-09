@@ -1,10 +1,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { setImmediate, setTimeout as delay } from "node:timers/promises";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 import {
   createCronExitWatchers,
@@ -90,6 +98,7 @@ function makeFakeSupervisor(opts: { deferSpawn?: boolean } = {}) {
 function onExitJob(id: string, command = "true", enabled = true): CronJob {
   return {
     id,
+    agentId: "main",
     name: id,
     enabled,
     createdAtMs: 1,
@@ -104,6 +113,8 @@ function onExitJob(id: string, command = "true", enabled = true): CronJob {
 }
 
 const noopLogger = { info: () => {}, warn: () => {} };
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
 type FixtureHandlers = Omit<CronExitWatcherHandlers, "fireOnExit"> & {
   reserveExit: (job: CronJob) => Promise<void>;
@@ -113,9 +124,15 @@ type FixtureHandlers = Omit<CronExitWatcherHandlers, "fireOnExit"> & {
 };
 
 function createWatcherFixture(
-  params: FixtureHandlers &
-    Pick<Parameters<typeof createCronExitWatchers>[0], "shell" | "retryBackoffMs">,
+  params: Omit<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger"> &
+    Partial<Pick<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger">> &
+    NonNullable<Parameters<typeof createCronExitWatchers>[2]>,
 ) {
+  const {
+    reserveExit = vi.fn(async () => {}),
+    fireOnExit = vi.fn(async () => {}),
+    logger = noopLogger,
+  } = params;
   let jobs = new Map<string, CronJob>();
   const handlers = (next: FixtureHandlers): CronExitWatcherHandlers => ({
     ...next,
@@ -139,7 +156,11 @@ function createWatcherFixture(
       await next.fireOnExit(current, exit);
     },
   });
-  const watchers = createCronExitWatchers({ ...params, ...handlers(params) });
+  const watchers = createCronExitWatchers(
+    handlers({ ...params, reserveExit, fireOnExit, logger }),
+    scheduler,
+    params,
+  );
   return {
     ...watchers,
     reconcile: (current: CronJob[]) => {
@@ -153,7 +174,72 @@ function createWatcherFixture(
 const flush = () => setImmediate();
 
 describe("createCronExitWatchers", () => {
-  it("arms a watcher and fires on exit after the creating request closes", async () => {
+  beforeEach(() => {
+    clock = createGatewaySchedulerClock();
+    scheduler = createTestGatewayScheduler(clock.clock);
+  });
+  afterEach(async () => {
+    await scheduler.stop();
+  });
+
+  it.each(["delivery", "owner"])(
+    "does not arm an exit job needing %s repair alongside a healthy sibling",
+    async (repair) => {
+      const { supervisor, runs } = makeFakeSupervisor();
+      const watchers = createWatcherFixture({
+        getProcessSupervisor: () => supervisor as never,
+      });
+      const invalid = onExitJob("invalid-delivery");
+      if (repair === "delivery") {
+        Reflect.deleteProperty(invalid.delivery!, "mode");
+      } else {
+        delete invalid.agentId;
+      }
+      try {
+        watchers.reconcile([invalid, { ...onExitJob("healthy-exit"), agentId: "ops" }]);
+        await flush();
+        expect(supervisor.spawn).toHaveBeenCalledOnce();
+        expect(watchers.activeJobIds()).toEqual(["healthy-exit"]);
+      } finally {
+        const settled = watchers.cancelAll();
+        for (const run of runs) {
+          run.deferred.resolve({ exitCode: 0, reason: "manual-cancel" });
+        }
+        await settled;
+      }
+    },
+  );
+
+  it("uses the current default when arming an ownerless exit job", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    const armed = createDeferred();
+    let defaultAgentId: string | undefined = "main";
+    const watchers = createWatcherFixture({
+      getDefaultAgentId: () => defaultAgentId,
+      getProcessSupervisor: () => supervisor as never,
+      logger: { ...noopLogger, info: () => armed.resolve() },
+    });
+    const job = onExitJob("implicit-main");
+    delete job.agentId;
+    try {
+      defaultAgentId = undefined;
+      watchers.reconcile([job]);
+      expect(supervisor.spawn).not.toHaveBeenCalled();
+      defaultAgentId = "main";
+      watchers.reconcile([job]);
+      expect(supervisor.spawn).toHaveBeenCalledOnce();
+      await armed.promise;
+      expect(watchers.activeJobIds()).toEqual([job.id]);
+    } finally {
+      const settled = watchers.cancelAll();
+      for (const run of runs) {
+        run.deferred.resolve({ exitCode: 0, reason: "manual-cancel" });
+      }
+      await settled;
+    }
+  });
+
+  it("fires a historical owner's job after the creating request closes", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const creatorContext = new AsyncLocalStorage<string>();
     const creatorWork = new AsyncWorkScope();
@@ -180,13 +266,13 @@ describe("createCronExitWatchers", () => {
       });
     });
     const w = createWatcherFixture({
+      getDefaultAgentId: () => "research",
       getProcessSupervisor: () => supervisor as never,
       reserveExit,
       fireOnExit,
-      logger: noopLogger,
     });
 
-    inCreator(() => w.reconcile([onExitJob("job-a")]));
+    inCreator(() => w.reconcile([{ ...onExitJob("job-a"), agentId: "ops" }]));
     await creatorWork.drain();
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
@@ -201,6 +287,7 @@ describe("createCronExitWatchers", () => {
     await flush();
     expect(fireOnExit).toHaveBeenCalledTimes(1);
     expect(fireOnExit.mock.calls[0]?.[0].id).toBe("job-a");
+    expect(fireOnExit.mock.calls[0]?.[0].agentId).toBe("ops");
     expect(fireOnExit.mock.calls[0]?.[1]).toMatchObject({
       exitCode: 0,
       reason: "exit",
@@ -229,7 +316,6 @@ describe("createCronExitWatchers", () => {
       getProcessSupervisor: () => supervisor as never,
       reserveExit: oldReserveExit,
       fireOnExit: oldFireOnExit,
-      logger: noopLogger,
     });
 
     watchers.reconcile([onExitJob("old-owner"), onExitJob("new-owner")]);
@@ -288,7 +374,6 @@ describe("createCronExitWatchers", () => {
       waitForRunSettlement: oldWait,
       reserveExit: oldPersist,
       fireOnExit: oldFire,
-      logger: noopLogger,
     });
     watchers.reconcile([onExitJob("job-a")]);
     await flush();
@@ -320,23 +405,26 @@ describe("createCronExitWatchers", () => {
       const settled = createDeferred();
       const fired = vi.fn();
       let job = onExitJob("job-a");
-      const watchers = createCronExitWatchers({
-        getProcessSupervisor: () => supervisor as never,
-        logger: noopLogger,
-        fireOnExit: async (_job, _exit, controls) => {
-          try {
-            controls.commitGuard();
-            job = { ...job, enabled: false };
-            controls.onReserved();
-            reserved.resolve();
-            await release.promise;
-            controls.commitGuard();
-            fired();
-          } finally {
-            settled.resolve();
-          }
+      const watchers = createCronExitWatchers(
+        {
+          getProcessSupervisor: () => supervisor as never,
+          logger: noopLogger,
+          fireOnExit: async (_job, _exit, controls) => {
+            try {
+              controls.commitGuard();
+              job = { ...job, enabled: false };
+              controls.onReserved();
+              reserved.resolve();
+              await release.promise;
+              controls.commitGuard();
+              fired();
+            } finally {
+              settled.resolve();
+            }
+          },
         },
-      });
+        scheduler,
+      );
       try {
         watchers.reconcile([job]);
         await flush();
@@ -367,21 +455,22 @@ describe("createCronExitWatchers", () => {
     },
   );
 
-  it("routes post-handoff retries through the replacement scheduler owner", async () => {
+  it("retains a pending retry across handler handoff and uses the replacement owner", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const oldUpdateWatcherState = vi.fn(async () => {});
     const newUpdateWatcherState = vi.fn(async () => {});
     const watchers = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
       updateWatcherState: oldUpdateWatcherState,
-      logger: noopLogger,
-      retryBackoffMs: [0],
+      retryBackoffMs: [1_000],
     });
 
     watchers.reconcile([onExitJob("job-a")]);
     await flush();
+    expectDefined(runs[0], "first watcher").deferred.reject(new Error("wait failed"));
+    await flush();
+    expect(oldUpdateWatcherState).toHaveBeenCalledOnce();
+    expect(scheduler.nextWakeAtMs).toBe(1_000);
     await watchers.updateHandlers({
       getProcessSupervisor: () => supervisor as never,
       reserveExit: vi.fn(async () => {}),
@@ -389,13 +478,127 @@ describe("createCronExitWatchers", () => {
       updateWatcherState: newUpdateWatcherState,
       logger: noopLogger,
     });
-    expectDefined(runs[0], "runs[0] test invariant").deferred.reject(new Error("wait failed"));
-
-    await vi.waitFor(() => expect(newUpdateWatcherState).toHaveBeenCalledOnce());
-    expect(oldUpdateWatcherState).not.toHaveBeenCalled();
-    await delay(5);
-    await flush();
+    await clock.advanceBy(1_000);
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expectDefined(runs[1], "replacement watcher").deferred.reject(new Error("replacement failed"));
+    await flush();
+    expect(newUpdateWatcherState).toHaveBeenCalledOnce();
+    expect(oldUpdateWatcherState).toHaveBeenCalledOnce();
+    await watchers.cancelAll();
+    await clock.advanceBy(1_000);
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins a scheduled retry's failed-start publication during scheduler shutdown", async () => {
+    const { supervisor } = makeFakeSupervisor();
+    supervisor.spawn.mockRejectedValue(new Error("spawn failed"));
+    const firstRetryScheduled = createDeferred();
+    const retryFailure = createDeferred();
+    const releaseRetry = createDeferred();
+    const watchers = createWatcherFixture({
+      getProcessSupervisor: () => supervisor as never,
+      updateWatcherState: vi.fn(async (_job, patch) => {
+        if (patch.consecutiveErrors !== 1) {
+          retryFailure.resolve();
+          await releaseRetry.promise;
+        }
+      }),
+      logger: { ...noopLogger, warn: () => firstRetryScheduled.resolve() },
+      retryBackoffMs: [1_000],
+    });
+    watchers.reconcile([onExitJob("job-a")]);
+    await firstRetryScheduled.promise;
+    expect(scheduler.nextWakeAtMs).toBe(1_000);
+    const retry = clock.advanceBy(1_000);
+    await retryFailure.promise;
+    let stopped = false;
+    const stopping = scheduler.stop().then(() => {
+      stopped = true;
+    });
+    try {
+      for (let turn = 0; turn < 5; turn += 1) {
+        await Promise.resolve();
+      }
+      expect(stopped).toBe(false);
+    } finally {
+      releaseRetry.resolve();
+      await retry;
+      await stopping;
+      await watchers.cancelAll();
+    }
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    expect(watchers.activeJobIds()).toEqual([]);
+  });
+
+  it("restarts retries while a cancelled retry's publication is still settling", async ({
+    signal,
+  }) => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    supervisor.spawn
+      .mockRejectedValueOnce(new Error("initial spawn failed"))
+      .mockRejectedValueOnce(new Error("retry spawn failed"))
+      .mockRejectedValueOnce(new Error("replacement spawn failed"));
+    const firstRetryScheduled = createDeferred();
+    const retryFailure = createDeferred();
+    const releaseRetry = createDeferred();
+    const replacementRetryScheduled = createDeferred();
+    let restarting = false;
+    const fireOnExit = vi.fn(async () => {});
+    const watchers = createWatcherFixture({
+      getProcessSupervisor: () => supervisor as never,
+      fireOnExit,
+      updateWatcherState: async (job, patch) => {
+        if (job.id === "job-a" && patch.consecutiveErrors === 2) {
+          retryFailure.resolve();
+          await releaseRetry.promise;
+        }
+      },
+      logger: {
+        ...noopLogger,
+        warn: () => (restarting ? replacementRetryScheduled : firstRetryScheduled).resolve(),
+      },
+      retryBackoffMs: [1_000],
+    });
+    let retry: Promise<void> | undefined;
+    let cancelling: Promise<void> | undefined;
+    try {
+      watchers.reconcile([onExitJob("job-a")]);
+      await withinTest(firstRetryScheduled.promise, signal);
+      retry = Promise.resolve(clock.advanceBy(1_000));
+      await withinTest(retryFailure.promise, signal);
+      cancelling = watchers.cancelAll();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+
+      restarting = true;
+      watchers.reconcile([onExitJob("job-b")]);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          replacementRetryScheduled.promise,
+          cancelling,
+          "Watcher cancellation completed before its failure publication settled",
+        ),
+        signal,
+      );
+      expect(scheduler.nextWakeAtMs).toBe(2_000);
+      releaseRetry.resolve();
+      await withinTest(Promise.all([retry, cancelling]), signal);
+      expect(watchers.activeJobIds()).toEqual(["job-b"]);
+      expect(scheduler.nextWakeAtMs).toBe(2_000);
+
+      await withinTest(Promise.resolve(clock.advanceBy(1_000)), signal);
+      expect(supervisor.spawn).toHaveBeenCalledTimes(4);
+      expect(runs).toHaveLength(1);
+      expect(watchers.activeJobIds()).toEqual(["job-b"]);
+      expect(fireOnExit).not.toHaveBeenCalled();
+    } finally {
+      releaseRetry.resolve();
+      const closing = watchers.cancelAll();
+      for (const run of runs) {
+        run.deferred.resolve({ exitCode: null, reason: "manual-cancel" });
+      }
+      await Promise.all([retry, cancelling, closing]);
+    }
   });
 
   it("a fired job stays unarmed across a simulated restart (disabled in store → not re-run)", async () => {
@@ -404,9 +607,6 @@ describe("createCronExitWatchers", () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -419,9 +619,6 @@ describe("createCronExitWatchers", () => {
     // Simulate restart: a fresh manager reconciling the now-disabled persisted job.
     const restarted = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     restarted.reconcile([onExitJob("job-a", "sleep 1", false)]); // enabled=false after completion
     await flush();
@@ -438,7 +635,6 @@ describe("createCronExitWatchers", () => {
         throw new Error("store write failed");
       }),
       fireOnExit,
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -465,7 +661,6 @@ describe("createCronExitWatchers", () => {
       reserveExit,
       fireOnExit,
       updateWatcherState,
-      logger: noopLogger,
       retryBackoffMs: [0],
     });
 
@@ -490,10 +685,8 @@ describe("createCronExitWatchers", () => {
       expect.objectContaining({ consecutiveErrors: 1 }),
     );
     expect(w.activeJobIds()).toEqual(["job-a"]);
-    // The backoff timer re-arms without an external reconcile. The 0ms retry
-    // timer is armed only after async state persistence, so a fixed sleep races
-    // it on loaded CI workers — wait for the re-arm instead.
-    await vi.waitFor(() => expect(supervisor.spawn).toHaveBeenCalledTimes(2));
+    await clock.advanceBy(0);
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
     expect(w.activeJobIds()).toEqual(["job-a"]);
   });
 
@@ -503,10 +696,7 @@ describe("createCronExitWatchers", () => {
     const updateWatcherState = vi.fn(async () => {});
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
       updateWatcherState,
-      logger: noopLogger,
       retryBackoffMs: [0],
     });
 
@@ -516,9 +706,8 @@ describe("createCronExitWatchers", () => {
       expect.objectContaining({ id: "job-a" }),
       expect.objectContaining({ consecutiveErrors: 1 }),
     );
-    // Backoff re-arm succeeds on the second spawn. Same async-persist race as
-    // the wait-rejection case above: wait for the re-arm, not a fixed sleep.
-    await vi.waitFor(() => expect(supervisor.spawn).toHaveBeenCalledTimes(2));
+    await clock.advanceBy(0);
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
     // Cancelling clears any pending retry timer; once the cancelled child
@@ -528,8 +717,8 @@ describe("createCronExitWatchers", () => {
       exitCode: null,
       reason: "cancelled",
     });
-    await delay(5);
-    await flush();
+    await w.cancelAll();
+    await clock.advanceBy(1_000);
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
     expect(w.activeJobIds()).toEqual([]);
   });
@@ -538,9 +727,6 @@ describe("createCronExitWatchers", () => {
     const { supervisor, cancelledScopes } = makeFakeSupervisor();
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a", "sleep 1")]);
     await flush();
@@ -557,9 +743,7 @@ describe("createCronExitWatchers", () => {
     const fireOnExit = vi.fn<FireOnExit>(async () => {});
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
       fireOnExit,
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -587,9 +771,7 @@ describe("createCronExitWatchers", () => {
     const fireOnExit = vi.fn(async () => {});
     const w = createWatcherFixture({
       getProcessSupervisor: () => fake.supervisor as never,
-      reserveExit: vi.fn(async () => {}),
       fireOnExit,
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush(); // spawn is awaiting the gate (in flight, untracked child)
@@ -612,9 +794,6 @@ describe("createCronExitWatchers", () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     const everyJob = {
       ...onExitJob("timer"),
@@ -630,9 +809,6 @@ describe("createCronExitWatchers", () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -645,9 +821,6 @@ describe("createCronExitWatchers", () => {
     const { supervisor, cancelled, runs } = makeFakeSupervisor();
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -673,9 +846,7 @@ describe("createCronExitWatchers", () => {
     const fireOnExit = vi.fn(async () => {});
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: vi.fn(async () => {}),
       fireOnExit,
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -702,7 +873,6 @@ describe("createCronExitWatchers", () => {
       getProcessSupervisor: () => supervisor as never,
       reserveExit,
       fireOnExit,
-      logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
@@ -734,8 +904,6 @@ describe("createCronExitWatchers", () => {
       reserveExit: vi.fn(async () => {
         job = { ...job, enabled: false };
       }),
-      fireOnExit: vi.fn(async () => {}),
-      logger: noopLogger,
     });
     w.reconcile([job]);
     await flush();
@@ -763,7 +931,6 @@ describe("createCronExitWatchers", () => {
         getProcessSupervisor: () => supervisor as never,
         reserveExit,
         fireOnExit,
-        logger: noopLogger,
       });
 
       try {

@@ -49,13 +49,7 @@ type WhatsAppInboundAdmissionCarrier = {
   admission?: WhatsAppInboundAdmission;
 };
 
-/**
- * Public-safe accepted inbound facts resolved by access control.
- *
- * Keep this as an admission envelope around canonical channel ingress
- * projections. Later PRs can migrate consumers to these projections without
- * publishing raw allowlist material or session-dependent post-admission state.
- */
+/** Accepted ingress facts exclude raw allowlists and session-dependent state. */
 export type WhatsAppInboundAdmission = WhatsAppInboundAdmissionAccess & {
   channelIngress?: ResolvedChannelMessageIngress;
   accountId: string;

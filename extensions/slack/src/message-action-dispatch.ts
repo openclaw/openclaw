@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
-import { buildSlackPresentationBlocks, canRenderSlackPresentation } from "./blocks-render.js";
+import { buildSlackPresentationBlocksIfComplete, type SlackBlock } from "./blocks-render.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
@@ -25,6 +25,7 @@ import {
   resolveSlackReplyDeliveryMessages,
   type SlackReplyDeliveryMessage,
 } from "./reply-blocks.js";
+import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
@@ -33,6 +34,14 @@ type SlackActionInvoke = (
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
+
+const SLACK_MESSAGE_ACTIONS = new Map([
+  ["reactions", "reactions"],
+  ["delete", "deleteMessage"],
+  ["pin", "pinMessage"],
+  ["unpin", "unpinMessage"],
+  ["list-pins", "listPins"],
+]);
 
 function readSlackForceDocument(params: Record<string, unknown>): boolean {
   return (
@@ -55,7 +64,7 @@ function resolveSlackPresentationText(
 function renderSlackActionPresentation(
   presentation: ReturnType<typeof normalizeMessagePresentation>,
 ): {
-  blocks?: ReturnType<typeof buildSlackPresentationBlocks>;
+  blocks?: SlackBlock[];
   usesPresentationTextFallback: boolean;
 } {
   if (!presentation) {
@@ -66,10 +75,9 @@ function renderSlackActionPresentation(
       (block.type === "text" || block.type === "context") &&
       block.text.trim().length > SLACK_SECTION_TEXT_MAX,
   );
-  const renderedBlocks =
-    !needsCompleteTextFallback && canRenderSlackPresentation(presentation)
-      ? buildSlackPresentationBlocks(presentation)
-      : undefined;
+  const renderedBlocks = needsCompleteTextFallback
+    ? undefined
+    : buildSlackPresentationBlocksIfComplete(presentation);
   const usesPresentationTextFallback = !renderedBlocks || renderedBlocks.length > SLACK_MAX_BLOCKS;
   const blocks = usesPresentationTextFallback ? undefined : renderedBlocks;
   return {
@@ -78,24 +86,23 @@ function renderSlackActionPresentation(
   };
 }
 
-/** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
   providerId: string;
   ctx: ChannelMessageActionContext;
   invoke: SlackActionInvoke;
-  normalizeChannelId?: (channelId: string) => string;
-  includeReadThreadId?: boolean;
 }): Promise<AgentToolResult<unknown>> {
-  const { providerId, ctx, invoke, normalizeChannelId, includeReadThreadId = false } = params;
+  const { providerId, ctx, invoke } = params;
   const { action, cfg, params: actionParams } = ctx;
   const accountId = ctx.accountId ?? undefined;
   const invokeSlackAction = (request: Record<string, unknown>, toolContext = ctx.toolContext) =>
     invoke({ ...request, accountId }, cfg, toolContext);
   const resolveChannelId = () => {
-    const channelId =
+    const raw =
       readStringParam(actionParams, "channelId") ??
       readStringParam(actionParams, "to", { required: true });
-    return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
+    const target = parseSlackTarget(raw, { defaultKind: "channel" });
+    const channelId = resolveSlackChannelId(raw);
+    return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
   };
 
   if (action === "conversation-open") {
@@ -187,15 +194,17 @@ export async function handleSlackMessageAction(params: {
     });
   }
 
-  if (action === "reactions") {
-    const messageId = readStringParam(actionParams, "messageId", {
-      required: true,
-    });
+  const messageAction = SLACK_MESSAGE_ACTIONS.get(action);
+  if (messageAction) {
+    const messageId =
+      action === "list-pins"
+        ? undefined
+        : readStringParam(actionParams, "messageId", { required: true });
     return await invokeSlackAction({
-      action: "reactions",
+      action: messageAction,
       channelId: resolveChannelId(),
       messageId,
-      limit: actionParams.limit,
+      ...(action === "reactions" ? { limit: actionParams.limit } : {}),
     });
   }
 
@@ -207,7 +216,7 @@ export async function handleSlackMessageAction(params: {
       before: readStringParam(actionParams, "before"),
       after: readStringParam(actionParams, "after"),
       messageId: readStringParam(actionParams, "messageId"),
-      ...(includeReadThreadId ? { threadId: readStringParam(actionParams, "threadId") } : {}),
+      threadId: readStringParam(actionParams, "threadId"),
     });
   }
 
@@ -250,29 +259,6 @@ export async function handleSlackMessageAction(params: {
       messageId,
       content: accessibleContent,
       blocks,
-    });
-  }
-
-  if (action === "delete") {
-    const messageId = readStringParam(actionParams, "messageId", {
-      required: true,
-    });
-    return await invokeSlackAction({
-      action: "deleteMessage",
-      channelId: resolveChannelId(),
-      messageId,
-    });
-  }
-
-  if (action === "pin" || action === "unpin" || action === "list-pins") {
-    const messageId =
-      action === "list-pins"
-        ? undefined
-        : readStringParam(actionParams, "messageId", { required: true });
-    return await invokeSlackAction({
-      action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
-      channelId: resolveChannelId(),
-      messageId,
     });
   }
 

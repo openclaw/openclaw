@@ -38,6 +38,11 @@ increased measured latency; other retrieval reads run off the Gateway event loop
 reader; recall metadata is read after candidate retrieval so forgotten chunks
 are excluded. This does not change stored data, configuration, or upgrade behavior.
 
+After Gateway readiness, idle warmup loads the active Memory Core retrieval
+worker before the first search. It does not open an index, start an embedding
+provider, or delay readiness. Requests arriving before warmup completes still
+initialize retrieval normally; the worker keeps its existing idle retirement policy.
+
 If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a
 partial-result warning. Session transcript hits require fresh visibility checks
@@ -153,6 +158,17 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When Memory Core owns the memory slot, its Gateway service opens each configured
+agent's memory manager at startup and after plugin replacement. Watched file
+changes can then update the index without a search or agent turn. Retiring an
+instance closes its managers, including file watchers, timers, and session
+listeners. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+before reporting the previous runtime restored. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
+
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
@@ -163,6 +179,19 @@ its full-retry state; ordinary dirty content does not itself force a rebuild.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
+
+When native file watching is unavailable, Memory Core uses background polling
+with a 30-second default interval, including when polling is explicitly enabled
+with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
+with a 20 ms minimum. Shorter intervals increase background scanning cost,
+especially for large memory trees. Native events
+still trigger prompt, debounced updates. Automatic fallback logs one warning per
+watcher lifetime. A running memory manager exposes each local observation's
+mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
+standalone status inspection does not start a watcher. The filesystem
+library does not currently retain the fallback reason or retry native selection;
+the warning says when no reason was reported. Restart the Gateway after resolving
+the native backend problem to try native watching again.
 
 If the host runs out of native file-watch capacity, Memory Core logs one warning
 and disables its watchers. Later searches trigger incremental synchronization
@@ -230,9 +259,13 @@ and adds `sessions` to `memory.search.sources` without enabling broader
 cross-conversation recall. Retained session-reset transcripts remain in the
 agent's sessions directory and are indexed from those original artifacts.
 
-When Memory Core finds a retired per-agent QMD workspace under
-`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
-indexes, model downloads, collection metadata, and session exports.
+Doctor removes only empty per-agent QMD directories under
+`~/.openclaw/agents/<agentId>/qmd/`. Nonempty directories stay untouched:
+OpenClaw's retired QMD backend used the same layout as standalone QMD, without
+an ownership marker. Retained directories do not block migration or Gateway
+startup. After backing them up, you can remove old indexes, model downloads,
+collection metadata, and session exports manually if you have confirmed that
+no standalone QMD installation uses them.
 
 Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next

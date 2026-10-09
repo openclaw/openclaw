@@ -1,4 +1,4 @@
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -17,6 +17,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
+import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import type { CommandPalette } from "./command-palette.ts";
 
 type GatewayHarness = {
@@ -24,6 +25,34 @@ type GatewayHarness = {
   setConnected: (connected: boolean) => void;
   emit: (event: string, payload?: unknown) => void;
 };
+
+export function registerCommandPaletteTestHooks() {
+  let restoreDialogPolyfill: () => void;
+  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    restoreDialogPolyfill = installDialogPolyfill();
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    restoreDialogPolyfill();
+    if (scrollIntoViewDescriptor) {
+      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+    } else {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+}
 
 export function createGateway(
   connected: boolean,
@@ -62,6 +91,7 @@ export function createGateway(
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,

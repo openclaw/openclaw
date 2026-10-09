@@ -2,7 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { normalizePluginId } from "./config-state.js";
-import { CONFIG_PATH_ACTIVATION_COMPAT_CODE } from "./installed-plugin-index-config-path-scope.js";
+import { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import type {
   InstalledPluginIndex,
@@ -24,6 +24,7 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "webFetchProviders",
   "webSearchProviders",
   "workerProviders",
+  "storageProviders",
   "usageProviders",
 ] as const;
 
@@ -57,10 +58,6 @@ function createOwnerLookup() {
     },
     has: (ids: readonly string[]) => ids.every((id) => resolve(id) !== undefined),
   };
-}
-
-function listValues(value: readonly string[] | undefined): readonly string[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function modelSupportOwnerMatches(owner: ModelSupportOwner, modelId: string): boolean {
@@ -99,22 +96,22 @@ export function createInstalledPluginIndexScopeLookup(
     channelContributionOwners.index(plugin.pluginId, [
       plugin.pluginId,
       plugin.packageChannel?.id,
-      ...listValues(plugin.contributions?.channels),
-      ...listValues(plugin.contributions?.channelConfigs),
+      ...(plugin.contributions?.channels ?? []),
+      ...(plugin.contributions?.channelConfigs ?? []),
     ]);
     providerContributionOwners.index(plugin.pluginId, [
       plugin.pluginId,
-      ...listValues(plugin.contributions?.providers),
-      ...listValues(plugin.contributions?.modelCatalogProviders),
-      ...listValues(plugin.contributions?.autoEnableProviderIds),
-      ...PROVIDER_CONTRIBUTION_CONTRACTS.flatMap((contract) =>
-        listValues(plugin.contributions?.contracts?.[contract]),
+      ...(plugin.contributions?.providers ?? []),
+      ...(plugin.contributions?.modelCatalogProviders ?? []),
+      ...(plugin.contributions?.autoEnableProviderIds ?? []),
+      ...PROVIDER_CONTRIBUTION_CONTRACTS.flatMap(
+        (contract) => plugin.contributions?.contracts?.[contract] ?? [],
       ),
     ]);
     modelSupportOwners.push({
       pluginId: plugin.pluginId,
-      prefixes: listValues(plugin.contributions?.modelSupportPrefixes),
-      patterns: listValues(plugin.contributions?.modelSupportPatterns).flatMap((pattern) => {
+      prefixes: plugin.contributions?.modelSupportPrefixes ?? [],
+      patterns: (plugin.contributions?.modelSupportPatterns ?? []).flatMap((pattern) => {
         const regex = compileSafeRegex(pattern, "u");
         return regex ? [regex] : [];
       }),
@@ -156,12 +153,7 @@ export function createInstalledPluginIndexScopeLookup(
     },
     hasChannelContributionOwners: channelContributionOwners.has,
     hasAgentHarnessOwners: agentHarnessOwners.has,
-    hasCompleteConfigPathActivationMetadata: () =>
-      index.plugins.every(
-        (plugin) =>
-          !plugin.compat.includes(CONFIG_PATH_ACTIVATION_COMPAT_CODE) ||
-          plugin.startup.configPaths !== undefined,
-      ),
+    hasCompleteConfigPathActivationMetadata: () => !hasMissingConfigPathActivationMetadata(index),
     hasDirectChannelOwners: directChannelOwners.has,
     hasInstalledPluginIds: (ids) => installedPluginOwners.has([...ids]),
     hasProviderContributionOwners: providerContributionOwners.has,

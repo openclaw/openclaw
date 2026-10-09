@@ -1,4 +1,3 @@
-/** Doctor checks and repair prompts for unavailable configured skills. */
 import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -19,7 +18,6 @@ import {
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
-/** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
 function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   const discoveryInput: GhConfigDiscoveryInput = {
     platform: process.platform,
@@ -27,12 +25,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
     fileExists: existsSync,
   };
   const githubSkill = skills.find((skill) => skill.name === "github");
-  if (
-    !githubSkill?.eligible ||
-    githubSkill.blockedByAgentFilter ||
-    githubSkill.disabled ||
-    githubSkill.blockedByAllowlist
-  ) {
+  if (!githubSkill?.eligible || githubSkill.blockedByAgentFilter) {
     return [];
   }
   const result = detectGhConfigDirMismatch(discoveryInput);
@@ -42,10 +35,9 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return formatGhConfigDirMismatchHint(result);
 }
 
-/** Formats doctor note lines for skills that are allowed but unavailable. */
 function formatUnavailableSkillDoctorLines(
   skills: SkillStatusEntry[],
-  includeDisableHint = true,
+  includeDisableHint: boolean,
 ): string[] {
   const count = skills.length;
   const lines = [

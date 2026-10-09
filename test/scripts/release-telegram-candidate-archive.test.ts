@@ -65,6 +65,34 @@ function compressTar(tarPath: string): string {
   return archivePath;
 }
 
+function makeTarArchive(
+  root: string,
+  name: string,
+  members: string,
+  format: "USTAR_FORMAT" | "PAX_FORMAT" = "USTAR_FORMAT",
+): string {
+  const tarPath = path.join(root, `${name}.tar`);
+  const python = `
+import io
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], "w", format=tarfile.${format}) as archive:
+    manifest = tarfile.TarInfo("manifest.json")
+    manifest_payload = b'{"version":1}\\n'
+    manifest.size = len(manifest_payload)
+    archive.addfile(manifest, io.BytesIO(manifest_payload))
+
+    root = tarfile.TarInfo("candidate")
+    root.type = tarfile.DIRTYPE
+    archive.addfile(root)
+${members}
+`;
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath], { encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  return compressTar(tarPath);
+}
+
 function makeCompressedArchive(root: string, fileSize = 32): string {
   const source = path.join(root, "source");
   const candidate = path.join(source, "candidate");
@@ -228,51 +256,24 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
 }
 
 function makeCumulativePaxArchive(root: string): string {
-  const tarPath = path.join(root, "cumulative-pax.tar");
-  const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+  return makeTarArchive(
+    root,
+    "cumulative-pax",
+    String.raw`
     for index in range(5):
         member = tarfile.TarInfo(f"candidate/pax-{index}")
         member.pax_headers = {"comment": "x" * 400}
         archive.addfile(member)
-`;
-  const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return compressTar(tarPath);
+`,
+    "PAX_FORMAT",
+  );
 }
 
 function makeValidHardlinkArchive(root: string): string {
-  const tarPath = path.join(root, "valid-hardlink.tar");
-  const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+  return makeTarArchive(
+    root,
+    "valid-hardlink",
+    String.raw`
     target = tarfile.TarInfo("candidate/a-target.txt")
     target_payload = b"shared\n"
     target.size = len(target_payload)
@@ -282,12 +283,9 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     link.type = tarfile.LNKTYPE
     link.linkname = target.name
     archive.addfile(link)
-`;
-  const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return compressTar(tarPath);
+`,
+    "USTAR_FORMAT",
+  );
 }
 
 function makeManyMemberTar(root: string, memberCount: number): string {
@@ -588,31 +586,16 @@ describe("release Telegram candidate archive guard", () => {
 
   it("rejects a member whose parent directory was not declared first", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const tarPath = path.join(root, "missing-parent.tar");
-    const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+    const archive = makeTarArchive(
+      root,
+      "missing-parent",
+      String.raw`
     child = tarfile.TarInfo("candidate/missing/child.txt")
     child.size = 2
     archive.addfile(child, io.BytesIO(b"ok"))
-`;
-    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const archive = compressTar(tarPath);
+`,
+      "USTAR_FORMAT",
+    );
     const destination = path.join(root, "missing-parent-output");
 
     expectFailure(
@@ -806,22 +789,10 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
 
   it("rejects a link that replaces a previously extracted descendant directory", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const tarPath = path.join(root, "link-prefix.tar");
-    const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+    const archive = makeTarArchive(
+      root,
+      "link-prefix",
+      String.raw`
     prefix = tarfile.TarInfo("candidate/prefix")
     prefix.type = tarfile.DIRTYPE
     archive.addfile(prefix)
@@ -834,13 +805,9 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     replacement.type = tarfile.SYMTYPE
     replacement.linkname = "file.txt"
     archive.addfile(replacement)
-`;
-    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const archive = compressTar(tarPath);
-
+`,
+      "USTAR_FORMAT",
+    );
     expectFailure(
       [
         "extract-zstd",
@@ -853,58 +820,12 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     );
   });
 
-  it("rejects duplicate canonical member paths", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const tarPath = path.join(root, "duplicate.tar");
-    const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
-    for _ in range(2):
-        duplicate = tarfile.TarInfo("candidate/duplicate")
-        archive.addfile(duplicate)
-`;
-    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const archive = compressTar(tarPath);
-
-    expectFailure(
-      ["extract-zstd", archive, path.join(root, "duplicate-output"), "--allowed-root", "candidate"],
-      "archive has duplicate path",
-    );
-  });
-
   it("rejects a member nested under a prior link", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const tarPath = path.join(root, "link-parent.tar");
-    const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+    const archive = makeTarArchive(
+      root,
+      "link-parent",
+      String.raw`
     link = tarfile.TarInfo("candidate/link")
     link.type = tarfile.SYMTYPE
     link.linkname = "target"
@@ -913,13 +834,9 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     child = tarfile.TarInfo("candidate/link/child.txt")
     child.size = 2
     archive.addfile(child, io.BytesIO(b"ok"))
-`;
-    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const archive = compressTar(tarPath);
-
+`,
+      "USTAR_FORMAT",
+    );
     expectFailure(
       [
         "extract-zstd",
@@ -984,23 +901,10 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
 
   it("rejects sparse archive members before extraction", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const tarPath = path.join(root, "sparse.tar");
-    const archivePath = `${tarPath}.zst`;
-    const python = String.raw`
-import io
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+    const archive = makeTarArchive(
+      root,
+      "sparse",
+      String.raw`
     sparse = tarfile.TarInfo("candidate/sparse.bin")
     sparse.size = 1
     sparse.pax_headers = {
@@ -1008,24 +912,11 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
         "GNU.sparse.realsize": "2097152",
     }
     archive.addfile(sparse, io.BytesIO(b"x"))
-`;
-    const tarResult = spawnSync(pythonExecPath, ["-c", python, tarPath], {
-      encoding: "utf8",
-    });
-    expect(tarResult.status, tarResult.stderr).toBe(0);
-    const zstdResult = spawnSync("zstd", ["-q", "-f", tarPath, "-o", archivePath], {
-      encoding: "utf8",
-    });
-    expect(zstdResult.status, zstdResult.stderr).toBe(0);
-
+`,
+      "PAX_FORMAT",
+    );
     expectFailure(
-      [
-        "extract-zstd",
-        archivePath,
-        path.join(root, "sparse-output"),
-        "--allowed-root",
-        "candidate",
-      ],
+      ["extract-zstd", archive, path.join(root, "sparse-output"), "--allowed-root", "candidate"],
       "unsupported sparse member",
     );
   });

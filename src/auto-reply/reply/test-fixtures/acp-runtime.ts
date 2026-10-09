@@ -2,6 +2,10 @@ import { vi } from "vitest";
 // Test fixtures for ACP runtime sessions, bindings, and reply delivery.
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type {
+  AsyncSessionBindingService,
+  SessionBindingService,
+} from "../../../infra/outbound/session-binding-service.js";
 import type { ReplyDispatcher } from "../reply-dispatcher.types.js";
 
 const settledCounts = (delivered: number) => ({
@@ -120,5 +124,27 @@ export function createAcpTestSessionBinding(
       boundBy: "user-1",
     },
     ...overrides,
+  };
+}
+
+export function createAcpCommandSessionBindingService(
+  mocks: Pick<
+    SessionBindingService,
+    "bind" | "getCapabilities" | "listBySession" | "resolveByConversation" | "unbind"
+  >,
+): AsyncSessionBindingService {
+  return {
+    bind: (input) => mocks.bind(input),
+    getCapabilities: (params) => mocks.getCapabilities(params),
+    inspectByConversationAsync: async (ref) => ({
+      status: "available",
+      binding: mocks.resolveByConversation(ref),
+    }),
+    listBySession: (targetSessionKey) => mocks.listBySession(targetSessionKey),
+    resolveByConversation: (ref) => mocks.resolveByConversation(ref),
+    resolveByConversationAsync: async (ref) => mocks.resolveByConversation(ref),
+    touch: vi.fn(),
+    touchAsync: vi.fn(async () => {}),
+    unbind: (input) => mocks.unbind(input),
   };
 }

@@ -24,9 +24,15 @@ import {
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const isActiveMemoryProviderNative = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 
-vi.mock("../../plugins/memory-runtime.js", () => ({ getActiveMemorySearchManagerCore }));
+vi.mock("../../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManagerCore,
+  isActiveMemoryProviderNative,
+  resolveActiveMemoryBackendConfig,
+}));
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveDefaultAgentId,
@@ -46,7 +52,7 @@ function createConfig(workspaceDir: string): OpenClawConfig {
     },
     agents: {
       defaults: { workspace: workspaceDir },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
 }
@@ -87,6 +93,8 @@ describe("memory.search gateway method", () => {
       layout: "state-only",
     });
     getActiveMemorySearchManagerCore.mockReset();
+    resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+    isActiveMemoryProviderNative.mockReset().mockReturnValue(false);
     resolveDefaultAgentId.mockClear();
   });
 
@@ -175,7 +183,7 @@ describe("memory.search gateway method", () => {
     cfg.agents = {
       ...cfg.agents,
       ownership: "explicit",
-      list: [{ id: "ops" }, { id: "research" }],
+      entries: { ops: {}, research: {} },
     };
     resolveDefaultAgentId.mockImplementationOnce(() => {
       throw new AgentSelectionRequiredError(["ops", "research"], {
@@ -240,7 +248,7 @@ describe("memory.search gateway method", () => {
     const cfg = createConfig(testState.workspaceDir);
     cfg.agents = {
       ...cfg.agents,
-      list: [{ id: "main", default: true }, { id: configured }],
+      entries: { main: {}, [configured]: {} },
     };
     const result = {
       path: "memory/project-lantern.md",
@@ -295,6 +303,19 @@ describe("memory.search gateway method", () => {
         message: "memory plugin unavailable",
       }),
     );
+  });
+
+  it("does not ask a legacy memory runtime for its backend before searching", async () => {
+    getActiveMemorySearchManagerCore.mockResolvedValue({
+      manager: null,
+      error: "memory plugin unavailable",
+    });
+
+    await invokeMemorySearch({ query: "lantern" }, {});
+
+    expect(isActiveMemoryProviderNative).toHaveBeenCalledWith({ cfg: {}, agentId: "main" });
+    expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledOnce();
   });
 
   it("does not qualify routine pending index work as a search failure", async () => {
@@ -393,12 +414,15 @@ describe("memory.search gateway method", () => {
   });
 
   it("shares one format repair across concurrent transient Gateway searches", async () => {
-    const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-      memoryRuntime: MemoryPluginRuntime;
+    const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+      createMemoryRuntime: (host: {
+        runInBackgroundContext: <T>(run: () => T) => T;
+      }) => MemoryPluginRuntime;
       configureMemoryCoreDreamingState: (
         openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
       ) => void;
     }>("../../../extensions/memory-core/runtime-api.js");
+    const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     const stateEnv = testState.env;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       createPluginStateKeyedStore<T>("memory-core", { ...options, env: stateEnv }),

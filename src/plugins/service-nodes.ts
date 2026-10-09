@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayNodeInvokeStream } from "../gateway/server-methods/shared-types.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getPluginRecordRegistry, isPluginRecordActive } from "./registry-lifecycle.js";
@@ -40,7 +41,10 @@ export function createPluginServiceNodeInvoker(options: {
   if (instance) {
     signals.push(instance.lifecycle.signal);
   }
-  const stop = lease.retain(() => lifetime.abort(new Error("Plugin service node access stopped")));
+  const stop = lease.retain(() => {
+    lifetime.abort(new Error("Plugin service node access stopped"));
+    materializeErrorStack(lifetime.signal.reason);
+  });
   type Request = Parameters<NonNullable<OpenClawPluginServiceContext["invokeNode"]>>[0];
   const prepare = (request: Request, duplex = false) => {
     const signal = AbortSignal.any(request.signal ? [...signals, request.signal] : signals);

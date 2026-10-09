@@ -1,19 +1,99 @@
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
+import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
-import type { CronJob, CronJobPatch } from "../../cron/types.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import type { CronCallerScope } from "./cron-caller-scope.js";
+import type { GatewayClient } from "./types.js";
+
+export function requiresExplicitAgentRuntimeToolsAllow(params: {
+  job: Pick<CronJob, "payload" | "trigger">;
+  callerScope: CronCallerScope | undefined;
+}): boolean {
+  return (
+    params.callerScope !== undefined &&
+    !params.callerScope.manageAll &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow === undefined
+  );
+}
+
+// Published clients send "deliver"; translate only the already-snapshotted request.
+function normalizeCronRequestDeliveryMode(input: CronJobPatch | null): void {
+  const delivery = input?.delivery;
+  if (typeof delivery?.mode === "string" && delivery.mode.trim().toLowerCase() === "deliver") {
+    delivery.mode = "announce";
+  }
+}
+
+/** Validate authored fields before normalization can erase blank or invalid input. */
+export function normalizeCronAddRequest(params: unknown): {
+  candidate: unknown;
+  enabledExplicit: boolean;
+} {
+  const rawParams = asOptionalObjectRecord(params);
+  for (const key of ["declarationKey", "displayName"]) {
+    const value = rawParams?.[key];
+    if (typeof value === "string" && value.trim().length === 0) {
+      throw new Error(`${key} must not be blank`);
+    }
+  }
+  const hasEnabled = Boolean(rawParams && Object.hasOwn(rawParams, "enabled"));
+  const parsedEnabled = hasEnabled ? parseBoolean(rawParams?.enabled) : undefined;
+  if (hasEnabled && parsedEnabled === undefined) {
+    throw new Error("enabled must be a boolean");
+  }
+  assertCronDeliveryInputNonBlankFields(rawParams?.delivery);
+  const normalized = normalizeCronJobCreate(params, {
+    sessionContext: { sessionKey: readStringField(rawParams, "sessionKey") },
+  });
+  normalizeCronRequestDeliveryMode(normalized);
+  return {
+    candidate: normalized ?? params,
+    enabledExplicit: parsedEnabled !== undefined,
+  };
+}
+
+export function normalizeCronUpdateRequest(params: unknown): {
+  candidate: unknown;
+  normalizedPatch: CronJobPatch | null;
+} {
+  const rawParams = asOptionalObjectRecord(params);
+  const rawPatch = rawParams?.patch;
+  const patchFields = asOptionalObjectRecord(rawPatch);
+  const rawDisplayName = patchFields?.displayName;
+  if (typeof rawDisplayName === "string" && rawDisplayName.trim().length === 0) {
+    throw new Error("displayName must not be blank");
+  }
+  assertCronDeliveryInputNonBlankFields(patchFields?.delivery);
+  const normalizedPatch = normalizeCronJobPatch(rawPatch);
+  normalizeCronRequestDeliveryMode(normalizedPatch);
+  return {
+    candidate: normalizedPatch && rawParams ? { ...rawParams, patch: normalizedPatch } : params,
+    normalizedPatch,
+  };
+}
 
 export async function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;
@@ -125,4 +205,52 @@ export function assertCronDoesNotTargetAgentHarness(input: {
   // Cron's detached runner does not carry the owning harness lock. Harness
   // execution targets must enter through ordinary session dispatch instead.
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+}
+
+export function captureCronCreatorSession(
+  job: CronJobCreate,
+  callerScope: CronCallerScope | undefined,
+  client: GatewayClient | null,
+) {
+  const isolatedAgentTurn = job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
+  const sessionKey = callerScope?.sessionKey ?? (isolatedAgentTurn ? job.sessionKey : undefined);
+  const agentId = callerScope?.agentId ?? job.agentId;
+  const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
+  const creatorSession = loaded?.entry;
+  const sourceConversation =
+    isolatedAgentTurn && loaded && creatorSession?.sessionId
+      ? {
+          sessionKey: loaded.canonicalKey,
+          sessionId: creatorSession.sessionId,
+          lifecycleRevision: creatorSession.lifecycleRevision,
+        }
+      : undefined;
+  // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
+  const actor = callerScope
+    ? creatorSession?.createdActor
+    : resolveOperatorSessionCreation(client).actor;
+  const actorId = normalizeOptionalString(actor?.id);
+  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+  return {
+    ...(sourceConversation ? { sourceConversation } : {}),
+    ...(createdActor ? { createdActor } : {}),
+    ...(callerScope && creatorSession?.skillLibrarySelections
+      ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
+      : {}),
+    assertCurrent: () => {
+      if (creatorSession && sessionKey) {
+        const latest = loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry;
+        if (
+          latest?.sessionId !== creatorSession.sessionId ||
+          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+        ) {
+          throw new Error(
+            "Creator session changed before scheduling; retry from the current turn.",
+          );
+        }
+      }
+    },
+  };
 }

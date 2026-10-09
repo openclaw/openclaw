@@ -7,12 +7,10 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals-core.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+import type {
+  ApprovalRequestInput as ApprovalRequest,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 
 /** One native approval delivery target selected by the channel adapter plan. */
 export type ChannelApprovalNativePlannedTarget = {
@@ -37,12 +35,13 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   adapter?: ChannelApprovalNativeAdapter | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
+  const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
+    targets: [],
+    originTarget: null,
+    notifyOriginWhenDmOnly: false,
+  };
   if (!adapter) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const capabilities = adapter.describeDeliveryCapabilities({
@@ -52,11 +51,7 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     request: params.request,
   });
   if (!capabilities.enabled) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const originTarget =
@@ -92,20 +87,12 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     });
   }
 
-  if (preferApproverDm) {
+  if (preferApproverDm || !originTarget) {
     for (const target of approverDmTargets) {
       plannedTargets.push({
         surface: "approver-dm",
         target,
-        reason: "preferred",
-      });
-    }
-  } else if (!originTarget) {
-    for (const target of approverDmTargets) {
-      plannedTargets.push({
-        surface: "approver-dm",
-        target,
-        reason: "fallback",
+        reason: preferApproverDm ? "preferred" : "fallback",
       });
     }
   }

@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 
 const controlUiAssetsMocks = vi.hoisted(() => ({
   ensureControlUiAssetsBuilt: vi.fn(),
@@ -19,7 +23,7 @@ const controlUiAssetsMocks = vi.hoisted(() => ({
 }));
 const retentionMocks = vi.hoisted(() => ({
   prepare: vi.fn<(options?: { signal?: AbortSignal }) => Promise<void>>(async () => {}),
-  resolveAsset: vi.fn(() => null),
+  resolveAsset: vi.fn(async () => null),
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => controlUiAssetsMocks);
@@ -28,13 +32,17 @@ vi.mock("./control-ui-asset-retention.js", () => ({
   createControlUiAssetRetention: vi.fn(() => retentionMocks),
 }));
 
-import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
+import {
+  createGatewayControlUiRootLifecycle,
+  readControlUiRootAsset,
+} from "./server-control-ui-root.js";
 
 function readyAssets(root = "/repo/dist/control-ui", publicAssetBuildId?: string) {
   return { kind: "ready", indexPath: `${root}/index.html`, publicAssetBuildId };
 }
 
 describe("createGatewayControlUiRootLifecycle", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(fs, "realpathSync").mockImplementation((rootPath) => String(rootPath));
@@ -48,7 +56,7 @@ describe("createGatewayControlUiRootLifecycle", () => {
     controlUiAssetsMocks.resolveControlUiRootOverrideSync.mockReturnValue(null);
     controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue(null);
     retentionMocks.prepare.mockResolvedValue(undefined);
-    retentionMocks.resolveAsset.mockReturnValue(null);
+    retentionMocks.resolveAsset.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -82,6 +90,51 @@ describe("createGatewayControlUiRootLifecycle", () => {
       realPath: "/repo/dist/control-ui",
     });
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+  });
+
+  test("does not admit a first file read after its root has stopped", async () => {
+    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
+    const { lifecycle } = createLifecycle();
+    const root = lifecycle.state;
+    if (root.kind !== "resolved") {
+      throw new Error("Expected a prepared root");
+    }
+    const read = vi.spyOn(WorkerTaskPool.prototype, "run").mockResolvedValue(null);
+    await lifecycle.stop();
+    expect(() => readControlUiRootAsset(root, "index.html", true)).toThrow();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  test("reads a cold asset while the shared compute budget is occupied", async () => {
+    const root = tempDirs.make("control-ui-compute-contention-");
+    fs.writeFileSync(path.join(root, "index.html"), "synthetic asset");
+    const capacity = getWorkerComputeCapacity();
+    const permits = Array.from({ length: capacity.getSnapshot().limit }, () => {
+      const permit = capacity.acquire(
+        () => {},
+        () => false,
+      );
+      if (!permit) {
+        throw new Error("Expected an unused compute budget");
+      }
+      return permit;
+    });
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const read = readControlUiRootAsset({ kind: "resolved", path: root }, "index.html", true);
+    try {
+      const pool = run.mock.contexts[0];
+      if (!(pool instanceof WorkerTaskPool)) {
+        throw new Error("Expected the file read to reach its worker pool");
+      }
+      expect(pool.getSnapshot().activeTasks).toBe(1);
+      await expect(read).resolves.toMatchObject({ file: { body: Buffer.from("synthetic asset") } });
+    } finally {
+      for (const permit of permits) {
+        capacity.release(permit);
+      }
+      await read;
+      await drainGlobalSingletonLifecycleState();
+    }
   });
 
   test("prepares retained generations for bundled roots without delaying construction", async () => {

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -67,16 +68,38 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): () =
   // neither diagnostic identity tokens nor their collection grant authority.
   const authority = getGatewayToolCallerIdentity()?.receiptAuthority;
   const assertBudgetCurrent = executionBudgetContext.getStore()?.assertCurrent;
-  return () => {
-    signal?.throwIfAborted();
-    assertBudgetCurrent?.();
+  const assertReceipt = Object.assign(() => {
     if (authority?.() === false) {
       throw new Error("tool invocation authority is no longer active");
     }
-  };
+  }, authority);
+  return composeSessionSourceAssertion([assertReceipt], (assertSource) => {
+    signal?.throwIfAborted();
+    assertBudgetCurrent?.();
+    assertSource();
+  });
 }
 
-const sourceExecutionGuards = new WeakMap<AnyAgentTool, () => void>();
+const SOURCE_EXECUTION_GUARD = Symbol.for("openclaw.agentToolSourceExecutionGuard");
+type GuardedAgentTool = AnyAgentTool & { [SOURCE_EXECUTION_GUARD]?: () => void };
+
+function appendSourceExecutionGuard(tool: GuardedAgentTool, guard: () => void): void {
+  const inherited = tool[SOURCE_EXECUTION_GUARD];
+  if (inherited === guard) {
+    return;
+  }
+  // The source edge can cross plugin views; a tool-object WeakMap loses that binding.
+  Object.defineProperty(tool, SOURCE_EXECUTION_GUARD, {
+    value: inherited
+      ? () => {
+          inherited();
+          guard();
+        }
+      : guard,
+    configurable: true,
+    enumerable: false,
+  });
+}
 
 /** Bind a host-owned guard without mutating a tool that another attempt may reuse. */
 export function bindAgentToolSourceExecutionGuard(
@@ -84,20 +107,21 @@ export function bindAgentToolSourceExecutionGuard(
   guard: () => void,
 ): AnyAgentTool {
   const bound = copyAgentToolMetadata(tool, { ...tool });
-  sourceExecutionGuards.set(bound, guard);
+  copyAgentToolSourceExecutionGuard(tool, bound);
+  appendSourceExecutionGuard(bound, guard);
   return bound;
 }
 
 export function copyAgentToolSourceExecutionGuard(
-  source: AnyAgentTool,
-  target: AnyAgentTool,
+  source: GuardedAgentTool,
+  target: GuardedAgentTool,
 ): void {
-  const guard = sourceExecutionGuards.get(source);
+  const guard = source[SOURCE_EXECUTION_GUARD];
   if (guard) {
-    sourceExecutionGuards.set(target, guard);
+    appendSourceExecutionGuard(target, guard);
   }
 }
 
-export function runAgentToolSourceExecutionGuard(tool: AnyAgentTool): void {
-  sourceExecutionGuards.get(tool)?.();
+export function runAgentToolSourceExecutionGuard(tool: GuardedAgentTool): void {
+  tool[SOURCE_EXECUTION_GUARD]?.();
 }
