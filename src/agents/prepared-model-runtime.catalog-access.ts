@@ -23,7 +23,7 @@ import {
   prepareInitialModelCatalogAuth,
   replacePreparedModelCatalogAuth,
 } from "./prepared-model-runtime.catalog-auth.js";
-import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
+import type * as CatalogContract from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   preparedProviderCatalogCredentials,
@@ -36,7 +36,6 @@ import {
   preparedModelInventoryKey,
 } from "./prepared-model-runtime.facts.js";
 import {
-  type PreparedModelRuntimeCatalogAccess,
   filterNativeModelCatalogScopes,
   filterPreparedProviderCatalog,
   mergePreparedModelCatalogInventory,
@@ -65,9 +64,9 @@ const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUIL
 const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
 
 export async function createFullModelCatalogAccess(
-  params: PreparedModelRuntimeCatalogAccessParams,
+  params: CatalogContract.PreparedModelRuntimeCatalogAccessParams,
   assertBuildCurrent: () => void,
-): Promise<PreparedModelRuntimeCatalogAccess> {
+): Promise<CatalogContract.PreparedModelRuntimeCatalogAccess> {
   assertBuildCurrent();
   const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
     params.pluginGeneration.pluginMetadataSnapshot,

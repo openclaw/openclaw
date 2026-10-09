@@ -32,13 +32,11 @@ import {
   hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   bindPreparedModelRuntimeAuth,
-  type PreparedModelRuntimeAuth,
-  type PreparedAccountCatalogAccess,
-  type PreparedModelRuntimeAuthScope,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -50,8 +48,6 @@ import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtim
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
-  PreparedModelCatalogRefreshOptions,
-  PreparedNativeModelSelection,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -630,23 +626,6 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
   return snapshot;
 }
 
-export type PreparedModelRuntimeCatalogAccess = Readonly<{
-  initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: PreparedAccountCatalogAccess;
-  isCurrent: () => boolean;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
-  refreshExpiredModelCatalog: () => void;
-  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: (
-    options?: PreparedModelCatalogRefreshOptions,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadNativeModelCatalog: (
-    selection: PreparedNativeModelSelection,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-}>;
 export function createPreparedModelRuntimeSnapshot(
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
   agentFacts: PreparedModelRuntimeAgentFacts,
