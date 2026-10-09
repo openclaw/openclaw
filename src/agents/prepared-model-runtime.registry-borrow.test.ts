@@ -216,6 +216,7 @@ describe("prepared registry construction borrows", () => {
       finishInspection.resolve();
       await expect(pending).rejects.toThrow("superseded");
       await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+      await expect(pending).rejects.toMatchObject({ admissionBlocked: false });
       expect(isPluginRegistryRetired(registry)).toBe(true);
       expect(instance.retainedWorkCount).toBe(0);
     } finally {

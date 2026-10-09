@@ -770,6 +770,7 @@ export async function startGatewayPostAttachRuntime(
     startupTrace: params.startupTrace,
     createUpdateCheck: runtimeDeps.createGatewayUpdateCheck,
     getConfig: params.getConfig,
+    getPluginRegistry: () => params.getCurrentPluginRegistry?.() ?? pluginRegistry,
     log: params.log,
     isNixMode: params.isNixMode,
     broadcastToConnIds: params.broadcastToConnIds,

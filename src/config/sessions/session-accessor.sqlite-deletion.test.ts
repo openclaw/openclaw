@@ -697,7 +697,7 @@ describe("session deletion and native owner state", () => {
     },
   );
 
-  it("does not restore a binding after the session committed but publication failed", async () => {
+  it("keeps deletion successful and the binding absent when a publication observer fails", async () => {
     await seed();
     const owner = nativeOwner();
 
@@ -716,7 +716,7 @@ describe("session deletion and native owner state", () => {
           },
         }),
       ),
-    ).rejects.toThrow("injected publication failure");
+    ).resolves.toMatchObject({ removedSessionKeys: [sessionKey] });
 
     expect(read()).toBeUndefined();
     expect(bindings.has(sessionKey)).toBe(false);
