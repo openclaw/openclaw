@@ -353,7 +353,56 @@ describe("createTelegramIngressMonitor", () => {
         reject: true,
       }),
     ),
-  ])("replays promoted controls after restart: $name", async (testCase) => {
+    {
+      name: "legacy DM abort control lane",
+      updateKind: "message",
+      chat: { id: 1234, type: "private" },
+      topic: {},
+      text: "/stop@openclaw_bot",
+      laneKey: "telegram:1234:control",
+      expectedLaneKey: "telegram:1234",
+    },
+    ...[true, false].map((hasTopicsEnabled) => ({
+      name: `legacy DM topic abort with bot topics ${hasTopicsEnabled ? "enabled" : "disabled"}`,
+      updateKind: "message",
+      chat: { id: 1234, type: "private" },
+      topic: { message_thread_id: 42 },
+      text: "/stop",
+      laneKey: "telegram:1234:control",
+      expectedLaneKey: hasTopicsEnabled ? "telegram:1234:topic:42" : "telegram:1234",
+      hasTopicsEnabled,
+    })),
+    {
+      name: "legacy forum abort control lane",
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_forum: true },
+      topic: { message_thread_id: 42, is_topic_message: true },
+      text: "/stop@openclaw_bot",
+      laneKey: "telegram:-1234:control",
+      expectedLaneKey: "telegram:-1234:topic:42",
+    },
+    {
+      name: "legacy channel Direct Messages abort control lane",
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_direct_messages: true },
+      topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
+      text: "/stop",
+      laneKey: "telegram:-1234:control",
+      expectedLaneKey: "telegram:-1234:topic:42",
+    },
+    ...[
+      { text: "/stop@some_other_bot", laneKey: "telegram:-1234:control" },
+      { text: "/stop@openclaw_bot", laneKey: "telegram:-9999:control" },
+    ].map(({ text, laneKey }) => ({
+      name: `rejects unrelated legacy abort ${text} from ${laneKey}`,
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_forum: true },
+      topic: { message_thread_id: 42, is_topic_message: true },
+      text,
+      laneKey,
+      reject: true,
+    })),
+  ])("replays control lane changes after restart: $name", async (testCase) => {
     await withTempState(async (stateDir) => {
       const queueOptions = { channelId: "telegram", accountId: "default", stateDir };
       const update = {
@@ -364,7 +413,7 @@ describe("createTelegramIngressMonitor", () => {
           from: { id: 111, is_bot: false, first_name: "Ada" },
           chat: testCase.chat,
           ...testCase.topic,
-          text: "/models@openclaw_bot",
+          text: "text" in testCase ? testCase.text : "/models@openclaw_bot",
         },
       };
       const eventId = String(update.update_id).padStart(16, "0");
@@ -384,8 +433,10 @@ describe("createTelegramIngressMonitor", () => {
 
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
       const controlLaneKey = `telegram:${testCase.chat.id}:control`;
+      const expectedLaneKey =
+        "expectedLaneKey" in testCase ? testCase.expectedLaneKey : controlLaneKey;
       const dispatch = vi.fn(async () => {
-        expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
+        expect(await queue.listClaims()).toMatchObject([{ laneKey: expectedLaneKey }]);
         return { kind: "completed" as const };
       });
       const monitor = createTelegramIngressMonitor({
@@ -394,7 +445,8 @@ describe("createTelegramIngressMonitor", () => {
         accountId: "default",
         botInfo: {
           ...telegramBotInfoForTest,
-          has_topics_enabled: true,
+          has_topics_enabled:
+            "hasTopicsEnabled" in testCase ? testCase.hasTopicsEnabled === true : true,
         },
         dispatch,
       });
@@ -409,9 +461,11 @@ describe("createTelegramIngressMonitor", () => {
         } else {
           expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
           expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-          expect(await queue.enqueue(eventId, payload, { laneKey: controlLaneKey })).toMatchObject({
-            kind: "completed",
-          });
+          expect(await queue.enqueue(eventId, payload, { laneKey: expectedLaneKey })).toMatchObject(
+            {
+              kind: "completed",
+            },
+          );
         }
         expect(await queue.listPending()).toEqual([]);
       } finally {

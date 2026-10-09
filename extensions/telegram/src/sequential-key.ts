@@ -116,16 +116,20 @@ export function isTelegramReadOnlyControlLaneText(params: {
   return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
-export function isTelegramControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
+function isTelegramAbortLaneText(params: { rawText?: string; botUsername?: string }): boolean {
   // Live polling and webhook admission already have bot identity. In defensive pre-identity
   // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.
   const abortCommandOptions = params.botUsername
     ? { botUsername: params.botUsername }
     : { targetedCommandMode: "pre-identity" as const };
-  if (isAbortRequestText(params.rawText, abortCommandOptions)) {
+  return isAbortRequestText(params.rawText, abortCommandOptions);
+}
+
+export function isTelegramControlLaneText(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  if (isTelegramAbortLaneText(params)) {
     return true;
   }
   const key = resolveTelegramCommandKeyForControlLane(params);
@@ -148,7 +152,10 @@ function getTelegramSequentialMessage(ctx: TelegramSequentialKeyContext): Messag
   );
 }
 
-export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
+export function getTelegramSequentialKey(
+  ctx: TelegramSequentialKeyContext,
+  options?: { abortUsesConversationLane?: boolean },
+): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
@@ -168,12 +175,19 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     // for the same unknown poll together while the handler records the miss.
     return `telegram:poll:${pollId}`;
   }
-  const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
+  const message = getTelegramSequentialMessage(ctx);
+  const msg = message ?? ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const chatLane = typeof chatId === "number" ? `telegram:${chatId}` : "telegram";
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
-  if (isTelegramControlLaneText({ rawText, botUsername })) {
+  // Durable ingress must find pre-adoption work on its conversation lane. grammY
+  // keeps the control lane so the command can run while that handler unwinds.
+  const abortUsesConversationLane =
+    options?.abortUsesConversationLane === true &&
+    message !== undefined &&
+    isTelegramAbortLaneText({ rawText, botUsername });
+  if (!abortUsesConversationLane && isTelegramControlLaneText({ rawText, botUsername })) {
     return `${chatLane}:control`;
   }
   if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
