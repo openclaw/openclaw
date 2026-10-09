@@ -41,8 +41,10 @@ After an upgrade, wildcard-only access groups no longer grant Control UI launch 
 
 OpenClaw builds the Mini App URL from the first source that resolves:
 
-1. `gateway.publicOrigin`, when it is an absolute `https:` origin without a path, query, or hash.
+1. `gateway.publicOrigin`, when it is an absolute `https:` origin without a path, query, or hash, and the Control UI origin policy admits it (see below).
 2. Tailscale Serve or Funnel.
+
+When both are configured (mixed ingress), the public origin wins only if the Control UI would accept a browser from it: `gateway.controlUi.allowedOrigins` is unset, or lists that origin or `"*"`. If an explicit `allowedOrigins` list leaves it out, the Mini App keeps the Tailscale URL, so an existing tailnet-only allowlist keeps working after you add `gateway.publicOrigin`.
 
 ### Reverse proxy or tunnel
 
@@ -84,5 +86,7 @@ Mini App needs an HTTPS gateway URL. Set an https `gateway.publicOrigin`, or set
 ```
 
 Set an https `gateway.publicOrigin`, or set one of the Tailscale modes shown above and make sure Tailscale is running on the gateway host, then retry the command.
+
+If an https `gateway.publicOrigin` is set but excluded by an explicit `gateway.controlUi.allowedOrigins` list and Tailscale is not available, the reply names the origin to add to `gateway.controlUi.allowedOrigins`.
 
 The Mini App does not support Telegram Web iframe.

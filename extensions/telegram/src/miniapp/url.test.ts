@@ -89,4 +89,83 @@ describe("resolveTelegramMiniAppUrls", () => {
       ).resolves.toMatchObject({ pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/" });
     },
   );
+
+  describe("mixed ingress (gateway.publicOrigin + Tailscale)", () => {
+    const tailnetStatus = () =>
+      vi.fn(async () => ({
+        code: 0,
+        stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
+      }));
+
+    it("prefers gateway.publicOrigin when controlUi.allowedOrigins is unset", async () => {
+      const runCommand = tailnetStatus();
+      await expect(
+        resolveTelegramMiniAppUrls({
+          cfg: {
+            gateway: {
+              publicOrigin: "https://gateway.example.com",
+              tailscale: { mode: "serve" },
+            },
+          },
+          runCommand,
+        }),
+      ).resolves.toMatchObject({ pageUrl: "https://gateway.example.com/__openclaw_tg_miniapp/" });
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+
+    it.each([[["https://host.tailnet.ts.net"]], [[]]])(
+      "keeps the Tailscale URL when controlUi.allowedOrigins %j excludes the public origin",
+      async (allowedOrigins) => {
+        await expect(
+          resolveTelegramMiniAppUrls({
+            cfg: {
+              gateway: {
+                publicOrigin: "https://gateway.example.com",
+                tailscale: { mode: "serve" },
+                controlUi: { allowedOrigins },
+              },
+            },
+            runCommand: tailnetStatus(),
+          }),
+        ).resolves.toEqual({
+          pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
+          controlUiUrl: "https://host.tailnet.ts.net",
+          gatewayUrl: "wss://host.tailnet.ts.net",
+        });
+      },
+    );
+
+    it.each([[["https://host.tailnet.ts.net", " HTTPS://Gateway.Example.com "]], [["*"]]])(
+      "uses gateway.publicOrigin when controlUi.allowedOrigins %j admits it",
+      async (allowedOrigins) => {
+        const runCommand = tailnetStatus();
+        await expect(
+          resolveTelegramMiniAppUrls({
+            cfg: {
+              gateway: {
+                publicOrigin: "https://gateway.example.com",
+                tailscale: { mode: "serve" },
+                controlUi: { allowedOrigins },
+              },
+            },
+            runCommand,
+          }),
+        ).resolves.toMatchObject({ gatewayUrl: "wss://gateway.example.com" });
+        expect(runCommand).not.toHaveBeenCalled();
+      },
+    );
+
+    it("names controlUi.allowedOrigins when the public origin is excluded and Tailscale is off", async () => {
+      await expect(
+        resolveTelegramMiniAppUrls({
+          cfg: {
+            gateway: {
+              publicOrigin: "https://gateway.example.com",
+              controlUi: { allowedOrigins: ["https://other.example.com"] },
+            },
+          },
+        }),
+      ).rejects.toThrow("Add https://gateway.example.com to `gateway.controlUi.allowedOrigins`");
+    });
+  });
 });

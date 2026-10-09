@@ -107,7 +107,7 @@ receive the administrator grant reserved for handoffs issued directly by the Gat
 Non-goals for v1:
 
 - Telegram Web iframe is unsupported.
-- Published URLs come only from an https `gateway.publicOrigin` or Tailscale Serve/Funnel.
+- Published URLs come only from an https `gateway.publicOrigin` or Tailscale Serve/Funnel. With both configured, the public origin is used only when `gateway.controlUi.allowedOrigins` is unset or admits it; otherwise the Tailscale URL is kept.
 
 <a id="if-you-see-unauthorized-1008"></a>
 
