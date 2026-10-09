@@ -10,6 +10,7 @@ import { loggingState } from "../../logging/state.js";
 import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { log } from "./logger.js";
 import * as retention from "./prompt-cache-retention.js";
@@ -45,14 +46,7 @@ function createFixture(responseFormat: Record<string, unknown>) {
       api: args[0].api,
       provider: args[0].provider,
       model: args[0].id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: 0,
     });

@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { createCronJobNameResolver } from "../cron/store/job-name.js";
+import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
   isSubagentCoordinationInputProvenance,
@@ -32,14 +33,9 @@ import {
   isCronRunMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
-
-export type SubagentCoordinationDisplayResolver = {
-  assertCurrent?: () => void;
-  isSubagentSession: (sessionKey: string) => boolean;
-  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
-};
 
 export function isSubagentCoordinationHistoryInput(
   message: Record<string, unknown>,
@@ -132,14 +128,8 @@ function readTtsSupplementMarker(
   if (!marker) {
     return undefined;
   }
-  const textSha256 =
-    typeof marker.textSha256 === "string" && marker.textSha256.trim()
-      ? marker.textSha256.trim()
-      : undefined;
-  const spokenText =
-    typeof marker.spokenText === "string" && marker.spokenText.trim()
-      ? marker.spokenText.trim()
-      : undefined;
+  const textSha256 = normalizeOptionalString(marker.textSha256);
+  const spokenText = normalizeOptionalString(marker.spokenText);
   return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
 }
 
@@ -261,7 +251,10 @@ export function mergeTtsSupplementMessages(
   return changed ? merged : messages;
 }
 
-function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
+function isSubagentAnnounceInterSessionUserMessage(
+  message: Record<string, unknown>,
+  readText?: (message: Record<string, unknown>) => string | undefined,
+): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
   if (
     provenance?.kind === "inter_session" &&
@@ -269,9 +262,11 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   ) {
     return true;
   }
-  const text = extractProjectedText(message.content ?? message.text);
+  const text = readText ? readText(message) : extractProjectedText(message.content ?? message.text);
   return (
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
+    typeof text === "string" &&
+    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
+    text.includes("sourceTool=subagent_announce")
   );
 }
 
@@ -280,28 +275,17 @@ function readChatHistoryRecordTimestampMs(message: unknown): number | undefined 
   return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
-function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
-  const record = readRecord(message);
-  if (!record || record.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(record.provenance);
-  if (
-    provenance?.kind === "inter_session" &&
-    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
-  ) {
-    return true;
-  }
-  const text = extractChatHistoryBlockText(record);
+export function isPreSessionStartAssistantMessage(
+  message: unknown,
+  sessionStartedAt: number | undefined,
+): boolean {
+  const timestamp = readChatHistoryRecordTimestampMs(message);
   return (
-    typeof text === "string" &&
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
-    text.includes("sourceTool=subagent_announce")
+    sessionStartedAt !== undefined &&
+    readRecord(message)?.role === "assistant" &&
+    timestamp !== undefined &&
+    timestamp < sessionStartedAt
   );
-}
-
-function isChatHistoryAssistantMessage(message: unknown): boolean {
-  return readRecord(message)?.role === "assistant";
 }
 
 export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
@@ -315,15 +299,16 @@ export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number
     for (const current of messages) {
       if (precedingAnnounce) {
         precedingAnnounce = false;
-        const ts = isChatHistoryAssistantMessage(current)
-          ? readChatHistoryRecordTimestampMs(current)
-          : undefined;
-        if (typeof ts === "number" && ts < sessionStartedAt) {
+        if (isPreSessionStartAssistantMessage(current, sessionStartedAt)) {
           changed = true;
           continue;
         }
       }
-      if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
+      const record = readRecord(current);
+      if (
+        record?.role === "user" &&
+        isSubagentAnnounceInterSessionUserMessage(record, extractChatHistoryBlockText)
+      ) {
         const ts = readChatHistoryRecordTimestampMs(current);
         if (typeof ts === "number" && ts < sessionStartedAt) {
           // The adjacent assistant may arrive in the next appended chunk.
@@ -349,7 +334,7 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   if (message.display === false) {
     return true;
   }
-  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+  return isOpenClawRuntimeContextCustomMessage(message);
 }
 
 function shouldHideProjectedHistoryMessage(
@@ -426,65 +411,46 @@ function displayTextForDuplicateCheck(message: Record<string, unknown>): string 
   return text ? text : undefined;
 }
 
-function isDuplicateAcpGatewayInjectedMessage(
+function isDuplicateAssistantDelivery(
   current: Record<string, unknown>,
   previousVisible: Record<string, unknown> | undefined,
 ): boolean {
   if (!previousVisible) {
     return false;
   }
-  if (
-    openclawAssistantModel(previousVisible) !== "acp-runtime" ||
-    openclawAssistantModel(current) !== "gateway-injected"
-  ) {
-    return false;
-  }
-  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
-    return false;
-  }
-  const previousText = displayTextForDuplicateCheck(previousVisible);
-  const currentText = displayTextForDuplicateCheck(current);
-  return Boolean(previousText && currentText && previousText === currentText);
-}
-
-function isDuplicateChannelFinalDeliveryMirror(
-  current: Record<string, unknown>,
-  previousVisible: Record<string, unknown> | undefined,
-): boolean {
-  if (!previousVisible || !isOpenClawDeliveryMirrorAssistantMessage(current)) {
-    return false;
-  }
-  const deliveryMirror = readRecord(current.openclawDeliveryMirror);
-  if (deliveryMirror?.kind !== "channel-final") {
-    return false;
-  }
-  if (asRoleContentMessage(previousVisible)?.role !== "assistant") {
-    return false;
-  }
-  if (isOpenClawDeliveryMirrorAssistantMessage(previousVisible)) {
-    return false;
-  }
-  if (isProjectedForwardedMessage(previousVisible)) {
-    return false;
-  }
-  const previousMeta = readRecord(previousVisible["__openclaw"]);
-  if (typeof deliveryMirror.sourceAssistantMessageId === "string") {
+  const acpInjection =
+    openclawAssistantModel(previousVisible) === "acp-runtime" &&
+    openclawAssistantModel(current) === "gateway-injected";
+  if (!acpInjection) {
+    const deliveryMirror = readRecord(current.openclawDeliveryMirror);
     if (
-      !deliveryMirror.sourceAssistantMessageId ||
-      deliveryMirror.sourceAssistantMessageId !== previousMeta?.id ||
-      hasAssistantDisplayableNonTextContent(previousVisible) ||
-      hasAssistantNonTextContent(current) ||
-      hasTranscriptMediaFacts(previousVisible) ||
-      hasTranscriptMediaFacts(current)
+      !isOpenClawDeliveryMirrorAssistantMessage(current) ||
+      deliveryMirror?.kind !== "channel-final" ||
+      asRoleContentMessage(previousVisible)?.role !== "assistant" ||
+      isOpenClawDeliveryMirrorAssistantMessage(previousVisible) ||
+      isProjectedForwardedMessage(previousVisible)
     ) {
       return false;
     }
-    const previousText = extractAssistantPhaseText(previousVisible)?.trim();
-    const currentText = extractAssistantPhaseText(current)?.trim();
-    return Boolean(previousText && currentText && previousText === currentText);
-  }
-  if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
-    return false;
+    const previousMeta = readRecord(previousVisible["__openclaw"]);
+    if (typeof deliveryMirror.sourceAssistantMessageId === "string") {
+      if (
+        !deliveryMirror.sourceAssistantMessageId ||
+        deliveryMirror.sourceAssistantMessageId !== previousMeta?.id ||
+        hasAssistantDisplayableNonTextContent(previousVisible) ||
+        hasAssistantNonTextContent(current) ||
+        hasTranscriptMediaFacts(previousVisible) ||
+        hasTranscriptMediaFacts(current)
+      ) {
+        return false;
+      }
+      const previousText = extractAssistantPhaseText(previousVisible)?.trim();
+      const currentText = extractAssistantPhaseText(current)?.trim();
+      return Boolean(previousText && currentText && previousText === currentText);
+    }
+    if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
+      return false;
+    }
   }
   if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
     return false;
@@ -541,10 +507,7 @@ export function filterVisibleProjectedHistoryMessages(
       pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
       continue;
     }
-    if (
-      isDuplicateAcpGatewayInjectedMessage(current, messages[i - 1]) ||
-      isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
-    ) {
+    if (isDuplicateAssistantDelivery(current, messages[i - 1])) {
       changed = true;
       continue;
     }
@@ -605,21 +568,33 @@ function resolveForwardedSenderSession(
     : undefined;
 }
 
+export function readForwardedCronJobIds(messages: readonly unknown[]) {
+  return messages.flatMap((value) => {
+    const message = readRecord(value);
+    if (!message || (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message))) {
+      return [];
+    }
+    const jobId = readForwardedSender(message).jobId;
+    return jobId ? [jobId] : [];
+  });
+}
+
+export async function prepareForwardedMessageCronJobNameResolver(
+  messages: readonly unknown[],
+  storePath?: string,
+) {
+  return await prepareCronJobNameResolver(readForwardedCronJobIds(messages), storePath);
+}
+
 export function projectForwardedMessages(
   messages: Array<Record<string, unknown>>,
   resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
   const resolve =
     resolveCronJobName ??
-    createCronJobNameResolver(
-      messages.flatMap((message) => {
-        if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
-          return [];
-        }
-        const jobId = readForwardedSender(message).jobId;
-        return jobId ? [jobId] : [];
-      }),
-    );
+    (() => {
+      throw new Error("Cron job names must be prepared before projecting forwarded messages");
+    });
   const names = new Map<string, string | undefined>();
   const resolveName = (jobId: string) => {
     if (!names.has(jobId)) {

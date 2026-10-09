@@ -1,16 +1,19 @@
 const CLAIM_ADMISSION = Symbol.for("openclaw.claimingHookAdmission");
 
 export type ClaimingHookAdmission = Readonly<{
-  [CLAIM_ADMISSION]?: () => Promise<void>;
+  [CLAIM_ADMISSION]?: Readonly<{
+    prepare?: () => Promise<void>;
+    assertCurrent?: () => void;
+  }>;
 }>;
 
 export function withClaimingHookAdmission<T extends object>(
   context: T,
-  assertCurrent: (() => Promise<void>) | undefined,
+  admission: ClaimingHookAdmission[typeof CLAIM_ADMISSION],
 ) {
-  return assertCurrent ? Object.assign(context, { [CLAIM_ADMISSION]: assertCurrent }) : context;
+  return admission ? Object.assign(context, { [CLAIM_ADMISSION]: admission }) : context;
 }
 
-export function readClaimingHookAdmission(context: ClaimingHookAdmission) {
+export function readClaimingHookAdmission(context: object & ClaimingHookAdmission) {
   return context[CLAIM_ADMISSION];
 }

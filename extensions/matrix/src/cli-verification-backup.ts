@@ -11,11 +11,9 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
+    .action(async (options: cli.MatrixCliOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand({
-        verbose: options.verbose === true,
-        json: options.json === true,
+      await cli.runMatrixCliCommand(options, {
         run: async () => await verification.getMatrixRoomKeyBackupStatus({ accountId, cfg }),
         onText: (status, verbose) => {
           cli.printAccountLabel(accountId);
@@ -40,17 +38,14 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        yes?: boolean;
-        rotateRecoveryKey?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
+      async (
+        options: cli.MatrixCliOptions & {
+          yes?: boolean;
+          rotateRecoveryKey?: boolean;
+        },
+      ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+        await cli.runMatrixCliCommand(options, {
           run: async () => {
             if (options.yes !== true) {
               throw new Error(
@@ -104,17 +99,14 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        recoveryKey?: string;
-        recoveryKeyStdin?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
+      async (
+        options: cli.MatrixCliOptions & {
+          recoveryKey?: string;
+          recoveryKeyStdin?: boolean;
+        },
+      ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await verification.restoreMatrixRoomKeyBackup({
               accountId,
@@ -164,18 +156,15 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        recoveryKey?: string;
-        recoveryKeyStdin?: boolean;
-        forceResetCrossSigning?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
+      async (
+        options: cli.MatrixCliOptions & {
+          recoveryKey?: string;
+          recoveryKeyStdin?: boolean;
+          forceResetCrossSigning?: boolean;
+        },
+      ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await verification.bootstrapMatrixVerification({
               accountId,
@@ -196,7 +185,7 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               console.log(
                 `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"} (master=${result.crossSigning.masterKeyPublished ? "yes" : "no"}, self=${result.crossSigning.selfSigningKeyPublished ? "yes" : "no"}, user=${result.crossSigning.userSigningKeyPublished ? "yes" : "no"})`,
               );
-              cli.printVerificationBackupStatus(result.verification);
+              cli.printBackupStatus(result.verification.backup);
               cli.printTimestamp(
                 "Recovery key created at",
                 result.verification.recoveryKeyCreatedAt,
@@ -206,7 +195,7 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               console.log(
                 `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"}`,
               );
-              cli.printVerificationBackupSummary(result.verification);
+              cli.printBackupSummary(result.verification.backup);
             }
             cli.printVerificationGuidance(
               {
@@ -233,17 +222,12 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
     .action(
       async (
         key: string | undefined,
-        options: {
-          account?: string;
+        options: cli.MatrixCliOptions & {
           recoveryKeyStdin?: boolean;
-          verbose?: boolean;
-          json?: boolean;
         },
       ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await verification.verifyMatrixRecoveryKey(
               await cli.requireMatrixCliRecoveryKeyInput({
@@ -263,10 +247,10 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
             console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
             console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
             console.log(`Device verified by owner: ${result.deviceOwnerVerified ? "yes" : "no"}`);
-            cli.printVerificationBackupSummary(result);
+            cli.printBackupSummary(result.backup);
             if (verbose) {
               cli.printVerificationTrustDiagnostics(result);
-              cli.printVerificationBackupStatus(result);
+              cli.printBackupStatus(result.backup);
               cli.printTimestamp("Recovery key created at", result.recoveryKeyCreatedAt);
               if (result.success) {
                 cli.printTimestamp("Verified at", result.verifiedAt);

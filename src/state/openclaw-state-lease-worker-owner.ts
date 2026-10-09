@@ -5,8 +5,10 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
@@ -16,7 +18,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerLeaseContext } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "renew" | "release";
@@ -26,7 +28,7 @@ export type OpenClawStateLeaseWorkerAuthority = {
   beforeCommit?(this: void): void;
 };
 
-type WorkerLeaseScope = {
+export type WorkerLeaseScope = {
   identity: OpenClawStateLeaseIdentity;
   assertCurrent(this: void): void;
   createAdmission: SqliteWorkerAdmissionFactory;
@@ -48,6 +50,7 @@ type RetainedLeaseScope = {
 };
 type WorkerLeaseOwner = {
   identity: OpenClawStateLeaseIdentity;
+  sourceIdentity?: DatabasePathIdentity;
   sourceContext?: OpenClawStateWorkerContext;
   assertSourceCurrent(): void;
   retain(
@@ -82,16 +85,9 @@ function assertSynchronousAuthority(assertion: (() => void) | undefined): void {
 }
 
 function captureLeaseWorkerSource(context: OpenClawStateWorkerContext, databasePath: string) {
-  const {
-    admission,
-    maintenanceScope,
-    runInCapturedSchemaScope,
-    existingSchemaPath,
-    coordinatorRuntime,
-    environment,
-  } = context;
+  const { admission, maintenanceScope, runInCapturedSchemaScope, existingSchemaPath, environment } =
+    context;
   const sourceEnvironment = { ...environment };
-  const sourceCoordinatorRuntime = { ...coordinatorRuntime };
   const assertAdmission = admission.assertCurrent;
   const assertMaintenance = maintenanceScope?.assertAdmission;
   const assertMaintenanceOwner = maintenanceScope?.assertOwnerCurrent;
@@ -105,10 +101,8 @@ function captureLeaseWorkerSource(context: OpenClawStateWorkerContext, databaseP
       maintenanceScope?.assertOwnerCurrent !== assertMaintenanceOwner ||
       context.runInCapturedSchemaScope !== runInCapturedSchemaScope ||
       context.existingSchemaPath !== existingSchemaPath ||
-      context.coordinatorRuntime !== coordinatorRuntime ||
       context.environment !== environment ||
-      !isDeepStrictEqual(environment, sourceEnvironment) ||
-      !isDeepStrictEqual(coordinatorRuntime, sourceCoordinatorRuntime)
+      !isDeepStrictEqual(environment, sourceEnvironment)
     ) {
       throw new Error("State lease worker source binding was replaced");
     }
@@ -251,6 +245,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   identity: OpenClawStateLeaseIdentity;
   databasePath: string;
   sourceContext?: OpenClawStateWorkerContext;
+  sourceIdentity?: DatabasePathIdentity;
   expiryObservation?: SharedArrayBuffer;
   assertCurrent(purpose: OpenClawStateLeaseWorkerPurpose): void;
 }) {
@@ -307,6 +302,9 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   };
   const owner: WorkerLeaseOwner = {
     identity: params.identity,
+    sourceIdentity: params.sourceIdentity
+      ? Object.freeze({ ...params.sourceIdentity })
+      : params.sourceContext && Object.freeze({ ...params.sourceContext.admission.identity }),
     sourceContext: params.sourceContext,
     assertSourceCurrent() {
       if (!assertSourceCurrent) {
@@ -428,6 +426,61 @@ export function withOpenClawStateLeaseWorkerAdmission<T>(
     throw new Error("State lease worker operation requires its original live lease context");
   }
   return owner.run(databasePath, operation, "write", authority);
+}
+
+/** A serving-owner reply acknowledges native settlement; a lost reply poisons the original lease. */
+export function withOpenClawStateLeaseRemoteAdmission<T>(
+  lease: OpenClawStateWorkerLeaseContext,
+  databasePath: string,
+  operation: (scope: {
+    identity: OpenClawStateLeaseIdentity;
+    sourceIdentity: DatabasePathIdentity;
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<Result<T, Error>>,
+): Promise<T> {
+  const owner = owners.get(lease);
+  if (!owner) {
+    throw new Error("Remote journal mutation requires its original live lease context");
+  }
+  const sourceIdentity = owner.sourceIdentity;
+  if (!sourceIdentity?.key.startsWith("file:") || sourceIdentity.birthtime === undefined) {
+    throw new Error("Remote journal mutation requires its captured physical database identity");
+  }
+  const scope = owner.retain(databasePath, "write");
+  const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
+  scope.retainSettlement(settlement.promise);
+  const settle = (outcome: SqliteWorkerOperationSettlement) => {
+    scope.settleNative(settlement.promise, outcome);
+    settlement.resolve(outcome);
+  };
+  return runRetainedLeaseScopes([scope], async () => {
+    let result: Result<T, Error>;
+    try {
+      scope.assertCurrent();
+      owner.assertSourceCurrent();
+      result = await operation({
+        identity: { ...scope.identity },
+        sourceIdentity: { ...sourceIdentity },
+        signal: lease.signal,
+        assertCurrent: () => {
+          scope.assertCurrent();
+          owner.assertSourceCurrent();
+        },
+      });
+    } catch (error) {
+      // Do not release or compensate while the other host may still hold a native writer.
+      settle({ kind: "unknown", error });
+      throw error;
+    }
+    settle({ kind: "completed" });
+    scope.assertCurrent();
+    owner.assertSourceCurrent();
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  });
 }
 
 /** Multiple leases authorize one worker operation only from their shared captured source. */

@@ -4,9 +4,15 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { trackSlackDraftMessage } from "../../draft-message-boundaries.js";
 import { formatSlackError } from "../../errors.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
-import { prepareSlackReply, resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
+import {
+  prepareSlackReply,
+  resolveSlackReplyBlocks,
+  resolveSlackReplyRenderPlan,
+} from "../../reply-blocks.js";
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
@@ -17,7 +23,7 @@ import {
 } from "../../streaming.js";
 import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
-import { deliverReplies, readSlackReplyBlocks } from "../replies.js";
+import { deliverReplies } from "../replies.js";
 import {
   createSlackEventDeliveryTracker,
   buildSlackEventDeliveryKey,
@@ -45,8 +51,14 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     slackMessageMetadata,
     slackStreamFallbackTeamId,
   } = setup;
+  const boundaryState: {
+    streamBoundary: ReturnType<typeof trackSlackDraftMessage> | null;
+    interruptedThreadTs: string | undefined;
+  } = { streamBoundary: null, interruptedThreadTs: undefined };
   const state = {
     streamSession: null as SlackStreamSession | null,
+    ...boundaryState,
+    streamInterrupted: false,
     nativeProgressStreamStartPromise: null as Promise<SlackStreamSession | null> | null,
     nativeProgressStreamThreadTs: undefined as string | undefined,
     streamFailed: false,
@@ -60,22 +72,46 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       "threadTs" | "text" | "chunks" | "taskDisplayMode"
     >,
   ) => {
-    const session = await startSlackStream({
-      client: slackClient,
-      clientOptions: slackClientOptions,
-      channel: message.channel,
-      ...params,
-      ...(slackIdentity ? { identity: slackIdentity } : {}),
-      teamId: await resolveSlackStreamRecipientTeamId({
-        client: slackClient,
-        token: ctx.botToken,
-        userId: message.user,
-        fallbackTeamId: slackStreamFallbackTeamId,
-      }),
-      userId: message.user,
+    const boundary = trackSlackDraftMessage({
+      accountId: account.accountId,
+      teamId: prepared.eventScope?.teamId,
+      channelId: message.channel,
+      // Ingress records the conversation from the inbound message, while
+      // params.threadTs is only the outbound delivery target.
+      threadTs: message.thread_ts,
+      onInterveningMessage: () => {
+        state.streamInterrupted = true;
+      },
     });
-    state.streamSession = session;
-    return session;
+    state.streamBoundary = boundary;
+    try {
+      const session = await startSlackStream({
+        client: slackClient,
+        clientOptions: slackClientOptions,
+        channel: message.channel,
+        ...params,
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
+        teamId: await resolveSlackStreamRecipientTeamId({
+          client: slackClient,
+          token: ctx.botToken,
+          userId: message.user,
+          fallbackTeamId: slackStreamFallbackTeamId,
+        }),
+        userId: message.user,
+      });
+      state.streamSession = session;
+      state.interruptedThreadTs = undefined;
+      if (session.streamer.ts) {
+        boundary.setMessageTs(session.streamer.ts);
+      }
+      return session;
+    } catch (error) {
+      boundary.stop();
+      if (state.streamBoundary === boundary) {
+        state.streamBoundary = null;
+      }
+      throw error;
+    }
   };
   const deliverPreparedReply = (
     reply: ReturnType<typeof prepareSlackReply>,
@@ -226,6 +262,8 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
   };
 
   const finishStream = async (chunks?: AnyChunk[]) => {
+    state.streamBoundary?.stop();
+    state.streamBoundary = null;
     const session = state.streamSession;
     if (session && !session.stopped) {
       try {
@@ -249,6 +287,38 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
   };
 
+  const rotateInterruptedStream = async (): Promise<string | undefined> => {
+    if (!state.streamInterrupted) {
+      return undefined;
+    }
+    // A human can arrive before Slack returns the first message timestamp.
+    // Wait for that receipt so the old stream can be sealed before replacement.
+    await state.nativeProgressStreamStartPromise?.catch(() => null);
+    if (!state.streamInterrupted) {
+      return undefined;
+    }
+    state.streamInterrupted = false;
+    if (state.streamSession?.stoppedBySlack) {
+      // A native Stop belongs to the turn, not just the old message identity.
+      // Retain the stopped session so all late progress and finals stay suppressed.
+      state.streamBoundary?.stop();
+      state.streamBoundary = null;
+      return undefined;
+    }
+    const threadTs = state.streamSession?.threadTs ?? state.nativeProgressStreamThreadTs;
+    // Finalize the visible pre-boundary message exactly once before any later
+    // output is admitted to a fresh Slack message in the same thread.
+    await finishStream();
+    if (state.streamSession?.stoppedBySlack) {
+      // Slack can Stop the stream while the sealing request is in flight.
+      // Keep that turn-level cancellation visible to all later delivery paths.
+      return undefined;
+    }
+    state.streamSession = null;
+    state.interruptedThreadTs = threadTs;
+    return threadTs;
+  };
+
   const deliverNormally = async (params: {
     payload: ReplyPayload;
     kind: ReplyDispatchKind;
@@ -257,7 +327,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (state.streamSession?.stoppedBySlack) {
       return { visibleReplySent: false };
     }
-    const replyThreadTs = resolveDeliveryThreadTs(params);
+    await rotateInterruptedStream();
+    if (state.streamSession?.stoppedBySlack) {
+      return { visibleReplySent: false };
+    }
+    const replyThreadTs =
+      params.forcedThreadTs ?? state.interruptedThreadTs ?? resolveDeliveryThreadTs(params);
     const deliveryReplyThreadTs =
       replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
         ? undefined
@@ -309,7 +384,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       renderPlan.mode !== "split" &&
       !renderPlan.textIsSlackPlainText &&
       !plannedBlocks?.length &&
-      !readSlackReplyBlocks(payload)?.length &&
+      !resolveSlackReplyBlocks(payload)?.length &&
       reply.hasText &&
       (!options?.maxTextBytes || countSlackTextUtf8Bytes(reply.trimmedText) <= options.maxTextBytes)
     );
@@ -335,11 +410,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (!state.streamSession && state.nativeProgressStreamStartPromise) {
       await state.nativeProgressStreamStartPromise;
     }
+    await rotateInterruptedStream();
     if (state.streamSession?.stoppedBySlack) {
       return { visibleReplySent: false };
     }
     let session = state.streamSession;
-    const threadTs = session?.threadTs ?? replyPlan.nextThreadTs();
+    const threadTs = session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs();
     if (state.streamFailed || !threadTs) {
       state.streamFailed = true;
       return await deliverNormally({
@@ -426,13 +502,26 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     );
   };
 
+  const nativeFinalThreadTs = () =>
+    state.streamSession?.threadTs ??
+    state.interruptedThreadTs ??
+    state.nativeProgressStreamThreadTs;
+  const canFinishNativeFinal = (payload: ReplyPayload, streamReady: boolean) =>
+    payload.isError !== true &&
+    streamReady &&
+    Boolean(state.streamSession || state.interruptedThreadTs) &&
+    isStreamingEligible(payload, { maxTextBytes: SLACK_EDIT_TEXT_MAX_BYTES });
+
   return Object.assign(state, {
+    canFinishNativeFinal,
     deliverNormally,
     deliverWithStreaming,
     finishStream,
     isStreamingEligible,
     markPreviewPayloadDelivered,
+    nativeFinalThreadTs,
     rememberDeliveredThreadTs,
+    rotateInterruptedStream,
     startStream,
     resetDeliveryTracker: () => {
       deliveryTracker = createSlackEventDeliveryTracker();

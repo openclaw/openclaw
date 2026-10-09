@@ -1,8 +1,8 @@
 // Covers model runtime policy precedence and private QA runtime overrides.
 import { afterEach, describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   resolveModelRouteIntent,
@@ -120,7 +120,7 @@ function resolveModelRuntimePolicy(
 ): ReturnType<typeof resolveModelRuntimePolicyBase> {
   return resolveModelRuntimePolicyBase({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: createCanonicalAgentConfigFixture(params.config).config,
   });
 }
 
@@ -525,31 +525,6 @@ describe("resolveModelRuntimePolicy", () => {
     },
   );
 
-  it("uses provider-qualified model ids to resolve provider model runtime policies", () => {
-    const config = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.example/v1",
-            models: [createModelConfig("claude-cli", "claude-opus-4-7")],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveModelRuntimePolicy({
-        config,
-        provider: "",
-        modelId: "anthropic/claude-opus-4-7",
-      }),
-    ).toEqual({
-      policy: { id: "claude-cli" },
-      source: "model",
-      matchedProvider: "anthropic",
-    });
-  });
-
   it("uses provider-qualified model ids to resolve provider runtime policies", () => {
     const config = {
       models: {
@@ -710,14 +685,13 @@ describe("resolveModelRuntimePolicy", () => {
             "openai/foo-1": { agentRuntime: { id: "codex" } },
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             models: {
               "anthropic/foo-1": { agentRuntime: { id: "claude-cli" } },
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
@@ -746,15 +720,14 @@ describe("resolveModelRuntimePolicy", () => {
             "vllm/qwen-local": { agentRuntime: { id: "codex" } },
           },
         },
-        list: [
-          { id: "ops" },
-          {
-            id: "research",
+        entries: {
+          ops: {},
+          research: {
             models: {
               "vllm/qwen-local": { agentRuntime: { id: "openclaw" } },
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 

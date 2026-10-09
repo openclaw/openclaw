@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createMockStateReadSource } from "./openclaw-state-read-mock.test-support.js";
 import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 
 const mocks = vi.hoisted(() => {
@@ -20,11 +21,11 @@ vi.mock("./openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: mocks.write,
 }));
 vi.mock("./openclaw-state-read-worker.js", () => ({
-  createOpenClawStateReadTransport: () => ({
-    read: mocks.read,
-    validateFresh: async () => {},
-    close: mocks.close,
-  }),
+  captureOpenClawStateReadSource: () =>
+    createMockStateReadSource({
+      read: mocks.read,
+      close: mocks.close,
+    }),
 }));
 
 import { createOnboardingRecommendationsStore } from "./onboarding-recommendations.js";

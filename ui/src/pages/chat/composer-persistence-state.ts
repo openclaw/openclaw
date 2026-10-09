@@ -1,17 +1,20 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type {
   ChatAttachment,
   ChatComposerDraftRetry,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   ChatQueueItem,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { readDraftRevisionState } from "../../lib/chat/outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   storedChatOutboxScopeKey,
   storageTargetForGateway,
+  storageTargetForComposer,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import type { DurableChatComposerSnapshot } from "./durable-composer-persistence.ts";
@@ -34,6 +37,7 @@ export type StoredChatComposerSnapshot = {
   draft: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   queue: ChatQueueItem[];
 };
 
@@ -47,6 +51,7 @@ export type ChatComposerPersistOptions = {
   draft?: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode | null;
+  replyTarget?: ChatReplyTarget | null;
   draftRevision?: number;
   expectedDraftRevision?: number;
 };
@@ -56,6 +61,7 @@ export type ChatComposerPersistenceState = ChatComposerScope & {
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
   chatGoalDraftMode?: ChatGoalDraftMode | null;
+  chatReplyTarget?: ChatReplyTarget | null;
   chatAttachments?: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   lastError?: string | null;
@@ -76,6 +82,7 @@ export type ChatComposerDraftSnapshot = {
   chatMessage: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   expectedDraftRevision: number;
   draftRevision: number;
   attachments: ChatAttachment[];
@@ -85,7 +92,7 @@ export type ChatComposerDraftSnapshot = {
 export function captureChatComposerOwner(state: ChatComposerScope) {
   return {
     gatewayOwner: storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner,
-    recoveryScope: state.client?.recoveryScope?.trim() ?? "",
+    recoveryScope: readOfflineStorageScope(state) ?? "",
     client: state.client,
   };
 }
@@ -96,7 +103,7 @@ export function isChatComposerOwnerCurrent(
 ): boolean {
   return (
     owner.gatewayOwner === storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner &&
-    owner.recoveryScope === (state.client?.recoveryScope?.trim() ?? "") &&
+    owner.recoveryScope === (readOfflineStorageScope(state) ?? "") &&
     (owner.client === state.client || state.client?.recoveryScopeReady === true)
   );
 }
@@ -116,4 +123,19 @@ export function isIncognitoComposerScope(
         storedChatOutboxScopeKey(scope),
     )
   );
+}
+
+export function resolveChatComposerDurableScope(
+  state: DurableChatComposerPersistenceState,
+  scope: StoredChatOutboxScope = resolveUiConversationIdentity(state, state.sessionKey),
+) {
+  const recoveryScope = readOfflineStorageScope(state);
+  if (!recoveryScope) {
+    return null;
+  }
+  return {
+    gatewayOwner: storageTargetForComposer(state).gatewayOwner,
+    recoveryScope,
+    scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}`,
+  };
 }

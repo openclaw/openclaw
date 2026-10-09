@@ -1,4 +1,3 @@
-// Validates the current runtime before OpenClaw startup.
 import process from "node:process";
 import { format } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -13,7 +12,6 @@ import {
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
-  isSupportedOpenClawNodeVersion,
   parseNodeReleaseVersion,
   type NodeReleaseVersion,
 } from "../../node-version.mjs";
@@ -21,14 +19,14 @@ import type { RuntimeEnv } from "../runtime.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
+export { isSupportedOpenClawNodeVersion as isSupportedNodeVersion } from "../../node-version.mjs";
+
 type RuntimeKind = "bun" | "node" | "unknown";
 
 const MINIMUM_BUN_VERSION: NodeReleaseVersion = { major: 1, minor: 4, patch: 0 };
 
-const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
-/** Runtime facts included in startup/runtime-version diagnostics. */
 type RuntimeDetails = {
   kind: RuntimeKind;
   version: string | null;
@@ -60,51 +58,35 @@ export function parseSemver(version: string | null): NodeReleaseVersion | null {
   };
 }
 
-/** Reads current process runtime metadata for startup support checks. */
 export async function detectRuntime(): Promise<RuntimeDetails> {
   const bunVersion = process.versions?.bun;
-  const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
-  const version = bunVersion ?? process.versions?.node ?? null;
-  const execPath = process.execPath ?? null;
-  const pathEnv = process.env.PATH ?? "(not set)";
-  const sqlite = await detectCurrentRuntimeSqlite();
-
-  return {
-    kind,
-    version,
-    execPath,
-    pathEnv,
-    hasNodeSqlite: sqlite.available,
-    sqliteVersion: sqlite.version,
-    sqliteSelectionError: sqlite.selectionError,
-    sqliteProbe: sqlite.probe,
+  const details: RuntimeDetails = {
+    kind: bunVersion ? "bun" : process.versions?.node ? "node" : "unknown",
+    version: bunVersion ?? process.versions?.node ?? null,
+    execPath: process.execPath ?? null,
+    pathEnv: process.env.PATH ?? "(not set)",
+    hasNodeSqlite: false,
+    sqliteVersion: null,
+    sqliteSelectionError: undefined,
+    sqliteProbe: undefined,
   };
-}
-
-async function detectCurrentRuntimeSqlite(): Promise<{
-  available: boolean;
-  version: string | null;
-  selectionError?: string;
-  probe?: SqliteCapabilities;
-}> {
   try {
     ensureSqliteLibrarySelected();
   } catch (error) {
-    return {
-      available: false,
-      version: null,
-      selectionError: error instanceof Error ? error.message : String(error),
-    };
+    details.sqliteSelectionError = error instanceof Error ? error.message : String(error);
+    return details;
   }
   try {
     const probe = await detectCurrentSqliteCapabilities();
-    return { available: probe.available, version: probe.version, probe };
+    details.hasNodeSqlite = probe.available;
+    details.sqliteVersion = probe.version;
+    details.sqliteProbe = probe;
   } catch {
-    return { available: false, version: null };
+    return details;
   }
+  return details;
 }
 
-/** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
 function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.sqliteSelectionError) {
     return false;
@@ -125,31 +107,12 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
   return false;
 }
 
-/** Returns whether the current process runtime satisfies OpenClaw's engine contract. */
 export async function isCurrentRuntimeSupported(): Promise<boolean> {
   return runtimeSatisfies(await detectRuntime());
 }
 
-/** Checks a Node version label against OpenClaw's supported Node version range. */
-export function isSupportedNodeVersion(version: string | null): boolean {
-  return isSupportedOpenClawNodeVersion(version);
-}
-
-/** Checks a Bun version label against OpenClaw's minimum supported release. */
 export function isSupportedBunVersion(version: string | null): boolean {
   return isNodeVersionAtLeast(parseSemver(version), MINIMUM_BUN_VERSION);
-}
-
-/** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
-function parseMinimumNodeEngine(engine: string | null): NodeReleaseVersion | null {
-  if (!engine) {
-    return null;
-  }
-  const match = engine.match(MINIMUM_ENGINE_RE);
-  if (!match) {
-    return null;
-  }
-  return parseSemver(match[1] ?? null);
 }
 
 /** Returns whether a Node version satisfies a supported engine range, or null if unsupported. */
@@ -157,11 +120,6 @@ export function nodeVersionSatisfiesEngine(
   version: string | null,
   engine: string | null,
 ): boolean | null {
-  const minimum = parseMinimumNodeEngine(engine);
-  if (minimum) {
-    return isNodeVersionAtLeast(parseNodeReleaseVersion(version), minimum);
-  }
-
   if (!engine) {
     return null;
   }
@@ -195,7 +153,6 @@ export function nodeVersionSatisfiesEngine(
   return satisfied;
 }
 
-/** Exits through the provided runtime when the current Node runtime is unsupported. */
 export async function assertSupportedRuntime(
   providedRuntime?: RuntimeEnv,
   providedDetails?: RuntimeDetails,

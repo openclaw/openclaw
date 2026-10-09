@@ -1,19 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  captureDeliveryQueueStateContext,
-  loadDeliveryQueueEntry,
-} from "../infra/delivery-queue-sqlite.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
+import { loadDeliveryQueueEntry } from "../infra/delivery-queue-sqlite.test-support.js";
+import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-namespaces.js";
 import {
   findDeliveryIntentOwner,
   loadPendingDelivery,
 } from "../infra/outbound/delivery-queue-storage.js";
+import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -22,15 +21,17 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
+import * as updateRunNotices from "./update-run-notice.runtime.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
 vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
@@ -51,33 +52,41 @@ vi.mock("./server-restart-sentinel.js", () => ({
 
 let services: ReturnType<typeof activateGatewayScheduledServices> | undefined;
 let watcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    await watcher?.stop();
-    await services?.stopDeliveryRecovery();
-    services?.heartbeatRunner.stop();
-    watcher = undefined;
-    services = undefined;
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    closeOpenClawAgentDatabasesForTest();
-    clearRuntimeConfigSnapshot();
-    resetPluginRuntimeStateForTest();
-    resetGatewayWorkAdmission();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    cleanup();
-  });
+let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
+let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle> | undefined;
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-runtime-recovery-");
+afterEach(async () => {
+  await watcher?.stop();
+  await lifecycle?.stop();
+  await services?.stopDeliveryRecovery();
+  services?.heartbeatRunner.stop();
+  await scheduler?.stop();
+  watcher = undefined;
+  services = undefined;
+  scheduler = undefined;
+  lifecycle = undefined;
+  clearRuntimeConfigSnapshot();
+  resetPluginRuntimeStateForTest();
+  resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 it("recovers a watcher-owned update notice on its runtime state after ambient root drift", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
+  const clock = createGatewaySchedulerClock(Date.now());
+  const advance = async (ms: number) => {
+    vi.setSystemTime(Date.now() + ms);
+    await clock.advanceBy(ms);
+  };
+  scheduler = createTestGatewayScheduler(clock.clock);
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
   resetGatewayWorkAdmission();
-  const rootA = tempDirs.make("openclaw-runtime-recovery-a-");
-  const rootB = tempDirs.make("openclaw-runtime-recovery-b-");
+  const rootA = tempDirs.make();
+  const rootB = tempDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", rootA);
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
   const sessionKey = "agent:main:matrix:direct:owner";
@@ -123,9 +132,18 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   );
   const contextA = captureDeliveryQueueStateContext();
   const notice = vi.spyOn(lifecycleNotices, "sendGatewayLifecycleNotice");
+  const noticeStarted = createDeferredCore();
+  const notifyUpdateRunPhase = updateRunNotices.notifyUpdateRunPhase;
+  const notifyPhase = vi.spyOn(updateRunNotices, "notifyUpdateRunPhase");
+  notifyPhase.mockImplementation((...args) => {
+    const notifying = notifyUpdateRunPhase(...args);
+    noticeStarted.resolve();
+    return notifying;
+  });
   const admittedWork = vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission");
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   services = activateGatewayScheduledServices({
+    scheduler,
     minimalTestGateway: false,
     cfgAtStart: cfg,
     deps: {},
@@ -134,6 +152,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     log: { ...log, child: () => log },
   });
   await vi.dynamicImportSettled();
+  await Promise.all(admittedWork.mock.results.map((result) => result.value));
   const run = createUpdateRun({
     trigger: "chat",
     before: { version: "2026.9.4" },
@@ -141,19 +160,28 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     origin: { sessionKey },
   });
   recordUpdateRunStep(run.runId, { step: "notice:ack", status: "completed" });
-  const broadcast = vi.fn();
-  watcher = startUpdateRunWatcher({ broadcast, log });
+  const initiallyObserved = createDeferredCore();
+  const broadcast = vi.fn().mockImplementationOnce(() => initiallyObserved.resolve());
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
+  await initiallyObserved.promise;
   expect(broadcast).toHaveBeenCalledWith(
     "update.run.changed",
     expect.objectContaining({ runId: run.runId, status: "running" }),
   );
   finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.5" } });
-  await vi.advanceTimersByTimeAsync(2_000);
+  await advance(2_000);
   await vi.dynamicImportSettled();
+  // Import settlement does not join the watcher's reads or the notifier's durable handoff.
+  await noticeStarted.promise;
+  expect(notifyPhase).toHaveBeenCalledOnce();
+  await notifyPhase.mock.results[0]?.value;
   expect(notice).toHaveBeenCalledOnce();
-  await notice.mock.results[0]?.value;
   const queueId = `update-run-finished:${run.runId}`;
-  expect(await loadPendingDelivery(queueId, undefined, contextA)).toMatchObject({
+  const pending = expectDefined(
+    await loadPendingDelivery(queueId, undefined, contextA),
+    "Expected retained failed notice",
+  );
+  expect(pending).toMatchObject({
     retryCount: 1,
     attemptCount: 1,
     lastError: expect.stringContaining("Synthetic transport did not dispatch"),
@@ -164,10 +192,11 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const firstAttempt = expectDefined(attempts[0], "Expected failed transport attempt");
   expect(receipts).toEqual([]);
 
-  // The first five-second tick can precede the failed send's backoff deadline.
-  await vi.advanceTimersByTimeAsync(10_000);
-  await vi.dynamicImportSettled();
-  await Promise.all(admittedWork.mock.results.map((result) => result.value));
+  // The worker records real time; drive the joined wake from its persisted attempt.
+  const retryAt =
+    expectDefined(pending.lastAttemptAt, "Expected recorded attempt time") +
+    computeBackoffMs(pending.retryCount);
+  await advance(Math.max(5_000, retryAt - Date.now()));
   expect(attempts).toHaveLength(2);
   expect(await findDeliveryIntentOwner(queueId, undefined, contextA)).toMatchObject({
     status: "completed",
@@ -182,9 +211,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     recoveryState: "completed_permanent",
   });
   expect(await findDeliveryIntentOwner(queueId, rootB)).toBeNull();
-  await vi.advanceTimersByTimeAsync(5_000);
-  await vi.dynamicImportSettled();
-  await Promise.all(admittedWork.mock.results.map((result) => result.value));
+  await advance(5_000);
   expect(attempts).toHaveLength(2);
   expect(receipts).toHaveLength(1);
 });

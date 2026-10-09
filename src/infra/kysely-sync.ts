@@ -1,4 +1,3 @@
-// Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -27,9 +26,6 @@ const supportsRepreparedAll =
     isNodeVersionAtLeast(nodeVersion, { major: 24, minor: 20, patch: 0 })) ||
     isNodeVersionAtLeast(nodeVersion, { major: 26, minor: 6, patch: 0 }));
 
-// Sync query helpers execute compiled Kysely SQL against node:sqlite without
-// going through Kysely's async driver path.
-
 export {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
@@ -57,14 +53,24 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 }
 
 /** A single bound set avoids SQLite parameter and JS variadic-call limits. */
-export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
+export function encodeSqliteStringSet(values: readonly (string | null)[]): string {
   // Keep node:sqlite's USV binding. SQLite 3.44 needs JSON5 \x00 to retain NUL;
   // consuming escaped backslashes first preserves literal "\\u0000" keys.
-  const encoded = JSON.stringify(values.map(toUSVString)).replace(/\\(?:\\|u0000)/g, (escape) =>
-    escape === "\\u0000" ? "\\x00" : escape,
-  );
+  return JSON.stringify(
+    values.map((value) => (value === null ? null : toUSVString(value))),
+  ).replace(/\\(?:\\|u0000)/g, (escape) => (escape === "\\u0000" ? "\\x00" : escape));
+}
+
+export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
+  return kyselySql<string>`(SELECT value FROM json_each(${encodeSqliteStringSet(values)}))`;
+}
+
+/** Expands encoded string tuples without adding one SQLite parameter per field. */
+export function sqliteStringSetEntries(
+  encoded: string | RawBuilder<string>,
+): RawBuilder<{ key: number; value: string | null }> {
+  return kyselySql<{ key: number; value: string | null }>`json_each(${encoded})`;
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
@@ -176,6 +182,21 @@ export function executeSqliteQuerySync<Row>(
 type SqliteQueryBindingBuilder<Params, Row> = (
   parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
 ) => Compilable<Row>;
+
+/** Cache compiled query functions or bundles by native connection. */
+export function createSqliteQueryCache<Queries extends object>(
+  create: (database: DatabaseSync) => Queries,
+): (database: DatabaseSync) => Queries {
+  const queriesByDatabase = new WeakMap<DatabaseSync, Queries>();
+  return (database) => {
+    let queries = queriesByDatabase.get(database);
+    if (queries === undefined) {
+      queries = create(database);
+      queriesByDatabase.set(database, queries);
+    }
+    return queries;
+  };
+}
 
 /** Compile fixed SQL and fresh bindings without taking ownership of a native statement. */
 export function compileSqliteQueryBindings<Params, Row = unknown>(

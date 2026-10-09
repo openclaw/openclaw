@@ -242,7 +242,7 @@ it.for(cases)(
       }
       const { sessionId, sessionKey, agentId } = REQUEST;
       const worktreeId = "abandonment-worktree";
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: worktreeId,
         name: "abandonment",
         repoFingerprint: "fixture",
@@ -277,9 +277,9 @@ it.for(cases)(
         nodeDeviceId: "offline-device",
       });
       offlineDeviceSeeded = true;
-      const active = seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
+      const active = await seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
       const source = { generation: active.generation, environmentId, ownerEpoch: 1 };
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId,
         sessionKey,
         agentId,
@@ -287,19 +287,19 @@ it.for(cases)(
         runId: "abandoned-run",
         owner: { kind: "worker", environmentId, ownerEpoch: 1 },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-      placements.markWorkspaceResultPending(claim);
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.markWorkspaceResultPending(claim);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       if (persisted) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId,
           source,
           target: { kind: "gateway" },
           abandonSource: true,
         });
         if (failed) {
-          placements.failWorkspaceResultAndReleaseTurn(
-            placements.listPendingWorkspaceResults()[0]!,
+          await placements.failWorkspaceResultAndReleaseTurn(
+            (await placements.listPendingWorkspaceResultsAsync())[0]!,
             "Earlier workspace recovery failed",
           );
           expect(placements.get(sessionId)).toMatchObject({
@@ -329,7 +329,7 @@ it.for(cases)(
       }
       signal.throwIfAborted();
       expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
       expect(placements.getPlacementMove(sessionId)).toBeUndefined();
       const environments = await createWorkerEnvironmentStore({ database });
@@ -379,7 +379,7 @@ it.for(cases)(
       expect(requests).toHaveLength(1);
       expect(requests[0].body).toContain(message);
       expect(requests[0].body).not.toContain(claim.runId);
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(sessionId)?.turnClaim).toBeNull();
       const deleted = await client.request<{ deleted: boolean; archived: string[] }>(
         "sessions.delete",
@@ -392,7 +392,7 @@ it.for(cases)(
       expect(loadGatewaySessionEntryReadOnly(sessionKey).entry).toBeUndefined();
       expect(placements.get(sessionId)).toBeUndefined();
       expect(placements.getPlacementMove(sessionId)).toBeUndefined();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
       expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");
       expect(stopInvoke).not.toHaveBeenCalled();

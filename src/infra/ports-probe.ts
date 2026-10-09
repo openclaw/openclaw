@@ -1,4 +1,3 @@
-// Probes local ports and reports listener availability.
 import net from "node:net";
 import { isErrno, toErrorObject } from "./errors.js";
 import type { PortUsageStatus } from "./ports-types.js";
@@ -39,7 +38,7 @@ export async function tryListenOnPort(params: ListenOnPortParams): Promise<numbe
     const clearAbort = () => params.signal?.removeEventListener("abort", onAbort);
     const onAbort = () => {
       clearAbort();
-      reject(toErrorObject(params.signal?.reason, "Port probe aborted"));
+      reject(toErrorObject(params.signal?.reason, "Port check aborted"));
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
     const tester = net
@@ -50,17 +49,14 @@ export async function tryListenOnPort(params: ListenOnPortParams): Promise<numbe
       })
       .once("listening", () => {
         const address = tester.address();
-        if (!address || typeof address === "string") {
-          tester.close(() => {
-            clearAbort();
-            reject(new Error("expected TCP listener address"));
-          });
-          return;
-        }
         // Binding succeeded; close immediately so the real server can claim the same port.
         tester.close(() => {
           clearAbort();
-          resolve(params.port === 0 ? address.port : undefined);
+          if (!address || typeof address === "string") {
+            reject(new Error("expected TCP listener address"));
+          } else {
+            resolve(params.port === 0 ? address.port : undefined);
+          }
         });
       })
       .listen(listenOptions);
@@ -96,6 +92,15 @@ export async function probeTcpListener(
   });
 }
 
+async function isIpv6LoopbackUnavailable(signal?: AbortSignal): Promise<boolean> {
+  try {
+    await tryListenOnPort({ port: 0, host: "::1", ...(signal ? { signal } : {}) });
+    return false;
+  } catch (err) {
+    return isErrno(err) && err.code === "EADDRNOTAVAIL";
+  }
+}
+
 async function probePortOnHost(
   port: number,
   host: string,
@@ -105,7 +110,13 @@ async function probePortOnHost(
     await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    return await probeTcpListener(port, host, signal);
+    const confirmed = await probeTcpListener(port, host, signal);
+    // With IPv6 disabled on Linux, `::` still binds but its confirming connect targets the
+    // missing `::1` and cannot be answered. The successful wildcard bind is then conclusive.
+    if (confirmed === "unknown" && host === "::" && (await isIpv6LoopbackUnavailable(signal))) {
+      return "free";
+    }
+    return confirmed;
   } catch (err) {
     signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {

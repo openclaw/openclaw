@@ -29,14 +29,14 @@ import {
   type WhatsAppSendResult,
 } from "./inbound/send-result.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
-import { isWhatsAppNewsletterJid } from "./normalize.js";
+import { isWhatsAppNewsletterJid } from "./normalize-target.js";
 import {
   normalizeWhatsAppPayloadText,
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
 import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
-import { markdownToWhatsAppChunks, toWhatsappJid } from "./text-runtime.js";
+import { markdownToWhatsAppChunks, toWhatsappJid } from "./targets-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 

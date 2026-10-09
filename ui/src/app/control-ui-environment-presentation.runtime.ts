@@ -2,8 +2,10 @@ import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { currentThemeBranding, neutralMarkSvg } from "../components/neutral-mark.ts";
+import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
+import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
+import { currentThemeBranding } from "./theme-branding.ts";
 
 export function applyControlUiPresentation(params: {
   environment: ControlUiEnvironment | null;
@@ -54,9 +56,23 @@ export function applyControlUiPresentation(params: {
 type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" | "idle";
 
 let faviconStatus: ControlUiFaviconStatus = "idle";
+let faviconImage: HTMLImageElement | null = null;
+
+/** Decoded personal artwork is always rasterized here, including when idle. */
+export function applyControlUiFaviconImage(image: HTMLImageElement | null): void {
+  if (faviconImage === image) {
+    return;
+  }
+  faviconImage = image;
+  // Decoded personal images never enter the cached default-source loader.
+  syncControlUiFavicon();
+}
 let faviconPalette: ReturnType<typeof resolveFaviconPalette> | undefined;
 const faviconSources = new Map<string, Promise<FaviconSource>>();
-const faviconRequests = new WeakMap<HTMLLinkElement, { signature: string }>();
+const faviconRequests = new WeakMap<
+  HTMLLinkElement,
+  { signature: string; image: HTMLImageElement | null }
+>();
 
 export function invalidateControlUiFaviconPalette(): void {
   faviconPalette = undefined;
@@ -116,13 +132,17 @@ function resolveFaviconPalette() {
   return { baseSvg, color, ring };
 }
 
+export function controlUiFaviconBaseSvg(): string | null {
+  return (faviconPalette ??= resolveFaviconPalette()).baseSvg;
+}
+
 export function syncControlUiFavicon(): void {
   const { baseSvg, color, ring } = (faviconPalette ??= resolveFaviconPalette());
   if (!color) {
     faviconSources.clear();
   }
   for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
-    if (!baseSvg && !color) {
+    if (!faviconImage && !baseSvg && !color) {
       faviconRequests.delete(icon);
       if (icon.dataset.openclawOriginalFavicon) {
         restoreFavicon(icon, JSON.parse(icon.dataset.openclawOriginalFavicon));
@@ -138,19 +158,21 @@ export function syncControlUiFavicon(): void {
     const original: [string | null, string | null] = JSON.parse(
       icon.dataset.openclawOriginalFavicon,
     );
-    const href = baseSvg ?? original[0];
-    const type = baseSvg ? "image/svg+xml" : original[1];
+    const image = faviconImage;
+    const href = image?.src ?? baseSvg ?? original[0];
+    const type = image ? "image/png" : baseSvg ? "image/svg+xml" : original[1];
     const signature = JSON.stringify([href, type, color, ring]);
-    if (faviconRequests.get(icon)?.signature === signature) {
+    const previous = faviconRequests.get(icon);
+    if (previous?.signature === signature && previous.image === image) {
       continue;
     }
-    const request = { signature };
+    const request = { signature, image };
     faviconRequests.set(icon, request);
-    if (!color || !href) {
+    if ((!color && !image) || !href) {
       restoreFavicon(icon, [href, type]);
       continue;
     }
-    void composeFavicon(href, type, color, ring).then(
+    void composeFavicon(href, type, color, ring, image).then(
       (result) => {
         // Asset decoding may finish after idle, a palette change, or a context teardown.
         if (icon.isConnected && faviconRequests.get(icon) === request) {
@@ -161,7 +183,11 @@ export function syncControlUiFavicon(): void {
       (error: unknown) => {
         if (faviconRequests.get(icon) === request) {
           faviconRequests.delete(icon);
-          restoreFavicon(icon, [href, type]);
+          if (image) {
+            applyControlUiFaviconImage(null);
+          } else {
+            restoreFavicon(icon, [href, type]);
+          }
           console.warn("[openclaw] favicon status could not be composed", error);
         }
       },
@@ -196,19 +222,21 @@ async function loadSource(href: string, type: string | null): Promise<FaviconSou
   return { image };
 }
 
-async function composeFavicon(href: string, type: string | null, color: string, ring: string) {
-  const key = JSON.stringify([href, type]);
-  let pending = faviconSources.get(key);
-  if (!pending) {
-    pending = loadSource(href, type);
-    faviconSources.set(key, pending);
-    void pending.catch(() => {
-      if (faviconSources.get(key) === pending) {
-        faviconSources.delete(key);
-      }
-    });
-  }
-  const source = await pending;
+async function composeFavicon(
+  href: string,
+  type: string | null,
+  color: string,
+  ring: string,
+  image: HTMLImageElement | null,
+) {
+  const source: FaviconSource = image
+    ? { image }
+    : await getOrCreatePromise(
+        faviconSources,
+        JSON.stringify([href, type]),
+        () => loadSource(href, type),
+        { cacheRejections: false },
+      );
   if ("svg" in source) {
     const svg = new DOMParser().parseFromString(
       `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><circle cx="25.5" cy="25.5" r="5" stroke-width="2"/></svg>`,
@@ -236,13 +264,18 @@ async function composeFavicon(href: string, type: string | null, color: string, 
   if (!context) {
     throw new Error("Favicon canvas unavailable");
   }
-  context.drawImage(source.image, 0, 0, 32, 32);
-  context.beginPath();
-  context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
-  context.fillStyle = color;
-  context.fill();
-  context.strokeStyle = ring;
-  context.lineWidth = 2;
-  context.stroke();
+  const scale = Math.min(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
+  const width = source.image.naturalWidth * scale;
+  const height = source.image.naturalHeight * scale;
+  context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
+  if (color) {
+    context.beginPath();
+    context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.fill();
+    context.strokeStyle = ring;
+    context.lineWidth = 2;
+    context.stroke();
+  }
   return { href: canvas.toDataURL("image/png"), type: "image/png" };
 }

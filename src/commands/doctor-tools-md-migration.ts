@@ -1,8 +1,9 @@
 /** Doctor-owned migration from workspace TOOLS.md into the AGENTS.md Tools section. */
-import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -12,6 +13,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { publishFileNoClobber, syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 import {
   describeToolsMdMergedBootstrapLimits,
   resolveToolsMdMigrationWorkspaceTargets,
@@ -19,7 +21,6 @@ import {
 import { shouldMergeToolsMd } from "./doctor-tools-md-migration-content.js";
 import { rewriteLegacyAgentsToolsGuidance as rewriteLegacyToolsGuidance } from "./doctor-tools-md-migration-guidance.js";
 
-const TOOLS_MD_MIGRATION_CHECK_ID = "core/doctor/tools-md-migration";
 const MIGRATED_SUBSECTION_HEADING = "### Local notes (migrated from TOOLS.md)";
 const NO_CLOBBER_PUBLICATION = {
   strategy: "link-or-copy",
@@ -43,48 +44,89 @@ type MigrationFileSnapshot = {
   stat?: syncFs.Stats;
 };
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
+type PosixFilePermissions = Pick<syncFs.Stats, "uid" | "gid" | "mode">;
+
+function samePosixPermissions(left: PosixFilePermissions, right: PosixFilePermissions): boolean {
+  return (
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    (left.mode & 0o7777) === (right.mode & 0o7777)
+  );
 }
 
-async function readMigrationFileSnapshot(params: {
-  filePath: string;
-  label: string;
-  allowMissing?: boolean;
-}): Promise<MigrationFileSnapshot> {
+function addsPosixReaders(
+  source: PosixFilePermissions,
+  destination: PosixFilePermissions,
+): boolean {
+  // Owner and group membership take precedence over other bits, including denied owner reads.
+  for (const uid of new Set([source.uid, destination.uid, undefined])) {
+    for (const sourceGroup of [false, true]) {
+      for (const destinationGroup of [false, true]) {
+        if (source.gid === destination.gid && sourceGroup !== destinationGroup) {
+          continue;
+        }
+        const sourceBit = uid === source.uid ? 0o400 : sourceGroup ? 0o040 : 0o004;
+        const destinationBit = uid === destination.uid ? 0o400 : destinationGroup ? 0o040 : 0o004;
+        if ((destination.mode & destinationBit) !== 0 && (source.mode & sourceBit) === 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+async function assertSourceReadersPreserved(
+  source: ToolsMdSource,
+  destination: PosixFilePermissions,
+): Promise<void> {
+  const current = await readMigrationFileSnapshot(source.path);
+  if (
+    current.content !== source.content ||
+    !current.stat ||
+    current.stat.dev !== source.stat.dev ||
+    current.stat.ino !== source.stat.ino ||
+    !samePosixPermissions(current.stat, source.stat)
+  ) {
+    throw new Error("TOOLS.md changed during migration");
+  }
+  if (addsPosixReaders(current.stat, destination)) {
+    throw new Error(
+      "Merging TOOLS.md would grant additional POSIX readers. Review both files' owners, groups, and read permissions before rerunning doctor.",
+    );
+  }
+}
+
+async function readMigrationFileSnapshot(
+  filePath: string,
+  allowMissing = false,
+): Promise<MigrationFileSnapshot> {
   let stat: syncFs.Stats;
   try {
-    stat = await fs.lstat(params.filePath);
+    stat = await fs.lstat(filePath);
   } catch (error) {
-    if (params.allowMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (allowMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return { content: "" };
     }
     throw error;
   }
   if (!stat.isFile() || stat.nlink > 1) {
-    throw new Error(`${params.label} must be an unlinked regular file for automatic migration`);
+    throw new Error(
+      `${path.basename(filePath)} must be an unlinked regular file for automatic migration`,
+    );
   }
-  const noFollow = syncFs.constants.O_NOFOLLOW ?? 0;
-  const handle = await fs.open(params.filePath, syncFs.constants.O_RDONLY | noFollow);
-  try {
-    const openedStat = await handle.stat();
-    if (
-      !openedStat.isFile() ||
-      openedStat.nlink !== 1 ||
-      openedStat.dev !== stat.dev ||
-      openedStat.ino !== stat.ino
-    ) {
-      throw new Error(`${params.label} changed while opening it for migration`);
-    }
-    const content = await handle.readFile("utf8");
-    const currentStat = await fs.lstat(params.filePath);
-    if (currentStat.dev !== openedStat.dev || currentStat.ino !== openedStat.ino) {
-      throw new Error(`${params.label} changed while opening it for migration`);
-    }
-    return { content, stat: openedStat };
-  } finally {
-    await handle.close();
+  const file = await readRegularFile({ filePath });
+  const currentStat = await fs.lstat(filePath);
+  if (
+    file.stat.nlink !== 1 ||
+    file.stat.dev !== stat.dev ||
+    file.stat.ino !== stat.ino ||
+    currentStat.dev !== file.stat.dev ||
+    currentStat.ino !== file.stat.ino
+  ) {
+    throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
   }
+  return { content: file.buffer.toString("utf8"), stat: currentStat };
 }
 
 async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefined> {
@@ -100,60 +142,41 @@ async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefi
     );
   }
   const toolsPath = path.join(workspaceDir, DEFAULT_TOOLS_FILENAME);
-  const snapshot = await readMigrationFileSnapshot({
-    filePath: toolsPath,
-    label: "TOOLS.md",
-    allowMissing: true,
-  });
+  const snapshot = await readMigrationFileSnapshot(toolsPath, true);
   if (!snapshot.stat) {
     return undefined;
   }
   return {
     path: toolsPath,
     content: snapshot.content,
-    sha256: sha256(snapshot.content),
+    sha256: sha256Hex(snapshot.content),
     stat: snapshot.stat,
   };
 }
 
-function migratedBlock(content: string): string {
-  return `${MIGRATED_SUBSECTION_HEADING}\n\n${content}`;
-}
-
 function appendWithSpacing(before: string, addition: string, after = ""): string {
-  const prefix =
-    before.length === 0 ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
-  const suffix =
-    after.length === 0
-      ? ""
-      : addition.endsWith("\n\n")
-        ? ""
-        : addition.endsWith("\n")
-          ? "\n"
-          : "\n\n";
+  const spacing = (text: string) =>
+    text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+  const prefix = before.length === 0 ? "" : spacing(before);
+  const suffix = after.length === 0 ? "" : spacing(addition);
   return `${before}${prefix}${addition}${suffix}${after}`;
 }
 
 function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
   const mergedAgentsContent = rewriteLegacyAgentsToolsGuidance(agentsContent);
-  if (mergedAgentsContent.includes(MIGRATED_SUBSECTION_HEADING)) {
-    if (mergedAgentsContent.includes(toolsContent)) {
-      return mergedAgentsContent;
-    }
-    const headingIndex = mergedAgentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
-    const insertAt = headingIndex + MIGRATED_SUBSECTION_HEADING.length;
-    return appendWithSpacing(
-      mergedAgentsContent.slice(0, insertAt),
-      toolsContent,
-      mergedAgentsContent.slice(insertAt),
-    );
+  const headingIndex = mergedAgentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
+  if (headingIndex >= 0 && mergedAgentsContent.includes(toolsContent)) {
+    return mergedAgentsContent;
   }
-  const block = migratedBlock(toolsContent);
-  const toolsSection = findToolsSection(mergedAgentsContent);
-  if (!toolsSection) {
+  const block =
+    headingIndex >= 0 ? toolsContent : `${MIGRATED_SUBSECTION_HEADING}\n\n${toolsContent}`;
+  const insertAt =
+    headingIndex >= 0
+      ? headingIndex + MIGRATED_SUBSECTION_HEADING.length
+      : findToolsSection(mergedAgentsContent)?.insertAt;
+  if (insertAt === undefined) {
     return appendWithSpacing(mergedAgentsContent, `## Tools\n\n${block}`);
   }
-  const insertAt = toolsSection.insertAt;
   return appendWithSpacing(
     mergedAgentsContent.slice(0, insertAt),
     block,
@@ -222,12 +245,9 @@ async function writeAgentsAtomically(params: {
   agentsPath: string;
   expected: string;
   content: string;
+  importedSource?: ToolsMdSource;
 }): Promise<void> {
-  const snapshot = await readMigrationFileSnapshot({
-    filePath: params.agentsPath,
-    label: "AGENTS.md",
-    allowMissing: true,
-  });
+  const snapshot = await readMigrationFileSnapshot(params.agentsPath, true);
   if (snapshot.content !== params.expected) {
     throw new Error("AGENTS.md changed during TOOLS.md migration");
   }
@@ -235,26 +255,43 @@ async function writeAgentsAtomically(params: {
   const mode = stat?.mode ?? 0o600;
   const tempPath = `${params.agentsPath}.doctor-writing-${process.pid}-${Date.now()}`;
   try {
-    const handle = await fs.open(tempPath, "wx", mode);
-    try {
+    let prepared: syncFs.Stats;
+    {
+      await using handle = await fs.open(tempPath, "wx", 0o600);
       await handle.writeFile(params.content, "utf8");
+      if (process.platform !== "win32" && stat) {
+        // Changing the owner must not grant the new UID the staging file's owner-read bit.
+        await handle.chmod(0o000);
+        await handle.chown(stat.uid, stat.gid);
+      }
+      if (process.platform !== "win32" && params.importedSource) {
+        await assertSourceReadersPreserved(params.importedSource, stat ?? (await handle.stat()));
+      }
+      if (stat) {
+        await handle.chmod(mode);
+      }
+      prepared = await handle.stat();
+      if (process.platform !== "win32" && stat && !samePosixPermissions(prepared, stat)) {
+        throw new Error("AGENTS.md ownership or permissions could not be preserved");
+      }
       await handle.sync();
-    } finally {
-      await handle.close();
     }
     // Doctor is a single-operator flow. This final snapshot catches edits before
     // commit without retaining the retired cross-process claim protocol.
-    const current = await readMigrationFileSnapshot({
-      filePath: params.agentsPath,
-      label: "AGENTS.md",
-      allowMissing: true,
-    });
+    const current = await readMigrationFileSnapshot(params.agentsPath, true);
     if (
       current.content !== params.expected ||
       current.stat?.dev !== stat?.dev ||
-      current.stat?.ino !== stat?.ino
+      current.stat?.ino !== stat?.ino ||
+      (process.platform !== "win32" &&
+        current.stat &&
+        stat &&
+        !samePosixPermissions(current.stat, stat))
     ) {
       throw new Error("AGENTS.md changed during TOOLS.md migration");
+    }
+    if (process.platform !== "win32" && params.importedSource) {
+      await assertSourceReadersPreserved(params.importedSource, prepared);
     }
     await fs.rename(tempPath, params.agentsPath);
     await syncDirectoryIfSupported(path.dirname(params.agentsPath));
@@ -287,11 +324,8 @@ async function recoverInterruptedAgentsWrite(agentsPath: string): Promise<void> 
 }
 
 async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): Promise<void> {
-  const current = await readMigrationFileSnapshot({
-    filePath: source.path,
-    label: "TOOLS.md",
-  });
-  if (sha256(current.content) !== source.sha256) {
+  const current = await readMigrationFileSnapshot(source.path);
+  if (sha256Hex(current.content) !== source.sha256) {
     throw new Error("TOOLS.md changed during migration");
   }
   // The original bytes are durable in both the archive and merged AGENTS.md;
@@ -310,36 +344,26 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
   await syncDirectoryIfSupported(workspaceDir);
 }
 
-function archivePathForSource(
-  agentId: string,
-  source: ToolsMdSource,
-  env: NodeJS.ProcessEnv,
-): string {
-  const safeAgentId = agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
-  return path.join(
-    resolveStateDir(env),
-    "backups",
-    "tools-md-migration",
-    `${safeAgentId}-${source.sha256}.md`,
-  );
-}
-
 async function archiveSource(params: {
   agentId: string;
   source: ToolsMdSource;
   env: NodeJS.ProcessEnv;
-}): Promise<string> {
-  const archivePath = archivePathForSource(params.agentId, params.source, params.env);
+}): Promise<void> {
+  const safeAgentId = params.agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const archivePath = path.join(
+    resolveStateDir(params.env),
+    "backups",
+    "tools-md-migration",
+    `${safeAgentId}-${params.source.sha256}.md`,
+  );
   const archiveDir = path.dirname(archivePath);
   await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
   const tempPath = `${archivePath}.doctor-writing-${process.pid}-${Date.now()}`;
   try {
-    const handle = await fs.open(tempPath, "wx", 0o600);
-    try {
+    {
+      await using handle = await fs.open(tempPath, "wx", 0o600);
       await handle.writeFile(params.source.content, "utf8");
       await handle.sync();
-    } finally {
-      await handle.close();
     }
     await publishFileNoClobber(tempPath, archivePath, NO_CLOBBER_PUBLICATION);
     await fs.rm(tempPath);
@@ -349,83 +373,60 @@ async function archiveSource(params: {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
     }
-    if (sha256(await fs.readFile(archivePath, "utf8")) !== params.source.sha256) {
+    if (sha256Hex(await fs.readFile(archivePath, "utf8")) !== params.source.sha256) {
       throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, { cause: error });
     }
   }
-  return archivePath;
-}
-
-function migrationFinding(params: {
-  agentId: string;
-  path: string;
-  message: string;
-  severity?: HealthFinding["severity"];
-  requirement: string;
-}): HealthFinding {
-  return {
-    checkId: TOOLS_MD_MIGRATION_CHECK_ID,
-    severity: params.severity ?? "warning",
-    message: params.message,
-    path: params.path,
-    target: params.agentId,
-    requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to merge TOOLS.md into AGENTS.md.`,
-  };
 }
 
 export async function collectToolsMdMigrationFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
+  const MIGRATION_FINDING_DEFAULTS = {
+    checkId: "core/doctor/tools-md-migration",
+    severity: "warning",
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to merge TOOLS.md into AGENTS.md.`,
+  } as const;
   const findings: HealthFinding[] = [];
   for (const target of resolveToolsMdMigrationWorkspaceTargets(cfg)) {
     try {
       const source = await readToolsMd(target.workspaceDir);
       if (source) {
-        findings.push(
-          migrationFinding({
-            agentId: target.primaryAgentId,
-            path: source.path,
-            message: `Agent "${target.primaryAgentId}" still stores local tool notes in TOOLS.md.`,
-            requirement: "legacy-tools-md",
-          }),
-        );
+        findings.push({
+          ...MIGRATION_FINDING_DEFAULTS,
+          target: target.primaryAgentId,
+          path: source.path,
+          message: `Agent "${target.primaryAgentId}" still stores local tool notes in TOOLS.md.`,
+          requirement: "legacy-tools-md",
+        });
         if (shouldMergeToolsMd(source.content)) {
           const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
-          const agentsContent = (
-            await readMigrationFileSnapshot({
-              filePath: agentsPath,
-              label: "AGENTS.md",
-              allowMissing: true,
-            })
-          ).content;
+          const agentsContent = (await readMigrationFileSnapshot(agentsPath, true)).content;
           const mergedChars = mergeToolsMdIntoAgentsMd(agentsContent, source.content).length;
           for (const budget of describeToolsMdMergedBootstrapLimits({
             cfg,
             agentIds: target.agentIds,
             mergedChars,
           })) {
-            findings.push(
-              migrationFinding({
-                agentId: budget.agentId,
-                path: agentsPath,
-                message: budget.message,
-                requirement: "tools-md-merged-bootstrap-limit",
-              }),
-            );
+            findings.push({
+              ...MIGRATION_FINDING_DEFAULTS,
+              target: budget.agentId,
+              path: agentsPath,
+              message: budget.message,
+              requirement: "tools-md-merged-bootstrap-limit",
+            });
           }
         }
       }
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          agentId: target.primaryAgentId,
-          path: path.join(target.workspaceDir, DEFAULT_TOOLS_FILENAME),
-          message: `Agent "${target.primaryAgentId}" TOOLS.md cannot be migrated: ${errorMessage(error)}`,
-          severity: "error",
-          requirement: "tools-md-migration-blocked",
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        target: target.primaryAgentId,
+        path: path.join(target.workspaceDir, DEFAULT_TOOLS_FILENAME),
+        message: `Agent "${target.primaryAgentId}" TOOLS.md cannot be migrated: ${errorMessage(error)}`,
+        severity: "error",
+        requirement: "tools-md-migration-blocked",
+      });
     }
   }
   return findings;
@@ -457,22 +458,19 @@ export async function maybeMigrateToolsMd(params: {
       await archiveSource({ agentId: target.primaryAgentId, source, env });
       const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
       await recoverInterruptedAgentsWrite(agentsPath);
-      const agentsContent = (
-        await readMigrationFileSnapshot({
-          filePath: agentsPath,
-          label: "AGENTS.md",
-          allowMissing: true,
-        })
-      ).content;
+      const agentsContent = (await readMigrationFileSnapshot(agentsPath, true)).content;
       const merged = shouldMerge
         ? mergeToolsMdIntoAgentsMd(agentsContent, source.content)
         : rewriteLegacyAgentsToolsGuidance(agentsContent);
       if (merged !== agentsContent) {
-        await writeAgentsAtomically({ agentsPath, expected: agentsContent, content: merged });
-        if (
-          (await readMigrationFileSnapshot({ filePath: agentsPath, label: "AGENTS.md" }))
-            .content !== merged
-        ) {
+        await writeAgentsAtomically({
+          agentsPath,
+          expected: agentsContent,
+          content: merged,
+          importedSource:
+            shouldMerge && !agentsContent.includes(source.content) ? source : undefined,
+        });
+        if ((await readMigrationFileSnapshot(agentsPath)).content !== merged) {
           throw new Error("AGENTS.md changed after TOOLS.md migration was written");
         }
       }
@@ -490,11 +488,6 @@ export async function maybeMigrateToolsMd(params: {
       );
     }
   }
-  if (changes.length > 0) {
-    note(changes.join("\n"), "TOOLS.md migration");
-  }
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorMigrationResult({ changes, warnings }, { changesTitle: "TOOLS.md migration" });
   return { changes, warnings };
 }

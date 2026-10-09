@@ -1,12 +1,14 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isMainThread, Worker, workerData } from "node:worker_threads";
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
-const BUILD_MARKER_RE = /^(?:\d+-\d+|no-package-json|build-[A-Za-z0-9._-]+)$/;
+const BUILD_MARKER_RE = /^(?:[a-f0-9]{16}|\d+-\d+|no-package-json|build-[A-Za-z0-9._-]+)$/;
 const sanitize = (value) => {
   const segment = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return segment && segment !== "." && segment !== ".." ? segment : "unknown";
@@ -29,7 +31,7 @@ export function resolveOpenClawCompileCacheDirectory({ installRoot, env = proces
       readFileSync(path.join(installRoot, "dist", "build-info.json"), "utf8"),
     );
     if (typeof build.buildId === "string" && build.buildId.trim()) {
-      marker = `build-${sanitize(build.buildId).slice(0, 96)}`;
+      marker = createHash("sha256").update(build.buildId).digest("hex").slice(0, 16);
     }
   } catch {
     // Older packages use the installation metadata above.
@@ -43,16 +45,46 @@ export function resolveOpenClawCompileCacheDirectory({ installRoot, env = proces
   ) {
     base = path.dirname(path.dirname(path.dirname(base)));
   }
-  return path.join(base, "openclaw", version, marker);
+  return resolveSafeNodeCompileCacheDirectory(path.join(base, "openclaw", version, marker));
+}
+
+export function resolveSafeNodeCompileCacheDirectory(directory) {
+  // Node can hang at 240/245 characters (and 283 for other path structures):
+  // https://github.com/nodejs/node/issues/66438. Leave room for Node's cache leaf.
+  if (process.platform === "win32" && path.resolve(directory).length > 200) {
+    process.stderr.write(
+      "[openclaw] Compile cache disabled: Windows cache path exceeds 200 characters.\n",
+    );
+    return undefined;
+  }
+  return directory;
 }
 
 export async function maintainOpenClawCompileCache(directory) {
+  // Node permission grants and later revocations do not extend to workers.
+  if (process.permission) {
+    return undefined;
+  }
   const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
   const pending = (owner.maintenance ??= new Map());
   if (pending.has(directory)) {
     return pending.get(directory);
   }
-  const task = maintain(directory)
+  const task = new Promise((resolve) => {
+    const worker = new Worker(new URL(import.meta.url), {
+      workerData: { openclawCompileCacheDirectory: directory },
+      // Maintenance must not replay CLI entry preloads or application loaders.
+      execArgv: [],
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name)),
+      ),
+    });
+    worker.on("error", () => {});
+    worker.once("exit", () => resolve());
+    // Callers can await completed cleanup, but unawaited cache work must not
+    // extend a command's lifetime. A Promise alone does not keep Node alive.
+    worker.unref();
+  })
     .catch(() => {
       // Disposable bytecode must never prevent startup or command completion.
     })
@@ -81,11 +113,11 @@ async function maintain(directory) {
   }
   await fs.mkdir(directory, { recursive: true });
   let retired = false;
-  for (const version of await fs.readdir(root, { withFileTypes: true })) {
-    if (!version.isDirectory()) {
+  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
       continue;
     }
-    const versionRoot = path.join(root, version.name);
+    const versionRoot = path.join(root, entry.name);
     for (const build of await fs.readdir(versionRoot, { withFileTypes: true })) {
       const candidate = path.join(versionRoot, build.name);
       if (build.isDirectory() && candidate !== directory) {
@@ -125,4 +157,10 @@ async function maintain(directory) {
       bytes -= file.size;
     }
   }
+}
+
+if (!isMainThread && typeof workerData?.openclawCompileCacheDirectory === "string") {
+  void maintain(workerData.openclawCompileCacheDirectory).catch(() => {
+    // Disposable bytecode cleanup is best-effort inside the worker too.
+  });
 }

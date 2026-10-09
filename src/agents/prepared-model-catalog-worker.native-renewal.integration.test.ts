@@ -1,9 +1,7 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -15,6 +13,7 @@ import {
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { readCatalogCaptureFootprint } from "./test-helpers/catalog-capture-footprint.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
@@ -36,16 +35,6 @@ it("admits cold native discovery during expired fleet provider renewal and prese
   let snapshots: PreparedModelRuntimeSnapshot[] = [];
   const requests: Array<{ agent: string; revision: number; authorization: string | undefined }> =
     [];
-  const nativeReads: Array<{ agent: string; revision: number }> = [];
-  const taskMetrics = {
-    completed: 0,
-    failed: 0,
-    totalQueueMs: 0,
-    maxQueueMs: 0,
-    totalRunMs: 0,
-    maxRunMs: 0,
-  };
-  const admissionMs: number[] = [];
   const work: Promise<unknown>[] = [];
   const publications: Promise<unknown>[] = [];
   const waiters = new Set<() => void>();
@@ -54,24 +43,6 @@ it("admits cold native discovery during expired fleet provider renewal and prese
       check();
     }
   });
-  const taskChannel = channel("openclaw.worker.task");
-  const recordTask = (message: unknown) => {
-    if (
-      isRecord(message) &&
-      typeof message.worker === "string" &&
-      message.worker.includes("prepared-model-catalog") &&
-      typeof message.queueMs === "number" &&
-      typeof message.runMs === "number"
-    ) {
-      taskMetrics.completed += 1;
-      taskMetrics.failed += message.outcome === "failed" ? 1 : 0;
-      taskMetrics.totalQueueMs += message.queueMs;
-      taskMetrics.maxQueueMs = Math.max(taskMetrics.maxQueueMs, message.queueMs);
-      taskMetrics.totalRunMs += message.runMs;
-      taskMetrics.maxRunMs = Math.max(taskMetrics.maxRunMs, message.runMs);
-    }
-  };
-  taskChannel.subscribe(recordTask);
   const waitForCatalogs = (expectedRevision: number) => {
     const completed = createDeferred();
     const check = () => {
@@ -100,7 +71,6 @@ it("admits cold native discovery during expired fleet provider renewal and prese
         if (url.pathname === "/native") {
           const nativeRevision = revision;
           const release = nativeHeld;
-          nativeReads.push({ agent, revision: nativeRevision });
           if (agent === nativeTarget?.agent && nativeRevision === nativeTarget.revision) {
             nativeEntered?.resolve();
           }
@@ -173,6 +143,10 @@ it("admits cold native discovery during expired fleet provider renewal and prese
         fs.writeFileSync(clockFile, String(clock));
         fs.writeFileSync(registrations, "");
         fs.writeFileSync(
+          path.join(seed.root, "plugin", "payload.bin"),
+          Buffer.alloc(1024 * 1024, 1),
+        );
+        fs.writeFileSync(
           path.join(seed.root, "plugin", "openclaw.plugin.json"),
           JSON.stringify({
             id: PROVIDER_ID,
@@ -188,7 +162,7 @@ it("admits cold native discovery during expired fleet provider renewal and prese
 const fs = require("node:fs");
 const { getCachedLiveCatalogValue } = require("openclaw/plugin-sdk/provider-catalog-shared");
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
-  fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ thread: require("node:worker_threads").threadId }) + "\\n");
+  fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ thread: require("node:worker_threads").threadId, filename: __filename }) + "\\n");
   api.registerAgentHarness({
     id: ${JSON.stringify(HARNESS_ID)}, label: "Native fleet proof", authBootstrap: "harness",
     supports: () => ({ supported: true }), runAttempt: async () => ({ ok: false, error: "unused" }),
@@ -222,6 +196,22 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       );
     }
     const preparedRegistrations = fs.readFileSync(registrations, "utf8");
+    const registeredSources = preparedRegistrations
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { thread: number; filename: string });
+    const workerSources = registeredSources.filter((source) => source.thread !== threadId);
+    expect(workerSources).toHaveLength(1);
+    const filename = workerSources[0]!.filename;
+    const captureOffset = filename.indexOf(`${path.sep}openclaw-plugin-build-`);
+    expect(captureOffset).toBeGreaterThan(0);
+    const captureRoot = filename.slice(0, captureOffset);
+    expect(path.basename(captureRoot)).toMatch(/^openclaw-model-catalog-/);
+    const nativeArtifacts = [path.join(path.dirname(filename), "payload.bin")];
+    const initialFootprint = readCatalogCaptureFootprint(captureRoot, nativeArtifacts);
+    expect(initialFootprint.captures).toHaveLength(1);
+    expect(initialFootprint.references).toEqual([expect.objectContaining({ bytes: 1024 * 1024 })]);
+    expect(initialFootprint.bytes).toBeGreaterThanOrEqual(1024 * 1024);
     for (revision = 1; revision <= 3; revision++) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
       clock += 1001;
@@ -249,7 +239,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         }),
       );
       await withTestTimeout(entered.promise, 30_000, "Expired provider catalog did not renew");
-      const started = performance.now();
       pendingNative = snapshots[0]!.loadNativeModelCatalog!({
         provider: nativeProvider,
         modelId: `native-${revision}`,
@@ -273,7 +262,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         5_000,
         "Native selection did not complete",
       );
-      admissionMs.push(performance.now() - started);
       expect(native).toMatchObject({
         entries: expect.arrayContaining([
           expect.objectContaining({
@@ -286,6 +274,9 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       held?.resolve();
       held = undefined;
       await publication;
+      // A stable registration count alone cannot detect growth inside a live capture.
+      const footprint = readCatalogCaptureFootprint(captureRoot, nativeArtifacts);
+      expect(footprint).toEqual(initialFootprint);
       const published = snapshots[0]!.readFullModelCatalog!()!;
       expect(published.entries).toEqual(
         expect.arrayContaining([
@@ -323,19 +314,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     await Promise.allSettled([...work, pendingNative, ...publications]);
     restoreClock?.();
     unsubscribe();
-    taskChannel.unsubscribe(recordTask);
-    console.info(
-      "Catalog native renewal proof",
-      JSON.stringify({
-        requests,
-        nativeReads,
-        admissionMs,
-        taskMetrics,
-        registrations: registrations
-          ? fs.readFileSync(registrations, "utf8").trim().split("\n").filter(Boolean).length
-          : 0,
-      }),
-    );
     server.listener.closeAllConnections();
     await server.releaseListener();
     await server.claim.release();

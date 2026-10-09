@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -13,6 +12,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
@@ -295,7 +295,10 @@ export async function createGitBackup(params: {
     stateDir: params.stateDir,
     gitEnv: params.gitEnv,
   });
-  const staging = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-git-backup-" });
+  const staging = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-backup-",
+  });
   const manifests: GitBackupManifest[] = [];
   const warnings: string[] = [];
   try {
@@ -415,14 +418,6 @@ export async function createGitBackup(params: {
   };
 }
 
-async function resolveGitCommit(repositoryPath: string, ref?: string): Promise<string> {
-  return await requireGit(repositoryPath, [
-    "rev-parse",
-    "--verify",
-    `${ref?.trim() || "HEAD"}^{commit}`,
-  ]);
-}
-
 /** Materialize one database scope from a Git ref into a private temporary directory. */
 async function materializeGitBackupRef(params: {
   repositoryPath: string;
@@ -431,7 +426,11 @@ async function materializeGitBackupRef(params: {
 }): Promise<{ commit: string; path: string } & AsyncDisposable> {
   const repositoryPath = path.resolve(params.repositoryPath);
   await assertGitRepository(repositoryPath);
-  const commit = await resolveGitCommit(repositoryPath, params.ref);
+  const commit = await requireGit(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    `${params.ref?.trim() || "HEAD"}^{commit}`,
+  ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
   const files = (
     await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", commit, "--", scope])
@@ -442,7 +441,10 @@ async function materializeGitBackupRef(params: {
   if ([...required].some((entry) => !files.includes(entry))) {
     throw new Error(`Git backup ref ${commit} does not contain ${scope}.`);
   }
-  const workspace = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-git-restore-" });
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-restore-",
+  });
   const outputPath = path.join(workspace.dir, scope);
   try {
     for (const file of files) {
@@ -502,7 +504,10 @@ export async function verifyGitBackupRef(params: {
   identity: GitBackupIdentity;
   ref?: string;
 }): Promise<GitBackupRestoreResult & { commit: string }> {
-  const scratch = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-git-verify-" });
+  const scratch = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-verify-",
+  });
   try {
     return await restoreGitBackupRef({
       ...params,

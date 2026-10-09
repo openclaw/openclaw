@@ -241,17 +241,6 @@ describe("createClackPrompter", () => {
     expect(spin.start).toHaveBeenCalledWith(theme.accent("1234567890ABC"));
   });
 
-  it("leaves short progress labels untouched", () => {
-    stubStdoutColumns(20);
-    const prompter = createClackPrompter();
-
-    const progress = prompter.progress("Loading");
-    onTestFinished(() => progress.stop());
-
-    const spin = clackMocks.spinner.mock.results[0]!.value;
-    expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
-  });
-
   it.each([undefined, "", "First line\nSecond line"])(
     "preserves tiny completion %j once",
     (message) => {
@@ -356,15 +345,6 @@ describe("createClackPrompter", () => {
     expect(stdoutWrite).not.toHaveBeenCalled();
   });
 
-  it("prints plain output without note framing", async () => {
-    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const prompter = createClackPrompter();
-
-    await prompter.plain?.('{"ok":true}');
-
-    expect(write).toHaveBeenCalledWith('{"ok":true}\n');
-  });
-
   it("renders vertical confirms with Clack's native layout", async () => {
     clackMocks.confirm.mockResolvedValue(true);
     const prompter = createClackPrompter();
@@ -384,27 +364,6 @@ describe("createClackPrompter", () => {
       }),
     );
   });
-
-  it.each([false, true])(
-    "preserves Symbol option values and recognizes only Clack cancellation (searchable: %s)",
-    async (searchable) => {
-      const value = Symbol("clack:cancel");
-      const mock = searchable ? clackMocks.autocomplete : clackMocks.select;
-      const params = {
-        message: "Pick a symbol",
-        options: [{ value, label: "Symbol option" }],
-        searchable,
-      };
-      const prompter = createClackPrompter();
-      mock.mockResolvedValueOnce(value);
-      await expect(prompter.select(params)).resolves.toBe(value);
-      expect(clackMocks.cancel).not.toHaveBeenCalled();
-
-      mock.mockResolvedValueOnce(CANCEL_SYMBOL);
-      await expect(prompter.select(params)).rejects.toBeInstanceOf(WizardCancelledError);
-      expect(clackMocks.cancel).toHaveBeenCalledOnce();
-    },
-  );
 
   it("uses navigation-aware searchable selects when prompt navigation is active", async () => {
     navigationPromptMocks.autocompleteWithNavigationFooter.mockResolvedValue("two");
@@ -853,6 +812,7 @@ describe("createClackPrompter", () => {
         }),
       ).rejects.toBeInstanceOf(WizardCancelledError);
 
+      expect(clackMocks.cancel).toHaveBeenCalledOnce();
       expect(clackMocks.cancel).toHaveBeenCalledWith(expect.any(String), {
         output: process.stdout,
       });

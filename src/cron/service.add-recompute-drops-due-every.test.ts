@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -38,6 +39,8 @@ describe("add() must not drop a due every-job's pending run", () => {
     const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,

@@ -1,5 +1,4 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
-// Signal plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -15,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -22,6 +22,7 @@ import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
@@ -107,12 +108,7 @@ function assertSignalRecipientDelivery(
   );
 }
 
-async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
-  if (!opts.cfg) {
-    throw new Error(
-      "Signal RPC account resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
+function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "Signal RPC account resolution");
   return resolveSignalAccount({
     cfg,
@@ -125,14 +121,13 @@ function parseTarget(raw: string): SignalTarget {
   if (!value) {
     throw new Error("Signal recipient is required");
   }
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized.startsWith("group:")) {
-    return { type: "group", groupId: value.slice("group:".length).trim() };
+  if (value.startsWith("group:")) {
+    return { type: "group", groupId: value.slice("group:".length) };
   }
-  if (normalized.startsWith("username:")) {
+  if (value.startsWith("username:")) {
     return {
       type: "username",
-      username: value.slice("username:".length).trim(),
+      username: value.slice("username:".length),
     };
   }
   return { type: "recipient", recipient: value };
@@ -205,11 +200,7 @@ function parseSignalReplyTimestamp(raw: string | null | undefined): number | und
   if (!value || !/^\d+$/.test(value)) {
     return undefined;
   }
-  const timestamp = Number(value);
-  if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
-    return undefined;
-  }
-  return timestamp;
+  return asPositiveSafeInteger(Number(value));
 }
 
 function resolveSignalQuoteParams(opts: SignalSendOpts):
@@ -231,39 +222,6 @@ function resolveSignalQuoteParams(opts: SignalSendOpts):
       quoteMessage: opts.replyToBody ?? "",
     },
   };
-}
-
-function isSignalQuoteMetadataRejection(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = normalizeLowercaseStringOrEmpty(message);
-  const rpcCode = /^signal rpc (-?\d+):/u.exec(normalized)?.[1];
-  if (rpcCode !== undefined) {
-    if (rpcCode !== "-32602") {
-      return false;
-    }
-  } else {
-    const restStatusText = /^signal rest (\d{3}):/u.exec(normalized)?.[1];
-    if (!restStatusText) {
-      return false;
-    }
-    const restStatus = Number(restStatusText);
-    // Only a definitive provider rejection makes replaying the send safe.
-    if (restStatus < 400 || restStatus >= 500 || restStatus === 408 || restStatus === 429) {
-      return false;
-    }
-  }
-  if (!normalized.includes("quote")) {
-    return false;
-  }
-  return (
-    normalized.includes("reject") ||
-    normalized.includes("invalid") ||
-    normalized.includes("unrecognized") ||
-    normalized.includes("unsupported") ||
-    normalized.includes("not found") ||
-    normalized.includes("no such") ||
-    normalized.includes("unknown")
-  );
 }
 
 export async function sendMessageSignal(
@@ -406,7 +364,7 @@ export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   if (target.type === "username") {
@@ -435,7 +393,7 @@ export async function sendReadReceiptSignal(
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
   }
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   if (target.type !== "recipient") {

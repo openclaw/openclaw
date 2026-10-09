@@ -4,9 +4,16 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
-import { execBusctlSystem, execSystemctl, readSystemctlDetail } from "./systemd-exec.js";
+import { readSystemdBusOwner, readSystemdUnitObjectPath } from "./systemd-bus-query.js";
+import {
+  execBusctlSystem,
+  execSystemctl,
+  isRunningAsRoot,
+  readSystemctlDetail,
+} from "./systemd-exec.js";
 
 type SystemSystemdOwnership =
   | { status: "absent"; unitName: string }
@@ -24,10 +31,6 @@ type SystemSystemdConflict = Exclude<SystemSystemdOwnership, { status: "absent" 
 function formatUnknownError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
-
-function quotePosixArgument(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function unverifiableSystemOwnership(
@@ -110,7 +113,6 @@ async function inspectLoadedSystemOwnership(
   timeoutMs?: number,
 ): Promise<SystemSystemdOwnership> {
   const manager = "org.freedesktop.systemd1";
-  const bus = "org.freedesktop.DBus";
   const missingUnit = Symbol("affirmative native absence");
   const deadline =
     performance.now() +
@@ -147,21 +149,11 @@ async function inspectLoadedSystemOwnership(
     }
     return parsed.data;
   };
-  const readOwner = async () => {
-    const value = await query(
-      ["call", bus, "/org/freedesktop/DBus", bus, "GetNameOwner", "s", manager],
-      "s",
+  const readOwner = () =>
+    readSystemdBusOwner(
+      async (args, signatures) => [await query(args, signatures[0]!)],
+      unavailable,
     );
-    if (
-      !Array.isArray(value) ||
-      value.length !== 1 ||
-      typeof value[0] !== "string" ||
-      !/^:[0-9]+\.[0-9]+$/.test(value[0])
-    ) {
-      throw unavailable();
-    }
-    return value[0];
-  };
   try {
     if (path.posix.basename(unitName) !== unitName) {
       throw unavailable();
@@ -184,14 +176,7 @@ async function inspectLoadedSystemOwnership(
       if (value === missingUnit) {
         return false;
       }
-      if (
-        !Array.isArray(value) ||
-        value.length !== 1 ||
-        typeof value[0] !== "string" ||
-        !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(value[0])
-      ) {
-        throw unavailable();
-      }
+      readSystemdUnitObjectPath(value, unavailable);
       return true;
     };
     if (await readLoaded()) {
@@ -256,20 +241,9 @@ async function inspectSystemSystemdOwnership(
   return await querySystemManager(unitName, run);
 }
 
-function isRunningAsRoot(): boolean {
-  if (typeof process.geteuid !== "function") {
-    return false;
-  }
-  try {
-    return process.geteuid() === 0;
-  } catch {
-    return false;
-  }
-}
-
 function formatSystemSystemdOwnershipError(ownership: SystemSystemdConflict): string {
   const privilegePrefix = isRunningAsRoot() ? "" : "sudo ";
-  const unitName = quotePosixArgument(ownership.unitName);
+  const unitName = quoteCliArg(ownership.unitName);
   const summary =
     ownership.status === "loaded"
       ? `System systemd unit ${ownership.unitName} already owns this gateway unit name.`
@@ -284,9 +258,9 @@ function formatSystemSystemdOwnershipError(ownership: SystemSystemdConflict): st
     ownership.status === "loaded"
       ? `Keep it as the sole gateway manager, or inspect it with \`${privilegePrefix}systemctl cat ${unitName}\`, then disable it and uninstall or reconfigure the package, generator, or administrator unit that owns it before retrying.`
       : installedInAdministratorPath
-        ? `Keep it as the sole gateway manager, or run \`${privilegePrefix}systemctl disable --now ${unitName}\`, \`${privilegePrefix}rm ${quotePosixArgument(ownership.unitPath)}\`, and \`${privilegePrefix}systemctl daemon-reload\` before retrying.`
+        ? `Keep it as the sole gateway manager, or run \`${privilegePrefix}systemctl disable --now ${unitName}\`, \`${privilegePrefix}rm ${quoteCliArg(ownership.unitPath)}\`, and \`${privilegePrefix}systemctl daemon-reload\` before retrying.`
         : ownership.status === "installed"
-          ? `Keep it as the sole gateway manager, or inspect it with \`${privilegePrefix}systemctl cat ${unitName}\`, then uninstall or reconfigure the package, generator, or runtime owner of ${quotePosixArgument(ownership.unitPath)} before retrying.`
+          ? `Keep it as the sole gateway manager, or inspect it with \`${privilegePrefix}systemctl cat ${unitName}\`, then uninstall or reconfigure the package, generator, or runtime owner of ${quoteCliArg(ownership.unitPath)} before retrying.`
           : "Fix the reported systemctl or filesystem access error, then retry.";
   return [
     summary,

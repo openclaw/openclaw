@@ -1,4 +1,3 @@
-// Slack data_table Block Kit contract, projection, and text fallback.
 import type { Block } from "@slack/web-api";
 import {
   renderMessagePresentationTableFallbackText,
@@ -174,7 +173,6 @@ export function countSlackDataTableCellCharacters(value: unknown): number | unde
     : cellCharacterCount;
 }
 
-/** Count the aggregate native-table cell characters already present in a message. */
 export function countSlackDataTableBlocksCellCharacters(
   blocks?: readonly unknown[],
 ): number | undefined {
@@ -251,7 +249,6 @@ export function resolveSlackDataTableCellCharacterCount(
     : undefined;
 }
 
-/** Map a validated portable table to Slack's current app-facing Block Kit shape. */
 export function buildSlackDataTableBlock(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
@@ -299,9 +296,17 @@ function renderSlackDataTable(
   return caption && mrkdwnSafe ? escapeSlackMrkdwn(caption) : caption;
 }
 
-/** Extract a deterministic accessible summary from a native Slack table block. */
-export function renderSlackDataTableFallbackText(value: unknown): string | undefined {
-  return renderSlackDataTable(value, renderMessagePresentationTableFallbackText);
+export function renderSlackDataTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
+  return renderSlackDataTable(
+    value,
+    mrkdwnSafe
+      ? renderSlackMessagePresentationTableFallbackText
+      : renderMessagePresentationTableFallbackText,
+    mrkdwnSafe,
+  );
 }
 
 function escapeCompactFallbackCell(value: string): string {
@@ -312,7 +317,11 @@ function escapeCompactFallbackCell(value: string): string {
     .replaceAll("\n", "\\n");
 }
 
-function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {
+/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
+export function renderSlackTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
   const rows = parseSlackBasicTableRows(value);
   return rows
     ?.map((row) =>
@@ -321,16 +330,6 @@ function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string 
         .join("\t"),
     )
     .join("\n");
-}
-
-/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
-export function renderSlackTableFallbackText(value: unknown): string | undefined {
-  return renderSlackBasicTableRows(value, false);
-}
-
-/** Render Slack's inbound `table` block without activating mrkdwn control tokens. */
-export function renderSlackTableMrkdwnFallbackText(value: unknown): string | undefined {
-  return renderSlackBasicTableRows(value, true);
 }
 
 /** Render each native table cell once for bounded, formatting-disabled delivery. */
@@ -342,9 +341,4 @@ export function renderSlackDataTableCompactPlainTextFallback(value: unknown): st
       ...table.rows.map((row) => row.map(escapeCompactFallbackCell).join("\t")),
     ].join("\n"),
   );
-}
-
-/** Render a native table as mrkdwn without activating raw cell control tokens. */
-export function renderSlackDataTableMrkdwnFallbackText(value: unknown): string | undefined {
-  return renderSlackDataTable(value, renderSlackMessagePresentationTableFallbackText, true);
 }

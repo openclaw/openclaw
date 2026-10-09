@@ -38,7 +38,8 @@ export async function commitCurrentSessionCronCompletion(
   if (!sourceSessionKey) {
     return { ok: false, reason: "current cron delivery is missing its source session binding" };
   }
-  if (!params.sourceSessionGeneration) {
+  const sourceSessionGeneration = params.sourceSessionGeneration;
+  if (!sourceSessionGeneration) {
     return { ok: false, reason: "current cron delivery is missing its source session generation" };
   }
   const transcriptPayloads = buildDirectCronTranscriptMirrorPayloads(params.deliveryPayloads);
@@ -52,10 +53,11 @@ export async function commitCurrentSessionCronCompletion(
   let preparedContent: Record<string, unknown>[] | undefined;
   let appended = false;
   try {
+    await params.deliveryAttemptFence?.beforeAttempt();
     const committed = await commitBackgroundResultToSession({
       agentId: params.agentId,
       sessionKey: sourceSessionKey,
-      expectedGeneration: params.sourceSessionGeneration,
+      expectedGeneration: sourceSessionGeneration,
       text: completionText,
       prepareDisplayContent: async () => {
         const { assistantContent } = await buildAssistantReplyContent({
@@ -88,16 +90,26 @@ export async function commitCurrentSessionCronCompletion(
       provenance: { kind: "cron", jobId: params.job.id, runId },
       config: params.cfgWithAgentDefaults,
       signal: params.abortSignal,
-      onMessageCommitted: (result) => {
+      assertCurrent: () => {
+        params.abortSignal?.throwIfAborted();
+        params.deliveryAttemptFence?.assertCurrent();
+      },
+      onMessageCommitted: (result, acceptCompletion) => {
         // Promote before publication; retries own the original committed blocks.
         // Preserve committed media even when promotion or the later drain fails.
         appended = result.appended;
         const blocks = readAssistantDisplayContent(result.message);
-        if (
-          hasManagedOutgoingAssistantContent(blocks) &&
-          !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
-        ) {
-          throw new Error("Current-session completion media ownership could not be persisted");
+        if (hasManagedOutgoingAssistantContent(blocks)) {
+          acceptCompletion(async () => {
+            if (
+              !(await attachManagedOutgoingMediaToMessage({
+                messageId: result.messageId,
+                blocks,
+              }))
+            ) {
+              throw new Error("Current-session completion media ownership could not be persisted");
+            }
+          });
         }
       },
     });

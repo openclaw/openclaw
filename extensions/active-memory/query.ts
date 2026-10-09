@@ -5,6 +5,7 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
@@ -16,7 +17,7 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-function buildQuery(params: {
+export function buildQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
   config: ResolvedActiveRecallPluginConfig;
@@ -26,9 +27,9 @@ function buildQuery(params: {
     return latest;
   }
   if (params.config.queryMode === "full") {
-    const allTurns = (params.recentTurns ?? [])
-      .map((turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`)
-      .filter((turn) => turn.length > 0);
+    const allTurns = (params.recentTurns ?? []).map(
+      (turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`,
+    );
     if (allTurns.length === 0) {
       return latest;
     }
@@ -68,46 +69,19 @@ function buildQuery(params: {
   ].join("\n");
 }
 
-function stripExternalUntrustedBlocks(text: string): string {
-  return text.replace(
-    /<<<EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g,
-    " ",
-  );
-}
-
-function stripJsonFences(text: string): string {
-  return text.replace(/```(?:json)?\s*[\s\S]*?```/gi, " ");
-}
-
-function stripActiveMemoryXmlBlocks(text: string): string {
-  return text.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/gi, " ");
-}
-
 function normalizeSearchQueryText(text: string): string {
   return text
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => {
-      if (!line) {
-        return false;
-      }
-      if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
-        return false;
-      }
-      if (/^(conversation info|sender|untrusted context)\b/i.test(line)) {
-        return false;
-      }
-      if (/^(source: external|---|untrusted discord message body)$/i.test(line)) {
-        return false;
-      }
-      if (/^⚠️?\s*Agent couldn't generate a response/i.test(line)) {
-        return false;
-      }
-      if (/^Please try again\.?$/i.test(line)) {
-        return false;
-      }
-      return true;
-    })
+    .filter(
+      (line) =>
+        line &&
+        line !== ACTIVE_MEMORY_CONTEXT_HEADER &&
+        !/^(conversation info|sender|untrusted context)\b/i.test(line) &&
+        !/^(source: external|---|untrusted discord message body)$/i.test(line) &&
+        !/^⚠️?\s*Agent couldn't generate a response/i.test(line) &&
+        !/^Please try again\.?$/i.test(line),
+    )
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -120,21 +94,25 @@ function clampSearchQuery(text: string): string {
     : normalized;
 }
 
-function buildSearchQuery(params: {
+export function buildSearchQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
 }): string {
   const latest = clampSearchQuery(
     normalizeSearchQueryText(
-      stripActiveMemoryXmlBlocks(
-        stripJsonFences(stripExternalUntrustedBlocks(params.latestUserMessage)),
-      ),
+      params.latestUserMessage
+        .replace(
+          /<<<EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g,
+          " ",
+        )
+        .replace(/```(?:json)?\s*[\s\S]*?```/gi, " ")
+        .replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/gi, " "),
     ),
   );
   if (latest.length >= 12 || !params.recentTurns?.length) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const previousUser = [...params.recentTurns]
+  const previousUser = params.recentTurns
     .toReversed()
     .find((turn) => turn.role === "user" && turn.text.trim() !== params.latestUserMessage.trim());
   if (!previousUser) {
@@ -147,7 +125,7 @@ function buildSearchQuery(params: {
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
-function extractTextContentParts(content: unknown): string[] {
+export function extractTextContentParts(content: unknown): string[] {
   if (typeof content === "string") {
     return content.trim() ? [content] : [];
   }
@@ -160,10 +138,10 @@ function extractTextContentParts(content: unknown): string[] {
       parts.push(item);
       continue;
     }
-    if (!item || typeof item !== "object") {
+    const typed = asOptionalObjectRecord(item);
+    if (!typed) {
       continue;
     }
-    const typed = item as { type?: unknown; text?: unknown; content?: unknown };
     if (typeof typed.text === "string") {
       parts.push(typed.text);
       continue;
@@ -175,33 +153,24 @@ function extractTextContentParts(content: unknown): string[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function extractTextContent(content: unknown): string {
+export function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
-function findActiveMemoryCloseLine(lines: string[], startIndex: number): number {
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if ((lines[index]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-      return index;
-    }
-  }
-  return -1;
-}
-
 function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): string {
-  const lines = text.split("\n");
+  const lines = text.split("\n").map((line) => line.trim());
   const cleanedLines: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]?.trim() ?? "";
+    const line = lines[index] ?? "";
     if (!line) {
       continue;
     }
     const blockStart = line === ACTIVE_MEMORY_CONTEXT_HEADER ? index + 1 : index;
     if (
       (!injectedPrefixOnly || line === ACTIVE_MEMORY_CONTEXT_HEADER) &&
-      lines[blockStart]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+      lines[blockStart] === ACTIVE_MEMORY_OPEN_TAG
     ) {
-      const closeIndex = findActiveMemoryCloseLine(lines, blockStart + 1);
+      const closeIndex = lines.indexOf(ACTIVE_MEMORY_CLOSE_TAG, blockStart + 1);
       if (closeIndex !== -1) {
         index = closeIndex;
         continue;
@@ -220,13 +189,13 @@ function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): st
   return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
 }
 
-function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
+export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
+    const typed = asOptionalObjectRecord(message);
+    if (!typed) {
       continue;
     }
-    const typed = message as { role?: unknown; content?: unknown };
     const role = typed.role === "user" || typed.role === "assistant" ? typed.role : undefined;
     if (!role) {
       continue;
@@ -241,14 +210,7 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   return turns;
 }
 
-function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEFAULT_PROVIDER) {
-  if (!modelRef) {
-    return undefined;
-  }
-  return parseModelRef(modelRef, defaultProvider) ?? { provider: defaultProvider, model: modelRef };
-}
-
-function getModelRef(
+export function getModelRef(
   runtimeConfig: OpenClawConfig,
   agentId: string,
   config: ResolvedActiveRecallPluginConfig,
@@ -272,19 +234,11 @@ function getModelRef(
     config.modelFallback,
   ];
   for (const candidate of candidates) {
-    const parsed = parseModelCandidate(candidate, defaultProvider);
-    if (parsed) {
-      return parsed;
+    if (candidate) {
+      return (
+        parseModelRef(candidate, defaultProvider) ?? { provider: defaultProvider, model: candidate }
+      );
     }
   }
   return undefined;
 }
-
-export {
-  buildQuery,
-  buildSearchQuery,
-  extractRecentTurns,
-  extractTextContent,
-  extractTextContentParts,
-  getModelRef,
-};

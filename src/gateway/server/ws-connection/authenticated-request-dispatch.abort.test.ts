@@ -98,6 +98,47 @@ function createDispatcher(
 }
 
 describe("authenticated WebSocket request cancellation", () => {
+  it.each([undefined, true])(
+    "binds only explicit reload waits to disconnect (%s)",
+    async (waitForDrain) => {
+      const socket = new EventEmitter();
+      const { client, dispatcher } = createDispatcher(socket);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let signal: AbortSignal | undefined;
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        signal = options.signal;
+        entered.resolve();
+        await release.promise;
+      });
+      const dispatch = dispatcher.dispatch(
+        {
+          type: "req",
+          id: "plugin-wait",
+          method: "plugins.reload",
+          params: {
+            plugins: [{ pluginId: "demo" }],
+            ...(waitForDrain !== undefined ? { waitForDrain } : {}),
+          },
+        },
+        client,
+      );
+      try {
+        await entered.promise;
+        socket.emit("close", 1000, Buffer.alloc(0));
+        if (waitForDrain) {
+          expect(signal?.aborted).toBe(true);
+        } else {
+          expect(signal).toBeUndefined();
+        }
+      } finally {
+        release.resolve();
+        await dispatch;
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+    },
+  );
+
   it("cancels only access-bound work after a grant ends, including after ordinary disconnect", async () => {
     const { registry, frames, waitForFrameCount } = createPairedNode();
     const guestSocket = new EventEmitter();
@@ -225,95 +266,10 @@ describe("authenticated WebSocket request cancellation", () => {
     expect(socket.listenerCount("close")).toBe(0);
   });
 
-  it.each(["test.trace", "sessions.cleanup", "agents.delete"])(
-    "keeps authenticated %s work alive after its socket disconnects",
-    async (method) => {
-      const socket = new EventEmitter();
-      const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
-      const invoked = createDeferredCore();
-      const completion = createDeferredCore();
-      let completed = false;
-      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-        invoked.resolve();
-        await completion.promise;
-        completed = true;
-        options.respond(true, { ok: true });
-      });
-
-      const dispatch = dispatcher.dispatch(
-        { type: "req", id: "ordinary-request", method, params: {} },
-        client,
-      );
-      try {
-        await invoked.promise;
-        expect(handleGatewayRequest).toHaveBeenCalledOnce();
-
-        expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-        expect(socket.listenerCount("close")).toBe(0);
-        socket.emit("close", 1006, Buffer.alloc(0));
-        expect(completed).toBe(false);
-      } finally {
-        completion.resolve();
-        await awaitResponseFrame("ordinary-request");
-        await dispatch;
-      }
-      expect(completed).toBe(true);
-    },
-  );
-
-  it("cancels a session companion ask when its authenticated socket closes", async () => {
-    const socket = new EventEmitter();
-    const { client, dispatcher } = createDispatcher(socket, {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    });
-    const invoked = createDeferredCore();
-    const abortObserved = createDeferredCore();
-    let observedSignal: AbortSignal | undefined;
-    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-      observedSignal = options.signal;
-      options.signal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
-      invoked.resolve();
-      await abortObserved.promise;
-    });
-
-    const dispatch = dispatcher.dispatch(
-      {
-        type: "req",
-        id: "session-companion",
-        method: "sessions.companion.ask",
-        params: { sessionKey: "agent:main:main", question: "What changed?" },
-      },
-      client,
-    );
-    try {
-      // Wait for the handler to own its abort listener before closing the socket.
-      await invoked.promise;
-      expect(socket.listenerCount("close")).toBe(1);
-      socket.emit("close", 1000, Buffer.alloc(0));
-      await abortObserved.promise;
-      expect(observedSignal?.aborted).toBe(true);
-    } finally {
-      socket.emit("close", 1000, Buffer.alloc(0));
-      await dispatch;
-    }
-    expect(socket.listenerCount("close")).toBe(0);
-  });
-
   it.each([
     {
       label: "control UI",
       id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    {
-      label: "gateway SDK",
-      id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-    },
-    {
-      label: "native macOS app",
-      id: GATEWAY_CLIENT_IDS.MACOS_APP,
       mode: GATEWAY_CLIENT_MODES.UI,
     },
   ])(

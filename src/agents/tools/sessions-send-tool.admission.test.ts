@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,13 +9,17 @@ import {
   readGatewayDeviceSourceAuthority,
 } from "../../gateway/device-revocation.js";
 import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
+import * as operatorCapture from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -28,10 +33,17 @@ import {
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import {
+  readFollowupRequest,
+  SessionFollowupCompletion,
+} from "../subagents/completion/session-followup-completion.js";
 import "../test-helpers/fast-openclaw-tools-sessions.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 vi.mock("./sessions-send-tool.a2a.js", () => ({
@@ -47,6 +59,21 @@ const config = {
   tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
 } satisfies OpenClawConfig;
 
+async function trackActualReplyFlow() {
+  const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
+    typeof import("./sessions-send-tool.a2a.js")
+  >("./sessions-send-tool.a2a.js");
+  const settled = createDeferredCore();
+  vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
+    try {
+      await runActualFlow(params);
+    } finally {
+      settled.resolve();
+    }
+  });
+  return settled;
+}
+
 describe("sessions_send dispatch admission", () => {
   let state: OpenClawTestState;
   let registerWatch: MockInstance<typeof sessionStateEvents.registerSessionStateWatch>;
@@ -56,7 +83,7 @@ describe("sessions_send dispatch admission", () => {
     setRuntimeConfigSnapshot(config);
     setActivePluginRegistry(createSessionConversationTestRegistry());
     resetGatewayWorkAdmission();
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    vi.mocked(runSessionsSendA2AFlow).mockReset();
     registerWatch = vi.spyOn(sessionStateEvents, "registerSessionStateWatch");
     for (const [sessionKey, sessionId] of [
       [requesterSessionKey, "requester-session"],
@@ -76,7 +103,18 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
-  it("keeps the accepted reply source until the detached flow actually settles", async () => {
+  const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
+  it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
+    if (sourceKey !== requesterSessionKey) {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: sourceKey },
+        { sessionId: "key-only-requester", updatedAt: 1 },
+      );
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: targetSessionKey },
+        { sessionId: "target-session", updatedAt: 1, spawnedBy: sourceKey },
+      );
+    }
     const context = createContext();
     const owner = createOperatorClient({ profileName: "send-owner", scopes: ["operator.write"] });
     const source = captureGatewayDeviceRevocation(
@@ -85,6 +123,22 @@ describe("sessions_send dispatch admission", () => {
       () => true,
     );
     const finish = createDeferredCore();
+    let completion: SessionFollowupCompletion | undefined;
+    const capturing = createDeferredCore();
+    const allowCapture = createDeferredCore();
+    let invocationStarted = false;
+    let returned = false;
+    const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+    const heldCapture = vi
+      .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+      .mockImplementation(async (...args) => {
+        const captured = await capture(...args);
+        if (invocationStarted) {
+          capturing.resolve();
+          await allowCapture.promise;
+        }
+        return captured;
+      });
     vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(() => finish.promise);
     const callGateway = vi.fn();
     callGateway.mockImplementation(
@@ -96,13 +150,21 @@ describe("sessions_send dispatch admission", () => {
           return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
         }
         if (request.method === "agent") {
+          const followup = readFollowupRequest(runId, targetSessionKey);
+          if (followup) {
+            completion = SessionFollowupCompletion.bind(followup);
+            followup.completion = completion;
+            completion.markAccepted(runId);
+            await completion.settle(runId, { status: "ok", replyText: "Task complete" });
+            completion.finishExecution(runId);
+          }
           return { runId, status: "accepted" };
         }
         throw new Error(`Unexpected Gateway method: ${request.method}`);
       },
     );
     try {
-      const result = await withPluginRuntimeGatewayRequestScope(
+      const pending = withPluginRuntimeGatewayRequestScope(
         {
           client: owner,
           context,
@@ -115,26 +177,66 @@ describe("sessions_send dispatch admission", () => {
               authenticatedUserProfile: owner.authenticatedUserProfile,
               scopes: owner.connect.scopes ?? [],
             },
-            () =>
-              createSessionsSendTool({
-                agentSessionKey: requesterSessionKey,
-                config,
-                callGateway,
-                idempotencyKey: runId,
-              }).execute("send-followup", {
-                sessionKey: targetSessionKey,
-                message: "Continue the task",
-                mode: "followup",
-                timeoutSeconds: 0,
-              }),
+            async () => {
+              const participants = createReplyTurnParticipants({
+                operatorAuthority:
+                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+              });
+              try {
+                return await withGatewayToolCallerIdentity(
+                  {
+                    agentId: "main",
+                    sessionKey: sourceKey,
+                    personalToolParticipants: participants,
+                    gatewayContextResolver: () => context,
+                    receiptAuthority: () => true,
+                  },
+                  () => {
+                    invocationStarted = true;
+                    return createSessionsSendTool({
+                      agentSessionKey: sourceKey,
+                      config,
+                      callGateway,
+                      idempotencyKey: runId,
+                    }).execute("send-followup", {
+                      sessionKey: targetSessionKey,
+                      message: "Continue the task",
+                      mode: "followup",
+                      timeoutSeconds: 0,
+                    });
+                  },
+                );
+              } finally {
+                returned = true;
+                participants.close();
+              }
+            },
           ),
       );
-      expect(result.details).toMatchObject({ status: "accepted", delivery: { status: "pending" } });
+      await capturing.promise;
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      expect(returned).toBe(false);
+      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+      allowCapture.resolve();
+      const result = await pending;
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        delivery: { status: "pending" },
+      });
       expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce();
+      expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterSessionKey: sourceKey, targetSessionKey }),
+      );
       source.release();
       expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(true);
     } finally {
+      vi.useRealTimers();
+      allowCapture.resolve();
       finish.resolve();
+      completion?.close();
+      heldCapture.mockRestore();
       source.release();
     }
   });
@@ -162,18 +264,8 @@ describe("sessions_send dispatch admission", () => {
   ])(
     "preserves the original $name route when a later turn changes the shared session route",
     async ({ name, accountId, sourceKey, threadId }) => {
-      const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
-        typeof import("./sessions-send-tool.a2a.js")
-      >("./sessions-send-tool.a2a.js");
       let completion: Record<string, unknown> | undefined;
-      const settled = createDeferredCore();
-      vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
-        try {
-          await runActualFlow(params);
-        } finally {
-          settled.resolve();
-        }
-      });
+      const settled = await trackActualReplyFlow();
       await replaceSessionEntry(
         { agentId: "main", sessionKey: sourceKey },
         { sessionId: "requester-session", updatedAt: 1, lifecycleRevision: "original-generation" },
@@ -224,6 +316,15 @@ describe("sessions_send dispatch admission", () => {
       const gateway = vi
         .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
         .mockImplementation(callGateway);
+      const mutation = vi
+        .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+        .mockImplementation(callGateway);
+      // This routing fixture supplies a run-scoped Gateway, not a native task
+      // receipt. Keep its real A2A/route assertions at that explicit boundary;
+      // retained core authority and custody have separate owner/integration proof.
+      const prepareFollowup = vi
+        .spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup")
+        .mockResolvedValue(undefined);
       try {
         const tool = createOpenClawTools({
           agentSessionKey: sourceKey,
@@ -270,7 +371,9 @@ describe("sessions_send dispatch admission", () => {
           sourceReplyDeliveryMode: "message_tool_only",
         });
       } finally {
+        prepareFollowup.mockRestore();
         gateway.mockRestore();
+        mutation.mockRestore();
       }
     },
   );
@@ -279,17 +382,7 @@ describe("sessions_send dispatch admission", () => {
     const sessionKey = "agent:main:direct:identity-linked-person";
     const originalRoute = { channel: "telegram", accountId: "default", to: "original-recipient" };
     const laterRoute = { channel: "telegram", accountId: "other", to: "later-recipient" };
-    const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
-      typeof import("./sessions-send-tool.a2a.js")
-    >("./sessions-send-tool.a2a.js");
-    const settled = createDeferredCore();
-    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
-      try {
-        await runActualFlow(params);
-      } finally {
-        settled.resolve();
-      }
-    });
+    const settled = await trackActualReplyFlow();
     const entry = {
       sessionId: "self-session",
       updatedAt: 1,
@@ -333,6 +426,9 @@ describe("sessions_send dispatch admission", () => {
     );
     const gateway = vi
       .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+      .mockImplementation(callGateway);
+    const mutation = vi
+      .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
       .mockImplementation(callGateway);
     try {
       const tool = createOpenClawTools({
@@ -386,13 +482,12 @@ describe("sessions_send dispatch admission", () => {
       expect(sendParams).not.toHaveProperty("sessionGeneration");
     } finally {
       gateway.mockRestore();
+      mutation.mockRestore();
     }
   });
 
   it.each([
-    { admission: "rejected", timeoutSeconds: 0 },
     { admission: "rejected", timeoutSeconds: 1 },
-    { admission: "pending", timeoutSeconds: 0 },
     { admission: "pending", timeoutSeconds: 1 },
   ] as const)(
     "does not install a watch or start A2A when admission is $admission (wait $timeoutSeconds)",

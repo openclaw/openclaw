@@ -1,4 +1,3 @@
-// Narrow mutable handle for the active reply session entry.
 import type { SessionEntry } from "../../config/sessions.js";
 
 export type ReplySessionEntryHandle = {
@@ -6,13 +5,33 @@ export type ReplySessionEntryHandle = {
   clearCurrent(): void;
   get(sessionKey: string): SessionEntry | undefined;
   getCurrent(): SessionEntry | undefined;
-  patchCurrent(patch: Partial<SessionEntry>): SessionEntry | undefined;
   replaceCurrent(entry: SessionEntry): void;
-  set(sessionKey: string, entry: SessionEntry): void;
   toCompatSessionStore(): Record<string, SessionEntry>;
 };
 
 export class ReplySessionGenerationInvalidatedError extends Error {}
+
+export function publishReplySessionEntry(
+  params: {
+    sessionEntryHandle?: ReplySessionEntryHandle;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+  },
+  entry: SessionEntry | undefined,
+): void {
+  if (entry) {
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(entry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = entry;
+    }
+  } else {
+    params.sessionEntryHandle?.clearCurrent();
+    if (params.sessionStore && params.sessionKey) {
+      delete params.sessionStore[params.sessionKey];
+    }
+  }
+}
 
 export function createReplySessionEntryHandle(params: {
   sessionEntry?: SessionEntry;
@@ -118,20 +137,7 @@ export function createReplySessionEntryHandle(params: {
     },
     get: (key) => entries[key],
     getCurrent: current,
-    patchCurrent: (patch) => {
-      if (currentEntry) {
-        replaceCurrent({ ...currentEntry, ...patch });
-      }
-      return currentEntry;
-    },
     replaceCurrent,
-    set: (key, entry) => {
-      if (key === sessionKey) {
-        replaceCurrent(entry);
-      } else {
-        entries[key] = entry;
-      }
-    },
     toCompatSessionStore: () => {
       if (!generationFence || !sessionKey) {
         return entries;

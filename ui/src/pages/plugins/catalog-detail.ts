@@ -15,7 +15,9 @@ import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
+  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
@@ -38,6 +40,7 @@ export type PluginCatalogDetailProps = {
   installBlockedReason: string | null;
   onInstall: () => void;
   iconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (url: string) => boolean;
 };
 
 export function renderPluginReadme(readme: string | undefined): TemplateResult {
@@ -70,14 +73,15 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     backHref: props.backHref,
     backLabel: t("tabs.plugins"),
     onBack: props.onBack,
-    icon: renderArtTile(
-      plugin.id,
-      plugin.catalog.name,
-      packageIcon,
-      undefined,
-      "plugins-tile",
-      authorIcon,
-    ),
+    icon: renderArtTile(plugin.id, plugin.catalog.name, {
+      iconUrl: packageIcon,
+      authorIconUrl: authorIcon,
+      whiteBackground: plugin.catalog.official && Boolean(packageIcon),
+      loading: Boolean(
+        (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)) ||
+        (detail.author?.imageUrl && props.iconLoading?.(detail.author.imageUrl)),
+      ),
+    }),
     titleAction: html`${
       plugin.local.action === "install" || installing
         ? renderReasonedDisabledControl(
@@ -96,17 +100,14 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     identity: renderPluginPublisher(result),
     sidebar: renderPluginMetadata(result),
     panel: html`${renderPluginRowMessage(props.message, { busy: props.busy, onContinue: props.canInstall ? props.onContinueInstall : undefined })}
+    ${renderPluginDeclaredCapabilities(detail.contracts, detail.uiCapabilities)}
     ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.bookOpenText)}
     ${renderPluginCapabilitySection(
       t("pluginsPage.detailTools"),
       (detail.contracts?.tools ?? []).map((name) => ({ name })),
       icons.wrench,
     )}
-    ${renderPluginCapabilitySection(
-      t("pluginsPage.detailMcpServers"),
-      detail.mcpServers.map((name) => ({ name })),
-      icons.plug,
-    )}`,
+    ${renderPluginMcpServers(detail.mcpServers, detail.mcpServerDetails)}`,
     readme: detail.readme ? renderPluginReadme(detail.readme) : undefined,
   });
 }
@@ -138,7 +139,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): Temp
                 </div>
               </div>
               <div class="plugin-catalog-detail__content">
-                <div class="plugin-catalog-detail__panel" aria-hidden="true">
+                <div class="plugin-catalog-detail__main" aria-hidden="true">
                   <div class="plugin-catalog-detail__loading-card skeleton"></div>
                   <div class="plugin-catalog-detail__loading-card skeleton"></div>
                 </div>

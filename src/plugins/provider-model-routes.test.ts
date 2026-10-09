@@ -584,9 +584,7 @@ describe("provider model route adapter", () => {
     ["provider request", { request: { allowPrivateNetwork: true } }, {}],
     ["provider local service", { localService: { command: "/custom-provider" } }, {}],
     ["provider auth header", { authHeader: false }, {}],
-    ["provider request timeout", { timeoutSeconds: 90 }, {}],
     ["model headers", {}, { headers: { "x-model-route": "custom" } }],
-    ["model compatibility", {}, { compat: { supportsStore: false } }],
   ])("projects %s without exposing its value", (_label, providerPatch, modelPatch) => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,

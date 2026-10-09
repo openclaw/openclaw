@@ -1,14 +1,7 @@
-/**
- * Applies non-interactive setup for provider plugins.
- *
- * This path resolves trusted plugin providers, delegates setup to their
- * non-interactive method, and installs runtime plugins required by the model.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
@@ -27,14 +20,11 @@ import {
   PROVIDER_PLUGIN_CHOICE_PREFIX,
 } from "../../../plugins/provider-plugin-choice.js";
 import type {
-  ProviderAuthOptionBag,
   ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderPlugin,
-  ProviderNonInteractiveApiKeyCredentialParams,
-  ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import {
   prepareAgentModelDefaults,
@@ -48,32 +38,17 @@ import {
   ensureModelSelectionRuntimePlugins,
 } from "../../runtime-plugin-install.js";
 
-async function loadPluginProviderRuntime() {
-  return import("./auth-choice.plugin-providers.runtime.js");
-}
-
-const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
-  loadPluginProviderRuntime,
-  ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
-);
-
 /** Applies a plugin-defined auth choice, or returns undefined when it is not plugin-backed. */
-export async function applyNonInteractivePluginProviderChoice(params: {
-  nextConfig: OpenClawConfig;
-  authChoice: string;
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-  baseConfig: OpenClawConfig;
-  target: OnboardingAgentTarget;
-  resolveApiKey: (input: ProviderResolveNonInteractiveApiKeyParams) => Promise<{
-    key: string;
-    source: "profile" | "env" | "flag";
-    envVarName?: string;
-  } | null>;
-  toApiKeyCredential: (
-    input: ProviderNonInteractiveApiKeyCredentialParams,
-  ) => ApiKeyCredential | null;
-}): Promise<OpenClawConfig | null | undefined> {
+export async function applyNonInteractivePluginProviderChoice(
+  params: {
+    nextConfig: OpenClawConfig;
+    authChoice: string;
+    opts: OnboardOptions;
+    runtime: RuntimeEnv;
+    baseConfig: OpenClawConfig;
+    target: OnboardingAgentTarget;
+  } & Pick<ProviderAuthMethodNonInteractiveContext, "resolveApiKey" | "toApiKeyCredential">,
+): Promise<OpenClawConfig | null | undefined> {
   const { agentDir, workspaceDir } = params.target;
   const reject = (message: string): null => {
     rejectOnboardingOption(params.opts, params.runtime, message);
@@ -125,7 +100,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     resolveOwningPluginIdsForProviderRef,
     resolveProviderPluginChoice,
     resolvePluginProviders,
-  } = await loadAuthChoicePluginProvidersRuntime();
+  } = (await import("./auth-choice.plugin-providers.runtime.js")).authChoicePluginProvidersRuntime;
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
@@ -305,7 +280,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     authChoice: params.authChoice,
     config: providerConfig,
     baseConfig: params.baseConfig,
-    opts: params.opts as ProviderAuthOptionBag,
+    opts: params.opts,
     runtime: params.runtime,
     agentDir,
     workspaceDir,
@@ -327,7 +302,9 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       { loadAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore },
       { loadPersistedAuthProfileStore },
       { closeAuthProfileReadPool },
-      { closeOpenClawAgentDatabases },
+      { closeOpenClawAgentDatabasesAsync },
+      { closeOpenClawStateDatabaseByPathAsync },
+      { resolveOpenClawStateSqlitePath },
       { splitTrailingAuthProfile },
       { resolveSetupModel },
       { prepareCustomSetupCredentials },
@@ -337,6 +314,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       import("../../../agents/auth-profiles/persisted.js"),
       import("../../../agents/auth-profiles/sqlite.js"),
       import("../../../state/openclaw-agent-db.js"),
+      import("../../../state/openclaw-state-db.js"),
+      import("../../../state/openclaw-state-db.paths.js"),
       import("../../../agents/model-ref-profile.js"),
       import("../../../system-agent/setup-inference-core.js"),
       import("../../../system-agent/setup-inference-custom.js"),
@@ -429,7 +408,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     } finally {
       clearRuntimeAuthProfileStoreSnapshot(stagingAgentDir);
       closeAuthProfileReadPool({ kind: "root", rootPath: stagingRoot });
-      closeOpenClawAgentDatabases(stagingRoot);
+      await closeOpenClawAgentDatabasesAsync(stagingRoot);
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stagingRoot }),
+      );
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
     if (savedProfileId) {

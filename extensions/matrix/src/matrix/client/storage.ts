@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   isMatrixActiveTokenRootDirectory,
@@ -10,12 +9,13 @@ import {
 } from "../../storage-paths.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
-  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
   MATRIX_RECOVERY_KEY_FILENAME,
-  migrateLegacyMatrixLegacyCryptoMigrationFileToStore,
-  migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync,
   scoreMatrixCryptoStateInStore,
 } from "../crypto-state-store.js";
+import {
+  assertMatrixSupportedStateFile,
+  assertMatrixSupportedStateRoot,
+} from "../retired-state.js";
 import {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
@@ -26,7 +26,6 @@ import type { MatrixAuth, MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
-const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 
 function openStorageMetaStore(rootDir: string) {
   return getMatrixRuntime().state.openKeyedStore<MatrixStorageMetadata>(
@@ -45,18 +44,6 @@ async function scoreStorageRoot(rootDir: string, metadata: MatrixStorageMetadata
   if (fs.existsSync(path.join(rootDir, "crypto"))) {
     score += 8;
   }
-  if (fs.existsSync(path.join(rootDir, THREAD_BINDINGS_FILENAME))) {
-    score += 4;
-  }
-  if (fs.existsSync(path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME))) {
-    score += 3;
-  }
-  if (fs.existsSync(path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME))) {
-    score += 2;
-  }
-  if (fs.existsSync(path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME))) {
-    score += 2;
-  }
   score += await scoreMatrixCryptoStateInStore(rootDir);
   return score;
 }
@@ -69,14 +56,8 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
   }
 }
 
-type PopulatedMatrixStorageRoot = {
-  tokenHash: string;
-  rootDir: string;
-  score: number;
-  mtimeMs: number;
-};
-
 async function readStoredRootMetadata(rootDir: string): Promise<MatrixStorageMetadata> {
+  await assertMatrixSupportedStateFile(path.join(rootDir, STORAGE_META_FILENAME));
   if (fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
     try {
       const stored = normalizeMatrixStorageMetadata(
@@ -89,9 +70,7 @@ async function readStoredRootMetadata(rootDir: string): Promise<MatrixStorageMet
       // Root selection remains best-effort; a write path will surface SQLite failures.
     }
   }
-  return (
-    normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ?? {}
-  );
+  return {};
 }
 
 function isCompatibleStorageRoot(params: {
@@ -99,8 +78,7 @@ function isCompatibleStorageRoot(params: {
   homeserver: string;
   userId: string;
   accountKey: string;
-  deviceId?: string | null;
-  requireExplicitDeviceMatch?: boolean;
+  deviceId: string;
 }): boolean {
   const { metadata } = params;
   if (metadata.homeserver && metadata.homeserver !== params.homeserver) {
@@ -115,22 +93,8 @@ function isCompatibleStorageRoot(params: {
   ) {
     return false;
   }
-  if (
-    params.deviceId &&
-    metadata.deviceId &&
-    metadata.deviceId.trim() &&
-    metadata.deviceId.trim() !== params.deviceId.trim()
-  ) {
-    return false;
-  }
-  if (
-    params.requireExplicitDeviceMatch &&
-    params.deviceId &&
-    (!metadata.deviceId || metadata.deviceId.trim() !== params.deviceId.trim())
-  ) {
-    return false;
-  }
-  return true;
+  // Sibling reuse requires the same confirmed device across token rotations.
+  return metadata.deviceId?.trim() === params.deviceId.trim();
 }
 
 async function resolvePreferredMatrixStorageRoot(params: {
@@ -188,7 +152,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
     };
   }
 
-  const compatiblePopulatedSiblings: PopulatedMatrixStorageRoot[] = [];
+  const populatedSiblingTokenHashes: string[] = [];
   const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
   for (const entry of siblingEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) {
@@ -211,9 +175,6 @@ async function resolvePreferredMatrixStorageRoot(params: {
         userId: params.userId,
         accountKey: params.accountKey,
         deviceId,
-        // Once auth resolves a concrete device, only sibling roots that explicitly
-        // declare that same device are safe to reuse across token rotations.
-        requireExplicitDeviceMatch: true,
       })
     ) {
       continue;
@@ -223,27 +184,20 @@ async function resolvePreferredMatrixStorageRoot(params: {
       continue;
     }
     populatedTokenHashes.push(entry.name);
-    compatiblePopulatedSiblings.push({
+    populatedSiblingTokenHashes.push(entry.name);
+    const candidate = {
       rootDir: candidateRootDir,
       tokenHash: entry.name,
       score: candidateScore,
       mtimeMs: resolveStorageRootMtimeMs(candidateRootDir),
-    });
-  }
-
-  for (const candidate of compatiblePopulatedSiblings) {
+    };
     if (
       candidate.score > best.score ||
       (best.rootDir !== params.canonicalRootDir &&
         candidate.score === best.score &&
         candidate.mtimeMs > best.mtimeMs)
     ) {
-      best = {
-        rootDir: candidate.rootDir,
-        tokenHash: candidate.tokenHash,
-        score: candidate.score,
-        mtimeMs: candidate.mtimeMs,
-      };
+      best = candidate;
     }
   }
 
@@ -255,7 +209,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
         canonicalTokenHash: params.canonicalTokenHash,
         selectedTokenHash: best.tokenHash,
         populatedTokenHashes,
-        populatedSiblingTokenHashes: compatiblePopulatedSiblings.map((root) => root.tokenHash),
+        populatedSiblingTokenHashes,
         populatedRootCount: populatedTokenHashes.length,
       });
   }
@@ -327,60 +281,35 @@ export async function maybeMigrateLegacyStorage({
 }: {
   storagePaths: MatrixStoragePaths;
 }): Promise<void> {
-  const { rootDir, storagePath, recoveryKeyPath } = storagePaths;
-  const cryptoMigrationPath = path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME);
-  const hasAccountScopedLegacyStorageFile = fs.existsSync(storagePath);
-  const syncCache = hasAccountScopedLegacyStorageFile
-    ? await import("./sync-cache-state.js")
-    : null;
-  const hasAccountScopedLegacyStorage =
-    hasAccountScopedLegacyStorageFile &&
-    (await syncCache?.readLegacyMatrixSyncCacheState(rootDir)) !== null;
-  const hasAccountScopedRecoveryKey = fs.existsSync(recoveryKeyPath);
-  const hasAccountScopedLegacyCryptoMigration = fs.existsSync(cryptoMigrationPath);
-  if (
-    !hasAccountScopedLegacyStorage &&
-    !hasAccountScopedRecoveryKey &&
-    !hasAccountScopedLegacyCryptoMigration
-  ) {
+  const { rootDir, storagePath } = storagePaths;
+  await assertMatrixSupportedStateRoot(rootDir);
+  if (!fs.existsSync(storagePath)) {
+    return;
+  }
+  const syncCache = await import("./sync-cache-state.js");
+  if (!(await syncCache.readLegacyMatrixSyncCacheState(rootDir))) {
     return;
   }
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
   fs.mkdirSync(rootDir, { recursive: true });
-  const migrations: string[] = [];
-  let archiveSyncCache = false;
+  let migrated = false;
   try {
-    if (syncCache && hasAccountScopedLegacyStorage) {
-      const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
-      if (persisted) {
-        const store = getMatrixRuntime().state.openKeyedStore<
-          import("./sync-cache-state.js").MatrixSyncCacheRecord
-        >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));
-        if (!(await syncCache.hasMatrixSyncCacheStateInStore({ storageRootDir: rootDir, store }))) {
-          await syncCache.writeMatrixSyncCacheStateToStore({
-            storageRootDir: rootDir,
-            payload: persisted,
-            store,
-          });
-          await claimCurrentTokenStorageState({ rootDir });
-          migrations.push(`- account sync cache: ${storagePath} -> ${rootDir} SQLite sync cache`);
-        }
-        archiveSyncCache = true;
-      }
+    const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+    if (!persisted) {
+      return;
     }
-    if (hasAccountScopedRecoveryKey) {
-      await migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
-        recoveryKeyPath,
-        getMatrixRuntime().state,
-      );
-      migrations.push(`- recovery key: ${recoveryKeyPath} -> ${rootDir} SQLite recovery key state`);
-    }
-    if (hasAccountScopedLegacyCryptoMigration) {
-      await migrateLegacyMatrixLegacyCryptoMigrationFileToStore(rootDir);
-      migrations.push(
-        `- legacy crypto migration: ${cryptoMigrationPath} -> ${rootDir} SQLite legacy crypto migration state`,
-      );
+    const store = getMatrixRuntime().state.openKeyedStore<
+      import("./sync-cache-state.js").MatrixSyncCacheRecord
+    >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));
+    if (!(await syncCache.hasMatrixSyncCacheStateInStore({ storageRootDir: rootDir, store }))) {
+      await syncCache.writeMatrixSyncCacheStateToStore({
+        storageRootDir: rootDir,
+        payload: persisted,
+        store,
+      });
+      await claimCurrentTokenStorageState({ rootDir });
+      migrated = true;
     }
   } catch (err) {
     throw new Error(`Failed migrating legacy Matrix client storage: ${String(err)}`, {
@@ -388,12 +317,14 @@ export async function maybeMigrateLegacyStorage({
     });
   }
   const archivePath = `${storagePath}.migrated`;
-  const skippedArchive = archiveSyncCache && fs.existsSync(archivePath);
-  if (archiveSyncCache && !skippedArchive) {
+  const skippedArchive = fs.existsSync(archivePath);
+  if (!skippedArchive) {
     fs.renameSync(storagePath, archivePath);
   }
-  if (migrations.length > 0) {
-    logger.info(`matrix: migrated legacy client storage into ${rootDir}\n${migrations.join("\n")}`);
+  if (migrated) {
+    logger.info(
+      `matrix: migrated legacy client storage into ${rootDir}\n- account sync cache: ${storagePath} -> ${rootDir} SQLite sync cache`,
+    );
   }
   if (skippedArchive) {
     logger.warn?.(
@@ -438,12 +369,10 @@ function prepareStorageMetaMutation(
 }
 
 async function mutateStorageMeta(rootDir: string, mutation: StorageMetaMutation): Promise<boolean> {
+  await assertMatrixSupportedStateFile(path.join(rootDir, STORAGE_META_FILENAME));
   try {
     const store = openStorageMetaStore(rootDir);
-    const decode = (value: unknown) =>
-      normalizeMatrixStorageMetadata(value) ??
-      normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ??
-      {};
+    const decode = (value: unknown) => normalizeMatrixStorageMetadata(value) ?? {};
     if (!store.observe || !store.compareAndApply) {
       // The published >=2026.9.4 host floor predates data-only comparisons.
       const legacyStore = getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(

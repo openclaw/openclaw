@@ -147,8 +147,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     transcript,
     paneId: "single",
     sessionKey,
-    onSessionKeyChange: () => undefined,
-    thinkingLevel: null,
     showThinking: false,
     showToolCalls: true,
     loading: false,
@@ -201,11 +199,8 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onClearHistory: () => undefined,
     agentsList: null,
     currentAgentId: "main",
-    onAgentChange: () => undefined,
-    onNavigateToAgent: () => undefined,
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
     onChatScroll: () => undefined,
@@ -216,6 +211,9 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
 
 export function renderChatView(overrides: Partial<ChatProps> = {}) {
   const container = document.createElement("div");
+  onTestFinished(() => {
+    render(nothing, container);
+  });
   render(renderChat(createChatProps(overrides)), container);
   return container;
 }

@@ -48,10 +48,12 @@ type ClaudeCliRunDiagnosticParams = Pick<
   | "sessionId"
   | "sessionKey"
   | "trigger"
+  | "isolatedCompletionPurpose"
 >;
 
 function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticTraceContext) {
   const channel = params.messageChannel ?? params.messageProvider;
+  const trigger = params.isolatedCompletionPurpose ?? params.trigger;
   return {
     runId: params.runId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -59,7 +61,7 @@ function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticT
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     provider: params.modelProvider ?? "anthropic",
     ...(params.model ? { model: params.model } : {}),
-    ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(trigger ? { trigger } : {}),
     ...(channel ? { channel } : {}),
     trace,
   };
@@ -88,13 +90,10 @@ function errorHarnessOutcome(
   if (failureKind === "timeout") {
     return "timed_out";
   }
-  if (failureKind === "aborted") {
+  if (failureKind === "aborted" || abortSignal?.aborted) {
     return abortSignal?.aborted && isSignalTimeoutReason(abortSignal.reason)
       ? "timed_out"
       : "aborted";
-  }
-  if (abortSignal?.aborted === true) {
-    return isSignalTimeoutReason(abortSignal.reason) ? "timed_out" : "aborted";
   }
   if (isTimeoutError(error)) {
     return "timed_out";
@@ -173,11 +172,9 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
         outcome:
           result.meta.timeoutPhase !== undefined
             ? "timed_out"
-            : runOutcome === "aborted"
-              ? "aborted"
-              : runOutcome === "completed"
-                ? "completed"
-                : "error",
+            : runOutcome === "blocked"
+              ? "error"
+              : runOutcome,
         ...(typeof result.meta.yielded === "boolean" ? { yieldDetected: result.meta.yielded } : {}),
       },
       resultErrorMessage && (runOutcome === "error" || runOutcome === "blocked")

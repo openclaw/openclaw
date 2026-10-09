@@ -38,11 +38,15 @@ import {
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
-import { renderSkillLibrary, renderSkillLibraryDialogs } from "./library-view.ts";
+import {
+  renderSkillLibrary,
+  renderSkillLibraryDialogs,
+  renderSkillLibraryFeedback,
+} from "./library-view.ts";
 import type { SkillDetailTab, SkillsStatusFilter } from "./view-types.ts";
 import { renderSkills } from "./view.ts";
 
@@ -117,15 +121,7 @@ class SkillsPage extends OpenClawLightDomElement {
   });
   private readonly clawhubIcons = new PluginIconController({
     kind: "catalog",
-    getFetchContext: () => ({
-      resourceBasePath: this.context.resourceBasePath,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: this.context.gateway.snapshot.hello,
-        settings: { token: this.context.gateway.connection.token },
-        password: this.context.gateway.connection.password,
-      },
-    }),
+    getFetchContext: () => pluginIconFetchContext(this.context),
     isConnected: () => this.gateway.connected,
     onUrlsChange: (urls) => {
       this.clawhubIconUrls = urls;
@@ -134,8 +130,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private readonly library = new SkillLibraryController(
     this,
     this.gateway,
-    () => this.skillsAgentId,
-    () => this.refreshPage(),
+    () => this.context?.config,
   );
   private readonly clawhubSearchTask = new Task(this, {
     args: () =>
@@ -150,6 +145,7 @@ class SkillsPage extends OpenClawLightDomElement {
       client ? searchClawHub(client, query, signal) : initialState,
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .watchStore(() => this.context?.config)
     .effect(
       () => this.context?.agents,
       (agents) => {
@@ -163,9 +159,8 @@ class SkillsPage extends OpenClawLightDomElement {
         return cleanup;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         const previous = this.skillsAgentId;
         this.reconcileAgentState();
@@ -198,10 +193,7 @@ class SkillsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubIcons.reset();
     super.disconnectedCallback();
   }
@@ -229,10 +221,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private resetLoadedSkillState() {
     this.library.reset();
     this.clawhubSearchTask.abort();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
     }
@@ -347,15 +336,20 @@ class SkillsPage extends OpenClawLightDomElement {
   private changeClawHubQuery(query: string) {
     this.clawhubSearchQuery = query;
     this.clawhubInstallMessage = null;
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubSearchTimer = setTimeout(() => {
       this.clawhubSearchTimer = null;
       this.debouncedClawHubSearchQuery = query.trim();
       this.requestUpdate();
     }, 300);
     this.requestUpdate();
+  }
+
+  private clearClawHubSearchTimer() {
+    if (this.clawhubSearchTimer) {
+      clearTimeout(this.clawhubSearchTimer);
+      this.clawhubSearchTimer = null;
+    }
   }
 
   get clawhubSearchResults(): ClawHubSearchResult[] | null {
@@ -456,8 +450,7 @@ class SkillsPage extends OpenClawLightDomElement {
             library:
               this.surface === "discovery"
                 ? html`
-                    ${this.library.error && !this.library.draft && !this.library.importOpen ? html`<div class="callout danger" role="alert">${this.library.error}</div>` : nothing}
-                    ${this.library.notice && !this.library.draft ? html`<div class="callout success" role="status">${this.library.notice}</div>` : nothing}
+                    ${renderSkillLibraryFeedback(this.library)}
                     ${renderSkillLibraryDialogs(this.library)}
                   `
                 : renderSkillLibrary(

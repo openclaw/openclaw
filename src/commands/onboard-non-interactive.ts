@@ -1,9 +1,3 @@
-/**
- * Non-interactive onboarding command dispatcher.
- *
- * This module validates the existing config snapshot, routes local/remote
- * setup, and handles explicit migration imports without interactive prompts.
- */
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ConfigMutationConflictError, replaceConfigFile } from "../config/config.js";
@@ -110,20 +104,9 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
     return;
   }
 
-  const baseConfig: OpenClawConfig = snapshot.valid
-    ? snapshot.exists
-      ? (snapshot.sourceConfig ?? snapshot.config)
-      : {}
-    : {};
+  const baseConfig: OpenClawConfig =
+    snapshot.valid && snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const mode = opts.mode ?? "local";
-  if (mode !== "local" && mode !== "remote") {
-    rejectOnboardingOption(
-      opts,
-      runtime,
-      `Invalid --mode "${String(mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    return;
-  }
 
   if (isMigrationImport(opts)) {
     // Import flow owns its own commit path because migrations may intentionally
@@ -168,10 +151,7 @@ export async function runNonInteractiveSetup(
         leaseLabel: "non-interactive onboarding lease",
         operationLabel: "onboarding.non-interactive.lease",
       },
-      async () =>
-        await withPluginLifecycleLease({}, async () =>
-          runNonInteractiveSetupExclusive(opts, runtime),
-        ),
+      () => withPluginLifecycleLease({}, () => runNonInteractiveSetupExclusive(opts, runtime)),
     );
   });
 }

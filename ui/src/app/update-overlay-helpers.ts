@@ -10,6 +10,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
+import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
   source?: "read";
@@ -335,10 +336,10 @@ export function projectUpdateCheckoutResponse(
     ...(updateSchedule !== undefined
       ? {
           updateSchedule,
-          heldUpdateCampaignId:
-            updateSchedule?.campaign?.holdUntilMs !== undefined
-              ? updateSchedule.campaign.id
-              : current.heldUpdateCampaignId,
+          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
+            updateSchedule,
+            current.heldUpdateCampaignId,
+          ),
         }
       : {}),
   };
@@ -388,7 +389,10 @@ export function resolveUpdateStatusBanner(params: {
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
+  const guidanceKey = Object.hasOwn(UPDATE_FAILURE_REASON_KEYS, reason)
+    ? UPDATE_FAILURE_REASON_KEYS[reason]
+    : undefined;
+  const guidance = t(guidanceKey ?? "updates.failureReasons.default");
   const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",

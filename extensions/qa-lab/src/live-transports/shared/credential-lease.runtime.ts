@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -54,28 +56,7 @@ const convexPayloadChunkSuccessSchema = z.object({
   data: z.string(),
 });
 
-type ConvexCredentialBrokerConfig = {
-  acquireTimeoutMs: number;
-  acquireUrl: string;
-  authToken: string;
-  heartbeatIntervalMs: number;
-  heartbeatUrl: string;
-  httpTimeoutMs: number;
-  leaseTtlMs: number;
-  ownerId: string;
-  payloadMaxBytes: number;
-  payloadMaxChunks: number;
-  payloadChunkUrl: string;
-  releaseUrl: string;
-  role: QaCredentialRole;
-};
-
-type QaCredentialLeaseHeartbeat = {
-  getFailure(): Error | null;
-  stop(): Promise<void>;
-  throwIfFailed(): void;
-  whenFailed: Promise<Error>;
-};
+type ConvexCredentialBrokerConfig = ReturnType<typeof resolveConvexCredentialBrokerConfig>;
 
 type QaCredentialRole = "ci" | "maintainer";
 
@@ -166,7 +147,7 @@ function resolveConvexCredentialBrokerConfig(params: {
   env: NodeJS.ProcessEnv;
   ownerId?: string;
   role: QaCredentialRole;
-}): ConvexCredentialBrokerConfig {
+}) {
   const siteUrl = params.env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   if (!siteUrl) {
     throw new Error("Missing OPENCLAW_QA_CONVEX_SITE_URL for --credential-source convex.");
@@ -391,18 +372,8 @@ function computeAcquireBackoffMs(params: {
 }
 
 function assertConvexOk(payload: unknown, actionLabel: string) {
-  if (payload === undefined) {
+  if (payload === undefined || convexOkSchema.safeParse(payload).success) {
     return;
-  }
-  if (convexOkSchema.safeParse(payload).success) {
-    return;
-  }
-  const brokerError = toBrokerError({
-    payload,
-    fallback: `Convex credential ${actionLabel} failed.`,
-  });
-  if (brokerError) {
-    throw brokerError;
   }
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
@@ -448,12 +419,7 @@ export async function acquireQaCredentialLease<TPayload>(
     ownerId: opts.ownerId,
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const sleepImpl =
-    opts.sleepImpl ??
-    ((ms: number) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleepImpl = opts.sleepImpl ?? sleep;
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();
@@ -631,17 +597,9 @@ export function startQaCredentialLeaseHeartbeat(
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
   },
-): QaCredentialLeaseHeartbeat {
-  if (lease.source !== "convex") {
-    return {
-      getFailure: () => null,
-      async stop() {},
-      throwIfFailed() {},
-      whenFailed: new Promise<Error>(() => {}),
-    };
-  }
+) {
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
-  if (!Number.isFinite(intervalMs) || intervalMs < 1) {
+  if (lease.source !== "convex" || !Number.isFinite(intervalMs) || intervalMs < 1) {
     return {
       getFailure: () => null,
       async stop() {},
@@ -658,10 +616,7 @@ export function startQaCredentialLeaseHeartbeat(
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
-  let resolveFailure: (error: Error) => void = () => undefined;
-  const whenFailed = new Promise<Error>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: whenFailed, resolve: resolveFailure } = createDeferred<Error>();
   const getFailure = () => {
     if (!failure) {
       try {

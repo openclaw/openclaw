@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements auth profile.fixture behavior.
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 
 export const QA_CODEX_OAUTH_PROFILE_ID = "openai:qa-oauth";

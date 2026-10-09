@@ -41,75 +41,41 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     });
   });
 
-  it("returns different references for different modulePath inputs", () => {
-    const fixtureA = createPluginSdkAliasFixture();
-    const fixtureB = createPluginSdkAliasFixture();
-    const entryA = writePluginEntry(fixtureA.root, bundledPluginFile("a", "src/index.ts"));
-    const entryB = writePluginEntry(fixtureB.root, bundledPluginFile("b", "src/index.ts"));
-
-    const aliasA = buildPluginLoaderAliasMap(entryA);
-    const aliasB = buildPluginLoaderAliasMap(entryB);
-
-    expect(aliasA).not.toBe(aliasB);
-  });
-
-  it("reuses one merged map for plugin entrypoints with the same effective SDK surface", () => {
+  it.each([
+    ["package roots", false],
+    ["entrypoints", true],
+    ["dist mode", false],
+    ["src mode", true],
+    ["argv hints", true],
+    ["dev root", false],
+  ] as const)("keys the cache by effective SDK context: %s", (change, shared) => {
     const fixture = createPluginSdkAliasFixture();
-    const entryA = writePluginEntry(fixture.root, bundledPluginFile("a", "src/index.ts"));
-    const entryB = writePluginEntry(fixture.root, bundledPluginFile("b", "src/index.ts"));
-
-    expect(buildPluginLoaderAliasMap(entryB)).toBe(buildPluginLoaderAliasMap(entryA));
-  });
-
-  it("returns different references when pluginSdkResolution differs", () => {
-    const fixture = createPluginSdkAliasFixture();
-    const entry = writePluginEntry(fixture.root, bundledPluginFile("res", "src/index.ts"));
-
-    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
-    const dist = buildPluginLoaderAliasMap(entry, undefined, undefined, "dist");
-
-    expect(auto).not.toBe(dist);
-  });
-
-  it("reuses one merged map when resolution modes have the same effective order", () => {
-    const fixture = createPluginSdkAliasFixture();
-    const entry = writePluginEntry(fixture.root, bundledPluginFile("same-order", "src/index.ts"));
-
-    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
-    const source = buildPluginLoaderAliasMap(entry, undefined, undefined, "src");
-
-    expect(source).toBe(auto);
-  });
-
-  it("reuses a merged map when different argv hints resolve the same SDK surface", () => {
-    const fixture = createPluginSdkAliasFixture();
-    const entry = writePluginEntry(fixture.root, bundledPluginFile("argv", "src/index.ts"));
-
-    const a = buildPluginLoaderAliasMap(entry, "/path/to/cli-a.mjs");
-    const b = buildPluginLoaderAliasMap(entry, "/path/to/cli-b.mjs");
-
-    expect(a).toBe(b);
-  });
-
-  it("returns different references when an explicit dev source root differs", () => {
-    const stableFixture = createPluginSdkAliasFixture();
-    const devFixture = createPluginSdkAliasFixture();
-    mkdirSafeDir(path.join(devFixture.root, "extensions"));
-    const entry = writePluginEntry(
-      stableFixture.root,
-      bundledPluginFile("dev-env", "src/index.ts"),
-    );
-
-    const stableAliases = buildPluginLoaderAliasMap(entry, undefined, undefined, "dist", null);
-    const devAliases = buildPluginLoaderAliasMap(
-      entry,
-      undefined,
-      undefined,
-      "dist",
-      devFixture.root,
-    );
-
-    expect(devAliases).not.toBe(stableAliases);
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("a", "src/index.ts"));
+    const firstArgs: Parameters<typeof buildPluginLoaderAliasMap> = [entry];
+    const nextArgs: Parameters<typeof buildPluginLoaderAliasMap> = [entry];
+    if (change === "package roots" || change === "entrypoints") {
+      const root = change === "package roots" ? createPluginSdkAliasFixture().root : fixture.root;
+      nextArgs[0] = writePluginEntry(root, bundledPluginFile("b", "src/index.ts"));
+    } else if (change === "dist mode" || change === "src mode") {
+      firstArgs[3] = "auto";
+      nextArgs[3] = change === "dist mode" ? "dist" : "src";
+    } else if (change === "argv hints") {
+      firstArgs[1] = "/path/to/cli-a.mjs";
+      nextArgs[1] = "/path/to/cli-b.mjs";
+    } else {
+      const dev = createPluginSdkAliasFixture();
+      mkdirSafeDir(path.join(dev.root, "extensions"));
+      firstArgs[3] = nextArgs[3] = "dist";
+      firstArgs[4] = null;
+      nextArgs[4] = dev.root;
+    }
+    const first = buildPluginLoaderAliasMap(...firstArgs);
+    const next = buildPluginLoaderAliasMap(...nextArgs);
+    if (shared) {
+      expect(next).toBe(first);
+    } else {
+      expect(next).not.toBe(first);
+    }
   });
 
   it("does not reuse a public alias map after private qa aliases are enabled", () => {

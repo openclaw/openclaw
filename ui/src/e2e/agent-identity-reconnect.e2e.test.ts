@@ -18,7 +18,7 @@ suite.define(() => {
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const artifacts = createControlUiE2eArtifactDir("agent-identity-reconnect");
-          const config = { agents: { list: [{ id: "main" }] } };
+          const config = { agents: { entries: { main: {} } } };
           const gateway = await installMockGateway(page, {
             featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
             methodResponses: {
@@ -34,7 +34,7 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
-          // Reopen a warm tab so its retained roster keeps this configured target selected offline.
+          // Include an existing browser cache; reconnect must rediscover the target live.
           await expect
             .poll(() =>
               page.evaluate(() =>

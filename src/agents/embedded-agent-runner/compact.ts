@@ -1,23 +1,15 @@
-/**
- * Public facade and fallback coordinator for embedded-agent compaction.
- */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  getAsyncWorkSignal,
-} from "../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -35,57 +27,36 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
-import { resolveProjectKey } from "../project-memory-scope.js";
+import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
-import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { buildCompactionFailureResult } from "./compact-reasons.js";
+import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
 } from "./compact.types.js";
-import { containsRealConversationMessages } from "./compaction-diagnostics.js";
-import {
-  buildBeforeCompactionHookMetrics,
-  estimateTokensAfterCompaction,
-  runAfterCompactionHooks,
-  runBeforeCompactionHooks,
-  runPostCompactionSideEffects,
-} from "./compaction-hooks.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import {
   projectCodexHostTranscriptBytePreflightConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
-import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
-import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
+import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
 import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
-type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
-  sessionFile: string;
-};
-
-function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactResult {
-  return {
-    ok: false,
-    compacted: false,
-    reason: `Model selection is locked to native agent harness "${runtime}"; generic compaction is unavailable.`,
-    failure: { reason: "model_selection_locked" },
-  };
-}
-
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
-  compactParams: CompactEmbeddedAgentSessionParamsWithSessionFile;
+  compactParams: CompactEmbeddedAgentSessionParams;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
@@ -100,20 +71,16 @@ export async function compactNativeCliSession(params: {
   }
   const manualCompaction = backend.manualCompaction;
   if (!manualCompaction) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: `CLI backend "${runtime}" owns compaction but does not support manual compaction.`,
-    };
+    return buildCompactionFailureResult(
+      `CLI backend "${runtime}" owns compaction but does not support manual compaction.`,
+    );
   }
   const cliSessionBinding = params.compactParams.cliSessionBinding;
   const cliSessionId = (cliSessionBinding?.sessionId ?? params.compactParams.cliSessionId)?.trim();
   if (!cliSessionId) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: `CLI backend "${runtime}" cannot manually compact without a resumable native session.`,
-    };
+    return buildCompactionFailureResult(
+      `CLI backend "${runtime}" cannot manually compact without a resumable native session.`,
+    );
   }
   const { runCliAgent } = await import("../cli-runner.js");
   const runId = `${params.compactParams.runId ?? params.compactParams.sessionId}:native-compact`;
@@ -168,21 +135,17 @@ export async function compactNativeCliSession(params: {
         abortSignal: params.compactParams.abortSignal,
       });
     };
-    if (params.runControlOperation) {
-      await params.runControlOperation(runControlOperation);
-    } else {
-      await runControlOperation();
-    }
+    await (params.runControlOperation
+      ? params.runControlOperation(runControlOperation)
+      : runControlOperation());
   } catch (err) {
     const signal = params.compactParams.abortSignal;
     if (signal?.aborted && (isAbortError(err) || err === signal.reason)) {
       throw err;
     }
-    return {
-      ok: false,
-      compacted: false,
-      reason: `CLI backend "${runtime}" failed to compact its native session: ${formatErrorMessage(err)}`,
-    };
+    return buildCompactionFailureResult(
+      `CLI backend "${runtime}" failed to compact its native session: ${formatErrorMessage(err)}`,
+    );
   } finally {
     preparedRunAdmission.close();
   }
@@ -191,10 +154,6 @@ export async function compactNativeCliSession(params: {
     compacted: true,
     reason: `CLI backend "${runtime}" compacted its native session.`,
   };
-}
-
-function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
-  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
 }
 
 function resolveCompactionFallbacksOverride(
@@ -212,41 +171,6 @@ function resolveCompactionFallbacksOverride(
   );
 }
 
-function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessionParams): boolean {
-  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model);
-  return (fallbacksOverride ?? defaultFallbacks).length > 0;
-}
-
-function classifyCompactionFallbackResult(
-  result: EmbeddedAgentCompactResult,
-  provider: string,
-  model: string,
-) {
-  if (result.ok) {
-    return null;
-  }
-  const reason = result.reason?.trim();
-  if (!reason) {
-    return null;
-  }
-  const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
-    status: result.failure?.status,
-    code: result.failure?.code,
-  });
-  const failoverError = coerceToFailoverError(failureError, { provider, model });
-  return failoverError ? { error: failoverError } : null;
-}
-
-function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactResult {
-  const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
-  return {
-    ok: false,
-    compacted: false,
-    reason,
-  };
-}
-
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -255,6 +179,7 @@ export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const parentSignal = getAsyncWorkSignal();
   const memoryTranscript = readCompactionAccountingRecorder(
     paramsBase.contextEngineRuntimeContext,
   )?.memoryTranscript;
@@ -265,7 +190,16 @@ export async function compactEmbeddedAgentSessionDirect(
       ...paramsBase,
       missingSessionKey: "resolve-existing",
     }));
-  const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const assertReadCurrent = () => {
+    parentSignal?.throwIfAborted();
+    paramsBase.abortSignal?.throwIfAborted();
+    memoryTranscript?.assertActive();
+  };
+  const entry = await readSessionEntryReadOnlyInWorker(
+    { ...runSessionTarget, readConsistency: "latest" },
+    assertReadCurrent,
+  );
+  assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
     paramsBase,
@@ -273,7 +207,7 @@ export async function compactEmbeddedAgentSessionDirect(
     lockedHarnessRuntime,
   );
   const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
-  const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
+  const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
     config: projectCodexHostTranscriptBytePreflightConfig(
       paramsBase.config,
@@ -334,19 +268,26 @@ export async function compactEmbeddedAgentSessionDirect(
     lockedHarnessRuntime !== "openclaw" &&
     !transcriptBytePreflightAuthority
   ) {
-    return lockedHarnessCompactionFailure(lockedHarnessRuntime);
+    return buildCompactionFailureResult(
+      `Model selection is locked to native agent harness "${lockedHarnessRuntime}"; generic compaction is unavailable.`,
+      { reason: "model_selection_locked" },
+    );
   }
-  const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();
-  const trackOwner = captureAsyncWorkTracker();
-  const parentSignal = getAsyncWorkSignal();
-  const cancellationSignal =
-    requestedParams.abortSignal && parentSignal
-      ? AbortSignal.any([requestedParams.abortSignal, parentSignal])
-      : (requestedParams.abortSignal ?? parentSignal);
-  const work = new AsyncWorkScope();
-  let context = work.run(() => AsyncLocalStorage.snapshot());
-  let releasePreparedRuntime: (() => Promise<void>) | undefined;
-  const runPreparedCompaction = async () => {
+  const sharedRuntimeWorkspace = resolveSharedPluginRuntimeWorkspace(
+    {
+      ...requestedParams,
+      workspaceDir: requestedWorkspaceDir,
+      agentId: requestedAgentIds.sessionAgentId,
+      isCanonicalWorkspace: requestedWorkspaceDir === canonicalWorkspaceDir,
+    },
+    () =>
+      loadPluginMetadataSnapshot({
+        config: requestedParams.config ?? {},
+        workspaceDir: requestedWorkspaceDir,
+        env: process.env,
+      }),
+  );
+  return await runForegroundCompactionWork(async (owner) => {
     // Compaction admits new work even when an engine restores a predecessor context.
     // Keep caller authority, but select metadata from the committed inventory.
     const preparedModelRuntimeLease = await runOutsidePluginRuntimeGenerationScope(() =>
@@ -355,8 +296,9 @@ export async function compactEmbeddedAgentSessionDirect(
           config: requestedParams.config ?? {},
           agentId: requestedAgentIds.sessionAgentId,
           agentDir: requestedAgentDir,
-          workspaceDir: requestedWorkspaceDir,
-          preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+          workspaceDir: sharedRuntimeWorkspace?.workspaceDir ?? requestedWorkspaceDir,
+          preserveWorkspaceDirOnRefresh:
+            !sharedRuntimeWorkspace && requestedWorkspaceDir !== canonicalWorkspaceDir,
           ...(requestedParams.allowGatewaySubagentBinding
             ? { allowGatewaySubagentBinding: true }
             : {}),
@@ -415,7 +357,7 @@ export async function compactEmbeddedAgentSessionDirect(
         },
       ),
     );
-    releasePreparedRuntime = () => preparedModelRuntimeLease[Symbol.asyncDispose]();
+    owner.adoptLease(preparedModelRuntimeLease);
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       const preparedConfig =
@@ -423,25 +365,19 @@ export async function compactEmbeddedAgentSessionDirect(
           preparedModelRuntimeOwnerSnapshot.config,
           Boolean(transcriptBytePreflightAuthority),
         ) ?? preparedModelRuntimeOwnerSnapshot.config;
-      const preparedWorkspaceDir =
-        preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
-      const repoRoot =
-        resolveSystemPromptRepoRoot({
-          config: preparedConfig,
-          workspaceDir: preparedWorkspaceDir,
-          cwd: requestedParams.cwd,
-        }) ?? null;
-      const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
-      const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
-        requestedParams.sessionId,
-        projectKey,
-      );
+      const preparedWorkspaceDir = sharedRuntimeWorkspace
+        ? requestedWorkspaceDir
+        : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
+      const projects = await prepareAgentPromptProjects({
+        config: preparedConfig,
+        workspaceDir: preparedWorkspaceDir,
+        cwd: requestedParams.cwd,
+        sessionId: requestedParams.sessionId,
+      });
       const preparedModelRuntime = Object.freeze({
         ...preparedModelRuntimeOwnerSnapshot,
         config: preparedConfig,
-        repoRoot,
-        projectKey,
-        activeProjectKeys,
+        ...projects,
       });
       // Fallback policy and every attempt consume the same generation as model/auth discovery.
       // A reload may have committed while session targeting was resolved above.
@@ -455,6 +391,12 @@ export async function compactEmbeddedAgentSessionDirect(
         ...(transcriptBytePreflightClaim
           ? {
               transcriptBytePreflightAuthority: true as const,
+              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
+                ? {
+                    transcriptByteCompactionPersistenceAsync:
+                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
+                  }
+                : {}),
               ...(transcriptBytePreflightClaim.withCompactionPersistence
                 ? {
                     transcriptByteCompactionPersistence:
@@ -467,8 +409,11 @@ export async function compactEmbeddedAgentSessionDirect(
       const compactPrepared = async () => {
         if (
           transcriptBytePreflightAuthority ||
-          hasExplicitCompactionModel(params) ||
-          !hasCompactionModelFallbackCandidates(params)
+          params.config?.agents?.defaults?.compaction?.model?.trim() ||
+          (
+            resolveCompactionFallbacksOverride(params) ??
+            resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model)
+          ).length === 0
         ) {
           return await compactEmbeddedAgentSessionDirectOnce(params);
         }
@@ -498,26 +443,22 @@ export async function compactEmbeddedAgentSessionDirect(
           config: params.config,
           agentId: params.sandboxAgentId ?? params.agentId,
         }).sessionAgentId;
-        const resolvedPrimaryCandidate = resolveModelCandidateChain({
+        const fallbackContext = {
           cfg: params.config,
           agentId: fallbackAgentId,
           manifestPlugins: preparedModelRuntime.metadataSnapshot,
           provider: primaryProvider,
           model: primaryModel,
-          requestedRouteResolution: "resolved",
+          requestedRouteResolution: "resolved" as const,
           fallbacksOverride,
-        })[0];
+        };
+        const resolvedPrimaryCandidate = resolveModelCandidateChain(fallbackContext)[0];
         const fallbackSessionKey =
           params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
         const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
-          cfg: params.config,
-          manifestPlugins: preparedModelRuntime.metadataSnapshot,
-          provider: primaryProvider,
-          model: primaryModel,
-          requestedRouteResolution: "resolved",
+          ...fallbackContext,
           runId: params.runId ?? params.sessionId,
           agentDir: params.agentDir,
-          agentId: fallbackAgentId,
           sessionId: params.sessionId,
           sessionKey: fallbackSessionKey,
           userLockedAuthProfileId:
@@ -535,9 +476,18 @@ export async function compactEmbeddedAgentSessionDirect(
               pluginRegistry: preparedModelRuntime.pluginRegistry!,
             });
           },
-          fallbacksOverride,
-          classifyResult: ({ result, provider, model }) =>
-            classifyCompactionFallbackResult(result, provider, model),
+          classifyResult: ({ result, provider, model }) => {
+            const reason = result.ok ? undefined : result.reason?.trim();
+            if (!reason) {
+              return null;
+            }
+            const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
+              status: result.failure?.status,
+              code: result.failure?.code,
+            });
+            const failoverError = coerceToFailoverError(failureError, { provider, model });
+            return failoverError ? { error: failoverError } : null;
+          },
           run: async (provider, model) => {
             const isPrimaryCandidate =
               provider === resolvedPrimaryCandidate?.provider &&
@@ -562,49 +512,13 @@ export async function compactEmbeddedAgentSessionDirect(
         return fallbackResult.result;
       };
       return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        context = AsyncLocalStorage.snapshot();
+        owner.captureContext();
         return compactPrepared();
       });
     } catch (err) {
-      return fallbackFailureToCompactionResult(err);
+      return buildCompactionFailureResult(
+        isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
+      );
     }
-  };
-  // Logical completion reports promptly; actual attempt work retains this generation.
-  void trackOwner(async () => {
-    const closeWork = () => context(() => work.beginClose(cancellationSignal?.reason));
-    cancellationSignal?.addEventListener("abort", closeWork, { once: true });
-    if (cancellationSignal?.aborted) {
-      closeWork();
-    }
-    try {
-      callerResult.resolve(await work.track(runPreparedCompaction));
-    } catch (error) {
-      callerResult.reject(error);
-    } finally {
-      try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => context(() => work.drain()),
-        );
-      } finally {
-        try {
-          await releasePreparedRuntime?.();
-        } finally {
-          cancellationSignal?.removeEventListener("abort", closeWork);
-        }
-      }
-    }
-  }).catch(callerResult.reject);
-  return await callerResult.promise;
+  }, requestedParams.abortSignal);
 }
-
-export const testing = {
-  compactNativeCliSession,
-  containsRealConversationMessages,
-  estimateTokensAfterCompaction,
-  buildBeforeCompactionHookMetrics,
-  prepareCompactionSessionAgent,
-  runBeforeCompactionHooks,
-  runAfterCompactionHooks,
-  runPostCompactionSideEffects,
-} as const;

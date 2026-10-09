@@ -1,9 +1,17 @@
 // Shared relay test doubles for the talk realtime gateway relay suites.
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { RealtimeVoiceBridge } from "../../../talk/provider-types.js";
 import { stopTalkRealtimeRelaySession } from "./operations.js";
 import { drainingRelaySessions } from "./state.js";
+
+export function createRelayAgentConfig(agentId: "main" | "ops"): OpenClawConfig {
+  return {
+    agents: { entries: { main: {}, ops: {} } },
+    talk: { agentId },
+  };
+}
 
 export function makeRelayTransport<
   Overrides extends Partial<RealtimeVoiceBridge> = Record<never, never>,
@@ -21,12 +29,14 @@ export function makeRelayTransport<
   };
 }
 
-export function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
+export function createIdleRelayProvider(
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"] = () => makeRelayTransport(),
+): RealtimeVoiceProviderPlugin {
   return {
     id: "relay-test",
     label: "Relay Test",
     isConfigured: () => true,
-    createBridge: () => makeRelayTransport(),
+    createBridge,
   };
 }
 

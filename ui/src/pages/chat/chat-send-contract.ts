@@ -1,8 +1,14 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import type { ChatSendIntent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { CommandClientPresentationAction } from "../../app/command-client-presentation.ts";
 import type { UiSettings } from "../../app/settings.ts";
-import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionRefreshTarget } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
@@ -13,6 +19,19 @@ import type { ToolStreamHost } from "./tool-stream-contract.ts";
 export type ChatComposerRecoveryOwner = {
   resolveOwner: () => ChatHost | undefined;
   retainedAttachmentIds: (attachments: readonly ChatAttachment[]) => ReadonlySet<string>;
+};
+
+export type ChatSendSubmitOptions = {
+  asyncQuestionItemId?: string;
+  intent?: ChatSendIntent;
+  attachmentsOverride?: readonly ChatAttachment[];
+  mentionsOverride?: readonly HumanMention[];
+  replyTargetOverride?: ChatHost["chatReplyTarget"];
+  /** Ordinary message admission transfers retry custody, including volatile sends. */
+  onOutboxAdmitted?: () => void;
+  followUpMode?: ControlUiFollowUpMode;
+  /** Only the inline queued-row submit may resume and replace an edited row. */
+  resumeQueuedMessageEditId?: string;
 };
 
 export type ChatHost = ToolStreamHost &
@@ -37,12 +56,7 @@ export type ChatHost = ToolStreamHost &
     /** Prepared from the browser override and current Gateway effective queue mode. */
     chatFollowUpMode?: ControlUiFollowUpMode;
     /** Selected message to reply to (right-click / keyboard shortcut). */
-    chatReplyTarget?: {
-      messageId: string;
-      text: string;
-      senderLabel?: string | null;
-      sourceMessageId?: string | null;
-    } | null;
+    chatReplyTarget?: ChatReplyTarget | null;
     /** Control UI route for /btw and /side; server/TUI command handling remains unchanged. */
     openSessionCompanion?: (question: string) => Promise<void> | void;
     /** Handles a recognized catalog action only when this client can complete it. */

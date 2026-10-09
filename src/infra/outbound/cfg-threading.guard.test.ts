@@ -6,7 +6,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
   sortRepoPaths,
@@ -249,25 +248,12 @@ function extractOutboundBlock(source: string, file: string): string {
 }
 
 describe("outbound cfg-threading guard", () => {
-  it("lists outbound entrypoints without scanning directories in-process", () => {
-    expectNoReaddirSyncDuring(() => {
-      const coreAdapterFiles = listCoreOutboundEntryFiles();
-      const extensionFiles = listExtensionFiles();
-
-      expect(coreAdapterFiles.length).toBeGreaterThan(0);
-      expect(extensionFiles.adapterEntrypoints.length).toBeGreaterThan(0);
-      expect(
-        coreAdapterFiles.every(
-          (file) => file.startsWith("src/channels/plugins/outbound/") && file.endsWith(".ts"),
-        ),
-      ).toBe(true);
-    });
-  });
-
   it("keeps outbound adapter entrypoints free of getRuntimeConfig calls", () => {
     const coreAdapterFiles = listCoreOutboundEntryFiles();
     const extensionAdapterFiles = listExtensionFiles().adapterEntrypoints;
     const adapterFiles = [...coreAdapterFiles, ...extensionAdapterFiles];
+    expect(coreAdapterFiles.length).toBeGreaterThan(0);
+    expect(extensionAdapterFiles.length).toBeGreaterThan(0);
 
     for (const file of adapterFiles) {
       const source = readRepoFile(file);

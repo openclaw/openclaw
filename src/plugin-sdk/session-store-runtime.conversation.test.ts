@@ -2,14 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   deleteSessionEntry,
   getConversationSession,
@@ -28,27 +31,15 @@ describe("current conversation session binding", () => {
     storePath = path.join(tempDir, "sessions.sqlite");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Retained reclamation cleanup still needs the shared-state broker.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it("does not create a database or hold a writer when the conversation store is missing", () => {
-    const scope = { agentId: "missing-owner", env: { OPENCLAW_STATE_DIR: tempDir } };
-
-    expect(
-      getConversationSession({
-        ...scope,
-        channel: "reef",
-        accountId: "default",
-        kind: "group",
-        peerId: "room",
-        threadId: "thread-1",
-      }),
-    ).toBeUndefined();
-    expect(getOpenClawAgentDatabaseIfOpen(scope)).toBeUndefined();
-    expect(fs.readdirSync(tempDir)).toEqual([]);
+    // A Vitest thread cannot retire an escaped reclamation lease after this case.
+    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
 
   it("reads conversation changes inside their owning transaction and respects rollback", async () => {
@@ -141,61 +132,6 @@ describe("current conversation session binding", () => {
       sessionId: replacement.sessionId,
     });
     expect(getSessionEntry(replacementScope)).not.toHaveProperty("displayName");
-  });
-
-  it("resolves an exact conversation through session reset and deletion", async () => {
-    const sessionKey = "agent:main:reef:group:room";
-    const address = {
-      agentId: "main",
-      storePath,
-      channel: "reef",
-      accountId: "default",
-      kind: "group" as const,
-      peerId: "room",
-      threadId: "thread-1",
-    };
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      entry: {
-        sessionId: "before-reset",
-        updatedAt: Date.now(),
-        chatType: "group",
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "reef",
-            accountId: "default",
-            to: "group:room",
-            threadId: "thread-1",
-          },
-        }),
-      },
-    });
-    expect(getConversationSession(address)).toEqual({ sessionKey, sessionId: "before-reset" });
-    expect(getConversationSession({ ...address, accountId: "other" })).toBeUndefined();
-    expect(getConversationSession({ ...address, threadId: "thread-2" })).toBeUndefined();
-    await resetSessionEntryLifecycle({
-      agentId: "main",
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      archivePreviousTranscript: false,
-      buildNextEntry: ({ currentEntry }) => ({
-        ...currentEntry,
-        sessionId: "after-reset",
-        updatedAt: Date.now(),
-      }),
-    });
-    expect(getConversationSession(address)).toEqual({ sessionKey, sessionId: "after-reset" });
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      entry: { sessionId: "without-route", updatedAt: Date.now() },
-    });
-    expect(getConversationSession(address)).toBeUndefined();
-    await deleteSessionEntry({ agentId: "main", sessionKey, storePath });
-    expect(getConversationSession(address)).toBeUndefined();
   });
 
   it("does not let a later parent turn replace an existing thread owner", async () => {

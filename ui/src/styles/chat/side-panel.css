@@ -152,7 +152,10 @@
 }
 
 .side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
+.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
@@ -251,13 +254,6 @@
   opacity: 1;
 }
 
-.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
-}
-
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
   background: var(--bg-hover);
 }
@@ -319,8 +315,6 @@ openclaw-chat-detail-panel,
   > :is(
     .chat,
     .chat-workspace-rail,
-    .chat-tasks-rail,
-    .chat-task-detail,
     openclaw-chat-session-rail,
     openclaw-session-discussion,
     openclaw-terminal-panel,
@@ -426,6 +420,8 @@ openclaw-chat-detail-panel,
   border: 0;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   text-align: left;

@@ -8,6 +8,7 @@ type LazyColumn = readonly [
 
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
+  ["agent_database_leases", "provenance", "TEXT", true],
   ["user_profile_identities", "authorization_id", "TEXT"],
   ["user_profile_identities", "authorization_basis_json", "TEXT"],
   ["claw_installs", "bootstrap_content_digest", "TEXT"],
@@ -31,6 +32,7 @@ const lazyColumns = [
   ["worker_session_placement_moves", "target_machine_class", "TEXT", true],
   ["worker_session_placement_moves", "target_os", "TEXT", true],
   ["worktrees", "run_end_cleanup_json", "TEXT"],
+  ["worktrees", "gc_protection_json", "TEXT"],
   ["device_bootstrap_tokens", "setup_id", "TEXT", true],
   ["session_groups", "cwd", "TEXT", true],
   ["session_groups", "worktree", "INTEGER", true],

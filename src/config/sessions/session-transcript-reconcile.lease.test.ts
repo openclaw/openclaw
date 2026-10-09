@@ -1,15 +1,18 @@
 import { MessageChannel, type Worker, type MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { readOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -46,10 +49,12 @@ it("preserves verification until the writer closes after read-only reconciliatio
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
       expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
-      closeOpenClawAgentDatabaseByPath(database.path);
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
       expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
     } finally {
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }
   });
@@ -72,6 +77,22 @@ it.each([
       const ports: MessagePort[] = [];
       const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
       let leaseId: string | undefined;
+      let canonicalLeaseId: string | undefined;
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      const admissionSpy = vi
+        .spyOn(admission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (
+              request.stage === "open" &&
+              isRecord(request.facts) &&
+              typeof request.facts.leaseId === "string"
+            ) {
+              canonicalLeaseId = request.facts.leaseId;
+            }
+            admit(request, grant);
+          }, attachment),
+        );
       const rejectLeaseRelease = new Int32Array(new SharedArrayBuffer(4));
       try {
         await persistSessionTranscriptTurn(scope, {
@@ -79,6 +100,8 @@ it.each([
           touchSessionEntry: false,
         });
         await waitForSessionTranscriptIndexReconcile(options);
+        // Exercise cold publication admission independently of the seed writer.
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
         const state = openOpenClawStateDatabase();
@@ -237,10 +260,19 @@ it.each([
           }
         }
         expect(modes).toEqual(fault === "release-delete" ? ["disk"] : ["disk", "release"]);
+        expect(canonicalLeaseId).toMatch(/^[a-f0-9-]+$/u);
+        expect(canonicalLeaseId).not.toBe(leaseId);
+        const writerLeases = [...baseline, { lease_id: canonicalLeaseId }].toSorted((a, b) =>
+          String(a.lease_id).localeCompare(String(b.lease_id)),
+        );
         if (fault === "claim-before") {
-          expect(leasesAtNativeFault).toEqual(baseline);
+          expect(leasesAtNativeFault).toEqual(writerLeases);
         } else if (fault === "claim-after") {
-          expect(leasesAtNativeFault).toHaveLength(baseline.length + 1);
+          expect(leasesAtNativeFault).toEqual(
+            [...writerLeases, { lease_id: leaseId }].toSorted((a, b) =>
+              String(a.lease_id).localeCompare(String(b.lease_id)),
+            ),
+          );
           expect(leasesAtNativeFault).toContainEqual({ lease_id: leaseId });
         }
         if (fault === "release-delete" || fault === "release-exit" || fault === "release-error") {
@@ -248,7 +280,7 @@ it.each([
             message: expect.stringContaining("cleanup incomplete"),
           });
           expect(readLeases()).toEqual(
-            [...baseline, { lease_id: leaseId }].toSorted((a, b) =>
+            [...writerLeases, { lease_id: leaseId }].toSorted((a, b) =>
               String(a.lease_id).localeCompare(String(b.lease_id)),
             ),
           );
@@ -266,9 +298,10 @@ it.each([
           expect(readLeases()).toEqual([]);
         } else {
           expect(String(result.error)).not.toContain("cleanup incomplete");
-          expect(readLeases()).toEqual(baseline);
+          expect(readLeases()).toEqual(writerLeases);
         }
       } finally {
+        admissionSpy.mockRestore();
         Atomics.store(rejectLeaseRelease, 0, 0);
         await Promise.all(workers.map((worker) => worker.terminate()));
         for (const port of ports) {
@@ -277,6 +310,8 @@ it.each([
         observer.beforeCreate = undefined;
         observer.onTask = undefined;
         await closeOpenClawAgentDatabasesAsync(stateDir);
+        await closeOpenClawStateDatabaseAsync();
+
         closeOpenClawStateDatabaseForTest();
       }
     });

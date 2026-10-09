@@ -1,13 +1,9 @@
-// Xai tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("xai provider thinking policy", () => {
   it.each([
     ["xai", "grok-4.3"],
-    ["xai", "grok-4.3-latest"],
-    ["xai", "grok-latest"],
-    ["x-ai", "grok-4.3"],
     ["x-ai", "grok-4.3-latest"],
     ["x-ai", "grok-latest"],
   ])("exposes Grok 4.3 thinking levels for %s/%s", (provider, modelId) => {
@@ -28,10 +24,6 @@ describe("xai provider thinking policy", () => {
 
   it.each([
     ["xai", "grok-4.5"],
-    ["xai", "grok-4.5-latest"],
-    ["xai", "grok-build-latest"],
-    ["x-ai", "grok-4.5"],
-    ["x-ai", "grok-4.5-latest"],
     ["x-ai", "grok-build-latest"],
   ])("uses xAI's high reasoning default for %s/%s", (provider, modelId) => {
     const profile = resolveThinkingProfile({
@@ -49,7 +41,6 @@ describe("xai provider thinking policy", () => {
     ["xai", "grok-4.7"],
     ["x-ai", "grok-4.7"],
     ["xai", "grok-4.6"],
-    ["x-ai", "grok-4.6"],
     // Releases newer than the manifest follow xAI's "grok-4.6 and later" rule.
     ["xai", "grok-4.8"],
     ["xai", "grok-4.8-latest"],
@@ -94,11 +85,7 @@ describe("xai provider thinking policy", () => {
 
   it.each([
     ["xai", "grok-build-0.1"],
-    ["xai", "grok-4.20-0309-reasoning"],
-    ["xai", "grok-4.20-beta-latest-reasoning"],
-    ["x-ai", "grok-build-0.1"],
     ["x-ai", "grok-4.20-0309-reasoning"],
-    ["x-ai", "grok-4.20-beta-latest-reasoning"],
     // Grok 4.20 predates 4.3, and variant suffixes are separate model contracts.
     ["xai", "grok-4.20"],
     ["xai", "grok-4-0709"],

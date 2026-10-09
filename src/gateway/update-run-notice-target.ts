@@ -6,7 +6,7 @@ import {
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+import { resolveSessionThreadInfo } from "../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.records.js";
@@ -169,7 +169,7 @@ export async function resolveUpdateRunNoticeTarget(params: {
     params.session ??
     (params.sessionKey ? loadSessionEntry(params.sessionKey, { env: params.env }) : undefined);
   const routingKey = params.sessionKey ?? session?.canonicalKey;
-  const { baseSessionKey, threadId } = parseSessionThreadInfo(routingKey);
+  const { baseSessionKey, threadId } = resolveSessionThreadInfo(routingKey);
   let context = deliveryContextFromSession(session?.entry);
   let chatType = sessionDeliveryOrigin(session?.entry)?.chatType ?? "direct";
   if (!hasDeliveryTargetFields(context) && baseSessionKey && baseSessionKey !== routingKey) {

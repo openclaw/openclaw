@@ -1,4 +1,3 @@
-// Assembles streamed backend events into TUI-visible messages.
 import {
   composeThinkingAndContent,
   extractContentFromMessage,
@@ -8,14 +7,12 @@ import {
 
 const MAX_TRACKED_STREAM_RUNS = 200;
 
-// Per-run state used to merge streaming deltas with final assistant messages.
 type RunStreamState = {
   thinkingText: string;
   contentText: string;
   displayText: string;
 };
 
-/** Assembles assistant stream deltas and final messages into stable TUI display text. */
 export class TuiStreamAssembler {
   private readonly runs = new Map<string, RunStreamState>();
 
@@ -66,13 +63,11 @@ export class TuiStreamAssembler {
       state.contentText = contentText;
     }
 
-    const displayText = composeThinkingAndContent({
+    state.displayText = composeThinkingAndContent({
       thinkingText: state.thinkingText,
       contentText: state.contentText,
       showThinking,
     });
-
-    state.displayText = displayText;
   }
 
   /** Ingests a streaming delta and returns updated display text only when it changed. */
@@ -88,7 +83,6 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
-  /** Reports whether a run already has real displayable streamed content. */
   hasDisplayText(runId: string): boolean {
     return Boolean(this.runs.get(runId)?.displayText);
   }

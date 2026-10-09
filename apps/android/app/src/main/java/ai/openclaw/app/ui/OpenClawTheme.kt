@@ -56,12 +56,10 @@ internal fun OpenClawSystemBarAppearance(lightAppearance: Boolean) {
   if (!view.isInEditMode) {
     SideEffect {
       val window = (view.context as? Activity)?.window ?: return@SideEffect
-      WindowCompat
-        .getInsetsController(window, window.decorView)
-        .isAppearanceLightStatusBars = lightAppearance
-      WindowCompat
-        .getInsetsController(window, window.decorView)
-        .isAppearanceLightNavigationBars = lightAppearance
+      WindowCompat.getInsetsController(window, window.decorView).apply {
+        isAppearanceLightStatusBars = lightAppearance
+        isAppearanceLightNavigationBars = lightAppearance
+      }
     }
   }
 }

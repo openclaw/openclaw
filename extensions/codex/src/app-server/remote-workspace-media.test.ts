@@ -1,20 +1,23 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
+import {
+  createNativeSessionBindingAuthority,
+  prepareNativeSessionGenerationAuthority,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import {
+  createCodexRemoteWorkspaceFileReader,
   prepareCodexRemoteWorkspaceMessageMedia,
-  readBoundedCodexRemoteWorkspaceFile,
-  type CodexRemoteWorkspaceFileReader,
 } from "./remote-workspace-media.js";
+import { createClientHarness } from "./test-support.js";
 
 const remoteWorkspaceRoot = "/remote/codex-workspace";
-const execFileAsync = promisify(execFile);
 let localWorkspaceRoot: string;
 let openClawState: OpenClawTestState;
 
@@ -33,7 +36,7 @@ afterEach(async () => {
 });
 
 function createRemoteFileReader(files: Record<string, string>) {
-  return vi.fn<CodexRemoteWorkspaceFileReader>(async ({ path: remotePath, maxBytes, signal }) => {
+  return vi.fn<RemoteWorkspaceFileReader>(async ({ path: remotePath, maxBytes, signal }) => {
     signal?.throwIfAborted();
     const content = files[remotePath];
     if (content === undefined) {
@@ -43,235 +46,157 @@ function createRemoteFileReader(files: Record<string, string>) {
     if (buffer.byteLength > maxBytes) {
       throw new Error(`Codex remote workspace artifact exceeds the limit of ${maxBytes} bytes.`);
     }
-    return { dataBase64: buffer.toString("base64") };
+    return buffer;
   });
 }
 
-function createLocalCommandClient() {
-  return {
-    request: vi.fn(
-      async (
-        _method: "command/exec",
-        params: CodexCommandExecParams,
-      ): Promise<CodexCommandExecResponse> => {
-        try {
-          const result = await execFileAsync(params.command[0]!, params.command.slice(1), {
-            maxBuffer: Math.max(1_024, params.outputBytesCap ?? 1024 * 1024),
-            ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-          });
-          return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-        } catch (error) {
-          const failure = error as { code?: number; stderr?: string; message?: string };
-          return {
-            exitCode: typeof failure.code === "number" ? failure.code : 1,
-            stdout: "",
-            stderr: failure.stderr ?? failure.message ?? "remote reader failed",
-          };
-        }
-      },
-    ),
-  };
-}
-
-describe("readBoundedCodexRemoteWorkspaceFile", () => {
-  it("transfers the exact remote bytes with a no-shell, default-capped command", async () => {
-    const filePath = path.join(localWorkspaceRoot, "report $(never-execute).txt");
-    await writeFile(filePath, "authoritative remote report\n");
-    const client = createLocalCommandClient();
-
-    const result = await readBoundedCodexRemoteWorkspaceFile({
-      client,
-      path: filePath,
-      maxBytes: 64,
-      timeoutMs: 9_000,
-    });
-
-    expect(Buffer.from(result.dataBase64, "base64").toString()).toBe(
-      "authoritative remote report\n",
-    );
-    expect(client.request).toHaveBeenCalledWith(
-      "command/exec",
-      expect.objectContaining({
-        command: ["node", "-e", expect.any(String), "--", filePath, "64", "0", "524288"],
-        env: { NODE_OPTIONS: null, NODE_PATH: null },
-        timeoutMs: expect.any(Number),
-      }),
-      { signal: undefined, timeoutMs: expect.any(Number) },
-    );
-    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("outputBytesCap");
-  });
-
-  it("reassembles multi-frame files beneath the Windows-safe native output cap", async () => {
-    const filePath = path.join(localWorkspaceRoot, "chunked-report.bin");
-    const expected = Buffer.alloc(512 * 1024 + 17, 0x61);
-    await writeFile(filePath, expected);
-    const client = createLocalCommandClient();
-
-    const result = await readBoundedCodexRemoteWorkspaceFile({
-      client,
-      path: filePath,
-      maxBytes: expected.byteLength,
-    });
-
-    expect(Buffer.from(result.dataBase64, "base64").equals(expected)).toBe(true);
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(client.request.mock.calls[0]?.[1].command).toEqual([
-      "node",
-      "-e",
-      expect.any(String),
-      "--",
-      filePath,
-      String(expected.byteLength),
-      "0",
-      "524288",
-    ]);
-    expect(client.request.mock.calls[1]?.[1].command).toEqual([
-      "node",
-      "-e",
-      expect.any(String),
-      "--",
-      filePath,
-      String(expected.byteLength),
-      "524288",
-      "524288",
-    ]);
-    expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("outputBytesCap");
-  });
-
-  it.each([
-    { timeoutMs: 500, elapsedMs: 100.25, budgets: [500, 399], expires: false },
-    { timeoutMs: 500, elapsedMs: 500.25, budgets: [500], expires: true },
-    { timeoutMs: undefined, elapsedMs: 500.25, budgets: [undefined, undefined], expires: false },
-  ])("keeps chunk deadlines across a clock rewind ($timeoutMs, $elapsedMs)", async (test) => {
-    let elapsed = 0;
-    let wallClock = 10_000;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    vi.spyOn(Date, "now").mockImplementation(() => wallClock);
-    const bytes = Buffer.alloc(512 * 1024 + 17, 0x62);
-    let offset = 0;
-    const request = vi.fn(
-      async (
-        _method: "command/exec",
-        _params: CodexCommandExecParams,
-        _options: { timeoutMs?: number },
-      ): Promise<CodexCommandExecResponse> => {
-        const chunk = bytes.subarray(offset, offset + 512 * 1024);
-        offset += chunk.byteLength;
-        elapsed = test.elapsedMs;
-        wallClock -= 5_000;
-        return {
-          exitCode: 0,
-          stdout: JSON.stringify({
-            dataBase64: chunk.toString("base64"),
-            size: bytes.byteLength,
-            revision: "stable-file",
-          }),
-          stderr: "",
-        };
-      },
-    );
-    const transfer = readBoundedCodexRemoteWorkspaceFile({
-      client: { request },
-      path: "/remote/chunked.bin",
-      maxBytes: bytes.byteLength,
-      timeoutMs: test.timeoutMs,
-    });
-    if (test.expires) {
-      await expect(transfer).rejects.toThrow("timed out");
-    } else {
-      expect(Buffer.from((await transfer).dataBase64, "base64")).toEqual(bytes);
-    }
-    expect(request.mock.calls.map(([, params]) => params.timeoutMs)).toEqual(test.budgets);
-    expect(request.mock.calls.map((call) => call[2].timeoutMs)).toEqual(test.budgets);
-  });
-
-  it("rejects oversized remote files before base64 allocation or transfer", async () => {
-    const filePath = path.join(localWorkspaceRoot, "oversized.txt");
-    await writeFile(filePath, "too many bytes");
-
-    await expect(
-      readBoundedCodexRemoteWorkspaceFile({
-        client: createLocalCommandClient(),
-        path: filePath,
-        maxBytes: 3,
-      }),
-    ).rejects.toThrow("limit of 3 bytes");
-  });
-
-  it("rejects remote symbolic links before opening their target", async () => {
-    const target = path.join(localWorkspaceRoot, "private.txt");
-    const link = path.join(localWorkspaceRoot, "escaped.txt");
-    await writeFile(target, "private content");
-    await symlink(target, link);
-
-    await expect(
-      readBoundedCodexRemoteWorkspaceFile({
-        client: createLocalCommandClient(),
-        path: link,
-        maxBytes: 64,
-      }),
-    ).rejects.toThrow("symbolic links are not allowed");
-  });
-
-  it("rejects parent symbolic links escaping the remote workspace", async () => {
-    const externalRoot = await mkdtemp(path.join(os.tmpdir(), "codex-remote-external-"));
-    try {
-      const externalFile = path.join(externalRoot, "private.txt");
-      await writeFile(externalFile, "private remote content");
-      const link = path.join(localWorkspaceRoot, "linked-directory");
-      await symlink(externalRoot, link);
-
-      await expect(
-        readBoundedCodexRemoteWorkspaceFile({
-          client: createLocalCommandClient(),
-          path: path.join(link, "private.txt"),
-          maxBytes: 64,
-          workspaceRoot: localWorkspaceRoot,
+describe("Codex remote file transport", () => {
+  it("retains the implicit Windows output cap and scrubs Node preload variables", async () => {
+    const bytes = Buffer.alloc(512 * 1024 + 17, 0x61);
+    const request = vi.fn(async (_method: string, params: { command: string[] }) => {
+      const offset = Number(params.command[6]);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          dataBase64: bytes.subarray(offset, offset + 512 * 1024).toString("base64"),
+          size: bytes.length,
+          revision: "same-file",
         }),
-      ).rejects.toThrow("file escapes remote workspace");
-    } finally {
-      await rm(externalRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects malformed, truncated, and oversized command responses", async () => {
-    for (const stdout of ["not valid base64!", "YQ", "YWJjZA=="]) {
-      const client = {
-        request: vi.fn(async () => ({ exitCode: 0, stdout, stderr: "" })),
+        stderr: "",
       };
-      await expect(
-        readBoundedCodexRemoteWorkspaceFile({ client, path: "/remote/report.txt", maxBytes: 3 }),
-      ).rejects.toThrow(/invalid|oversized|exceeds/);
+    });
+    const read = createCodexRemoteWorkspaceFileReader(
+      { request },
+      createNativeSessionBindingAuthority([], vi.fn()),
+    );
+    expect(await read({ path: "/remote/report.txt", maxBytes: bytes.length })).toEqual(bytes);
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const [method, params] of request.mock.calls) {
+      expect(method).toBe("command/exec");
+      expect(params).toMatchObject({ env: { NODE_OPTIONS: null, NODE_PATH: null } });
+      expect(params).not.toHaveProperty("outputBytesCap");
     }
   });
 
-  it("reports the documented remote Node.js prerequisite clearly", async () => {
-    const client = {
-      request: vi.fn(async () => {
-        throw new Error("failed to spawn command: No such file or directory");
-      }),
-    };
-
-    await expect(
-      readBoundedCodexRemoteWorkspaceFile({ client, path: "/remote/report.txt", maxBytes: 64 }),
-    ).rejects.toThrow("requires Node.js on the remote app-server host");
+  it("distinguishes missing files from a missing Node.js executable", async () => {
+    const request = vi.fn(async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "ENOENT: missing report.txt",
+    }));
+    const read = createCodexRemoteWorkspaceFileReader(
+      { request },
+      createNativeSessionBindingAuthority([], vi.fn()),
+    );
+    await expect(read({ path: "/remote/report.txt", maxBytes: 64 })).rejects.toThrow(
+      "file read failed: ENOENT",
+    );
   });
 
-  it("honors cancellation before issuing a native command", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const client = createLocalCommandClient();
-
-    await expect(
-      readBoundedCodexRemoteWorkspaceFile({
-        client,
-        path: "/remote/report.txt",
-        maxBytes: 64,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow();
-    expect(client.request).not.toHaveBeenCalled();
+  it("reports the remote Node.js prerequisite clearly", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("failed to spawn command: No such file or directory");
+    });
+    const read = createCodexRemoteWorkspaceFileReader(
+      { request },
+      createNativeSessionBindingAuthority([], vi.fn()),
+    );
+    await expect(read({ path: "/remote/report.txt", maxBytes: 64 })).rejects.toThrow(
+      "requires Node.js on the remote app-server host",
+    );
   });
+
+  it.each(["current", "before first chunk", "between chunks", "before final response"] as const)(
+    "checks persisted lineage at remote file dispatch and completion (%s)",
+    async (stage) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:remote-file-authority",
+        storePath: path.join(openClawState.sessionsDir(), "sessions.json"),
+      };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: "reader-origin", updatedAt: 1 },
+      });
+      const captured = await prepareNativeSessionGenerationAuthority({
+        target: { ...scope, sessionId: "reader-origin" },
+        storePath: scope.storePath,
+        createSupersededError: () => new Error("Remote file source was replaced"),
+      });
+      expect(captured.state).toBe("current");
+      const replace = () =>
+        upsertSessionEntry({
+          ...scope,
+          entry: { sessionId: "reader-successor", updatedAt: 2 },
+        });
+      const bytes = Buffer.alloc(stage === "before final response" ? 17 : 512 * 1024 + 17, 0x61);
+      const firstReply = createDeferred<() => void>();
+      const harness = createClientHarness({
+        onWrite(line, send) {
+          const request = JSON.parse(line) as {
+            id: number;
+            method: string;
+            params: { command: string[] };
+          };
+          expect(request.method).toBe("command/exec");
+          const offset = Number(request.params.command[6]);
+          const reply = () =>
+            send({
+              id: request.id,
+              result: {
+                exitCode: 0,
+                stdout: JSON.stringify({
+                  dataBase64: bytes.subarray(offset, offset + 512 * 1024).toString("base64"),
+                  size: bytes.length,
+                  revision: "same-file",
+                }),
+                stderr: "",
+              },
+            });
+          if (offset === 0 && (stage === "between chunks" || stage === "before final response")) {
+            firstReply.resolve(reply);
+          } else {
+            reply();
+          }
+        },
+      });
+      let transfer: Promise<Buffer> | undefined;
+      try {
+        if (stage === "before first chunk") {
+          await replace();
+        }
+        const read = createCodexRemoteWorkspaceFileReader(harness.client, captured.authority);
+        transfer = read({ path: "/remote/report.txt", maxBytes: bytes.length });
+        const settled = transfer.then(
+          () => undefined,
+          () => undefined,
+        );
+        if (stage === "between chunks" || stage === "before final response") {
+          const reply = await Promise.race([
+            firstReply.promise,
+            settled.then(() => {
+              throw new Error("Remote file read settled before its first command");
+            }),
+          ]);
+          // The worker admission must end before awaiting the native response.
+          await replace();
+          reply();
+        }
+        if (stage === "current") {
+          await expect(transfer).resolves.toEqual(bytes);
+        } else {
+          await expect(transfer).rejects.toThrow("Remote file source was replaced");
+        }
+        expect(harness.writes).toHaveLength(
+          stage === "current" ? 2 : stage === "before first chunk" ? 0 : 1,
+        );
+        expect(harness.client.getCloseError()).toBeUndefined();
+      } finally {
+        harness.client.close();
+        await Promise.allSettled([transfer]);
+      }
+    },
+  );
 });
 
 describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
@@ -337,21 +262,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
 
     await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "authoritative remote content\n",
-    );
-  });
-
-  it("transfers newly generated remote files without waiting for workspace synchronization", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/new-upload.txt`;
-
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: { filePath: remotePath },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile: createRemoteFileReader({ [remotePath]: "new remote attachment\n" }),
-    });
-
-    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
-      "new remote attachment\n",
     );
   });
 
@@ -498,12 +408,10 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     vi.spyOn(Date, "now").mockImplementation(() => wallClock);
     const first = `${remoteWorkspaceRoot}/reports/first.txt`;
     const second = `${remoteWorkspaceRoot}/reports/second.txt`;
-    const readRemoteFile = vi.fn<CodexRemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
+    const readRemoteFile = vi.fn<RemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
       elapsed = test.elapsedMs;
       wallClock -= 5_000;
-      return {
-        dataBase64: Buffer.from(remotePath === first ? "first" : "second").toString("base64"),
-      };
+      return Buffer.from(remotePath === first ? "first" : "second");
     });
     const transfer = prepareCodexRemoteWorkspaceMessageMedia({
       args: { mediaUrls: [first, second] },
@@ -537,22 +445,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       ).rejects.toThrow("16-attachment limit");
       expect(readRemoteFile).not.toHaveBeenCalled();
     }
-  });
-
-  it("keeps staged media immutable after the remote source changes", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/immutable-upload.txt`;
-    const remoteFiles = { [remotePath]: "immutable transferred report\n" };
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: { filePath: remotePath },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile: createRemoteFileReader(remoteFiles),
-    });
-    remoteFiles[remotePath] = "changed remote content\n";
-
-    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
-      "immutable transferred report\n",
-    );
   });
 
   it("honors cancellation before requesting remote bytes", async () => {

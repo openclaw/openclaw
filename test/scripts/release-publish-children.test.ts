@@ -92,11 +92,17 @@ if (args[0] === 'run' && args[1] === 'view') {
     console.log(JSON.stringify({ status: current.status, url: url(id), updatedAt: 'T' + state.index[id] }));
   }
   else if (json === 'headSha,url') console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: url(id) }));
-  else if (json === 'jobs') console.log(jq === '.jobs' ? JSON.stringify(current.jobs) : '');
+  else if (json === 'jobs') console.log(jq === '.jobs' ? JSON.stringify(current.jobs) : jq ? '' : JSON.stringify({ jobs: current.jobs }));
   else if (json === 'conclusion,url,createdAt,updatedAt') console.log(JSON.stringify({ conclusion: current.conclusion, url: url(id), createdAt: '2026-09-23T20:00:00Z', updatedAt: '2026-09-23T20:05:00Z' }));
   else throw new Error('Unexpected view: ' + JSON.stringify(args));
 } else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/pending_deployments'))) {
+  appendFileSync(root + '/calls', 'pending-deployments ' + JSON.stringify(args) + '\\n');
   console.log('[]');
+} else if (args[0] === 'api' && args[1].includes('/actions/runs/')) {
+  const id = args[1].split('/').at(-1);
+  console.log(JSON.stringify(runs[id][0]));
+} else if (args[0] === 'run' && args[1] === 'cancel') {
+  appendFileSync(root + '/calls', 'cancel ' + args.at(-1) + '\\n');
 } else if (args[0] === 'api' && args.some((arg) => arg.includes('/commits/'))) {
   console.log(${JSON.stringify(workflowSha)});
 } else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/dispatches'))) {
@@ -189,11 +195,9 @@ describe("plugin npm child failure propagation", () => {
     expect(result.status).toBe(1);
     expect(result.dispatches).toHaveLength(0);
     expect(result.stderr).toContain("Plugin npm publish failed");
-    expect(result.outputs).toBe("cleanup\n");
-    expect(result.events).toEqual([
-      ...states.map(({ status }) => `observed 91 ${status}`),
-      "cleanup",
-    ]);
+    expect(result.outputs).toBe("");
+    expect(result.events).toEqual(states.map(({ status }) => `observed 91 ${status}`));
+    expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
   });
 
   it("records the successful original child before continuing publication", () => {
@@ -206,6 +210,24 @@ describe("plugin npm child failure propagation", () => {
   });
 });
 
+describe("waiting npm child cleanup", () => {
+  it.each([
+    { status: "waiting", jobs: [publish(null, "waiting")], cancelled: true },
+    { status: "in_progress", jobs: [publish(null, "in_progress")], cancelled: false },
+    { status: "completed", jobs: [publish("success")], cancelled: false },
+  ])(
+    "preserves active publishers and cancels only waiting children ($status)",
+    ({ status, jobs, cancelled }) => {
+      const result = fixture({ 91: [{ status, jobs }] }).run(
+        'source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"\n' +
+          "cleanup_waiting_npm_children",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.events.filter(Boolean)).toEqual(cancelled ? ["cancel 91"] : []);
+    },
+  );
+});
+
 describe("parent read retries", () => {
   it.each([
     { count: 2, message: "gh: Server Error (HTTP 502)", calls: 3, succeeds: true },
@@ -214,7 +236,7 @@ describe("parent read retries", () => {
   ])("bounds retries for $message ($count failures)", ({ count, message, calls, succeeds }) => {
     const result = fixture({ 91: [succeeded[1]!] }, { count, message }).run(
       'source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"\n' +
-        'wait_for_run plugin-npm-release.yml 91 "$PARENT_WORKFLOW_SHA"',
+        'wait_for_run plugin-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "" false',
     );
     expect(result.status, result.stderr).toBe(succeeds ? 0 : 7);
     expect(result.events.filter((event) => event.startsWith("read "))).toHaveLength(calls);

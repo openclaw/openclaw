@@ -3,7 +3,6 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
 import { RealtimeTalkCameraController } from "./camera-controller.ts";
-import { openRealtimeTalkCamera } from "./input.ts";
 import {
   type RealtimeTalkWebRtcSdpSessionResult,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -11,6 +10,7 @@ import {
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
+  shouldInterruptRealtimeTalkControlResponse,
   submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
   type RealtimeTalkTranscript,
@@ -70,7 +70,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     };
     this.camera = new RealtimeTalkCameraController({
-      acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
       getDeviceId: () => this.ctx.videoDeviceId,
       setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
       isClosed: () => this.closed,
@@ -683,14 +682,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private interruptSuppressedControlResponse(result: unknown): void {
-    if (!this.responseActive || !result || typeof result !== "object") {
-      return;
-    }
-    const record = result as Record<string, unknown>;
-    if (
-      record.ok === true &&
-      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
-    ) {
+    if (this.responseActive && shouldInterruptRealtimeTalkControlResponse(result)) {
       this.send({ type: "response.cancel" });
     }
   }

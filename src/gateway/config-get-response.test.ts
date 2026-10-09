@@ -40,6 +40,7 @@ const { invalidateConfigGetResponseCache, readConfigGetResponse: readConfigGetRe
 const revisionProjector = {
   projectRawHash: (hash: string) => `raw-token:${hash}`,
   projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+  hashResponseSessionBearer: () => "unused-test-scope",
 };
 
 function readConfigGetResponse(

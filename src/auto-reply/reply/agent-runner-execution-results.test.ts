@@ -20,7 +20,6 @@ import {
   expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
   createRunAgentTurnParams,
-  NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -34,10 +33,16 @@ describe("executeAgentTurn: result and tool delivery", () => {
   it.each([
     { stopReason: "error", isHeartbeat: false, failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
     { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
+    {
+      stopReason: "error",
+      isHeartbeat: true,
+      useHeartbeatFailureCopy: false,
+      failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
     { stopReason: "aborted", isHeartbeat: false, failureText: undefined },
     { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
   ])(
-    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
+    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat, heartbeat copy=$useHeartbeatFailureCopy)",
     async (testCase) => {
       const followupRun = createFollowupRun();
       followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -50,6 +55,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
         isHeartbeat: testCase.isHeartbeat,
+        opts: { useHeartbeatFailureCopy: testCase.useHeartbeatFailureCopy },
       });
 
       expect(result.kind).toBe("success");
@@ -108,7 +114,10 @@ describe("executeAgentTurn: result and tool delivery", () => {
     ).toBeUndefined();
   });
 
-  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+  it.each([
+    { label: "Discord group", provider: "discord", chatType: "group" },
+    { label: "Slack channel", provider: "slack", chatType: "channel" },
+  ] as const)(
     "surfaces model capacity errors from no-text mid-turn failures in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({

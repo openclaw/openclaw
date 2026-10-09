@@ -1,26 +1,37 @@
 import type fs from "node:fs";
 import { hasErrnoCode } from "../infra/errno.js";
+import type { captureConfigAuditAppender } from "./io.audit.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;
-  async: (health: ReturnType<typeof captureConfigHealthStateStore>) => T | Promise<T>;
+  async: (
+    health: ReturnType<typeof captureConfigHealthStateStore>,
+    appendAudit: ReturnType<typeof captureConfigAuditAppender>,
+  ) => T | Promise<T>;
 };
 
 export function createConfigRecoveryStatEffect(
   deps: Pick<NormalizedConfigIoDeps, "fs">,
   configPath: string,
+  requireIdentity = false,
 ): ConfigRecoveryEffect<fs.Stats | null> {
+  const unavailable = (error: unknown): null => {
+    if (requireIdentity && !hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    return null;
+  };
   return {
     sync: () => {
       try {
         return deps.fs.statSync(configPath, { throwIfNoEntry: false }) ?? null;
-      } catch {
-        return null;
+      } catch (error) {
+        return unavailable(error);
       }
     },
-    async: () => deps.fs.promises.stat(configPath).catch(() => null),
+    async: () => deps.fs.promises.stat(configPath).catch(unavailable),
   };
 }
 
@@ -49,14 +60,20 @@ export function createConfigBackupReadEffect(
   deps: Pick<NormalizedConfigIoDeps, "fs">,
   backupPath: string,
 ): ConfigRecoveryEffect<string | null> {
+  const unavailable = (error: unknown): null => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    return null;
+  };
   return {
     sync: () => {
       try {
         return deps.fs.readFileSync(backupPath, "utf-8");
-      } catch {
-        return null;
+      } catch (error) {
+        return unavailable(error);
       }
     },
-    async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(() => null),
+    async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(unavailable),
   };
 }

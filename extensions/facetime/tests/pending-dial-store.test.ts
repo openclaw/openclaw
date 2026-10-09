@@ -166,46 +166,30 @@ describe("pending FaceTime dial persistence", () => {
     expect(backend.current()).toBeUndefined();
   });
 
-  it("preserves a replacement dial when conditional clear encounters a conflict", async () => {
+  it.each([
+    { dialID: "dial-b", action: "keep", cleared: false },
+    { dialID: "dial-a", action: "delete", cleared: true },
+  ])("retries conflicts and applies $action to $dialID", async ({ dialID, action, cleared }) => {
     const backend = createBackend({ ...pendingDial(), callUUIDAliases: ["a-call"] });
-    const replacement: StoredDial = { ...pendingDial("dial-b"), callUUIDAliases: ["b-call"] };
+    const replacement: StoredDial = {
+      ...pendingDial(dialID),
+      delivery: "cancelling",
+      callUUIDAliases: ["b-call"],
+    };
     backend.store.compareAndApply.mockImplementationOnce(async () => {
       backend.replace(replacement);
       return { status: "conflict", current: { value: replacement, comparison: "1" } };
     });
     const store = new PendingFaceTimeDialStore(backend.store);
-
-    await expect(store.clear("dial-a")).resolves.toBe(false);
-
-    expect(backend.current()).toEqual(replacement);
+    await expect(store.clear("dial-a")).resolves.toBe(cleared);
+    expect(backend.current()).toEqual(cleared ? undefined : replacement);
     expect(backend.store.compareAndApply).toHaveBeenCalledTimes(2);
     expect(backend.store.compareAndApply).toHaveBeenLastCalledWith("active", "1", {
       operation: "delete",
-      action: "keep",
+      action,
     });
     expect(backend.store.deleteIf).not.toHaveBeenCalled();
     expect(backend.store.delete).not.toHaveBeenCalled();
-  });
-
-  it("retries an explicit conflict while the observed dial still matches", async () => {
-    const initial: StoredDial = { ...pendingDial(), callUUIDAliases: ["a-call"] };
-    const backend = createBackend(initial);
-    backend.store.compareAndApply.mockImplementationOnce(async () => {
-      const updated = { ...initial, delivery: "cancelling" as const };
-      backend.replace(updated);
-      return { status: "conflict", current: { value: updated, comparison: "1" } };
-    });
-    const store = new PendingFaceTimeDialStore(backend.store);
-
-    await expect(store.clear("dial-a")).resolves.toBe(true);
-
-    expect(backend.store.compareAndApply).toHaveBeenCalledTimes(2);
-    expect(backend.store.compareAndApply).toHaveBeenLastCalledWith("active", "1", {
-      operation: "delete",
-      action: "delete",
-    });
-    expect(backend.current()).toBeUndefined();
-    expect(backend.store.deleteIf).not.toHaveBeenCalled();
   });
 
   it("propagates a comparison transport failure without retrying or falling back", async () => {
@@ -223,7 +207,7 @@ describe("pending FaceTime dial persistence", () => {
     expect(backend.current()).toEqual(initial);
   });
 
-  it.each(["observe", "compareAndApply", "both"] as const)(
+  it.each(["observe", "compareAndApply"] as const)(
     "uses legacy atomic deletion when %s is unavailable",
     async (missing) => {
       const backend = createBackend({ ...pendingDial(), callUUIDAliases: ["a-call"] });

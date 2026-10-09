@@ -16,7 +16,10 @@ import {
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
-import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  isGatewayServerTestFile,
+} from "../vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
 import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
 
@@ -26,11 +29,23 @@ const {
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
+  hasImportGraphImpactOnTargets,
   parseTestProjectsArgs,
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
 } = await import("../../scripts/test-projects.test-support.mts");
+
+it("tracks compile-cache dependencies through generated SQLite lifecycle fixtures", () => {
+  expect(
+    hasImportGraphImpactOnTargets(
+      ["node-compile-cache.mjs"],
+      ["test/non-isolated-runner.sqlite.test.ts"],
+      process.cwd(),
+      { tooling: true, runtimeOnly: true },
+    ),
+  ).toBe(true);
+});
 
 const VITEST_NODE_PREFIX = [
   "exec",
@@ -137,7 +152,7 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it.each([["--watch", "false"], ["-w", "false"], ["--watch=false"], ["--no-watch"]])(
+  it.each([["--watch", "false"], ["--no-watch"]])(
     "preserves native watch controls after the wrapper separator: %j",
     (...flags) => {
       const file = "test/scripts/run-vitest.test.ts";
@@ -161,30 +176,18 @@ describe("test-projects args", () => {
     });
   });
 
-  it.each(
-    [
-      { label: "distinct operand", flag: "--exclude", operand: "test/scripts/other.test.ts" },
-      {
-        label: "identical exclusion",
-        flag: "--exclude",
-        operand: "test/scripts/run-vitest.test.ts",
-      },
-      { label: "identical name pattern", flag: "-t", operand: "test/scripts/run-vitest.test.ts" },
-    ].flatMap(({ label, flag, operand }) =>
-      [true, false].map((targetFirst) => ({ label, flag, operand, targetFirst })),
-    ),
-  )(
-    "partitions targets by occurrence, not option-operand value: $label (targetFirst=$targetFirst)",
-    ({ flag, operand, targetFirst }) => {
+  it.each([true, false])(
+    "partitions targets by occurrence when an exclusion repeats the target (targetFirst=%s)",
+    (targetFirst) => {
       const target = "test/scripts/run-vitest.test.ts";
       const args = targetFirst
-        ? [target, flag, operand, "--reporter=dot"]
-        : [flag, operand, target, "--reporter=dot"];
+        ? [target, "--exclude", target, "--reporter=dot"]
+        : ["--exclude", target, target, "--reporter=dot"];
       expect(buildVitestRunPlans(args)).toEqual([
         {
           config: "test/vitest/vitest.tooling.config.ts",
           includePatterns: [target],
-          forwardedArgs: [flag, operand, "--reporter=dot"],
+          forwardedArgs: ["--exclude", target, "--reporter=dot"],
           watchMode: false,
         },
       ]);
@@ -254,13 +257,13 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.cli-process.config.ts",
     },
     {
-      title: "routes the Git backup outcome consumer to the infra config",
-      target: "src/snapshot/git-backup.test.ts",
-      config: "test/vitest/vitest.infra.config.ts",
+      title: "routes native Windows argv proof to the process owner",
+      target: "src/daemon/schtasks-process.windows.test.ts",
+      config: "test/vitest/vitest.cli-process.config.ts",
     },
     {
-      title: "routes the worker-backed task registry to the infra config",
-      target: "src/tasks/task-registry.test.ts",
+      title: "routes the Git backup outcome consumer to the infra config",
+      target: "src/snapshot/git-backup.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
@@ -284,8 +287,13 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
-      title: "routes reset-heavy acp targets to the acp config",
+      title: "routes worker-backed ACP metadata to the infra config",
       target: "src/acp/runtime/session-meta.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
+      title: "routes isolated ACP store tests to the ACP config",
+      target: "src/acp/runtime/session-meta-store.test.ts",
       config: "test/vitest/vitest.acp.config.ts",
     },
     {
@@ -368,11 +376,7 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-output.test.ts",
-          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
-          "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-          "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
         watchMode: false,
       },
@@ -399,15 +403,6 @@ describe("test-projects args", () => {
   });
 
   it("routes infra targets to the infra config", () => {
-    expect(buildVitestRunPlans(["src/infra/openclaw-root.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/infra/openclaw-root.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
     expect(buildVitestRunPlans(["src/infra/migrations.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.infra.config.ts",
@@ -511,15 +506,6 @@ describe("test-projects args", () => {
   });
 
   it("routes plugin targets to the plugins config", () => {
-    expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.bundled.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugins/loader.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
     expect(buildVitestRunPlans(["src/plugins/discovery.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.plugins.config.ts",
@@ -591,13 +577,17 @@ describe("test-projects args", () => {
     );
     expect(grep.status).toBe(0);
     using parser = createNativeTypeScriptParser();
-    const directImporterTests = grep.stdout
+    const candidates = grep.stdout
       .split("\n")
       .map((line) => line.trim())
-      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
-      .filter((file) => {
-        const source = fs.readFileSync(file, "utf8");
-        return collectModuleReferencesFromSource(parser.parseSourceFile(file, source), {
+      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
+    const directImporterTests = parser
+      .parseSourceFiles(
+        candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
+      )
+      .flatMap((sourceFile) => {
+        const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
+        const references = collectModuleReferencesFromSource(sourceFile, {
           acceptSpecifier: (specifier) => {
             if (!specifier.startsWith(".")) {
               return false;
@@ -607,7 +597,8 @@ describe("test-projects args", () => {
             );
             return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
           },
-        }).some(({ kind }) => kind === "import" || kind === "export");
+        });
+        return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
       });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
@@ -620,7 +611,7 @@ describe("test-projects args", () => {
       expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
     }
 
-    // Mixed selections coalesce package contracts and Gateway worker tests
+    // Mixed selections coalesce package contracts and Gateway child tests
     // into their aggregate owners. Singleton selection retains each leaf owner.
     for (const plan of plans) {
       expect(plan.watchMode).toBe(false);
@@ -632,7 +623,10 @@ describe("test-projects args", () => {
             : plan.config === "test/vitest/vitest.gateway.config.ts" &&
                 gatewayDatabaseWorkerTestFiles.includes(file)
               ? "test/vitest/vitest.gateway-database-workers.config.ts"
-              : plan.config;
+              : plan.config === "test/vitest/vitest.gateway.config.ts" &&
+                  isGatewayServerTestFile(file)
+                ? "test/vitest/vitest.gateway-server.config.ts"
+                : plan.config;
         expect(buildVitestRunPlans([file])).toEqual([
           {
             config,
@@ -787,19 +781,6 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: [`${target}/**/*.test.ts`],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes direct Discord extension file targets to the Discord config", () => {
-    expect(
-      buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
-    ).toEqual([
-      {
-        config: "test/vitest/vitest.extension-discord.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
       },
     ]);

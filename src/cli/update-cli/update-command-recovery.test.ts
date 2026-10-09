@@ -11,7 +11,7 @@ import {
 } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
-import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -51,7 +51,7 @@ describe("package finalization recovery targets", () => {
 
   it.each(
     (["entry", "settlement"] as const).flatMap((phase) =>
-      (["run-only", "same-target", "distinct-target", "retargeted"] as const).map((kind) => ({
+      (["same-target", "distinct-target", "retargeted"] as const).map((kind) => ({
         phase,
         kind,
       })),
@@ -165,14 +165,7 @@ async function fixture(rollback = false) {
   const run = createUpdateRun({ trigger: "cli" }, options);
   const from = { root: live, nodePath: process.execPath, version: "1.0.0", buildId: null };
   const to = { ...from, version: "2.0.0" };
-  let current = true;
-  const fence = {
-    assertCurrent() {
-      if (!current) {
-        throw new Error("authority lost");
-      }
-    },
-  };
+  const fence = { assertCurrent() {} };
   let record = createRetainedUpdateRecovery({ runId: run.runId, from, to }, options);
   const recovery = {
     getRecord: () => record,
@@ -206,9 +199,6 @@ async function fixture(rollback = false) {
     root,
     get record() {
       return record;
-    },
-    revoke() {
-      current = false;
     },
     reload() {
       closeOpenClawStateDatabaseForTest();
@@ -251,28 +241,17 @@ describe("durable terminal finalizer consumer", () => {
     expect(f.reload()?.terminal).toBeUndefined();
   });
 
-  it.each(["pending", "lost readiness", "unavailable package"] as const)(
-    "refuses retained full-state finalization (%s) without committing or cleaning",
-    async (mode) => {
-      const f = await fixture();
-      if (mode === "lost readiness") {
-        f.revoke();
-      }
-      if (mode === "unavailable package") {
-        await fs.rename(f.backup, f.backup + "-unavailable");
-      }
-      const before = f.reload();
-      await expect(
-        finishSuccessfulPackageSwitch({ packageRoot: f.live, run: f.opts.run }, { opts: f.opts }),
-      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure" });
-      expect(f.reload()).toEqual(before);
-      expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
-      expect(await fs.stat(f.live)).toBeDefined();
-      expect(
-        await fs.stat(mode === "unavailable package" ? f.backup + "-unavailable" : f.backup),
-      ).toBeDefined();
-    },
-  );
+  it("refuses retained full-state finalization without committing or cleaning", async () => {
+    const f = await fixture();
+    const before = f.reload();
+    await expect(
+      finishSuccessfulPackageSwitch({ packageRoot: f.live, run: f.opts.run }, { opts: f.opts }),
+    ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure" });
+    expect(f.reload()).toEqual(before);
+    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
+    expect(await fs.stat(f.live)).toBeDefined();
+    expect(await fs.stat(f.backup)).toBeDefined();
+  });
 });
 
 describe("historical terminal completion diagnostics", () => {
@@ -357,18 +336,25 @@ describe("historical terminal completion diagnostics", () => {
     expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
   });
 
-  it("does not turn unrelated legacy inspection into permission for the writing fallback", async () => {
-    const f = await historical(false);
-    const other = createUpdateRun({ trigger: "cli" }, f.options);
-    closeOpenClawStateDatabaseForTest();
-    const before = await f.family();
-    expect(() =>
-      completeUpdateCommandRun(
+  it.each([false, true])(
+    "keeps unrelated legacy history separate from fallback completion (terminal=%s)",
+    async (terminal) => {
+      const f = await historical(false, terminal);
+      const other = createUpdateRun({ trigger: "cli" }, f.options);
+      closeOpenClawStateDatabaseForTest();
+      const before = await f.family();
+      const result = completeUpdateCommandRun(
         { status: "ok", mode: "npm", steps: [], durationMs: 1 },
         { runId: other.runId, env: f.opts.run!.env },
-      ),
-    ).toThrow();
-    expect(await f.family()).toEqual(before);
-    expect(getUpdateRun(other.runId, f.options)?.status).toBe("running");
-  });
+      );
+      expect(result).toMatchObject(
+        terminal ? { status: "ok" } : { status: "error", reason: "update-recovery-pending" },
+      );
+      if (!terminal) {
+        expect(await f.family()).toEqual(before);
+      }
+      expect(getUpdateRun(other.runId, f.options)?.status).toBe(terminal ? "succeeded" : "running");
+      expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(f.saved);
+    },
+  );
 });

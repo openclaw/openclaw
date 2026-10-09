@@ -5,11 +5,7 @@ import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 const THREAD_BINDING_PERSONA_MAX_CHARS = 80;
 
 function normalizePersonaLabel(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized || undefined;
+  return value ? value.replace(/\s+/g, " ").trim() || undefined : undefined;
 }
 
 export function resolveThreadBindingPersona(params: { label?: string; agentId?: string }): string {
@@ -19,8 +15,5 @@ export function resolveThreadBindingPersona(params: { label?: string; agentId?: 
 }
 
 export function resolveThreadBindingPersonaFromRecord(record: ThreadBindingRecord): string {
-  return resolveThreadBindingPersona({
-    label: record.label,
-    agentId: record.agentId,
-  });
+  return resolveThreadBindingPersona(record);
 }

@@ -106,10 +106,17 @@ describe("toPublicCronJob", () => {
     const job: CronStoredJob = {
       ...makeCronJob({}),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      sourceConversation: {
+        sessionKey: "agent:main:conversation",
+        sessionId: "creating-session",
+        lifecycleRevision: "generation-1",
+      },
     };
 
     expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
+    expect(toPublicCronJob(job)).not.toHaveProperty("sourceConversation");
     expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
+    expect(job.sourceConversation?.lifecycleRevision).toBe("generation-1");
   });
 
   it("strips private runtime authority without mutating the stored job", () => {

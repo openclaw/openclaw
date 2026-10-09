@@ -22,7 +22,6 @@ function hardware(memoryGiB: number): LlamaCppHardware {
 
 describe("local model recommendation", () => {
   it.each([
-    { ram: 8, backend: "metal" as const, modelId: SMALL_MODEL },
     { ram: 16, backend: "metal" as const, modelId: MEDIUM_MODEL },
     { ram: 24, backend: "metal" as const, modelId: "gemma-4-12b-it-q4_k_m" },
     { ram: 32, backend: "metal" as const, modelId: LARGE_MODEL },

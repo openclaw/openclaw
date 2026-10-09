@@ -43,60 +43,7 @@ type ProfileConfig = {
   queryRuns: number;
 };
 
-type TimedQuery = {
-  database: "agent" | "state";
-  id: string;
-  p50Ms: number;
-  p95Ms: number;
-  plan: SqliteQueryPlanEvidence;
-  runs: number;
-  rows: number;
-  sql: string;
-};
-
-type BenchmarkReport = {
-  integrity: {
-    agent: string[];
-    state: string;
-  };
-  node: string;
-  schemaVersion: 2;
-  versions: {
-    agentSchema: number;
-    sqlite: string;
-    stateSchema: number;
-  };
-  paths: {
-    agentDatabases: string[];
-    artifact: string | null;
-    stateDatabase: string;
-    stateDir: string;
-  };
-  profile: ProfileId;
-  queries: TimedQuery[];
-  rows: {
-    agentCacheEntries: number;
-    agentDatabases: number;
-    channelIngressEvents: number;
-    cronJobs: number;
-    cronTaskRuns: number;
-    deliveryQueueEntries: number;
-    pluginStateEntries: number;
-    stateRows: number;
-    transcriptEvents: number;
-  };
-  timingsMs: {
-    checkpoint: number;
-    seed: number;
-    total: number;
-  };
-  walBytes: {
-    agentAfter: number[];
-    agentBefore: number[];
-    stateAfter: number;
-    stateBefore: number;
-  };
-};
+type TimedQuery = ReturnType<typeof runTimedQuery>;
 
 const PROFILES: Record<ProfileId, ProfileConfig> = {
   smoke: {
@@ -571,7 +518,7 @@ function runTimedQuery(params: {
   queryParams: SQLInputValue[];
   requestedRuns: number;
   sql: string;
-}): TimedQuery {
+}) {
   const runs = params.fullLoad
     ? Math.min(params.requestedRuns, SQLITE_PERF_FULL_LOAD_RUNS)
     : params.requestedRuns;
@@ -620,64 +567,53 @@ function runHotQueries(params: {
   const db = getSessionKysely(params.agentDb);
   const transcriptBytes = transcriptEventReadBytesSql("event").compile(db).sql;
   const transcriptPayload = transcriptEventJsonSql(params.agentDb, "event").compile(db).sql;
-  return [
-    runTimedQuery({
+  const queries: Array<Omit<Parameters<typeof runTimedQuery>[0], "db" | "requestedRuns">> = [
+    {
       database: "state",
-      db: params.stateDb,
       id: "cron.store.load",
       queryParams: ["/state/cron/jobs-0.json"],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM cron_jobs
         WHERE store_key = ?
         ORDER BY sort_order ASC, updated_at ASC, job_id ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "task-runs.cron.list",
       queryParams: ["cron"],
-      requestedRuns: params.config.queryRuns,
       sql: taskRunSelectSql("runtime = ?"),
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "task-runs.cron-source.list",
       queryParams: ["cron", "job-00000000"],
-      requestedRuns: params.config.queryRuns,
       sql: taskRunSelectSql("runtime = ? AND source_id = ?"),
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "delivery.pending.load",
       queryParams: ["outbound", "pending"],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT id, entry_json, enqueued_at, retry_count, last_attempt_at, last_error,
                 platform_send_started_at, recovery_state
          FROM delivery_queue_entries
         WHERE queue_name = ? AND status = ?
         ORDER BY enqueued_at ASC, id ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.first-page",
       queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", SQLITE_PERF_PAGE_SIZE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ?
         ORDER BY received_at ASC, event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.seek-page",
       queryParams: [
         SQLITE_PERF_INGRESS_QUEUE,
@@ -687,68 +623,57 @@ function runHotQueries(params: {
         "event-00000500",
         SQLITE_PERF_PAGE_SIZE,
       ],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ?
           AND (received_at > ? OR (received_at = ? AND event_id > ?))
         ORDER BY received_at ASC, event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.id-page",
       queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", SQLITE_PERF_PAGE_SIZE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ?
         ORDER BY event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.id-seek-page",
       queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", "event-00000500", SQLITE_PERF_PAGE_SIZE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ? AND event_id > ?
         ORDER BY event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "plugin-state.namespace.live",
       queryParams: [SQLITE_PERF_PLUGIN_ID, SQLITE_PERF_PLUGIN_NAMESPACE, SQLITE_PERF_PLUGIN_NOW],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
          FROM plugin_state_entries
         WHERE plugin_id = ? AND namespace = ?
           AND (expires_at IS NULL OR expires_at > ?)
         ORDER BY created_at ASC, entry_key ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "agent",
-      db: params.agentDb,
       id: "agent-cache.plugin-model-catalog.list",
       queryParams: [SQLITE_PERF_CATALOG_SCOPE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT key, value_json
          FROM cache_entries
         WHERE scope = ?
         ORDER BY key ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "agent",
-      db: params.agentDb,
       id: "transcript.tail.metadata",
       queryParams: [SQLITE_PERF_TRANSCRIPT_SESSION_ID, ...transcriptPositions],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT active.message_position,
                    ${transcriptBytes} + 1 AS serialized_bytes
               FROM session_transcript_active_events AS active
@@ -757,13 +682,11 @@ function runHotQueries(params: {
              WHERE active.session_id = ?
                AND active.message_position IN (${transcriptPlaceholders})
              ORDER BY active.message_position DESC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "agent",
-      db: params.agentDb,
       id: "transcript.tail.payload",
       queryParams: [SQLITE_PERF_TRANSCRIPT_SESSION_ID, ...transcriptPositions],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT active.message_position, ${transcriptPayload} AS event_json
               FROM session_transcript_active_events AS active
               JOIN transcript_events AS event
@@ -771,26 +694,15 @@ function runHotQueries(params: {
              WHERE active.session_id = ?
                AND active.message_position IN (${transcriptPlaceholders})
              ORDER BY active.message_position ASC`,
-    }),
+    },
   ];
-}
-
-function printProofLines(report: BenchmarkReport): void {
-  const p95 = Math.max(...report.queries.map((query) => query.p95Ms));
-  console.log(`SQLITE_PERF_PROFILE=${report.profile}`);
-  console.log(`SQLITE_PERF_STATE_ROWS=${report.rows.stateRows}`);
-  console.log(`SQLITE_PERF_AGENT_ROWS=${report.rows.agentCacheEntries}`);
-  console.log(`SQLITE_PERF_TRANSCRIPT_ROWS=${report.rows.transcriptEvents}`);
-  console.log(`SQLITE_PERF_INTEGRITY=${report.integrity.state}`);
-  console.log(`SQLITE_PERF_WAL_BYTES_BEFORE=${report.walBytes.stateBefore}`);
-  console.log(`SQLITE_PERF_WAL_BYTES_AFTER=${report.walBytes.stateAfter}`);
-  console.log(`SQLITE_PERF_QUERY_P95_MS=${p95.toFixed(3)}`);
-  for (const query of report.queries) {
-    console.log(`SQLITE_PERF_SCENARIO ${JSON.stringify(query)}`);
-  }
-  if (report.paths.artifact) {
-    console.log(`SQLITE_PERF_ARTIFACT=${report.paths.artifact}`);
-  }
+  return queries.map((query) =>
+    runTimedQuery({
+      ...query,
+      db: query.database === "agent" ? params.agentDb : params.stateDb,
+      requestedRuns: params.config.queryRuns,
+    }),
+  );
 }
 
 function main(): void {
@@ -835,7 +747,7 @@ function main(): void {
     agentDatabases.forEach((database) => checkpoint(database.db));
     const checkpointMs = nowMs() - checkpointStarted;
 
-    const report: BenchmarkReport = {
+    const report = {
       integrity: {
         agent: agentIntegrity,
         state: stateIntegrity,
@@ -883,7 +795,21 @@ function main(): void {
       fs.mkdirSync(path.dirname(options.output), { recursive: true });
       fs.writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     }
-    printProofLines(report);
+    const p95 = Math.max(...report.queries.map((query) => query.p95Ms));
+    console.log(`SQLITE_PERF_PROFILE=${report.profile}`);
+    console.log(`SQLITE_PERF_STATE_ROWS=${report.rows.stateRows}`);
+    console.log(`SQLITE_PERF_AGENT_ROWS=${report.rows.agentCacheEntries}`);
+    console.log(`SQLITE_PERF_TRANSCRIPT_ROWS=${report.rows.transcriptEvents}`);
+    console.log(`SQLITE_PERF_INTEGRITY=${report.integrity.state}`);
+    console.log(`SQLITE_PERF_WAL_BYTES_BEFORE=${report.walBytes.stateBefore}`);
+    console.log(`SQLITE_PERF_WAL_BYTES_AFTER=${report.walBytes.stateAfter}`);
+    console.log(`SQLITE_PERF_QUERY_P95_MS=${p95.toFixed(3)}`);
+    for (const query of report.queries) {
+      console.log(`SQLITE_PERF_SCENARIO ${JSON.stringify(query)}`);
+    }
+    if (report.paths.artifact) {
+      console.log(`SQLITE_PERF_ARTIFACT=${report.paths.artifact}`);
+    }
   } finally {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();

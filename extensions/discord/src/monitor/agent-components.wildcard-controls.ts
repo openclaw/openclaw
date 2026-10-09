@@ -1,4 +1,4 @@
-import { ButtonStyle, ComponentType } from "discord-api-types/v10";
+import { ComponentType } from "discord-api-types/v10";
 import { parseDiscordComponentCustomIdForInteraction } from "../component-custom-id.js";
 import {
   BaseMessageInteractiveComponent,
@@ -6,12 +6,11 @@ import {
   type ButtonInteraction,
   type ComponentData,
 } from "../internal/discord.js";
-import {
-  parseDiscordComponentData,
-  resolveInteractionCustomId,
-  type AgentComponentContext,
-  type AgentComponentMessageInteraction,
-} from "./agent-components-helpers.js";
+import { parseDiscordComponentData, resolveInteractionCustomId } from "./agent-components-data.js";
+import type {
+  AgentComponentContext,
+  AgentComponentMessageInteraction,
+} from "./agent-components.types.js";
 
 export type DiscordComponentControlHandlers = {
   handleComponentEvent: (params: {
@@ -32,43 +31,16 @@ export type DiscordComponentControlHandlers = {
 
 type SelectControlSpec = {
   type: ComponentType;
-  customId: string;
-  componentLabel: string;
-  label: string;
+  kind: "string" | "user" | "role" | "mentionable" | "channel";
 };
 
-const SELECT_CONTROLS = {
-  string: {
-    type: ComponentType.StringSelect,
-    customId: "__openclaw_discord_component_string_select_wildcard__",
-    componentLabel: "select menu",
-    label: "discord component select",
-  },
-  user: {
-    type: ComponentType.UserSelect,
-    customId: "__openclaw_discord_component_user_select_wildcard__",
-    componentLabel: "user select",
-    label: "discord component user select",
-  },
-  role: {
-    type: ComponentType.RoleSelect,
-    customId: "__openclaw_discord_component_role_select_wildcard__",
-    componentLabel: "role select",
-    label: "discord component role select",
-  },
-  mentionable: {
-    type: ComponentType.MentionableSelect,
-    customId: "__openclaw_discord_component_mentionable_select_wildcard__",
-    componentLabel: "mentionable select",
-    label: "discord component mentionable select",
-  },
-  channel: {
-    type: ComponentType.ChannelSelect,
-    customId: "__openclaw_discord_component_channel_select_wildcard__",
-    componentLabel: "channel select",
-    label: "discord component channel select",
-  },
-} satisfies Record<string, SelectControlSpec>;
+const SELECT_CONTROLS = [
+  { type: ComponentType.StringSelect, kind: "string" },
+  { type: ComponentType.UserSelect, kind: "user" },
+  { type: ComponentType.RoleSelect, kind: "role" },
+  { type: ComponentType.MentionableSelect, kind: "mentionable" },
+  { type: ComponentType.ChannelSelect, kind: "channel" },
+] satisfies SelectControlSpec[];
 
 class DiscordComponentSelectControl extends BaseMessageInteractiveComponent {
   override customIdParser = parseDiscordComponentCustomIdForInteraction;
@@ -82,7 +54,7 @@ class DiscordComponentSelectControl extends BaseMessageInteractiveComponent {
   ) {
     super();
     this.type = spec.type;
-    this.customId = spec.customId;
+    this.customId = `__openclaw_discord_component_${spec.kind}_select_wildcard__`;
   }
 
   serialize(): unknown {
@@ -99,8 +71,11 @@ class DiscordComponentSelectControl extends BaseMessageInteractiveComponent {
       ctx: this.ctx,
       interaction,
       data,
-      componentLabel: this.spec.componentLabel,
-      label: this.spec.label,
+      componentLabel: this.spec.kind === "string" ? "select menu" : `${this.spec.kind} select`,
+      label:
+        this.spec.kind === "string"
+          ? "discord component select"
+          : `discord component ${this.spec.kind} select`,
       values: interaction.values ?? [],
     });
   }
@@ -109,7 +84,6 @@ class DiscordComponentSelectControl extends BaseMessageInteractiveComponent {
 class DiscordComponentButton extends Button {
   override label = "component";
   override customId = "__openclaw_discord_component_button_wildcard__";
-  override style = ButtonStyle.Primary;
   override customIdParser = parseDiscordComponentCustomIdForInteraction;
 
   constructor(
@@ -140,24 +114,11 @@ class DiscordComponentButton extends Button {
   }
 }
 
-function bindSelectControl(spec: SelectControlSpec) {
-  return (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
-    new DiscordComponentSelectControl(spec, ctx, handlers);
-}
-
-export function createDiscordComponentButtonControl(
-  ctx: AgentComponentContext,
-  handlers: DiscordComponentControlHandlers,
-): Button {
-  return new DiscordComponentButton(ctx, handlers);
-}
-
-export const createDiscordComponentStringSelectControl = bindSelectControl(SELECT_CONTROLS.string);
-export const createDiscordComponentUserSelectControl = bindSelectControl(SELECT_CONTROLS.user);
-export const createDiscordComponentRoleSelectControl = bindSelectControl(SELECT_CONTROLS.role);
-export const createDiscordComponentMentionableSelectControl = bindSelectControl(
-  SELECT_CONTROLS.mentionable,
-);
-export const createDiscordComponentChannelSelectControl = bindSelectControl(
-  SELECT_CONTROLS.channel,
-);
+export const discordComponentControlFactories = [
+  (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
+    new DiscordComponentButton(ctx, handlers),
+  ...SELECT_CONTROLS.map(
+    (spec) => (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
+      new DiscordComponentSelectControl(spec, ctx, handlers),
+  ),
+];

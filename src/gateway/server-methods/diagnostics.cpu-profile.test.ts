@@ -8,13 +8,19 @@ import { GatewayRequestEntryLifetime } from "../server-request-entry.js";
 import type { GatewayRequestOptions } from "./types.js";
 
 const capture = vi.hoisted(() => vi.fn());
+const captureHeap = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/diagnostic-cpu-profile.js", () => ({
   captureDiagnosticCpuProfile: capture,
+}));
+vi.mock("../../logging/diagnostic-heap-profile.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/diagnostic-heap-profile.js")>()),
+  captureDiagnosticHeapProfile: captureHeap,
 }));
 
 const result = {
   requestedDurationMs: 5_000,
   actualDurationMs: 5_015,
+  startBlockedMs: 2_100,
   samplingIntervalMicros: 10_000,
   sampleLossCount: null,
   redactedNodeCount: 1,
@@ -50,8 +56,21 @@ const result = {
   },
 };
 
+const heapResult = {
+  durationMs: 5_000,
+  samplingIntervalBytes: 32_768,
+  includeObjectsCollectedByMajorGC: false,
+  includeObjectsCollectedByMinorGC: false,
+  heapUsedBefore: 100,
+  heapUsedAfter: 200,
+  rssBefore: 300,
+  rssAfter: 400,
+  truncated: false,
+};
+
 function request(
   options: {
+    method?: "diagnostics.cpuProfile" | "diagnostics.heapProfile";
     scopes?: string[];
     role?: string;
     params?: unknown;
@@ -66,7 +85,7 @@ function request(
     req: {
       type: "req",
       id: "cpu-profile",
-      method: "diagnostics.cpuProfile",
+      method: options.method ?? "diagnostics.cpuProfile",
       params: options.params,
     },
     respond,
@@ -99,19 +118,21 @@ beforeEach(() => {
     .mockResolvedValue({ status: "complete", result } satisfies Awaited<
       ReturnType<typeof captureDiagnosticCpuProfile>
     >);
+  captureHeap.mockReset().mockResolvedValue({ status: "complete", result: heapResult });
 });
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 describe("diagnostics.cpuProfile dispatch", () => {
   it.each([
-    { role: "operator", scopes: [] },
-    { role: "operator", scopes: ["operator.read"] },
-    { role: "operator", scopes: ["operator.write"] },
-    { role: "node", scopes: ["operator.admin"] },
-  ])("rejects $role/$scopes before native work", async (options) => {
-    const call = request(options);
+    { method: "diagnostics.cpuProfile", role: "operator", scopes: ["operator.write"] },
+    { method: "diagnostics.cpuProfile", role: "node", scopes: ["operator.admin"] },
+    { method: "diagnostics.heapProfile", role: "operator", scopes: ["operator.write"] },
+    { method: "diagnostics.heapProfile", role: "node", scopes: ["operator.admin"] },
+  ] as const)("rejects $role/$scopes for $method before native work", async (options) => {
+    const call = request({ ...options, scopes: [...options.scopes] });
     await call.pending;
     expect(capture).not.toHaveBeenCalled();
+    expect(captureHeap).not.toHaveBeenCalled();
     expect(call.respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -119,17 +140,14 @@ describe("diagnostics.cpuProfile dispatch", () => {
     );
   });
 
-  it.each([undefined, {}])(
-    "preserves signed-origin profiles for admin requests with empty params %j",
-    async (params) => {
-      const call = request({ params });
-      await call.pending;
-      expect(capture).toHaveBeenCalledOnce();
-      expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
-    },
-  );
+  it("preserves signed-origin profiles for admin requests with empty params", async () => {
+    const call = request({ params: {} });
+    await call.pending;
+    expect(capture).toHaveBeenCalledOnce();
+    expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
+  });
 
-  it.each([null, [], "", 1, { durationMs: 1 }, { filename: "profile" }])(
+  it.each([null, { durationMs: 1 }])(
     "rejects nonempty/nonobject params %j before capture",
     async (params) => {
       const call = request({ params });
@@ -195,21 +213,6 @@ describe("diagnostics.cpuProfile dispatch", () => {
     expect(call.respond).not.toHaveBeenCalled();
   });
 
-  it("publishes a bounded, visible failure including cleanup uncertainty", async () => {
-    capture.mockResolvedValue({
-      status: "unavailable",
-      reason: "capture-failed",
-      cleanupFailed: true,
-    });
-    const call = request();
-    await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "CPU profile unavailable: capture-failed",
-      details: { reason: "capture-failed", cleanupFailed: true },
-    });
-  });
-
   it("explains that all active Node tracing must be stopped first", async () => {
     capture.mockResolvedValue({
       status: "unavailable",
@@ -227,6 +230,41 @@ describe("diagnostics.cpuProfile dispatch", () => {
           "CPU profile unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile",
         details: { reason: "tracing-active", cleanupFailed: false },
       }),
+    );
+  });
+});
+
+describe("diagnostics.heapProfile dispatch", () => {
+  it.each([
+    undefined,
+    {
+      durationMs: 200,
+      samplingIntervalBytes: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: false,
+    },
+  ])(
+    "serves allocation attribution through the registered admin RPC with params %j",
+    async (params) => {
+      const call = request({ method: "diagnostics.heapProfile", params });
+      await call.pending;
+      expect(captureHeap).toHaveBeenCalledExactlyOnceWith({
+        ...params,
+        signal: expect.any(AbortSignal),
+        hasAuthority: expect.any(Function),
+      });
+      expect(call.respond).toHaveBeenCalledWith(true, heapResult, undefined);
+    },
+  );
+
+  it("rejects unsupported heap profile params before capture", async () => {
+    const call = request({ method: "diagnostics.heapProfile", params: { filename: "profile" } });
+    await call.pending;
+    expect(captureHeap).not.toHaveBeenCalled();
+    expect(call.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
   });
 });

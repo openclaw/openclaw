@@ -35,7 +35,7 @@ import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admis
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
@@ -125,7 +125,7 @@ export function readLegacyPrimaryTranscriptIdentity(
       !parseParentLinkedOpaqueEntry(raw)
     ) {
       if (registered) {
-        return undefined;
+        continue;
       }
       throw new Error("Unrecognized primary transcript record");
     }
@@ -244,13 +244,10 @@ type TranscriptImportPlan = {
 
 class TranscriptImportLimitError extends Error {}
 
-export type TranscriptFileFingerprint = {
-  ctimeNs: bigint;
-  dev: bigint;
-  ino: bigint;
-  mtimeNs: bigint;
-  size: bigint;
-};
+export type TranscriptFileFingerprint = Pick<
+  fs.BigIntStats,
+  "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
+>;
 
 export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });
@@ -449,7 +446,7 @@ function readSessionDatabase<T>(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
     return { ok: true, value: read(database) };
   } catch (error) {
     return { error, ok: false };
@@ -485,42 +482,31 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = tableExists(database, "transcript_events");
-    const integrityRow = database.prepare("PRAGMA quick_check").get() as
-      | { quick_check?: unknown }
-      | undefined;
-    if (!hasTranscriptEvents) {
-      return {
-        ok: true,
-        stats: {
-          dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
-          integrityCheck:
-            typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
-          largestSessions: [],
-          totalTranscriptRowBytes: 0,
-          walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-        },
-      };
-    }
-    // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
-    const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
-      ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
-      : "octet_length(event_json)";
-    const totalRow = database
-      .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
-      .get() as { row_bytes?: unknown } | undefined;
-    const largestRows = database
-      .prepare(
-        `
+    const integrityRow = database.prepare("PRAGMA quick_check").get();
+    let totalRow: { row_bytes?: unknown } | undefined;
+    let largestRows: Array<{ events?: unknown; row_bytes?: unknown; session_id?: unknown }> = [];
+    if (hasTranscriptEvents) {
+      // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
+      const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
+        ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
+        : "octet_length(event_json)";
+      totalRow = database
+        .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
+        .get();
+      largestRows = database
+        .prepare(
+          `
           SELECT session_id, COUNT(*) AS events, COALESCE(SUM(${eventBytes}), 0) AS row_bytes
           FROM transcript_events
           GROUP BY session_id
           ORDER BY row_bytes DESC, events DESC, session_id ASC
           LIMIT 5
         `,
-      )
-      .all() as Array<{ events?: unknown; row_bytes?: unknown; session_id?: unknown }>;
+        )
+        .all();
+    }
     return {
       ok: true,
       stats: {

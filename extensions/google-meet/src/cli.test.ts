@@ -236,26 +236,24 @@ describe("google-meet CLI", () => {
   });
 
   it("can prove Google Meet API create access", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = requestUrl(input).href;
-        if (url === "https://oauth2.googleapis.com/token") {
-          return jsonResponse({
-            access_token: "new-access-token",
-            expires_in: 3600,
-            token_type: "Bearer",
-          });
-        }
-        if (url === "https://meet.googleapis.com/v2/spaces") {
-          return jsonResponse({
-            name: "spaces/new-space",
-            meetingUri: "https://meet.google.com/new-abcd-xyz",
-          });
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = requestUrl(input).href;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return jsonResponse({
+          access_token: "new-access-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+        });
+      }
+      if (url === "https://meet.googleapis.com/v2/spaces") {
+        return jsonResponse({
+          name: "spaces/new-space",
+          meetingUri: "https://meet.google.com/new-abcd-xyz",
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const stdout = captureStdout();
 
     try {
@@ -280,6 +278,15 @@ describe("google-meet CLI", () => {
       expectFields(checks[0], { id: "oauth-config", ok: true });
       expectFields(checks[1], { id: "oauth-token", ok: true });
       expectFields(checks[2], { id: "meet-spaces-create", ok: true });
+      expect(fetchMock).toHaveBeenCalledWith("https://meet.googleapis.com/v2/spaces", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer new-access-token",
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
     } finally {
       stdout.restore();
     }

@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 
 // Enforces Kysely and SQLite guardrails in infrastructure code.
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/unstable/ast";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
-  collectTypeScriptFilesFromRoots,
+  collectFileViolations,
   getPropertyNameText,
   runAsScript,
   toLine,
@@ -24,6 +22,8 @@ const nodeSqliteBoundaryRoots = [
 ];
 
 const nodeSqliteConstructorOwnerPaths = new Set([
+  // Native conformance must observe raw driver close on disposable probe databases.
+  "src/infra/bun-sqlite-close-probe.worker.ts",
   "src/infra/node-sqlite.ts",
   "src/infra/sqlite-runtime-version.ts",
 ]);
@@ -33,6 +33,9 @@ const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
+  "native close conformance on disposable probe databases": [
+    "src/infra/bun-sqlite-close-probe.worker.ts",
+  ],
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
     "src/infra/kysely-sync-cache-state.ts",
@@ -83,7 +86,6 @@ const rawSqliteAllowPathGroups = {
     "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
-  "cross-process SQLite coordination locks": ["src/infra/sqlite-coordinator.ts"],
   "schema-less ownership token: lock only, no data queries; Kysely has no lock primitive": [
     "src/infra/sqlite-snapshot-staging.ts",
   ],
@@ -99,7 +101,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-readonly.ts",
   ],
   "cold-process read-only relay lookup avoids the shared state writer lifecycle": [
-    "src/agents/harness/native-hook-relay-client.worker.ts",
+    "src/agents/harness/native-hook-relay-client-read.ts",
   ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
@@ -115,9 +117,9 @@ const rawSqliteAllowPathGroups = {
   ],
   "doctor SQLite maintenance and legacy state migration": [
     "src/commands/doctor-agent-memory-schema.ts",
-    "src/commands/doctor/cron/legacy-run-log-migration.ts",
-    "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
+    // Exclusive Doctor maintenance reads auto-vacuum and page-size PRAGMAs.
+    "src/commands/doctor-sqlite-reclamation.ts",
     "src/commands/doctor-session-sqlite.ts",
     "src/infra/session-sqlite-migration-readers.ts",
     "src/commands/doctor-session-sqlite-transcript-readers.ts",
@@ -152,8 +154,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugins/installed-plugin-index-store-write.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    "src/tasks/task-registry.store.kernel.ts",
   ],
 };
 
@@ -353,11 +353,7 @@ function isLikelySqliteReceiver(expression: Expression) {
 
 function isPersistedRowExpression(expression: Expression) {
   const unwrapped = unwrapExpression(expression);
-  if (ts.isPropertyAccessExpression(unwrapped)) {
-    const owner = unwrapExpression(unwrapped.expression);
-    return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
-  }
-  if (ts.isElementAccessExpression(unwrapped)) {
+  if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
     const owner = unwrapExpression(unwrapped.expression);
     return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
   }
@@ -366,17 +362,11 @@ function isPersistedRowExpression(expression: Expression) {
 
 function isPersistedStringCastType(typeText: string) {
   return [
-    /\bTaskRecord\["(?:runtime|scopeKind|status|deliveryStatus|notifyPolicy|terminalOutcome)"\]/u,
-    /\bTaskFlowRecord\["(?:status|notifyPolicy)"\]/u,
-    /\bTaskFlowSyncMode\b/u,
     /\bVirtualAgentFsEntryKind\b/u,
     /\b[A-Z][A-Za-z0-9]*(?:Status|Kind|Mode|Policy|Runtime|Outcome)\b/u,
   ].some((pattern) => pattern.test(typeText));
 }
 
-/**
- * Collects Kysely/raw SQLite violations from one source file.
- */
 function collectKyselyGuardrailViolations(sourceFile: SourceFile, relativePath: string) {
   const imports = collectImports(sourceFile);
   const violations: GuardViolation[] = [];
@@ -497,38 +487,31 @@ function collectKyselyGuardrailViolations(sourceFile: SourceFile, relativePath: 
   return violations;
 }
 
-/**
- * Collects Kysely guardrail violations across configured source roots.
- */
 async function collectKyselyGuardrails() {
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations: Array<GuardViolation & { path: string }> = [];
-  for (const filePath of files) {
-    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
-    const content = await fs.readFile(filePath, "utf8");
-    const sourceFile = parser.parseSourceFile(filePath, content);
-    for (const violation of collectKyselyGuardrailViolations(sourceFile, relativePath)) {
-      violations.push({ path: relativePath, ...violation });
-    }
-  }
-  const nodeSqliteFiles = await collectTypeScriptFilesFromRoots(nodeSqliteBoundaryRoots, {
-    includeTests: false,
-  });
-  for (const filePath of nodeSqliteFiles) {
-    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
-    const content = await fs.readFile(filePath, "utf8");
-    const sourceFile = parser.parseSourceFile(filePath, content);
-    for (const violation of collectNodeSqliteBoundaryViolations(sourceFile, relativePath)) {
-      violations.push({ path: relativePath, ...violation });
+  for (const scan of [
+    { sourceRoots, includeTests: true, collect: collectKyselyGuardrailViolations },
+    {
+      sourceRoots: nodeSqliteBoundaryRoots,
+      includeTests: false,
+      collect: collectNodeSqliteBoundaryViolations,
+    },
+  ]) {
+    const found = await collectFileViolations({
+      repoRoot,
+      sourceRoots: scan.sourceRoots,
+      includeTests: scan.includeTests,
+      findViolations: (_content, filePath, sourceFile) =>
+        scan.collect(sourceFile, path.relative(repoRoot, filePath).split(path.sep).join("/")),
+    });
+    for (const violation of found) {
+      violation.path = violation.path.split(path.sep).join("/");
+      violations.push(violation);
     }
   }
   return violations;
 }
 
-/**
- * Runs the Kysely guardrail check.
- */
 async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {

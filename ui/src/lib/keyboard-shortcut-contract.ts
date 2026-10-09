@@ -1,14 +1,16 @@
-import { resolveAsciiShortcutKey } from "./keyboard-shortcuts.ts";
+import {
+  COMMAND_PALETTE_SHORTCUT,
+  isApplePlatform,
+  matchesKeyboardShortcut,
+  resolveAsciiShortcutKey,
+  type KeyboardShortcutDefinition,
+  type KeyboardShortcutModifier,
+} from "../../../src/shared/keyboard-shortcuts.ts";
 
-type KeyboardShortcutModifier = "mod" | "ctrl" | "shift" | "alt";
-type ShortcutDefinition<Key extends string> = {
-  readonly modifiers: readonly KeyboardShortcutModifier[];
-  readonly key: Key;
-  readonly platformSpecific?: boolean;
-};
+export { isApplePlatform } from "../../../src/shared/keyboard-shortcuts.ts";
 
 export const KEYBOARD_SHORTCUT_COMBOS = {
-  commandPalette: { modifiers: ["mod"], key: "k", platformSpecific: true },
+  commandPalette: COMMAND_PALETTE_SHORTCUT,
   newSession: { modifiers: ["mod", "shift"], key: "o", platformSpecific: true },
   archiveSession: { modifiers: ["mod", "shift"], key: "a", platformSpecific: true },
   keyboardShortcuts: { modifiers: ["mod"], key: "/" },
@@ -25,7 +27,6 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   workspaceFiles: { modifiers: ["mod", "shift"], key: "b" },
   sideChat: { modifiers: ["mod", "shift"], key: "s" },
   browserPanel: { modifiers: ["mod", "alt", "shift"], key: "u" },
-  tasksPanel: { modifiers: ["mod", "alt", "shift"], key: "k" },
   desktopPanel: { modifiers: ["mod", "alt", "shift"], key: "d" },
   discussionPanel: { modifiers: ["mod", "alt", "shift"], key: "j" },
   dashboardPanel: { modifiers: ["mod", "alt", "shift"], key: "g" },
@@ -44,15 +45,11 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   // Display-only mouse chords; never keyboard-matched.
   toggleSessionSelect: { modifiers: ["alt"], key: "Click" },
   extendSessionSelect: { modifiers: ["shift"], key: "Click" },
-} as const satisfies Record<string, ShortcutDefinition<string>>;
+} as const satisfies Record<string, KeyboardShortcutDefinition>;
 
 type KeyboardShortcutKey =
   (typeof KEYBOARD_SHORTCUT_COMBOS)[keyof typeof KEYBOARD_SHORTCUT_COMBOS]["key"];
-export type KeyboardShortcutCombo = ShortcutDefinition<KeyboardShortcutKey>;
-
-export function isApplePlatform(platform = globalThis.navigator?.platform ?? ""): boolean {
-  return /Mac|iPhone|iPad|iPod/u.test(platform);
-}
+export type KeyboardShortcutCombo = KeyboardShortcutDefinition<KeyboardShortcutKey>;
 
 export function formatKeyboardShortcutParts(
   combo: KeyboardShortcutCombo,
@@ -85,57 +82,8 @@ export function formatKeyboardShortcutCombo(
   return formatKeyboardShortcutParts(combo, applePlatform).join(applePlatform ? "" : "+");
 }
 
-// Most mod-chords accept either modifier. Platform-specific chords reserve
-// native editing keys (Mac Ctrl+B/F/K) for the focused text field.
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
-  if (event.isComposing || event.key === "Dead" || event.keyCode === 229) {
-    return false;
-  }
-  const wantsMod = combo.modifiers.includes("mod");
-  const wantsCtrl = combo.modifiers.includes("ctrl");
-  const primaryModifierMatches = wantsMod
-    ? event.metaKey !== event.ctrlKey &&
-      (!combo.platformSpecific || event.metaKey === isApplePlatform())
-    : !event.metaKey && event.ctrlKey === wantsCtrl;
-  // "/" and Backquote ignore Shift: some layouts need Shift to produce "/",
-  // and the shipped terminal chord accepts Ctrl+Shift+` (layouts where the
-  // Backquote key is shifted, e.g. producing ~, must keep working).
-  const shiftInsensitiveKey = combo.key === "/" || combo.key === "Backquote";
-  if (
-    !primaryModifierMatches ||
-    event.altKey !== combo.modifiers.includes("alt") ||
-    (!shiftInsensitiveKey && event.shiftKey !== combo.modifiers.includes("shift"))
-  ) {
-    return false;
-  }
-  if (combo.key === "/") {
-    if (event.key === "/" || event.key === "?") {
-      return true;
-    }
-    // Physical fallback only for non-Latin layouts. Latin layouts that put a
-    // different printable on the Slash key (German "-") keep that chord's own
-    // meaning — Cmd+"-" must stay browser zoom, not open the overview.
-    return event.code === "Slash" && !/^[\x20-\x7e]$/u.test(event.key);
-  }
-  if (combo.key === "Backquote" || combo.key === "Comma") {
-    return event.code === combo.key;
-  }
-  if (
-    combo.key === "Enter" ||
-    combo.key === "Escape" ||
-    combo.key === "ArrowUp" ||
-    combo.key === "ArrowDown" ||
-    combo.key === "ArrowLeft" ||
-    combo.key === "ArrowRight"
-  ) {
-    return event.key === combo.key;
-  }
-  // Only Command+Option uses physical letters; Ctrl+Alt may be AltGr text.
-  const key = resolveAsciiShortcutKey(event);
-  if (key !== null || !event.metaKey || !event.altKey) {
-    return key === combo.key;
-  }
-  return event.code === `Key${combo.key.toUpperCase()}`;
+  return matchesKeyboardShortcut(combo, event, isApplePlatform(), resolveAsciiShortcutKey(event));
 }
 
 /** Runtime controls of the lazily loaded shortcuts dialog. */

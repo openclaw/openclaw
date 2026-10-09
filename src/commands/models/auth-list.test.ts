@@ -297,10 +297,8 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
   });
 
-  it.each([
-    ["agent-local", "/tmp/openclaw/agents/main/openclaw-agent.sqlite"],
-    ["shared", "/tmp/openclaw/state/openclaw.sqlite"],
-  ])("prints an empty profile list with the %s auth path", async (_shape, authStatePath) => {
+  it("prints an empty profile list with the actual shared auth path", async () => {
+    const authStatePath = "/tmp/openclaw/state/openclaw.sqlite";
     mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
     mocks.resolveAuthStatePathForDisplay.mockReturnValue(authStatePath);
     const runtime = createRuntime();

@@ -1,5 +1,4 @@
 import { normalizeLegacyDmAliases } from "openclaw/plugin-sdk/channel-config-helpers";
-// Discord helper module supports config schema behavior.
 import {
   buildChannelAllowBotsSchema,
   buildChannelConfigSchema,
@@ -10,13 +9,11 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   ProviderCommandsSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
   TtsConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import * as channelConfigSchema from "openclaw/plugin-sdk/channel-config-schema";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   buildSecretInputSchema,
@@ -26,48 +23,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { z } from "zod";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
 
-// Published 2026.9.2 exposes the two dependency validators, but not this refiner.
-// Remove this fallback when the declared plugin API floor excludes that host.
-const dmPolicySdk: Partial<Pick<typeof channelConfigSchema, "refineChannelDmPolicy">> =
-  channelConfigSchema;
-
-function refineDiscordDmPolicyForHost(
-  params: Omit<Parameters<typeof channelConfigSchema.refineChannelDmPolicy>[0], "channelId">,
-): void {
-  if (dmPolicySdk.refineChannelDmPolicy) {
-    dmPolicySdk.refineChannelDmPolicy({ channelId: "discord", ...params });
-    return;
-  }
-  const { value, accountId, ctx } = params;
-  const account = accountId === undefined ? value : value.accounts?.[accountId];
-  if (!account) {
-    return;
-  }
-  const policy = account.dmPolicy ?? value.dmPolicy;
-  const allowFrom = account.allowFrom ?? value.allowFrom;
-  const owner = accountId === undefined ? "channels.discord" : "channels.discord.accounts.*";
-  const inherited = accountId === undefined ? "" : " (or channels.discord.allowFrom)";
-  const path = accountId === undefined ? ["allowFrom"] : ["accounts", accountId, "allowFrom"];
-  requireOpenAllowFrom({
-    policy,
-    allowFrom,
-    ctx,
-    path,
-    message: `${owner}.dmPolicy="${policy}" requires ${owner}.allowFrom${inherited} to include "*"`,
-  });
-  requireAllowlistAllowFrom({
-    policy,
-    allowFrom,
-    ctx,
-    path,
-    message: `${owner}.dmPolicy="${policy}" requires ${owner}.allowFrom${inherited} to contain at least one sender ID`,
-  });
-}
-
 const SecretInputSchema = buildSecretInputSchema();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelStreamingProgressSchema.optional(),
-}).strict();
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -118,6 +74,7 @@ const DiscordThreadSchema = z
 
 const DiscordGuildChannelSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
@@ -141,6 +98,7 @@ const DiscordGuildChannelSchema = buildGroupEntrySchema(
 
 const DiscordGuildSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     slug: z.string().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     ...buildChannelReactionShape({
@@ -154,20 +112,16 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
 );
 
-const DiscordVoiceAutoJoinSchema = z
-  .object({
-    guildId: z.string().min(1),
-    channelId: z.string().min(1),
-    whenOccupied: z.boolean().optional(),
-  })
-  .strict();
-
 const DiscordVoiceAllowedChannelSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
   })
   .strict();
+
+const DiscordVoiceAutoJoinSchema = DiscordVoiceAllowedChannelSchema.extend({
+  whenOccupied: z.boolean().optional(),
+});
 
 const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
 const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
@@ -241,7 +195,7 @@ const DiscordVoiceSchema = z
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   allowFrom: DiscordIdListSchema.optional(),
-  streaming: DiscordPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
 });
 
 const DiscordAccountSchemaBase = z
@@ -313,16 +267,7 @@ const DiscordAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     intents: z
       .object({
         messageContent: z.boolean().optional(),
@@ -446,7 +391,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  refineDiscordDmPolicyForHost({ value, ctx });
+  refineChannelDmPolicy({ channelId: "discord", value, ctx });
 
   if (!value.accounts) {
     return;
@@ -455,7 +400,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
     if (!account) {
       continue;
     }
-    refineDiscordDmPolicyForHost({ value, accountId, ctx });
+    refineChannelDmPolicy({ channelId: "discord", value, accountId, ctx });
   }
 });
 

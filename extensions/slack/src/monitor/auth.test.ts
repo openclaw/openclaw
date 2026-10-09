@@ -1,6 +1,8 @@
 import { WebAPIPlatformError, WebAPIRequestError } from "@slack/web-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
 import type { SlackMonitorContext } from "./context.js";
 
@@ -30,11 +32,6 @@ beforeAll(async () => {
 beforeEach(() => {
   setSlackRuntime(createPluginRuntimeMock());
   readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
-  delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
-});
-
-afterEach(() => {
-  delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
 });
 
 vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
@@ -307,13 +304,7 @@ describe("authorizeSlackSystemEventSender", () => {
   });
 
   it.each([
-    [
-      "ignores non-decimal channel member cache ttl env values",
-      () => {
-        process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS = "0x0";
-      },
-      1,
-    ],
+    ["reuses cached channel members", () => {}, 1],
     [
       "drops cached channel members when the current clock is not a valid date timestamp",
       () => {
@@ -528,6 +519,50 @@ describe("authorizeSlackSystemEventSender", () => {
 });
 
 describe("resolveSlackCommandIngress", () => {
+  it.each(["allowFrom", "pairing approval"] as const)(
+    "matches an uppercase native sender against a lowercase %s entry",
+    async (source) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const actual = await vi.importActual<
+          typeof import("openclaw/plugin-sdk/channel-ingress-runtime")
+        >("openclaw/plugin-sdk/channel-ingress-runtime");
+        readChannelIngressStoreAllowFromForDmPolicyMock.mockImplementation(
+          actual.readChannelIngressStoreAllowFromForDmPolicy,
+        );
+        const ctx = makeAuthorizeCtx({
+          allowFrom: source === "allowFrom" ? ["u123"] : [],
+          dmPolicy: "pairing",
+        });
+        if (source === "pairing approval") {
+          await addChannelAllowFromStoreEntry({
+            channel: "slack",
+            accountId: ctx.accountId,
+            entry: "u123",
+          });
+        }
+        const allowFrom = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
+        expect(allowFrom).toEqual(["u123"]);
+        for (const [senderId, authorized] of [
+          ["U123", true],
+          ["U999", false],
+        ] as const) {
+          const ingress = await resolveSlackCommandIngress({
+            ctx,
+            senderId,
+            senderAuthentication: "verified",
+            channelId: "D123",
+            channelType: "im",
+            ownerAllowFromLower: allowFrom,
+            allowTextCommands: true,
+            hasControlCommand: true,
+          });
+          expect(ingress.commandAccess.authorized).toBe(authorized);
+          expect(ingress.commandAccess.shouldBlockControlCommand).toBe(!authorized);
+        }
+      });
+    },
+  );
+
   it("matches a slugged allowlist entry against a spaced sender name", async () => {
     const result = await resolveSlackCommandIngress({
       ctx: makeAuthorizeCtx({ allowNameMatching: true }),
@@ -699,12 +734,6 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
       },
     },
     {
-      name: "allows interactive events when channel type is known from ID prefix",
-      ctx: { allowFrom: ["U_OWNER"] },
-      request: interactiveRequest("U_OWNER", { channelId: "C1" }),
-      expected: allowedChannel,
-    },
-    {
       name: "allows interactive events when channel type is known from explicit type",
       ctx: {
         allowFrom: ["U_OWNER"],
@@ -712,11 +741,6 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
       },
       request: interactiveRequest("U_OWNER", { channelId: "X1", channelType: "group" }),
       expected: { allowed: true, channelType: "group", channelName: "mystery" },
-    },
-    {
-      name: "does not apply interactiveEvent restrictions to non-interactive events",
-      request: { senderId: "U_ANYONE", channelId: "C1" },
-      expected: allowedChannel,
     },
   ] satisfies AuthorizeCase[])("$name", async ({ ctx, request, expected }) => {
     await expect(

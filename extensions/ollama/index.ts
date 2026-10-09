@@ -1,10 +1,9 @@
-// Ollama plugin entrypoint registers its OpenClaw integration.
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -19,13 +18,10 @@ import {
   type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  buildApiKeyCredential,
-  coerceSecretRef,
-  isNonSecretApiKeyMarker,
-} from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -50,6 +46,7 @@ import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
   isLocalOllamaBaseUrl,
+  readOllamaStringValue,
   resolveOllamaDiscoveryResult,
   resolveOllamaRuntimeBaseUrl,
   shouldUseSyntheticOllamaAuth,
@@ -135,10 +132,6 @@ function matchesOllamaContextOverflowError(errorMessage: string): boolean {
     /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
     /\btruncating input\b.*\btoo long\b/i.test(errorMessage)
   );
-}
-
-function classifyOllamaFailoverReason(errorMessage: string): "server_error" | undefined {
-  return errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined;
 }
 
 const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;
@@ -340,33 +333,6 @@ function toDynamicOllamaModel(params: {
   };
 }
 
-function stripTrailingAuthProfile(raw: string): string {
-  const trimmed = raw.trim();
-  const lastSlash = trimmed.lastIndexOf("/");
-  let delimiter = trimmed.indexOf("@", lastSlash + 1);
-  if (delimiter <= 0) {
-    return trimmed;
-  }
-  const suffix = () => trimmed.slice(delimiter + 1);
-  if (/^\d{8}(?:@|$)/.test(suffix())) {
-    const next = trimmed.indexOf("@", delimiter + 9);
-    if (next < 0) {
-      return trimmed;
-    }
-    delimiter = next;
-  }
-  if (/^(?:i?q\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(suffix())) {
-    const next = trimmed.indexOf("@", delimiter + 1);
-    if (next < 0) {
-      return trimmed;
-    }
-    delimiter = next;
-  }
-  const model = trimmed.slice(0, delimiter).trim();
-  const profile = trimmed.slice(delimiter + 1).trim();
-  return model && profile ? model : trimmed;
-}
-
 function needsOllamaCatalogMetadata(entry: ProviderAugmentModelCatalogContext["entries"][number]) {
   const hasContextLimit = entry.contextWindow !== undefined || entry.contextTokens !== undefined;
   return (
@@ -377,26 +343,11 @@ function needsOllamaCatalogMetadata(entry: ProviderAugmentModelCatalogContext["e
   );
 }
 
-function readConfiguredOllamaApiKey(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (value && typeof value === "object" && "value" in value) {
-    const resolved = (value as { value?: unknown }).value;
-    if (typeof resolved === "string") {
-      const trimmed = resolved.trim();
-      return trimmed || undefined;
-    }
-  }
-  return undefined;
-}
-
 function readConcreteOllamaApiKey(value: unknown): string | undefined {
   if (coerceSecretRef(value)) {
     return undefined;
   }
-  const apiKey = readConfiguredOllamaApiKey(value);
+  const apiKey = readOllamaStringValue(value);
   return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;
 }
 
@@ -422,7 +373,7 @@ async function resolveAppGuidedOllamaApiKey(
   if (resolved.unresolvedRefReason) {
     return undefined;
   }
-  const value = readConfiguredOllamaApiKey(resolved.value);
+  const value = readOllamaStringValue(resolved.value);
   return value === "OLLAMA_API_KEY"
     ? readConcreteOllamaApiKey(ctx.env.OLLAMA_API_KEY)
     : readConcreteOllamaApiKey(value);
@@ -454,7 +405,7 @@ function readUsableOllamaShowApiKey(params: {
   if (explicitApiKey) {
     return explicitApiKey;
   }
-  const resolvedApiKey = readConfiguredOllamaApiKey(params.resolved?.apiKey);
+  const resolvedApiKey = readOllamaStringValue(params.resolved?.apiKey);
   const canUseResolvedDiscovery =
     params.allowAmbientEnvFallback || !isAmbientOllamaApiKeyMarker(resolvedApiKey);
   const discoveryApiKey = readConcreteOllamaApiKey(params.resolved?.discoveryApiKey);
@@ -504,12 +455,11 @@ function collectConfiguredOllamaModelIds(params: {
     const trimmedName = typeof name === "string" ? name.trim() : "";
     const existing = models.get(trimmed);
     if (existing) {
-      if ((!existing.api && api) || (!existing.name && trimmedName)) {
-        models.set(trimmed, {
-          ...existing,
-          ...(api && !existing.api ? { api } : {}),
-          ...(trimmedName && !existing.name ? { name: trimmedName } : {}),
-        });
+      if (!existing.api && api) {
+        existing.api = api;
+      }
+      if (!existing.name && trimmedName) {
+        existing.name = trimmedName;
       }
       return;
     }
@@ -523,7 +473,7 @@ function collectConfiguredOllamaModelIds(params: {
     if (typeof raw !== "string") {
       return;
     }
-    const trimmed = stripTrailingAuthProfile(raw);
+    const trimmed = splitTrailingAuthProfile(raw).model;
     if (!trimmed.toLowerCase().startsWith(providerPrefix)) {
       return;
     }
@@ -720,7 +670,8 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
     matchesContextOverflowError: ({ errorMessage }) =>
       matchesOllamaContextOverflowError(errorMessage),
-    classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
+    classifyFailoverReason: ({ errorMessage }) =>
+      errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined,
   }) satisfies Pick<
     ProviderPlugin,
     | "createStreamFn"
@@ -904,32 +855,11 @@ export default definePluginEntry({
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
               env: ctx.env,
-              workspaceDir: ctx.workspaceDir,
-              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
               ...(ctx.signal ? { signal: ctx.signal } : {}),
-              secretInputMode: ctx.secretInputMode,
-              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
-              profiles: result.credential
-                ? [
-                    {
-                      profileId: "ollama:default",
-                      credential: buildApiKeyCredential(
-                        OLLAMA_PROVIDER_ID,
-                        result.credential,
-                        undefined,
-                        result.credentialMode
-                          ? {
-                              secretInputMode: result.credentialMode,
-                              config: ctx.config,
-                            }
-                          : undefined,
-                      ),
-                    },
-                  ]
-                : [],
+              profiles: [],
               configPatch: result.config,
               ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
             };
@@ -1030,7 +960,7 @@ export default definePluginEntry({
           if (resolved.unresolvedRefReason) {
             return undefined;
           }
-          const resolvedApiKey = readConfiguredOllamaApiKey(resolved.value);
+          const resolvedApiKey = readOllamaStringValue(resolved.value);
           const configuredSecretRef = coerceSecretRef(providerConfig.apiKey);
           discoveryApiKey = configuredSecretRef
             ? resolvedApiKey

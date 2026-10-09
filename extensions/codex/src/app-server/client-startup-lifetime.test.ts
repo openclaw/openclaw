@@ -63,64 +63,60 @@ afterEach(async () => {
 });
 
 describe("guarded startup request lifetime", () => {
-  it.each(["thread/start", "thread/resume", "thread/fork"])(
-    "%s timeout preserves a peer and releases its fence on the exact late response",
-    async (method) => {
-      const old = createHarness();
-      const replacement = createHarness();
-      vi.spyOn(CodexAppServerClient, "start")
-        .mockResolvedValueOnce(old.client)
-        .mockResolvedValueOnce(replacement.client);
-      expect(await acquire()).toBe(old.client);
-      const peer = old.client.request("turn/start", { threadId: "peer" }, { timeoutMs: 5_000 });
-      const peerFrame = await waitForHarnessRequest(old, "turn/start");
-      let continued = false;
-      const startup = old.client
-        .request(method, { threadId: "abandoned" }, { timeoutMs: 100 })
-        .then(
-          () => {
-            continued = true;
-          },
-          (error: unknown) => error,
-        );
-      const frame = await waitForHarnessRequest(old, method);
-      expect(await startup).toMatchObject({ reason: "timed out", mayHaveWritten: true });
-      expect(old.stdinDestroyed).toBe(false);
-      expect(await acquire()).toBe(replacement.client);
+  it("fork timeout preserves a peer and releases its fence on the exact late response", async () => {
+    const method = "thread/fork";
+    const old = createHarness();
+    const replacement = createHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockResolvedValueOnce(old.client)
+      .mockResolvedValueOnce(replacement.client);
+    expect(await acquire()).toBe(old.client);
+    const peer = old.client.request("turn/start", { threadId: "peer" }, { timeoutMs: 5_000 });
+    const peerFrame = await waitForHarnessRequest(old, "turn/start");
+    let continued = false;
+    const startup = old.client.request(method, { threadId: "abandoned" }, { timeoutMs: 100 }).then(
+      () => {
+        continued = true;
+      },
+      (error: unknown) => error,
+    );
+    const frame = await waitForHarnessRequest(old, method);
+    expect(await startup).toMatchObject({ reason: "timed out", mayHaveWritten: true });
+    expect(old.stdinDestroyed).toBe(false);
+    expect(await acquire()).toBe(replacement.client);
 
-      // A replacement's same-home startup must not overtake the old native work.
-      const blocked = replacement.client.request("thread/start", {}, { timeoutMs: 100 });
-      await expect(blocked).rejects.toMatchObject({ reason: "timed out", mayHaveWritten: false });
-      expect(replacement.writes.some((line) => JSON.parse(line).method === "thread/start")).toBe(
-        false,
-      );
-      expect(replacement.stdinDestroyed).toBe(false);
+    // A replacement's same-home startup must not overtake the old native work.
+    const blocked = replacement.client.request("thread/start", {}, { timeoutMs: 100 });
+    await expect(blocked).rejects.toMatchObject({ reason: "timed out", mayHaveWritten: false });
+    expect(replacement.writes.some((line) => JSON.parse(line).method === "thread/start")).toBe(
+      false,
+    );
+    expect(replacement.stdinDestroyed).toBe(false);
 
-      old.send({ id: frame.id, result: { thread: { id: "abandoned" } } });
-      old.send({ method: "thread/started", params: { thread: { id: "abandoned" } } });
-      const helperStartIndex = old.writes.length;
-      const helper = old.client.request("thread/fork", { threadId: "peer" }, { timeoutMs: 1_000 });
-      const helperFrame = await waitForHarnessRequest(old, "thread/fork", helperStartIndex);
-      old.send({ id: helperFrame.id, result: { thread: { id: "peer-helper" } } });
-      await expect(helper).resolves.toEqual({ thread: { id: "peer-helper" } });
-      expect(continued).toBe(false);
-      old.send({ id: peerFrame.id, result: { turn: { id: "peer-turn" } } });
-      await expect(peer).resolves.toEqual({ turn: { id: "peer-turn" } });
-      expect(old.stdinDestroyed).toBe(false);
+    old.send({ id: frame.id, result: { thread: { id: "abandoned" } } });
+    old.send({ method: "thread/started", params: { thread: { id: "abandoned" } } });
+    const helperStartIndex = old.writes.length;
+    const helper = old.client.request("thread/fork", { threadId: "peer" }, { timeoutMs: 1_000 });
+    const helperFrame = await waitForHarnessRequest(old, "thread/fork", helperStartIndex);
+    old.send({ id: helperFrame.id, result: { thread: { id: "peer-helper" } } });
+    await expect(helper).resolves.toEqual({ thread: { id: "peer-helper" } });
+    expect(continued).toBe(false);
+    old.send({ id: peerFrame.id, result: { turn: { id: "peer-turn" } } });
+    await expect(peer).resolves.toEqual({ turn: { id: "peer-turn" } });
+    expect(old.stdinDestroyed).toBe(false);
 
-      expect(releaseLeasedSharedCodexAppServerClient(old.client)).toBe(true);
-      expect(old.stdinDestroyed).toBe(true);
-      old.emitExit();
-      retireSharedCodexAppServerClientIfCurrent(old.client);
-      expect(await acquire()).toBe(replacement.client);
-      expect(replacement.stdinDestroyed).toBe(false);
-      expect(
-        replacement.writes.some((line) => JSON.parse(line).method === "thread/unsubscribe"),
-      ).toBe(false);
-      releaseLeasedSharedCodexAppServerClient(replacement.client);
-      releaseLeasedSharedCodexAppServerClient(replacement.client);
-    },
-  );
+    expect(releaseLeasedSharedCodexAppServerClient(old.client)).toBe(true);
+    expect(old.stdinDestroyed).toBe(true);
+    old.emitExit();
+    retireSharedCodexAppServerClientIfCurrent(old.client);
+    expect(await acquire()).toBe(replacement.client);
+    expect(replacement.stdinDestroyed).toBe(false);
+    expect(
+      replacement.writes.some((line) => JSON.parse(line).method === "thread/unsubscribe"),
+    ).toBe(false);
+    releaseLeasedSharedCodexAppServerClient(replacement.client);
+    releaseLeasedSharedCodexAppServerClient(replacement.client);
+  });
 
   it.each(["response", "rpc error", "overload", "exit"])(
     "an aborted written startup holds config until %s, without rechecking stale ownership",

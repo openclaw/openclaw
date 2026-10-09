@@ -1,11 +1,79 @@
-import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseBrowserTabToolBinding } from "./browser-tool-binding.js";
+import {
+  BrowserToolOutputSchema,
+  createBrowserToolSchema,
+  resolveBrowserToolCapabilities,
+  type BrowserToolCapabilities,
+} from "./browser-tool.schema.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
-/** Build the Browser tool guidance shared by lazy registration and runtime execution. */
-export function describeBrowserTool(opts: {
-  targetDefault: "sandbox" | "host";
-  hostHint: string;
+/** Lazy registration and execution expose exactly the same configured tool. */
+export function createBrowserToolDefinition(
+  opts:
+    | {
+        runToolBinding?: unknown;
+        toolCapabilities?: BrowserToolCapabilities;
+        sandboxBridgeUrl?: string;
+        allowHostControl?: boolean;
+      }
+    | undefined,
+  getConfig: () => OpenClawConfig | undefined,
+) {
+  const parsed =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (parsed && !parsed.ok) {
+    throw new Error(`invalid browser run binding: ${parsed.error}`);
+  }
+  const binding = parsed?.binding;
+  const config = getConfig();
+  const capabilities =
+    opts?.toolCapabilities ??
+    (() => {
+      const profile =
+        binding?.target === "host"
+          ? resolveProfile(resolveBrowserConfig(config?.browser, config), binding.profile)
+          : undefined;
+      return resolveBrowserToolCapabilities({
+        tabBound: Boolean(binding),
+        evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+        ...(profile ? { profileCapabilities: getBrowserProfileCapabilities(profile) } : {}),
+      });
+    })();
+  return {
+    binding,
+    capabilities,
+    metadata: {
+      label: "Browser",
+      name: "browser",
+      resultContentSource: "network" as const,
+      description: describeBrowserTool({
+        config,
+        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+        allowHostControl: opts?.allowHostControl,
+        capabilities,
+      }),
+      parameters: createBrowserToolSchema(capabilities),
+      outputSchema: BrowserToolOutputSchema,
+    },
+  };
+}
+
+function describeBrowserTool(opts: {
+  config?: OpenClawConfig;
+  sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
   capabilities: BrowserToolCapabilities;
 }): string {
+  const nodePolicy = opts.config?.gateway?.nodes?.browser;
+  const usePinnedNode =
+    nodePolicy?.mode !== "off" &&
+    Boolean(nodePolicy?.node?.trim()) &&
+    !opts.sandboxBridgeUrl?.trim() &&
+    opts.allowHostControl !== false;
   const actions = new Set(opts.capabilities.actions);
   const evaluateEnabled = opts.capabilities.actKinds.includes("evaluate");
   const lines = [
@@ -24,7 +92,9 @@ export function describeBrowserTool(opts: {
     `For Chrome MCP existing-session profiles, omit timeoutMs on act:type, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.${evaluateEnabled ? " act:evaluate supports timeoutMs." : ""}`,
     ...(!opts.capabilities.tabBound
       ? [
-          'Prefer the host browser; auto-route to a connected browser node only when the host has no usable browser capability. Select another location with target="node" or node=<id|name>; configured node pins also take precedence.',
+          usePinnedNode
+            ? 'Omit target and node to use the configured browser node. If it is unavailable, report the routing error rather than switching to host. Set target="host" only when you intend to use the Gateway host browser; it bypasses configured node routing.'
+            : 'Prefer the host browser; auto-route to a connected browser node only when the host has no usable browser capability. Select another location with target="node" or node=<id|name>; configured node pins also take precedence.',
         ]
       : []),
     "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
@@ -62,8 +132,10 @@ export function describeBrowserTool(opts: {
       : []),
     ...(!opts.capabilities.tabBound
       ? [
-          `target selects browser location (sandbox|host|node). Default: ${opts.targetDefault}.`,
-          opts.hostHint,
+          `target selects browser location (sandbox|host|node). Default: ${usePinnedNode ? "configured browser node" : opts.sandboxBridgeUrl ? "sandbox" : "host"}.`,
+          opts.allowHostControl === false
+            ? "Host target blocked by policy."
+            : "Host target allowed.",
         ]
       : []),
   ];

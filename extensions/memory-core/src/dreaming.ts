@@ -100,44 +100,26 @@ async function runShortTermDreamingPromotion(params: {
   // Each completion uses its workspace owner's model and credentials. The triggering
   // agent owns whatever the roster cannot attribute.
   const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
-  const seenWorkspaces = new Set<string>();
-  const workspaces: Array<{ agentId?: string; agentIds: readonly string[]; workspaceDir: string }> =
-    [];
-  const addWorkspace = (
-    workspaceDir: string,
-    agentId: string,
-    agentIds: readonly string[] = [agentId],
-  ): void => {
-    if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
-      return;
-    }
-    seenWorkspaces.add(workspaceDir);
-    workspaces.push({ ...(agentId ? { agentId } : {}), agentIds, workspaceDir });
-  };
-  // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
-  // several agents always resolves the same owner across sweeps.
-  const resolveWorkspaceOwnerAgentId = (agentIds: readonly string[]): string => {
-    if (triggerAgentId && agentIds.includes(triggerAgentId)) {
-      return triggerAgentId;
-    }
-    return agentIds.toSorted()[0] ?? triggerAgentId;
-  };
-  if (params.cfg) {
-    for (const entry of resolveMemoryDreamingWorkspaces(params.cfg, {
-      primaryWorkspaceDir: fallbackWorkspaceDir,
-      // Attribute the hook's own workspace to the agent whose turn triggered the sweep;
-      // the host falls back to the roster default agent when the turn has no id.
-      ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
-    })) {
-      addWorkspace(
-        entry.workspaceDir,
-        resolveWorkspaceOwnerAgentId(entry.agentIds),
-        entry.agentIds,
-      );
-    }
-  }
+  const workspaces = params.cfg
+    ? resolveMemoryDreamingWorkspaces(params.cfg, {
+        primaryWorkspaceDir: fallbackWorkspaceDir,
+        ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
+      }).map(({ workspaceDir, agentIds }) => {
+        // The host deduplicates workspaces. Prefer their triggering agent,
+        // otherwise select a stable owner among agents sharing the workspace.
+        const agentId =
+          triggerAgentId && agentIds.includes(triggerAgentId)
+            ? triggerAgentId
+            : (agentIds.toSorted()[0] ?? triggerAgentId);
+        return agentId ? { agentId, agentIds, workspaceDir } : { agentIds, workspaceDir };
+      })
+    : [];
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
-    addWorkspace(fallbackWorkspaceDir, triggerAgentId);
+    workspaces.push({
+      ...(triggerAgentId ? { agentId: triggerAgentId } : {}),
+      agentIds: [triggerAgentId],
+      workspaceDir: fallbackWorkspaceDir,
+    });
   }
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -191,8 +173,8 @@ async function runShortTermDreamingPromotion(params: {
         detachNarratives,
         nowMs: sweepNowMs,
       });
-      degradedNarratives += phaseResult?.degradedPhases ?? 0;
-      pendingNarratives += phaseResult?.pendingNarratives ?? 0;
+      degradedNarratives += phaseResult.degradedPhases;
+      pendingNarratives += phaseResult.pendingNarratives;
     } catch (err) {
       failedWorkspaces += 1;
       params.logger.error(
@@ -301,12 +283,14 @@ async function runShortTermDreamingPromotion(params: {
         timezone: params.config.timezone,
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
-      // Generate dream diary narrative from promoted memories.
       if (applied.applied > 0) {
+        const promotions = applied.appliedCandidates
+          .map((candidate) => candidate.snippet)
+          .filter(Boolean);
         const data: NarrativePhaseData = {
           phase: "deep",
-          snippets: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
-          promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
+          snippets: promotions,
+          promotions,
           sourceEntryKeys: [...new Set(applied.appliedCandidates.map((c) => c.key))],
         };
         if (!params.subagent) {

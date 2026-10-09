@@ -487,13 +487,7 @@ export async function createBackupArchive(
       skippedStateSourcePaths.add(path.resolve(plan.configPath));
       skippedStateSourcePaths.add(await canonicalizePathForContainment(plan.configPath));
     }
-    for (const snapshot of stateSqliteBackup.snapshots) {
-      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
-      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
-        skippedStateSourcePaths.add(skippedSourcePath);
-      }
-    }
-    for (const snapshot of legacyAuditSnapshots) {
+    for (const snapshot of [...stateSqliteBackup.snapshots, ...legacyAuditSnapshots]) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
         skippedStateSourcePaths.add(skippedSourcePath);
@@ -520,11 +514,14 @@ export async function createBackupArchive(
         return false;
       }
       const isDirectory = entryStat.isDirectory();
+      // Staged images retain the sealed source's policy, even when scratch lives
+      // beside the archive in an excluded update-capture directory.
+      const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
       if (
         !onlyConfig &&
-        !(isDirectory
-          ? inventory.isTraversable(resolvedEntryPath)
-          : inventory.isIncluded(resolvedEntryPath))
+        !(isDirectory || entryStat.isSymbolicLink()
+          ? inventory.isTraversable(inventoryPath)
+          : inventory.isIncluded(inventoryPath))
       ) {
         return false;
       }
