@@ -14,15 +14,15 @@ minimumReleaseAgeExclude:
   - "source-map-js@1.2.2"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.24.2 release and native helpers; remove after 2026-10-14T04:50:36.473Z.
-  - "@openclaw/fs-safe@0.24.2"
-  - "@openclaw/fs-safe-darwin-arm64@0.24.2"
-  - "@openclaw/fs-safe-darwin-x64@0.24.2"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.24.2"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.24.2"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.24.2"
-  - "@openclaw/fs-safe-linux-x64-musl@0.24.2"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.24.2"
+  # Reviewed fs-safe 0.25.0 release and native helpers; remove after 2026-10-15T21:23:59.079Z.
+  - "@openclaw/fs-safe@0.25.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.25.0"
+  - "@openclaw/fs-safe-darwin-x64@0.25.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.25.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.25.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.25.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.25.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.25.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
