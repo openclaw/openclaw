@@ -542,6 +542,63 @@ describe("resolveTranscriptPolicy", () => {
     expect(reasoningPolicy.dropReasoningFromHistory).toBe(false);
   });
 
+  it("keeps runtime context append-only only for opted-in unowned Chat Completions models", () => {
+    const config = {} as OpenClawConfig;
+    const resolve = (compat?: ProviderRuntimeModel["compat"], modelApi = "openai-completions") =>
+      resolveTranscriptPolicy({
+        config,
+        provider: "litellm-proxy",
+        modelId: "gpt-6.1-sol",
+        modelApi,
+        model: makeOpenAiCompatibleReasoningModel({ reasoning: true, compat }),
+      });
+
+    const defaultPolicy = resolve();
+    const optedOutPolicy = resolve({ appendOnlyRuntimeContext: false });
+    const optedInPolicy = resolve({ appendOnlyRuntimeContext: true });
+
+    expect(defaultPolicy.appendOnlyRuntimeContext).toBe(false);
+    expect(optedOutPolicy).toEqual(defaultPolicy);
+    // The memoized policy must not be shared between opted-in and default models.
+    expect(optedInPolicy).toEqual({ ...defaultPolicy, appendOnlyRuntimeContext: true });
+    expect(resolve().appendOnlyRuntimeContext).toBe(false);
+
+    const responsesDefault = resolve(undefined, "openai-responses");
+    expect(resolve({ appendOnlyRuntimeContext: true }, "openai-responses")).toEqual(
+      responsesDefault,
+    );
+  });
+
+  it("honors the append-only opt-in for plugin-owned providers without a replay hook", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "gemma-3-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel({
+        provider: "vllm",
+        compat: { appendOnlyRuntimeContext: true },
+      }),
+    });
+
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("keeps provider-owned replay policies authoritative over the append-only opt-in", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel({
+        provider: "mistral",
+        compat: { appendOnlyRuntimeContext: true },
+      }),
+    });
+
+    expect(policy.appendOnlyRuntimeContext).toBe(false);
+  });
+
   it("enables Anthropic-compatible policies for Bedrock provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "amazon-bedrock",

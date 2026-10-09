@@ -51,6 +51,11 @@ function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   return compat?.supportsReasoningEffort === false;
 }
 
+/** Explicit per-model opt-in; there is no endpoint-derived default. */
+function modelOptsIntoAppendOnlyRuntimeContext(model?: ProviderRuntimeModel): boolean {
+  return model?.compat?.appendOnlyRuntimeContext === true;
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -111,6 +116,12 @@ function buildUnownedProviderTransportReplayFallback(params: {
       ? { validateAnthropicTurns: true }
       : {}),
     ...(isGoogle || isOpenAiResponses ? { allowSyntheticToolResults: true } : {}),
+    // Automatic prefix caches (for example Bedrock Converse behind a LiteLLM proxy) only hit
+    // when the previous request is a byte-identical prefix; replacing the trailing carrier on
+    // every request rewrites that prefix. Only the carrier retention changes here.
+    ...(isStrictOpenAiCompatible && modelOptsIntoAppendOnlyRuntimeContext(params.model)
+      ? { appendOnlyRuntimeContext: true }
+      : {}),
   };
 }
 
@@ -195,6 +206,7 @@ export function resolveTranscriptPolicy(params: {
             : "",
         dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
         preservesReasoningContentReplay: params.model?.reasoning === true,
+        appendOnlyRuntimeContextOptIn: modelOptsIntoAppendOnlyRuntimeContext(params.model),
         workspaceDir: params.workspaceDir ?? "",
         pluginControlPlane: resolvePluginControlPlaneFingerprint({
           config: cacheConfig,

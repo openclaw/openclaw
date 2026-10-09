@@ -185,6 +185,38 @@ without a global private-network override. For a LAN-hosted proxy, set
 
   </Accordion>
 
+  <Accordion title="Prompt caching for prefix-cached upstreams">
+    Some LiteLLM backends cache automatically and only reuse a prompt when the previous request is
+    an exact prefix of the new one, for example GPT models on Amazon Bedrock served through the
+    Converse API. By default OpenClaw replaces the per-turn Runtime Context carrier at the end of
+    each request, so those backends rewrite the whole prompt into the cache on every call.
+
+    Opt a model into append-only Runtime Context to keep earlier carriers in place:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          litellm: {
+            models: [
+              {
+                id: "gpt-6.1-sol",
+                // ...existing model fields
+                compat: { appendOnlyRuntimeContext: true },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Only the carrier retention changes; tool-id sanitizing and turn validation stay the same.
+    Earlier carriers then stay in context until compaction. Enable it per model after confirming
+    the upstream behaves this way, for example by comparing `cacheRead` across consecutive turns.
+
+  </Accordion>
+
   <Accordion title="Proxy behavior notes">
     - LiteLLM runs on `http://localhost:4000` by default.
     - OpenClaw connects through LiteLLM's proxy-style OpenAI-compatible `/v1` endpoint.

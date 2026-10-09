@@ -108,6 +108,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | --- | --- |
     | `supportsStore` | Accepts the OpenAI `store` request field. |
     | `supportsPromptCacheKey` | Accepts OpenAI prompt-cache/session-affinity keys. |
+    | `appendOnlyRuntimeContext` | `openai-completions` only: keeps earlier per-turn Runtime Context carriers in replayed history instead of replacing them, so each request is a pure append of the previous one. Set it for backends whose automatic prefix cache matches only a byte-identical earlier request (for example Bedrock-hosted GPT models behind LiteLLM). Applies when the provider has no plugin-owned replay policy; carriers then accumulate in context until compaction. |
     | `supportsDeveloperRole` | Accepts `developer` messages instead of requiring `system`. |
     | `supportsReasoningEffort` | Accepts a reasoning-effort control. Custom `openai-completions` routes enable this by default for models marked `reasoning: true`; set `false` to opt out. |
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
