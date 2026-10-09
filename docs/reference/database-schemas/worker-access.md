@@ -1884,6 +1884,13 @@ opaque SDK guards and cross-store assertions retain their synchronous transactio
 contract. Board publication, schemas, permissions,
 retention, and update behavior are unchanged.
 
+Durable Board mutations run first-use schema preparation only in the existing
+agent worker, before the Board write transaction. Native incognito and opaque
+SDK paths retain their original preparation. Board tables are canonical from
+agent schema 15 onward: historical missing-table databases still use the
+migration owner, and missing required tables at the current schema remain an
+admission error.
+
 Durable entry deletion can carry prepared Agents API and Codex binding participants
 through the same executing worker. Binding deletion still commits in shared state
 before the agent transaction commits, and can veto that transaction. Confirmed agent
@@ -2083,6 +2090,28 @@ lease before reading or deriving replacement rows. Startup acquires plugin
 ownership after startup ownership and rereads metadata after any waiting installer
 settles. A queued refresh therefore keeps the install records committed while it
 waited. Index formats, source cleanup guards, and update behavior are unchanged.
+
+Live plugin installation, removal, and reload prepare fresh metadata through the
+existing shared-state worker. Cold discovery-policy and installed-index reads
+share one request and snapshot; ordinary reads retain the Gateway's stable boot
+metadata. Leased index commits and exact-revision compensation use that same
+worker. Each synchronous transaction checks the original lease and live caller at
+admission and commit and returns its exact before/after row receipt. The commit
+coordinator retains an acknowledged receipt before checking for later caller
+revocation, so it can compensate without overwriting a successor. Unknown writes
+are never replayed or redirected to host SQLite. Desired metadata publishes only
+after acknowledged persistence and a final live-caller check. Lease primitives
+and synchronous boot, Doctor, and released metadata readers retain their named
+native contracts; schemas, stored bytes, and update behavior are unchanged.
+
+Index mutations prepare the complete caller guard once. Transport setup checks
+only retained lease liveness; the transaction grant, commit grant, and final
+disclosure each run the live caller fence once. Identical config-write assertion
+leaves share one synchronous invocation, never observations across awaits.
+Native state-ownership and lease reads at those effect boundaries remain final
+authority guards while synchronous SDK and foreign-process writers exist. Their
+retirement requires complete owner-published revocation facts in the next Plugin
+SDK major, rather than reuse of an earlier successful read.
 
 Deferred plugin obligations are recorded through the shared-state writer while
 holding the plugin lifecycle lease. The worker rereads pending rows, checks the

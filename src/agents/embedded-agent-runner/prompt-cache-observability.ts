@@ -10,6 +10,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import type { ProviderPromptState } from "./provider-prompt-state.js";
 
 type PromptHistoryRewriteReason =
   | "compaction"
@@ -77,6 +78,8 @@ type PromptCacheTracker = {
   lastCacheRead: number | null;
   /** Missing usage must not bind an older hit to a new request fingerprint. */
   lastCacheReadSnapshot?: PromptCacheSnapshot;
+  lastProviderPrompt?: ProviderPromptState["lastAttempt"];
+  requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
 };
 
@@ -159,7 +162,46 @@ const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
 
 function buildTrackerKey(params: PromptCacheIdentity): string {
-  return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  // Background reviews share provider affinity, but never diagnostic request ownership.
+  return JSON.stringify([
+    params.sessionId,
+    params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId,
+  ]);
+}
+
+function describeProviderPrefix(
+  previous: ProviderPromptState["lastAttempt"],
+  next: ProviderPromptState["lastAttempt"],
+): string {
+  if (!previous?.cachePrefix || !next?.cachePrefix) {
+    return "unavailable";
+  }
+  const before = previous.cachePrefix;
+  const after = next.cachePrefix;
+  if (previous.scopeDigest !== next.scopeDigest) {
+    return "provider-scope";
+  }
+  for (const segment of ["system", "tools"] as const) {
+    if (before[segment] !== after[segment]) {
+      return segment;
+    }
+  }
+  const index = before.messages.findIndex((digest, i) => digest !== after.messages[i]);
+  if (index >= 0) {
+    return `message:${index}`;
+  }
+  if (before.parameters !== after.parameters) {
+    return "parameters";
+  }
+  if (before.tail !== undefined) {
+    // A growing tail cannot establish equality of its earlier messages from one digest.
+    return before.messageCount !== after.messageCount
+      ? `unverified-after:${before.messages.length}`
+      : before.tail !== after.tail
+        ? `message-tail:${before.messages.length}`
+        : "prefix-match";
+  }
+  return "prefix-match";
 }
 
 function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSnapshot): string {
@@ -333,8 +375,8 @@ export function beginPromptCacheObservation(
   },
 ) {
   const key = buildTrackerKey(params);
-  const cached = trackers.get(key);
-  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
+  const previous = trackers.get(key);
+  const requestedAt = Date.now();
   const tools = sortPromptCacheToolsByName(params.tools);
   const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
   const prefix = splitSystemPrompt?.stablePrefix ?? params.systemPrompt;
@@ -409,6 +451,8 @@ export function beginPromptCacheObservation(
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
+    lastProviderPrompt: previous?.lastProviderPrompt,
+    requestedAt,
     pendingChanges: changes.length > 0 ? changes : null,
   };
   trackers.delete(key);
@@ -426,6 +470,7 @@ export function beginPromptCacheObservation(
     snapshot,
     changes: changes.length > 0 ? changes : null,
     previousCacheRead: previous?.lastCacheRead ?? null,
+    requestGapMs: previous ? Math.max(0, requestedAt - previous.requestedAt) : undefined,
   };
 }
 
@@ -459,6 +504,7 @@ export function recordAggregateTruncation(params: PromptCacheIdentity): void {
 export function completePromptCacheObservation(
   params: PromptCacheIdentity & {
     usage?: NormalizedUsage;
+    providerPrompt?: ProviderPromptState["lastAttempt"];
   },
 ) {
   const key = buildTrackerKey(params);
@@ -475,8 +521,10 @@ export function completePromptCacheObservation(
   }
   const previousCacheRead = tracker.lastCacheRead;
   const previousSnapshot = tracker.lastCacheReadSnapshot;
+  const previousProviderPrompt = tracker.lastProviderPrompt;
   tracker.lastCacheRead = cacheRead;
   tracker.lastCacheReadSnapshot = tracker.snapshot;
+  tracker.lastProviderPrompt = params.providerPrompt;
 
   if (previousCacheRead == null || previousCacheRead <= 0) {
     return null;
@@ -496,6 +544,11 @@ export function completePromptCacheObservation(
         previousCacheRead,
         cacheRead,
         changes,
+        ...(params.providerPrompt
+          ? {
+              providerPrefix: describeProviderPrefix(previousProviderPrompt, params.providerPrompt),
+            }
+          : {}),
       }
     : null;
 }

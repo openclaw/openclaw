@@ -174,6 +174,21 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/plugins/installed-plugin-index-store-write.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readInstalledPluginIndexRow",
+          "writePersistedInstalledPluginIndexToSqlite",
+          "restorePersistedInstalledPluginIndexInDatabase",
+        ],
+        evidence:
+          "Live install-record commits, direct index writes, refresh, and exact-revision rollback dispatch through plugins/state.worker.ts under the retained lifecycle lease. Source-admission publication uses that worker too. The synchronous refresh kernel has no remaining non-worker production callers.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-maintenance-transaction.ts",
     [
       {
