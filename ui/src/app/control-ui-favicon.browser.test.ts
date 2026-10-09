@@ -109,7 +109,7 @@ describe("favicon presentation ownership", () => {
     vi.restoreAllMocks();
   });
 
-  it("fits decoded artwork without cropping and keeps its colors under every status dot", async () => {
+  it("keeps personal artwork SVG-preferred without cropping or changing its status colors", async () => {
     const artwork = new Image();
     artwork.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>')}`;
     await artwork.decode();
@@ -121,7 +121,10 @@ describe("favicon presentation ownership", () => {
     });
     await Promise.resolve();
     const idleHref = svgIcon.href;
-    expect(idleHref).toMatch(/^data:image\/png;/u);
+    // Firefox prefers any queued SVG candidate over a newer PNG, including a
+    // default restored briefly while personal artwork is being decoded.
+    expect(idleHref).toMatch(/^data:image\/svg\+xml,/u);
+    expect([svgIcon.type, pngIcon.type]).toEqual(["image/svg+xml", "image/svg+xml"]);
     expect(decode).not.toHaveBeenCalled();
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 32;
