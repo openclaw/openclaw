@@ -7,7 +7,6 @@ import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import type {
   SqliteIntegrityWorkerInput,
   SqliteIntegrityWorkerMessage,
-  SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
@@ -25,10 +24,10 @@ if (!process.send || !process.disconnect) {
 const sendMessage = process.send.bind(process);
 const disconnect = process.disconnect.bind(process);
 
-function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+function send(message: SqliteIntegrityWorkerMessage): Promise<void> {
   return new Promise((resolve, reject) => {
     // Flush each phase before native work can block this child's event loop.
-    sendMessage({ type: "phase", phase } satisfies SqliteIntegrityWorkerMessage, (error) => {
+    sendMessage(message, (error) => {
       if (error) {
         reject(error);
       } else {
@@ -43,13 +42,13 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
   try {
-    await sendPhase("opening");
+    await send({ type: "phase", phase: "opening" });
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
     setSqliteBusyTimeout(database, input.busyTimeoutMs);
     configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-    await sendPhase("checking");
+    await send({ type: "phase", phase: "checking" });
     const startedAt = performance.now();
     try {
       assertSqliteIntegrity(database, input.databaseLabel);
@@ -61,7 +60,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   } finally {
     if (database) {
       try {
-        await sendPhase("closing");
+        await send({ type: "phase", phase: "closing" });
       } catch (error) {
         // Reporting failure cannot replace a native failure or skip native close.
         failure ??= toStringifiedError(error);
@@ -100,9 +99,7 @@ for await (const [input] of on(process, "message") as AsyncIterable<
     break;
   }
   const result = await check(input);
-  await new Promise<void>((resolve, reject) => {
-    sendMessage(result, (error) => (error ? reject(error) : resolve()));
-  });
+  await send(result);
   if (!input.reuse || !result.ok) {
     disconnect();
     break;

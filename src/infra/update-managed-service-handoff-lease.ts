@@ -173,7 +173,7 @@ function createLeaseStore(
     if (custody && (custody !== "reserved" || !root.includes("/.openclaw-update-child-"))) {
       throw new Error("Managed command custody requires a child reservation");
     }
-    const run = (db: HandoffDatabase): LeaseAcquisition => {
+    return withDatabase(true, (db): LeaseAcquisition => {
       // Probe liveness before taking the write lock; commit only if both observations still match.
       const observed = row(db, root);
       const destination = admissionLease(root, observed, handle, processState);
@@ -272,8 +272,7 @@ function createLeaseStore(
           lease: handle(root, { owner, payload_json: payload, updated_at: updatedAt }),
         };
       });
-    };
-    return withDatabase(true, run);
+    });
   }
   const acquire = createManagedHandoffOriginalAcquisition({
     options,

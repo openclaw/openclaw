@@ -110,14 +110,8 @@ const originalGenerationSchema = z.strictObject({
   payload: z.string().min(1),
   updatedAt: z.number().int().nonnegative(),
 });
-const cancellingPayloadSchema = z
-  .strictObject({
-    version: z.literal(4),
-    executor: processIdentitySchema,
-    helper: processIdentitySchema,
-    action: updateAction,
-    cancellation: originalGenerationSchema,
-  })
+const cancellingPayloadSchema = originalUpdateSchema
+  .extend({ version: z.literal(4), cancellation: originalGenerationSchema })
   .refine((value) => {
     const original = safeParseJsonWithSchema(originalUpdateSchema, value.cancellation.payload);
     return (

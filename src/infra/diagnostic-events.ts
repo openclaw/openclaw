@@ -1166,10 +1166,7 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
     state.asyncDrainScheduled = false;
     const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
-      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData, {
-        hostPluginId: entry.hostPluginId,
-        trustedListenersOnly: entry.trustedListenersOnly,
-      });
+      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData, entry);
     }
     if (state.asyncQueue.length > 0) {
       scheduleAsyncDiagnosticDrain(state);
@@ -1452,18 +1449,12 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   privateData?: DiagnosticEventPrivateData,
 ) {
   const coreModelRequestLifecycle = consumeCoreModelRequestLifecycleDiagnosticEvent(event);
-  if (!privateData || !Object.hasOwn(privateData, "hostPluginId")) {
-    emitDiagnosticEventWithTrust(event, true, { coreModelRequestLifecycle, privateData });
-    return;
+  if (privateData && Object.hasOwn(privateData, "hostPluginId")) {
+    // Host attribution is reserved for object-identity provenance, not private content.
+    privateData = { ...privateData };
+    Reflect.deleteProperty(privateData, "hostPluginId");
   }
-  // Plugin-facing emitters may provide trusted private content, but host attribution
-  // is reserved for the object-identity provenance consumed above.
-  const sanitized = { ...privateData };
-  Reflect.deleteProperty(sanitized, "hostPluginId");
-  emitDiagnosticEventWithTrust(event, true, {
-    coreModelRequestLifecycle,
-    privateData: sanitized,
-  });
+  emitDiagnosticEventWithTrust(event, true, { coreModelRequestLifecycle, privateData });
 }
 
 /** Emits a trusted canonical security event from core-owned enforcement boundaries. */

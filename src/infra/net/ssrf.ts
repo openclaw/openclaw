@@ -611,10 +611,10 @@ export async function resolvePinnedHostname(
 }
 
 function withPinnedLookup(
-  lookup: PinnedHostname["lookup"],
+  pinned: Pick<PinnedHostname, "lookup"> | undefined,
   connect?: Record<string, unknown>,
-): Record<string, unknown> {
-  return { ...connect, lookup };
+): Record<string, unknown> | undefined {
+  return pinned ? { ...connect, lookup: pinned.lookup } : connect ? { ...connect } : undefined;
 }
 
 function resolvePinnedDispatcherLookup(
@@ -654,15 +654,31 @@ export function createPinnedDispatcher(
   timeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
+  return createPolicyDispatcher(policy, timeoutMs, { lookup });
+}
 
+export function createPolicyDispatcherWithoutPinnedDns(
+  policy?: PinnedDispatcherPolicy,
+  timeoutMs?: number,
+): Dispatcher | null {
+  return policy ? createPolicyDispatcher(policy, timeoutMs) : null;
+}
+
+function createPolicyDispatcher(
+  policy: PinnedDispatcherPolicy | undefined,
+  timeoutMs: number | undefined,
+  pinned?: Pick<PinnedHostname, "lookup">,
+): Dispatcher {
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
+    const connect = withPinnedLookup(pinned, policy?.connect);
+    return createHttp1Agent(connect ? { connect } : undefined, timeoutMs);
   }
 
   if (policy.mode === "env-proxy") {
+    const connect = withPinnedLookup(pinned, policy.connect);
     return createHttp1EnvHttpProxyAgent(
       {
-        connect: withPinnedLookup(lookup, policy.connect),
+        ...(connect ? { connect } : {}),
         ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
       },
       timeoutMs,
@@ -670,14 +686,14 @@ export function createPinnedDispatcher(
   }
 
   const proxyUrl = policy.proxyUrl.trim();
-  const requestTls = withPinnedLookup(lookup, policy.proxyTls);
+  const requestTls = withPinnedLookup(pinned, policy.proxyTls);
   return createHttp1ProxyAgent(
     {
       uri: proxyUrl,
       // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
       // transport hints for explicit proxies. Translate that to undici's
       // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
-      requestTls,
+      ...(requestTls ? { requestTls } : {}),
     },
     timeoutMs,
   );

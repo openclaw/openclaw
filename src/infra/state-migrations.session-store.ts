@@ -328,12 +328,6 @@ function sessionStoreMayNeedCanonicalization(params: {
     if (lowerKey === DEFAULT_MAIN_KEY || lowerKey === params.mainKey) {
       return true;
     }
-    if (lowerKey.startsWith("subagent:")) {
-      return true;
-    }
-    if (lowerKey.startsWith("group:") || lowerKey.startsWith("channel:")) {
-      return true;
-    }
     if (!lowerKey.startsWith("agent:")) {
       return true;
     }

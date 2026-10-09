@@ -29,6 +29,7 @@ import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
+  createPolicyDispatcherWithoutPinnedDns,
   matchesHostnameAllowlist,
   resolveSsrFPolicyForUrl,
   resolvePinnedHostnameWithPolicy,
@@ -39,11 +40,7 @@ import {
 } from "./ssrf.js";
 import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import {
-  createHttp1Agent,
-  createHttp1EnvHttpProxyAgent,
-  createHttp1ProxyAgent,
-} from "./undici-runtime.js";
+import { createHttp1EnvHttpProxyAgent } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -195,39 +192,6 @@ function assertExplicitProxySupportsPinnedDns(
       "Explicit proxy SSRF pinning requires HTTPS targets; plain HTTP targets are not supported",
     );
   }
-}
-
-function createPolicyDispatcherWithoutPinnedDns(
-  dispatcherPolicy?: PinnedDispatcherPolicy,
-  timeoutMs?: number,
-): Dispatcher | null {
-  if (!dispatcherPolicy) {
-    return null;
-  }
-
-  if (dispatcherPolicy.mode === "direct") {
-    return createHttp1Agent(
-      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
-      timeoutMs,
-    );
-  }
-
-  if (dispatcherPolicy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent(
-      {
-        ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
-        ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
-      },
-      timeoutMs,
-    );
-  }
-
-  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  const requestTls = dispatcherPolicy.proxyTls;
-  return createHttp1ProxyAgent(
-    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
-    timeoutMs,
-  );
 }
 
 async function assertExplicitProxyAllowed(

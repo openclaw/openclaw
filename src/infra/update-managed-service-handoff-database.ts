@@ -327,6 +327,11 @@ export function createManagedHandoffLeaseDatabase(
   if (existingIdentity && databasePath !== existingIdentity.databasePath) {
     throw new Error("managed handoff lease database path changed");
   }
+  const assertCurrent = () => {
+    if (existingIdentity) {
+      assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
+    }
+  };
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
   const validationQuery = createSqliteQueryCache((db) =>
     prepareSqliteQuerySync<void, LeaseTable>(db, () =>
@@ -336,7 +341,7 @@ export function createManagedHandoffLeaseDatabase(
   const existingOptions = existingIdentity
     ? {
         busyTimeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
-        assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
+        assertIdentity: assertCurrent,
         validate: (db: HandoffDatabase) => {
           validationQuery(db)();
         },
@@ -484,9 +489,7 @@ export function createManagedHandoffLeaseDatabase(
     if (!write || !writeLockRoot) {
       return accessDatabase(write, operation);
     }
-    if (existingIdentity) {
-      assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-    }
+    assertCurrent();
     const inherited = writeAdmissions.getStore();
     const admission = inherited?.active
       ? inherited
@@ -532,11 +535,6 @@ export function createManagedHandoffLeaseDatabase(
       };
     },
     transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T {
-      const assertCurrent = () => {
-        if (existingIdentity) {
-          assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-        }
-      };
       assertCurrent();
       const transact: ExistingSqliteTransaction =
         existingTransactions.get(db) ??
