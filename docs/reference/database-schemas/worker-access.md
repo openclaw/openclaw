@@ -54,6 +54,45 @@ This foundation adds no SQL, schema validation, persistent storage, SDK
 deprecation, or migration. Admission continues to own validation; receipt
 installation consumes the physical facts already captured by that owner.
 
+### Foreign observation and recertification
+
+The shared-state current-reader owner retains one unpinned probe connection per
+physical database while borrowers are active. Aliases share that connection;
+each borrower keeps its own source, admission, and cleanup authority. Closing one
+borrower does not close another's probe. Database retirement closes the shared
+connection and invalidates every certification, including refreshes still in flight.
+
+`runSqliteForeignUse` shares one `PRAGMA data_version` observation per physical
+owner in a final synchronous use. Nested guards share the frame, and captured
+frames refuse use after return or an await. Different physical databases require
+separate probes. The observation compares only versions from its original
+connection; it adds no schema, format, integrity, index, or filesystem timestamp
+checks. Existing physical identity and admission checks remain with the lifecycle
+owner. Incognito continues to use its actor authority rather than a file probe.
+
+A domain starts a refresh before its coherent worker read and accepts it only
+after observing the same connection again. Foreign commits, tracked same-handle
+mutations, schema revocation, unknown state, and owner closure retire certification.
+A newer refresh supersedes an older pending refresh. Failed preparation can be
+retried; a committed mutation or side effect must never be replayed. Domain owners
+still own complete postimages, explicit absence, pending writes, and supersession
+under the receipt contract above. Freshness alone does not certify writer coverage.
+
+Installing a known worker receipt never advances the probe baseline: another
+connection's commit can include a foreign revocation in the same interval. Even
+an own-worker-only write therefore requires conservative recertification. This
+extra work belongs in measurements. An unregistered same-handle prototype bypass
+remains outside managed mutation coverage; its domains retain native guards until
+raw-writer settlement is complete or the synchronous API is removed.
+
+Subagent maintenance uses this owner for its prepared protection snapshot. Its
+legacy synchronous candidate refresh remains in place, and refreshing a candidate
+subset cannot certify the full snapshot for later candidates. Other final-effect
+guards remain unchanged pending their domain coverage and API migrations. A probe
+is a point-in-time observation, not exclusion of foreign writers through a later
+commit or external effect. Schemas, stored bytes, retention, and update behavior
+are unchanged; published updaters need no migration for these process-local facts.
+
 Meeting transcript downloads and JSONL artifacts stream through the existing
 shared-state read worker. One private read-only transaction owns the cursor,
 entry metadata, and optional summary until the consumer and cleanup settle.

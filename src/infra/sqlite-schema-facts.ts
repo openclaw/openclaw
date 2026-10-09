@@ -444,6 +444,15 @@ export function readSqliteNativeMutationRevision(database: DatabaseSync): number
   return owners.get(database)?.mutationRevision;
 }
 
+/** SQL-free witness for a dedicated, unpinned foreign-commit observer. */
+export function readSqliteForeignObservationRevision(database: DatabaseSync): number | undefined {
+  const owner = owners.get(database);
+  if (!owner || owner.authorizerActive || owner.mutationDepth !== 0) {
+    return undefined;
+  }
+  return owner.mutationRevision;
+}
+
 /** Reuse schema only through unchanged synchronous transaction work, never as write authority. */
 export function canReuseSqliteSchemaInTransaction(database: DatabaseSync): boolean {
   const owner = owners.get(database);
