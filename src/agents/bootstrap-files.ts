@@ -274,9 +274,6 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
 }
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
-/** Shared parameters for the bootstrap-file resolvers. Kept internal so the
- * public `resolveBootstrapFilesForRun` SDK signature stays callback-free while
- * the timing-aware variant extends it with the substage-timing callback. */
 type BootstrapFileResolutionParams = {
   bootstrapUserProfileId?: string;
   workspaceDir: string;
