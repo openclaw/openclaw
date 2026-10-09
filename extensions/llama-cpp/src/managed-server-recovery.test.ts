@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   dataDir: vi.fn<() => string>(),
   install: vi.fn(),
   genericCreate: vi.fn(),
+  reap: vi.fn(),
+  supportsRecovery: true,
 }));
 
 vi.mock("./defaults.js", async (importOriginal) => ({
@@ -21,6 +23,12 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
 // mock-isolation: Exercise preparation without initializing the shared provider registry.
 vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
   getEmbeddingProvider: () => ({ create: mocks.genericCreate }),
+}));
+// mock-isolation: Plugin preparation selects recovery policy; native process custody has owner tests.
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  get reapOrphanedProcesses() {
+    return mocks.supportsRecovery ? mocks.reap : undefined;
+  },
 }));
 
 import { llamaCppEmbeddingProviderAdapter } from "./embedding-provider.js";
@@ -41,6 +49,8 @@ afterEach(() => {
 async function createFixture() {
   const root = tempDirs.make("llama-managed-recovery-");
   mocks.dataDir.mockReturnValue(path.join(root, "tools", "llama.cpp"));
+  mocks.reap.mockResolvedValue([]);
+  mocks.supportsRecovery = true;
   const asset = selectLlamaServerAsset();
   const { command, presetPath } = resolveManagedLlamaServerPaths(asset);
   const modelPath = path.join(root, "chat.gguf");
@@ -70,6 +80,59 @@ async function createFixture() {
 }
 
 describe("managed llama-server recovery", () => {
+  it("preserves preparation on released hosts without the recovery capability", async () => {
+    const { command, model, presetPath, provider } = await createFixture();
+    mocks.supportsRecovery = false;
+    await ensureManagedLlamaServerForChat({ model, provider });
+    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
+    expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
+    expect(mocks.reap).not.toHaveBeenCalled();
+  });
+
+  it("reclaims a matching orphan before creating the embedding transport, once per host", async () => {
+    const { command, modelPath, presetPath, provider } = await createFixture();
+    let orphanAlive = true;
+    mocks.reap.mockImplementation(async ({ command: executable, matchesArguments }) => {
+      expect(executable).toBe(command);
+      expect(matchesArguments([command, "--port", "19432", "--models-preset", presetPath])).toBe(
+        true,
+      );
+      expect(matchesArguments([command, "--port", "19433", "--models-preset", presetPath])).toBe(
+        false,
+      );
+      expect(
+        matchesArguments([command, "--port", "19432", "--models-preset", `${presetPath}.other`]),
+      ).toBe(false);
+      expect(
+        matchesArguments([
+          command,
+          "--port",
+          "19432",
+          "--port",
+          "19433",
+          "--models-preset",
+          presetPath,
+        ]),
+      ).toBe(false);
+      orphanAlive = false;
+      return [1234];
+    });
+    mocks.genericCreate.mockImplementation(async () => {
+      expect(orphanAlive).toBe(false);
+      return { provider: null };
+    });
+    const options = {
+      config: { models: { providers: { "llama-cpp": { ...provider, models: [] } } } },
+      provider: "local",
+      model: modelPath,
+      local: { modelPath },
+    };
+    await llamaCppEmbeddingProviderAdapter.create(options);
+    await llamaCppEmbeddingProviderAdapter.create(options);
+    expect(mocks.reap).toHaveBeenCalledOnce();
+    expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
+  });
+
   it("restores a missing configured managed executable before preparing chat", async () => {
     const { asset, command, presetPath, model, provider } = await createFixture();
     await ensureManagedLlamaServerForChat({ model, provider });
@@ -131,6 +194,7 @@ describe("managed llama-server recovery", () => {
 
       expect(mocks.install).not.toHaveBeenCalled();
       expect(provider.localService.command).toBe(configuredCommand);
+      expect(mocks.reap).not.toHaveBeenCalled();
     },
   );
 

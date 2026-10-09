@@ -45,6 +45,7 @@ import {
   type LlamaServerPresetOptions,
   type ManagedLlamaChatModel,
 } from "./llama-server-preset.js";
+import { recoverManagedLlamaServer } from "./managed-server-orphans.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
 
 type ModelArtifact = {
@@ -448,6 +449,17 @@ export async function prepareManagedLlamaServer(params: {
   const configuredPreset =
     params.localService?.args?.find((_, index, args) => args[index - 1] === "--models-preset") ??
     params.localService?.env?.LLAMA_ARG_MODELS_PRESET;
+  if (params.localService && !params.isolated) {
+    await recoverManagedLlamaServer({
+      command,
+      port,
+      presetPath: configuredPreset
+        ? path.resolve(params.localService.cwd ?? process.cwd(), configuredPreset)
+        : undefined,
+      args: params.localService.args,
+      signal: params.signal,
+    });
+  }
   // Existing services may own a direct --model command instead of a router preset.
   // Keep that public localService contract; only setup creates a new router.
   if (params.localService && !configuredPreset && !params.isolated) {
