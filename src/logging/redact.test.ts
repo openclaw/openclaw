@@ -98,19 +98,6 @@ describe("bounded replacement output", () => {
   });
 });
 
-it.each(["urbauth-~zod", "URBAUTH-~ZOD"])(
-  "masks reflected %s cookies through shared payload policy",
-  (name) => {
-    const cookie = `${name}=synthetic-urbit-session-cookie`;
-    const output = redactToolPayloadTextWithConfig(
-      `Poke failed: 503 - invalid session: ${cookie}; retry later`,
-    );
-    expect(output).not.toContain("synthetic-urbit-session-cookie");
-    expect(output).toContain("Poke failed: 503 - invalid session:");
-    expect(output).toContain("; retry later");
-  },
-);
-
 describe("registered exact secret values", () => {
   it("shares registrations and matcher invalidation across module instances", async () => {
     const first = await import("./secret-redaction-registry.js");

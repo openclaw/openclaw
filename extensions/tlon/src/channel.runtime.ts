@@ -6,7 +6,6 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
@@ -19,6 +18,7 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./urbit/context.js";
 import { urbitFetch } from "./urbit/fetch.js";
+import { redactUrbitErrorText } from "./urbit/redact.js";
 import { buildMediaStory, sendDmWithStory, sendGroupMessageWithStory } from "./urbit/send.js";
 import { markdownToStory } from "./urbit/story.js";
 import { uploadImageFromUrl } from "./urbit/upload.js";
@@ -82,7 +82,7 @@ async function createHttpPokeApi(params: {
         if (!response.ok && response.status !== 204) {
           const errorText = await readResponseTextLimited(response, 16 * 1024);
           // Ship/proxy error bodies can reflect the session cookie; mask before throwing.
-          throw new Error(`Poke failed: ${response.status} - ${redactToolPayloadText(errorText)}`);
+          throw new Error(`Poke failed: ${response.status} - ${redactUrbitErrorText(errorText)}`);
         }
 
         return pokeId;
