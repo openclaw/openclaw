@@ -212,7 +212,7 @@ it.each([
     error: "has schema role state",
   },
   {
-    sql: "DROP TRIGGER session_nodes_canonical_pending_after_update",
+    sql: "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
     error: "canonical validation schema is missing or drifted",
   },
 ])(

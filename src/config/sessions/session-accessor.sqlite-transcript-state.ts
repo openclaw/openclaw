@@ -15,8 +15,8 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionRootWrite,
   canonicalSessionKeyMigrationRequiredError,
+  markCanonicalSessionValidationPending,
 } from "./session-canonical-key.js";
-import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
@@ -236,6 +236,9 @@ export function ensureTranscriptSessionRoot(
       );
     }
   }
+  if (options.allowStoredAlias) {
+    markCanonicalSessionValidationPending(database, [scope.sessionKey]);
+  }
   if (!nodeExists) {
     const insertedNode = executeSqliteQuerySync(
       database.db,
@@ -251,13 +254,6 @@ export function ensureTranscriptSessionRoot(
         .onConflict((conflict) => conflict.column("session_key").doNothing()),
     );
     if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("session_nodes")
-          .set({ entry_valid: -1 })
-          .where("session_key", "=", scope.sessionKey),
-      );
       publishSessionEntryPlaceholderInsertion(database, {
         sessionKey: scope.sessionKey,
         sessionId: scope.sessionId,
@@ -284,9 +280,6 @@ export function ensureTranscriptSessionRoot(
         }),
       ),
   );
-  if (!options.allowStoredAlias) {
-    certifyCanonicalSessionValidationRow(database, scope.sessionKey);
-  }
 }
 
 export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: string): number {

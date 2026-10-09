@@ -19,7 +19,10 @@ import {
   AgentDatabaseSchemaAdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError,
 } from "./agent-database-admission-error.js";
-import { hasPersistedOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
+import {
+  clearPersistedOpenClawAgentCanonicalValidation,
+  hasPersistedOpenClawAgentCanonicalValidation,
+} from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   adoptCanonicalSessionValidationSchema,
   assertCanonicalSessionValidationSchema,
@@ -545,6 +548,17 @@ export function hasOpenClawAgentCanonicalValidation(
   validatedPaths.set(path.resolve(pathname), entry);
   bindValidationLifetime({ ...database, path: pathname }, canonical);
   return true;
+}
+
+/** Offline import/repair owns exclusive custody; rollback may conservatively require validation. */
+export function invalidateOpenClawAgentCanonicalValidation(
+  database: CanonicalValidationDatabase,
+): void {
+  const validation = canonicalValidationReceipt(database);
+  if (validation) {
+    Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+  }
+  clearPersistedOpenClawAgentCanonicalValidation(database);
 }
 
 /** Publish successful canonical proof only when its outer transaction has committed. */

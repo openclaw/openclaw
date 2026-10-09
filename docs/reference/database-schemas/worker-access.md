@@ -8,6 +8,16 @@ read_when:
 title: "Database access in workers"
 ---
 
+Canonical session writers validate the serialized node they already hold and
+persist its final validity with the entry. They do not enqueue or reread their own
+row for canonical certification. Offline import, Doctor repair, and main-key
+policy changes explicitly queue validation and revoke the shared readiness cell
+and persisted receipt; rollback may conservatively leave readiness revoked.
+Those operations require exclusive offline or startup maintenance custody.
+Physical integrity admission remains valid independently of canonical readiness.
+The schema 25 migration seeds every existing node before admission; see
+[canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
