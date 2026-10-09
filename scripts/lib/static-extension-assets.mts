@@ -18,7 +18,6 @@ type StaticExtensionAssetParams = {
   env?: NodeJS.ProcessEnv;
   includeExternalPlugins?: boolean;
   assets?: StaticExtensionAsset[];
-  warn?: (message: string) => void;
 };
 
 export function shouldCopyStaticExtensionAssets(
@@ -310,6 +309,12 @@ export function resolveStaticExtensionAssetSource(
   );
 }
 
+function missingDeclaredStaticAssetError(sources: string[]) {
+  return new Error(
+    sources.map((src) => `declared static extension asset is missing: ${src}`).join("\n"),
+  );
+}
+
 /**
  * Copies declared static extension assets from source packages into root dist.
  */
@@ -318,7 +323,7 @@ export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {
   const fsImpl = params.fs ?? fs;
   const assets =
     params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl, env: params.env });
-  const warn = params.warn ?? console.warn;
+  const missing: string[] = [];
   for (const asset of assets) {
     const { src, dest } = asset;
     const srcPath = resolveStaticExtensionAssetSource(rootDir, asset, fsImpl);
@@ -327,8 +332,11 @@ export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {
       fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
       fsImpl.copyFileSync(srcPath, destPath);
     } else {
-      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
+      missing.push(src);
     }
+  }
+  if (missing.length > 0) {
+    throw missingDeclaredStaticAssetError(missing);
   }
 }
 
@@ -346,7 +354,7 @@ export function copyStaticExtensionAssetsToRuntimeOverlay(
     return;
   }
   const assets = discoverStaticExtensionRuntimeOverlayAssets({ ...params, rootDir, fs: fsImpl });
-  const warn = params.warn ?? console.warn;
+  const missing: string[] = [];
   for (const asset of assets) {
     const { src, dest } = asset;
     const normalizedDest = toPosixPath(dest);
@@ -366,7 +374,10 @@ export function copyStaticExtensionAssetsToRuntimeOverlay(
       }
       fsImpl.copyFileSync(copySourcePath, destPath);
     } else {
-      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
+      missing.push(src);
     }
+  }
+  if (missing.length > 0) {
+    throw missingDeclaredStaticAssetError(missing);
   }
 }
