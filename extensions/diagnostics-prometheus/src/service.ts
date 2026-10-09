@@ -17,11 +17,9 @@ import type {
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 import {
   escapeHelp,
-  formatLabelEntry,
   formatLabels,
   formatPrometheusNumber,
   seconds,
-  sortedLabels,
   type LabelSet,
 } from "./prometheus-format.js";
 import {
@@ -84,27 +82,16 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
   for (const [key, sample] of snapshot.histograms) {
     const name = key.split("|", 1)[0] ?? "";
     emitHeader(name, "histogram", sample.help);
-    const labels = formatLabels(sample.labels);
-    const bucketLabels = sortedLabels({ ...sample.labels, le: "" });
-    const boundIndex = bucketLabels.findIndex(([labelKey]) => labelKey === "le");
-    const bucketFragments = bucketLabels.map(formatLabelEntry);
-    // Only the bound changes between buckets; reuse sorted, escaped labels within this scrape.
     for (let index = 0; index < sample.buckets.length; index += 1) {
-      const bucket = sample.buckets[index];
-      if (bucket === undefined) {
-        continue;
-      }
-      bucketFragments[boundIndex] = `le="${String(bucket)}"`;
       lines.push(
-        `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
+        `${sample.bucketPrefixes[index]}${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
       );
     }
-    bucketFragments[boundIndex] = 'le="+Inf"';
     lines.push(
-      `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.count)}`,
+      `${sample.bucketPrefixes[sample.buckets.length]}${formatPrometheusNumber(sample.count)}`,
     );
-    lines.push(`${name}_sum${labels} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(`${name}_count${labels} ${formatPrometheusNumber(sample.count)}`);
+    lines.push(`${name}_sum${sample.labels} ${formatPrometheusNumber(sample.sum)}`);
+    lines.push(`${name}_count${sample.labels} ${formatPrometheusNumber(sample.count)}`);
   }
 
   lines.push("");
