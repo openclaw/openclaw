@@ -79,6 +79,7 @@ import {
   saveSettings,
 } from "./settings.ts";
 import { createSidebarAttentionStore } from "./sidebar-attention-store.ts";
+import { startStandaloneDownloadRouting } from "./standalone-download-routing.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import {
   normalizeLegacyTerminalViewLocation,
@@ -330,6 +331,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot, {
     shouldOpenExternally,
   });
+  startStandaloneDownloadRouting({ signal: startupLifecycle.signal });
   const nativeLinkRouting = startNativeLinkRouting({
     shouldOpenExternally,
     signal: startupLifecycle.signal,
