@@ -29,10 +29,17 @@ import { hasGlobPattern, normalizeWorkspacePatternPath } from "./workspace-boots
 // agree on grammar. Default Minimatch treats `[ab]` as a character class, so a
 // bracket segment counts as magic here — consistent, because a fully-literal
 // bracket path (`pkg[ab]/AGENTS.md`) is routed to the literal reader by the
-// loader and never reaches this walk.
+// loader and never reaches this walk. Case handling mirrors Node fs.glob's
+// matcher (case-insensitive wildcards on macOS and Windows). Its
+// `optimizationLevel: 2` is deliberately not copied: that rewrites `**/../x` to
+// `{..,**}/x`, which only Node's own walker interprets correctly; a downward walk
+// would turn it into a superset of fs.glob's matches.
 const EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS = {
+  nocase: process.platform === "darwin" || process.platform === "win32",
+  nocaseMagicOnly: true,
   nocomment: true,
   nonegate: true,
+  platform: process.platform,
   windowsPathsNoEscape: true,
 } as const;
 

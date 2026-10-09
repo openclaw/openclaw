@@ -283,6 +283,20 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     }
   });
 
+  it("applies fs.glob's platform case rules under the fs.glob-absent fallback", async () => {
+    // Node's glob matcher is case-insensitive on macOS and Windows, so `*.MD`
+    // finds AGENTS.md there; the fallback must load the same set on each platform.
+    const workspaceDir = await createWorkspaceDir("case-rules");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents", "utf-8");
+    const native = await loaderRelative(workspaceDir, "*.MD");
+    const caseInsensitive = process.platform === "darwin" || process.platform === "win32";
+    expect(native).toStrictEqual(caseInsensitive ? ["AGENTS.md"] : []);
+
+    await withoutFsGlob(async () => {
+      expect(await loaderRelative(workspaceDir, "*.MD")).toStrictEqual(native);
+    });
+  });
+
   it("resolves a missing workspace cwd to no matches without a diagnostic (ENOENT)", async () => {
     // F1 boundary: a missing cwd makes fs.glob throw ENOENT, which legitimately
     // means "no matches" rather than an error to surface — no files, no diagnostic.
