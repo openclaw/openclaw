@@ -312,7 +312,7 @@ describe("bedrock mantle discovery", () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-aws-sdk-authmode"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
 
-    const resolved = await resolveMantleRuntimeBearerToken({
+    const resolved = await resolveRuntimeWithDependencies({
       apiKey: "***",
       authMode: "aws-sdk",
       env: {
@@ -327,7 +327,7 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("returns the literal apiKey as-is when authMode is not aws-sdk and the IAM marker is absent", async () => {
-    const resolved = await resolveMantleRuntimeBearerToken({
+    const resolved = await resolveRuntimeWithDependencies({
       apiKey: "literal-bearer-value", // pragma: allowlist secret
       authMode: "api-key",
       env: {
