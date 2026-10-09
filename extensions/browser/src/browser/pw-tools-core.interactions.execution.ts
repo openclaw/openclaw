@@ -68,11 +68,9 @@ async function executeSingleAction(
     signal: opts.signal,
     assertCurrent: opts.assertCurrent,
   };
-  if (opts.assertCurrent) {
-    const assertion = assertInteractionCurrent(interaction);
-    if (assertion) {
-      await assertion;
-    }
+  const assertion = assertInteractionCurrent(interaction);
+  if (assertion) {
+    await assertion;
   }
   switch (action.kind) {
     case "click":

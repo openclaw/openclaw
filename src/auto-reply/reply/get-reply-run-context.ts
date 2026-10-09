@@ -223,12 +223,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
-  if (replyOperationRunState) {
-    replyOperationRunState.replyCompletion = resolveReplyCompletion(
-      terminalReplyExpectation,
-      "empty",
-    );
-  }
+  const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
+    if (replyOperationRunState) {
+      replyOperationRunState.replyCompletion = resolveReplyCompletion(
+        terminalReplyExpectation,
+        evidence,
+      );
+    }
+  };
+  setReplyCompletion("empty");
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? promptSessionCtx : { ...promptSessionCtx, ThreadStarterBody: undefined },
@@ -291,12 +294,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     (!commandAuthorized || !command.isAuthorizedSender) &&
     isRegisteredWholeMessageCommand
   ) {
-    if (replyOperationRunState) {
-      replyOperationRunState.replyCompletion = resolveReplyCompletion(
-        terminalReplyExpectation,
-        "blocked",
-      );
-    }
+    setReplyCompletion("blocked");
     opts?.onDeliberateSilentTerminalReply?.();
     return finishReplyPreparation(typing);
   }

@@ -16,6 +16,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
@@ -658,25 +659,20 @@ describe.each(["borrowed", "captured"] as const)(
           SELECT RAISE(ABORT, 'controlled command failure');
         END
       `);
-        const create = admission.createSqliteWorkerOperationAdmission;
         const commandRefusal = new Error("controlled command admission refusal");
         let commandRefusals = 0;
         let refusals = 0;
-        const interception = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            create((request, grant) => {
-              if (failure === "admission" && request.stage === "transaction") {
-                commandRefusals++;
-                throw commandRefusal;
-              }
-              if (isRecord(request.facts) && request.facts.kind === "fixture-cleanup") {
-                refusals++;
-                throw new Error("controlled publication cleanup admission refusal");
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const interception = probe.admission(admission, (request, grant, admit) => {
+          if (failure === "admission" && request.stage === "transaction") {
+            commandRefusals++;
+            throw commandRefusal;
+          }
+          if (isRecord(request.facts) && request.facts.kind === "fixture-cleanup") {
+            refusals++;
+            throw new Error("controlled publication cleanup admission refusal");
+          }
+          admit(request, grant);
+        });
         const result = worker.execute(
           { type: "append", input: { value: "failed" } },
           () => undefined,
@@ -740,19 +736,14 @@ describe.each(["borrowed", "captured"] as const)(
           void work.catch(() => undefined);
           await Promise.race([entered.promise, work]);
         }
-        const create = admission.createSqliteWorkerOperationAdmission;
         let refused = 0;
-        const interception = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            create((request, grant) => {
-              if (request.stage === "open") {
-                refused++;
-                throw new Error("controlled opening revocation");
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const interception = probe.admission(admission, (request, grant, admit) => {
+          if (request.stage === "open") {
+            refused++;
+            throw new Error("controlled opening revocation");
+          }
+          admit(request, grant);
+        });
         options = { ...options, path: path.join(root, "refused.sqlite") };
         const openMarker = path.join(root, "factory-entered");
         const { worker: refusedWorker } = await setup({ openMarker });
@@ -784,21 +775,16 @@ describe.each(["borrowed", "captured"] as const)(
         const { db, worker } = await setup();
         const committed = createDeferredCore<number>();
         const release = createDeferredCore();
-        const create = admission.createSqliteWorkerOperationAdmission;
         let refuseCleanup = false;
         let refusals = 0;
-        const interception = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            create((request, grant) => {
-              if (refuseCleanup && request.stage === "prepare") {
-                refuseCleanup = false;
-                refusals++;
-                throw new Error("controlled publication cleanup admission refusal");
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const interception = probe.admission(admission, (request, grant, admit) => {
+          if (refuseCleanup && request.stage === "prepare") {
+            refuseCleanup = false;
+            refusals++;
+            throw new Error("controlled publication cleanup admission refusal");
+          }
+          admit(request, grant);
+        });
         const first = worker.run(
           async (scope) => {
             const result = await scope.execute({ type: "append", input: { value: "first" } });

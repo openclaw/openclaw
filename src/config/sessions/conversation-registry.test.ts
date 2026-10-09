@@ -1,15 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -27,6 +30,15 @@ import {
   loadReplySessionInitializationSnapshot,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
+import {
+  conversationPublication,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
+import {
+  linkSessionConversation,
+  prepareConversationIdentities,
+  upsertConversationIdentities,
+} from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -50,6 +62,7 @@ describe("conversation registry", () => {
 
   const tempDirs = createTempDirTracker();
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const dir of tempDirs.dirs) {
       await closeOpenClawAgentDatabasesAsync(dir);
       closeOpenClawAgentDatabasesForTest(dir);
@@ -115,7 +128,28 @@ describe("conversation registry", () => {
       label: "@peer-a's agent",
     });
     expect(identity).toBeDefined();
-    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    const receipts: ConversationPublication[] = [];
+    const unsubscribe = conversationPublication.subscribe((receipt) => receipts.push(receipt));
+    try {
+      await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    } finally {
+      unsubscribe();
+    }
+    expect(receipts).toHaveLength(1);
+    expect(
+      receipts[0]?.facts.get(JSON.stringify(["catalogue", identity!.conversationRef])),
+    ).toMatchObject({
+      kind: "postimage",
+      value: {
+        kind: "catalogue",
+        row: {
+          conversation_id: identity!.conversationRef,
+          label: identity!.label,
+          created_at: 100,
+          updated_at: 100,
+        },
+      },
+    });
 
     const [conversation] = await listConversations(
       { agentId: "main", storePath },
@@ -689,5 +723,193 @@ describe("conversation registry", () => {
     expect(
       await readConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
     ).not.toMatchObject({ sessionId: expect.any(String), sessionKey: expect.any(String) });
+  });
+
+  it("publishes native association role removals atomically and drops rolled-back catalogue changes", async () => {
+    const scope = { agentId: "main", sessionKey: "agent:main:receipt", storePath };
+    const sessionId = "receipt-session";
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+    const identities = ["first", "second"].map((peerId) =>
+      buildConversationIdentity({
+        channel: "fixture",
+        accountId: "default",
+        kind: "channel",
+        peerId,
+        deliveryTarget: peerId,
+      })!,
+    );
+    const write = (index: number, updatedAt: number) =>
+      runOpenClawAgentWriteTransaction((database) => {
+        const identity = identities[index]!;
+        upsertConversationIdentities(
+          database,
+          prepareConversationIdentities([identity]),
+          updatedAt,
+        );
+        linkSessionConversation({
+          database,
+          sessionId,
+          conversation: { identity, role: "primary" },
+          updatedAt,
+        });
+      }, options);
+    write(0, 10);
+    const installed = new Map<string, unknown>();
+    const snapshots: string[][] = [];
+    const receipts: ConversationPublication[] = [];
+    const unsubscribeFacts = conversationPublication.subscribeFacts((receipt) => {
+      if (!("facts" in receipt)) {
+        return;
+      }
+      for (const [key, fact] of receipt.facts) {
+        installed.set(key, fact);
+      }
+    });
+    const unsubscribe = conversationPublication.subscribe((receipt) => {
+      receipts.push(receipt);
+      snapshots.push([...installed.keys()].toSorted());
+    });
+    try {
+      write(1, 20);
+      const oldPrimary = JSON.stringify([
+        "association",
+        sessionId,
+        identities[0]!.conversationRef,
+        "primary",
+      ]);
+      const oldRelated = JSON.stringify([
+        "association",
+        sessionId,
+        identities[0]!.conversationRef,
+        "related",
+      ]);
+      const newPrimary = JSON.stringify([
+        "association",
+        sessionId,
+        identities[1]!.conversationRef,
+        "primary",
+      ]);
+      expect(installed.get(oldPrimary)).toEqual({ kind: "absent" });
+      expect(installed.get(oldRelated)).toMatchObject({
+        kind: "postimage",
+        value: { row: { role: "related", first_seen_at: 10, last_seen_at: 20 } },
+      });
+      expect(installed.get(newPrimary)).toMatchObject({
+        kind: "postimage",
+        value: { row: { role: "primary", first_seen_at: 20, last_seen_at: 20 } },
+      });
+      expect(snapshots).toHaveLength(2);
+      expect(
+        snapshots.every(
+          (keys) =>
+            keys.includes(oldPrimary) && keys.includes(oldRelated) && keys.includes(newPrimary),
+        ),
+      ).toBe(true);
+      expect(() =>
+        runOpenClawAgentWriteTransaction(() => {
+          write(0, 30);
+          throw new Error("rollback conversation");
+        }, options),
+      ).toThrow("rollback conversation");
+      expect(receipts).toHaveLength(2);
+      expect(
+        openOpenClawAgentDatabase(options)
+          .db.prepare(
+            "SELECT role FROM session_conversations WHERE session_id = ? AND conversation_id = ?",
+          )
+          .get(sessionId, identities[1]!.conversationRef),
+      ).toEqual({ role: "primary" });
+    } finally {
+      unsubscribeFacts();
+      unsubscribe();
+    }
+  });
+
+  it("retires catalogue coverage after unknown native settlement", async () => {
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "unknown-settlement",
+      deliveryTarget: "reef:unknown-settlement",
+    })!;
+    const nativeOutcomes: string[] = [];
+    const outcomes: string[] = [];
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((...args) => {
+      const owner = createAdmission(...args);
+      const finish = owner.finish.bind(owner);
+      owner.finish = () => {
+        finish();
+        const settled = owner.settlement;
+        if (settled?.committed && settled.kind === "completed") {
+          nativeOutcomes.push(settled.kind);
+          // Preserve the real commit receipt while simulating an uncertain terminal observation.
+          vi.spyOn(owner, "settlement", "get").mockReturnValue({ ...settled, kind: "unknown" });
+        }
+      };
+      return owner;
+    });
+    const unsubscribe = conversationPublication.subscribeFacts((change) => {
+      if ("kind" in change && change.kind === "settled") {
+        outcomes.push(change.outcome ?? "missing");
+      }
+    });
+    try {
+      await registerConversationAddresses({ agentId: "main", storePath }, [identity], 100);
+      expect(
+        await readConversation({ agentId: "main", storePath }, identity.conversationRef),
+      ).toMatchObject({ conversationRef: identity.conversationRef, lastSeenAt: 100 });
+      expect(nativeOutcomes).toEqual(["completed"]);
+      expect(outcomes.at(-1)).toBe("unknown");
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("commits catalogue metadata whose encoded receipt exceeds the transport limit", async () => {
+    const scope = { agentId: "main", storePath };
+    const identity = buildConversationIdentity({
+      channel: "fixture",
+      accountId: "default",
+      kind: "direct",
+      peerId: "large-catalogue",
+      deliveryTarget: "large-catalogue",
+    })!;
+    // The request fits IPC; JSON's six-byte escape expands the stored postimage beyond it.
+    identity.metadata = {
+      payload: "\0".repeat(Math.floor(SQLITE_WORKER_MAX_MESSAGE_BYTES / 6) + 1),
+    };
+    const events: string[] = [];
+    const unsubscribe = conversationPublication.subscribeFacts((change) => {
+      if ("kind" in change) {
+        events.push(change.kind);
+      }
+    });
+    try {
+      const outcome = await registerConversationAddresses(scope, [identity], 100).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      events.push("reply");
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+      expect(
+        database.db
+          .prepare(
+            "SELECT length(metadata_json) AS bytes, updated_at FROM conversations WHERE conversation_id = ?",
+          )
+          .get(identity.conversationRef),
+      ).toEqual({
+        bytes: JSON.stringify(identity.metadata).length,
+        updated_at: 100,
+      });
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.value).toBeUndefined();
+      expect(events).toContain("unknown");
+      expect(events.indexOf("unknown")).toBeLessThan(events.indexOf("reply"));
+    } finally {
+      unsubscribe();
+    }
   });
 });

@@ -60,6 +60,8 @@ export async function withGatewayServiceUpdateAuthority<T>(
 ): Promise<T> {
   const parent = owners.getStore();
   const originalRoot = parent?.originalRoot ?? options?.originalRoot;
+  const closedError = () =>
+    new GatewayServiceAuthorityError(new Error("Native service authority has closed."));
   let active = true;
   let accepting = true;
   let tail: Promise<unknown> = Promise.resolve();
@@ -75,7 +77,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
   };
   const assertScope = (compensating = false) => {
     if (!active) {
-      throw new GatewayServiceAuthorityError(new Error("Native service authority has closed."));
+      throw closedError();
     }
     try {
       // Caller assertions can borrow a native lock whose checks consult this scope.
@@ -118,7 +120,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
       (nativeCommand === parent?.nativeCommand ? parent?.nativeDispatch : undefined) ??
       (async (argv, commandOptions, assertSubmittedScope) => {
         if (!active || !accepting) {
-          throw new GatewayServiceAuthorityError(new Error("Native service authority has closed."));
+          throw closedError();
         }
         const command = [...argv];
         const selected = {
@@ -137,9 +139,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
         const work = track(
           previous.then(async () => {
             if (!active || !accepting) {
-              throw new GatewayServiceAuthorityError(
-                new Error("Native service authority has closed."),
-              );
+              throw closedError();
             }
             assertCurrent();
             assertSubmittedScope();
@@ -173,9 +173,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
       });
     const bound: GatewayServiceNativeCommand = (argv, commandOptions) => {
       if (!active || !accepting) {
-        return Promise.reject(
-          new GatewayServiceAuthorityError(new Error("Native service authority has closed.")),
-        );
+        return Promise.reject(closedError());
       }
       return track(dispatch(argv, commandOptions, assertCurrent));
     };

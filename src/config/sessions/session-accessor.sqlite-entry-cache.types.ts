@@ -54,6 +54,7 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
         }
       : {}),
     archivedAt: entry.archivedAt,
+    category: entry.category,
     ...(entry.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
@@ -81,6 +82,7 @@ export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
+  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
 };
@@ -135,6 +137,7 @@ export type SessionEntryReplacementPostimage = { entry: SessionEntry } & (
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
@@ -200,6 +203,7 @@ export type SessionEntryPublicationRecord = {
   | {
       kind: "metadata";
       sharingChange: "changed" | "unchanged";
+      previous?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
       prepared: PreparedSessionEntryChanges;
       /** Row delivery rechecks and folds synchronous writes made by earlier listeners. */
       readCurrent?: (sessionKey: string) =>

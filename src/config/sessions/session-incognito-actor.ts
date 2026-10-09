@@ -16,6 +16,7 @@ import {
   readIncognitoGrantFacts,
   type IncognitoEntryOperations,
   type IncognitoSessionRunner,
+  type IncognitoSessionPublication,
 } from "./session-incognito-admission.js";
 import {
   bindIncognitoSessionStoreReads,
@@ -39,13 +40,7 @@ import type {
 } from "./session-incognito-contract.js";
 import type { IncognitoEntryPatchAuthorizer } from "./session-incognito-entry-patch-contract.js";
 import {
-  incognitoHistoryKeys,
-  isIncognitoHistoryCommand,
-} from "./session-incognito-history-contract.js";
-import {
   captureIncognitoLifecycleSettlement,
-  incognitoLifecycleKeys,
-  isIncognitoLifecycleCommand,
   isIncognitoLifecycleWrite,
   type IncognitoLifecycleEntry,
   type IncognitoLifecycleOperations,
@@ -62,6 +57,7 @@ import {
   type IncognitoSideDataOperations,
 } from "./session-incognito-side-data-contract.js";
 import {
+  isIncognitoTranscriptReceiptCommand,
   isIncognitoTranscriptWrite,
   type IncognitoTranscriptOperations,
 } from "./session-incognito-transcript-contract.js";
@@ -71,8 +67,6 @@ import type {
   PendingInputMutation,
   PendingInputRead,
 } from "./session-pending-input-operations.types.js";
-
-export type { IncognitoSessionRunner } from "./session-incognito-admission.js";
 
 export type { IncognitoSessionClaim } from "./session-incognito-authority.js";
 
@@ -174,12 +168,7 @@ export function createIncognitoSessionFacts(
         signal?: AbortSignal,
         companion?: LifecycleSettlement,
         cleanup = false,
-        publication?: {
-          factsKey?: "entry";
-          prepare?(facts: unknown): void;
-          authorize(stage: "transaction" | "commit", facts: unknown): void;
-          decodeReceipt(facts: unknown): IncognitoSessionOperations[Key]["output"];
-        },
+        publication?: IncognitoSessionPublication<Key>,
         restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
         onCommitted?: (value: IncognitoSessionOperations[Key]["output"]) => void,
         onCommittedWithoutReply?: (facts: readonly IncognitoSessionFacts[]) => void,
@@ -355,25 +344,12 @@ export function createIncognitoSessionFacts(
                     (request.stage === "commit" && publication?.factsKey === "entry"
                       ? publication.decodeReceipt(request.facts.entry).facts
                       : undefined);
-                  const facts = readIncognitoGrantFacts(received, identity);
-                  const keys = facts.map((entry) => entry.sessionKey);
-                  const lifecycleKeys = isIncognitoLifecycleCommand(captured)
-                    ? incognitoLifecycleKeys(captured, identity)
-                    : undefined;
-                  const historyKeys = isIncognitoHistoryCommand(captured)
-                    ? incognitoHistoryKeys(captured)
-                    : undefined;
-                  if (
-                    new Set(keys).size !== keys.length ||
-                    (historyKeys && !isDeepStrictEqual(keys, historyKeys)) ||
-                    (lifecycleKeys && !isDeepStrictEqual(keys, lifecycleKeys)) ||
-                    (!historyKeys &&
-                      "sessionKey" in captured.input &&
-                      (keys.length !== 1 || keys[0] !== captured.input.sessionKey)) ||
-                    (request.stage === "commit" && !isDeepStrictEqual(keys, [...targets]))
-                  ) {
-                    throw new Error("Incognito session grant changed its target set");
-                  }
+                  const facts = readIncognitoGrantFacts(
+                    received,
+                    identity,
+                    captured,
+                    request.stage === "commit" ? targets : undefined,
+                  );
                   commandGrant.capture(request.stage, facts);
                   for (const entry of facts) {
                     targets.add(entry.sessionKey);
@@ -446,6 +422,7 @@ export function createIncognitoSessionFacts(
           onCommitted?: (value: IncognitoEntryOperations[Key]["output"]) => void,
           onRead?: (value: IncognitoEntryOperations[Key]["output"]) => void,
           authorizePrepared?: IncognitoEntryPatchAuthorizer,
+          authorizePublication?: (facts: unknown) => void,
         ): Promise<IncognitoEntryOperations[Key]["output"]> =>
           perform(
             authority,
@@ -458,7 +435,7 @@ export function createIncognitoSessionFacts(
             signal,
             undefined,
             false,
-            incognitoEntryPublication(command.type, authorizePrepared),
+            incognitoEntryPublication(command.type, authorizePrepared, authorizePublication),
             undefined,
             onCommitted ? (result) => onCommitted(result.value) : undefined,
           ),
@@ -659,16 +636,23 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
           onCommitted?: (value: IncognitoTranscriptOperations[Key]["output"]) => void,
+          onRead?: (value: IncognitoTranscriptOperations[Key]["output"]) => void,
+          authorizePrepared?: IncognitoEntryPatchAuthorizer,
         ): Promise<IncognitoTranscriptOperations[Key]["output"]> =>
           perform(
             authority,
             command,
             isIncognitoTranscriptWrite(command.type),
-            (result) => result.value,
+            (result) => {
+              onRead?.(result.value);
+              return result.value;
+            },
             signal,
             undefined,
             false,
-            undefined,
+            isIncognitoTranscriptReceiptCommand(command.type)
+              ? incognitoEntryPublication(command.type, authorizePrepared)
+              : undefined,
             restrict,
             onCommitted ? (result) => onCommitted(result.value) : undefined,
           ),
@@ -683,6 +667,7 @@ export function createIncognitoSessionFacts(
           command: { type: Key; input: IncognitoLifecycleOperations[Key]["input"] },
           signal?: AbortSignal,
           captureLifecycle?: (entries: readonly IncognitoLifecycleEntry[]) => LifecycleSettlement,
+          onCommitted?: (value: IncognitoLifecycleOperations[Key]["output"]) => void,
         ): Promise<IncognitoLifecycleOperations[Key]["output"]> => {
           assertBorrowed();
           authority.assertCurrent();
@@ -694,6 +679,13 @@ export function createIncognitoSessionFacts(
             (result) => result.value,
             signal,
             captureIncognitoLifecycleSettlement(captured.input, captureLifecycle),
+            false,
+            captured.type === "session.lifecycle.messageCut" ||
+              captured.type === "session.lifecycle.maintenance"
+              ? incognitoEntryPublication<Key>(captured.type)
+              : undefined,
+            undefined,
+            onCommitted ? (result) => onCommitted(result.value) : undefined,
           );
         },
         ...captureRead(assertBorrowed),

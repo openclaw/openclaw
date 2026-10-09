@@ -20,7 +20,10 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import {
   publishPluginSourceAdmissionInDatabase,
   refreshPersistedInstalledPluginIndexWithLeaseSync,
-  type PreparedInstalledPluginIndexRefresh,
+  restorePersistedInstalledPluginIndexInDatabase,
+  writePersistedInstalledPluginIndexToSqlite,
+  type InstalledPluginIndexWriteLease,
+  type InstalledPluginIndexWriteOperations,
 } from "./installed-plugin-index-store-write.js";
 import {
   readHostedCatalogSnapshotInDatabase,
@@ -31,11 +34,38 @@ import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-ext
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
+function indexWriteLease(identity: OpenClawStateLeaseIdentity): InstalledPluginIndexWriteLease {
+  return {
+    assertOwnedInTransaction(db, stage = "transaction") {
+      assertOpenClawStateLeaseWorkerOwnedInTransaction(db, identity, "write", stage);
+    },
+  };
+}
+
 export const pluginRuntimeOperations = {
-  "plugins.metadata.index.refresh": (
-    input: { identity: OpenClawStateLeaseIdentity; prepared: PreparedInstalledPluginIndexRefresh },
+  "plugins.metadata.index.write": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.write"]["input"],
     { open },
-  ) => {
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.write"]["output"] =>
+    writePersistedInstalledPluginIndexToSqlite(
+      input.index,
+      { database: open() },
+      indexWriteLease(input.identity),
+    ),
+  "plugins.metadata.index.restore": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.restore"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.restore"]["output"] =>
+    restorePersistedInstalledPluginIndexInDatabase(
+      input.index,
+      input.expectedRevision,
+      open(),
+      indexWriteLease(input.identity),
+    ),
+  "plugins.metadata.index.refresh": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.refresh"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.refresh"]["output"] => {
     const { installRoots, nowMs, candidates, discovery, ...prepared } = input.prepared;
     const restoreCandidates = (values: NonNullable<typeof candidates>) =>
       values.map(({ candidate, installOwner, ambiguous }) =>
@@ -55,12 +85,8 @@ export const pluginRuntimeOperations = {
           filePath: database.path,
           database,
           ...(nowMs !== undefined ? { now: () => new Date(nowMs) } : {}),
-          lease: {
-            assertOwnedInTransaction(db, stage = "transaction") {
-              assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity, "write", stage);
-            },
-          },
-        }).index;
+          lease: indexWriteLease(input.identity),
+        });
       }),
     );
   },

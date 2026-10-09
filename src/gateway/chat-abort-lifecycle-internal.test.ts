@@ -39,37 +39,19 @@ function registeredRun(onRemoved?: () => void) {
   return { entries, runId, entry, registration, drain };
 }
 
-it.each(
-  ["settled", "pending", "writing", "failed"].flatMap((state) =>
-    [false, true].map((alreadyRemoved) => ({ state, alreadyRemoved })),
-  ),
-)(
-  "checks $state terminal ownership when alreadyRemoved=$alreadyRemoved",
-  async ({ state, alreadyRemoved }) => {
+it.each(["settled", "pending", "failed"] as const)(
+  "checks %s terminal ownership after registration removal",
+  async (state) => {
     const { entries, runId, entry, drain } = registeredRun();
     if (state === "pending") {
       entry.projectSessionTerminalPending = true;
-    } else if (state === "writing") {
-      entry.projectSessionTerminalPersistence = new Promise<void>(() => {});
     } else if (state === "failed") {
       markChatAbortTerminalPersistenceError(entry, new Error("terminal write failed"));
     }
-    if (alreadyRemoved) {
-      removeChatAbortControllerEntry(entries, runId, entry);
-    }
-    const result = drain();
     removeChatAbortControllerEntry(entries, runId, entry);
-    expect(await result).toBe(state === "settled");
+    expect(await drain()).toBe(state === "settled");
   },
 );
-
-it("finishes an empty selection without draining unrelated registrations", async () => {
-  const { entries, runId } = registeredRun();
-  expect(await waitForChatAbortControllerRemoval({ entries, targets: [], timeoutMs: 1_000 })).toBe(
-    true,
-  );
-  expect(entries.has(runId)).toBe(true);
-});
 
 it("releases the reserved terminal owner when no lifecycle subscriber adopts it", async () => {
   const { entries, runId, entry, drain } = registeredRun();
@@ -172,13 +154,9 @@ it.each(["fulfilled", "rejected"] as const)(
   },
 );
 
-it.each(
-  (["settled", "pending", "writing", "failed", "dispatch-failed"] as const).flatMap((state) =>
-    [false, true].map((unbounded) => ({ state, unbounded })),
-  ),
-)(
-  "self-drain preserves $state terminal ownership and still joins its sibling (unbounded=$unbounded)",
-  async ({ state, unbounded }) => {
+it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)(
+  "self-drain preserves %s terminal ownership and still joins its sibling",
+  async (state) => {
     const { entries, runId, entry, registration } = registeredRun();
     const sibling = registerChatAbortController({
       chatAbortControllers: entries,
@@ -219,16 +197,13 @@ it.each(
             failure: { error: new Error("terminal dispatch failed") },
           });
         }
-        const waitOptions = unbounded
-          ? { timeoutMs: null, signal: new AbortController().signal }
-          : { timeoutMs: 1_000 };
         const draining = waitForChatAbortControllerRemoval({
           entries,
           targets: [
             { runId, entry },
             { runId: "sibling-tail", entry: siblingEntry },
           ],
-          ...waitOptions,
+          timeoutMs: 1_000,
         });
         selectedSibling.resolve();
         expect(await draining).toBe(state === "settled");

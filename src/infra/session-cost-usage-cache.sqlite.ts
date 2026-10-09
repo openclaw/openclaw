@@ -15,10 +15,10 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseOperations,
   AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "../state/openclaw-agent-execution-contract.js";
 import {

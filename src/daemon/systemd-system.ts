@@ -2,11 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
+import { formatServiceInspectionDetail } from "./service-runtime.js";
 import {
   readSystemdBusOwner,
   readSystemdUnitObjectPath,
@@ -31,11 +30,6 @@ type SystemSystemdOwnership =
     };
 
 type SystemSystemdConflict = Exclude<SystemSystemdOwnership, { status: "absent" }>;
-
-function formatUnknownError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
 
 function unverifiableSystemOwnership(
   unitName: string,
@@ -104,7 +98,7 @@ async function findInstalledSystemUnitInPaths(
       if (isMissingPathError(error)) {
         continue;
       }
-      const detail = `${unitPath}: ${formatUnknownError(error)}`;
+      const detail = `${unitPath}: ${formatServiceInspectionDetail(error)}`;
       return unverifiableSystemOwnership(unitName, detail, "filesystem");
     }
   }
@@ -200,7 +194,7 @@ async function inspectLoadedSystemOwnership(
     }
     return { status: "absent", unitName };
   } catch (error) {
-    return unverifiableSystemOwnership(unitName, formatUnknownError(error), "busctl");
+    return unverifiableSystemOwnership(unitName, formatServiceInspectionDetail(error), "busctl");
   }
 }
 

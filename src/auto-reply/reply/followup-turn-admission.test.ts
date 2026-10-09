@@ -125,6 +125,26 @@ beforeEach(() => {
 });
 
 describe("admitFollowupTurn", () => {
+  it.each([
+    { sessionKey: " agent:main:session ", expected: "agent:main:session" },
+    { sessionKey: undefined, expected: "legacy-target" },
+  ])("preserves the admitted transcript target $expected", async ({ sessionKey, expected }) => {
+    const queued = createRun();
+    queued.run.sessionKey = sessionKey;
+    queued.run.sessionFile = "legacy-target";
+    state.admitReply.mockResolvedValue({
+      status: "owned",
+      operation: createOperation("admitted-session"),
+    });
+
+    const result = await admitFollowupTurn({ queued, defaults: createDefaults({ sessionKey }) });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.sessionFile).toBe(expected);
+    }
+  });
+
   it("reports each active-run deferral without adopting the queued source", async () => {
     state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
     const onDeferredHeartbeat = vi.fn();

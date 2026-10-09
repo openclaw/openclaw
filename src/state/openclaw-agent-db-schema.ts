@@ -33,14 +33,18 @@ import {
 } from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
+  ensureLegacySessionEntryValidityTriggers,
+  migrateCanonicalSessionWriterValidation,
+} from "./openclaw-agent-canonical-validation-migration.js";
+import {
   canonicalSessionValidationSchemaSql,
   assertCanonicalSessionValidationSchema,
-  withoutCanonicalSessionValidationSchema,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
+  CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   TRANSCRIPT_FTS_ROW_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
@@ -420,6 +424,10 @@ function ensureAgentSchema(
         previousVersion === 0 &&
         readExistingAgentSchemaMeta(db) === null &&
         !db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
+      const requiresCanonicalWriterMigration =
+        !isEmptyDatabase &&
+        previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
+        targetVersion >= CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION;
       const requiresStorageMigration =
         !isEmptyDatabase &&
         previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
@@ -437,7 +445,7 @@ function ensureAgentSchema(
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
-        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
+        previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
         targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
       ) {
         if (previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
@@ -446,15 +454,13 @@ function ensureAgentSchema(
           migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
           ensureSessionAdditiveColumns(db);
           ensureSessionEntryValidityProjection(db);
+          ensureLegacySessionEntryValidityTriggers(db);
           ensureSessionKeyContractSchemaInTransaction(db);
           if (hasPendingMemoryChunkMetadataMigration(db)) {
             migrateMemoryChunkMetadataSchema(db);
           }
         }
-        const previousSchema =
-          previousVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
-            ? withoutCanonicalSessionValidationSchema(migrationSchemaSql)
-            : migrationSchemaSql;
+        const previousSchema = getOpenClawAgentMigrationSchema(previousVersion);
         repairCanonicalSqliteIndexes(db, pathname, previousSchema, {
           verifyPhysicalIntegrity: false,
         });
@@ -465,13 +471,18 @@ function ensureAgentSchema(
         );
         if (previousVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
           db.exec(canonicalSessionValidationSchemaSql(migrationSchemaSql));
-          seedCanonicalSessionValidationPending(db);
+          if (!requiresCanonicalWriterMigration) {
+            seedCanonicalSessionValidationPending(db);
+          }
         }
         if (requiresStorageMigration) {
           migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
         }
         if (requiresSnapshotMigration) {
           migrateSessionEntrySnapshotsInTransaction(db);
+        }
+        if (requiresCanonicalWriterMigration) {
+          migrateCanonicalSessionWriterValidation(db);
         }
         finishAgentSchemaMigration(
           db,
@@ -486,6 +497,7 @@ function ensureAgentSchema(
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
         ensureSessionAdditiveColumns(db);
+        ensureLegacySessionEntryValidityTriggers(db);
         assertSqliteIntegrity(db, pathname);
         migrateMemoryChunkMetadataSchema(db);
         // Validate before CREATE IF NOT EXISTS can conceal missing required storage.
@@ -554,7 +566,8 @@ function ensureAgentSchema(
       }
       if (
         previousVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION &&
-        targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+        targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION &&
+        !requiresCanonicalWriterMigration
       ) {
         seedCanonicalSessionValidationPending(db);
       }
@@ -563,6 +576,9 @@ function ensureAgentSchema(
       }
       if (requiresSnapshotMigration) {
         migrateSessionEntrySnapshotsInTransaction(db);
+      }
+      if (requiresCanonicalWriterMigration) {
+        migrateCanonicalSessionWriterValidation(db);
       }
       finishAgentSchemaMigration(
         db,

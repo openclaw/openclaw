@@ -418,7 +418,8 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
     ) => {
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
-        const patch = reduceSessionEntryPatch(operation, { sessionId: "", updatedAt: 0, ...entry });
+        const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
+        const patch = reduceSessionEntryPatch(operation, currentEntry, currentEntry);
         wrote = patch !== null;
         return patch;
       });

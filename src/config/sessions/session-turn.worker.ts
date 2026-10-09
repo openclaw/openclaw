@@ -29,6 +29,11 @@ import {
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
+let voiceKernel: typeof import("../../talk/client-voice-session-write.kernel.js") | undefined;
+export async function prepareVoiceTranscriptCommit() {
+  voiceKernel ??= await import("../../talk/client-voice-session-write.kernel.js");
+}
+
 function inCustody<T>(
   input: SessionTurnPlan,
   context: AgentWorkerOperationContext,
@@ -73,8 +78,18 @@ function inCustody<T>(
     : owned();
 }
 
-export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerOperationContext) {
+export function prepareSessionTurn(
+  input: SessionTurnPlan,
+  context: AgentWorkerOperationContext,
+  incarnation?: string,
+) {
   const database = context.open();
+  const ownerSourceValidation = input.ownerSources?.length
+    ? readSessionSourceValidation(database, input.ownerSources, incarnation)
+    : undefined;
+  if (ownerSourceValidation?.refusedSource) {
+    return { refusedOwnerSource: ownerSourceValidation.refusedSource };
+  }
   prepareSessionTurnRouting(
     input.options.sessionTurnMutation?.routingPredicate,
     context.options.env,
@@ -117,6 +132,7 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
       : undefined;
   if (input.prepareColdTranscript && transcriptState?.coldArchive) {
     return {
+      ownerSourceValidation,
       result: undefined,
       messages: [],
       coldArchive: transcriptState.coldArchive,
@@ -144,6 +160,7 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
         }),
       );
   return {
+    ownerSourceValidation,
     result,
     messages,
     coldArchive: undefined,
@@ -156,12 +173,32 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
 }
 
 export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOperationContext) {
+  return applySessionTurn(input, context, (database, candidate) =>
+    transferSessionEntryWorkerCandidate(database, context.admit, candidate),
+  );
+}
+
+export function applySessionTurn<T>(
+  input: SessionTurnPlan,
+  context: AgentWorkerOperationContext,
+  publish: (
+    database: ReturnType<AgentWorkerOperationContext["open"]>,
+    candidate: SessionTurnCommitted,
+  ) => T,
+  incarnation?: string,
+) {
   const assertRouting = prepareSessionTurnRouting(
     input.options.sessionTurnMutation?.routingPredicate,
     context.options.env,
   );
   return inCustody(input, context, () =>
     context.writeTransaction("session.transcript.append-turn", "Session turn", (database) => {
+      if (input.ownerSources?.length) {
+        context.admit("transaction", {
+          kind: "session-turn-owner",
+          sourceValidation: readSessionSourceValidation(database, input.ownerSources, incarnation),
+        });
+      }
       const scope = {
         agentId: input.agentId,
         path: context.options.path,
@@ -173,14 +210,14 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
         : undefined;
       const messages = input.options.messages.map((append, index) => ({
         ...append,
-        ...(append.preparation
-          ? { prepareMessageAfterIdempotencyCheck: () => append.preparation!.message }
+        ...(append.preparedMessage
+          ? { prepareMessageAfterIdempotencyCheck: () => append.preparedMessage!.message }
           : {}),
-        ...(append.freshGuard || append.preparation
+        ...(append.freshGuard || append.preparedMessage
           ? {
               beforeFreshMessageCommit: () => {
                 // The append kernel invokes this only after replay and custody recognition.
-                if (append.preparation && !append.preparation.prepared) {
+                if (append.preparedMessage && !append.preparedMessage.prepared) {
                   throw new SqliteTranscriptMutationConflictError(scope.sessionId);
                 }
                 if (
@@ -193,7 +230,11 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
                   context.admit("transaction", {
                     kind: "session-turn-fresh",
                     index,
-                    sourceValidation: readSessionSourceValidation(database, append.sources),
+                    sourceValidation: readSessionSourceValidation(
+                      database,
+                      append.sources,
+                      incarnation,
+                    ),
                   });
                 }
               },
@@ -211,7 +252,7 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
       );
       // Prepared host hooks are never replayed after a foreign writer changes their idempotency decision.
       for (const append of input.options.messages) {
-        if (!append.preparation?.prepared) {
+        if (!append.preparedMessage?.prepared) {
           continue;
         }
         const key = readMessageIdempotencyKey(append.message);
@@ -224,7 +265,7 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
                 append.idempotencyLookup,
               )
             : undefined;
-        if (!isDeepStrictEqual(current, append.preparation.expected)) {
+        if (!isDeepStrictEqual(current, append.preparedMessage.expected)) {
           throw new Error("Transcript idempotency changed while preparing the turn");
         }
       }
@@ -235,6 +276,16 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
           projectionNeedsReconcile = true;
         },
       });
+      if (input.options.voiceTranscript && committed.result.appendedMessages.length === 1) {
+        if (!voiceKernel) {
+          throw new Error("Voice transcript commit was not prepared");
+        }
+        committed.result.voiceSession = voiceKernel.mutateVoiceSessionInDatabase(database, {
+          ...input.options.voiceTranscript,
+          kind: "confirm",
+          now: Date.now(),
+        });
+      }
       const revision = getSqliteReadScopeRevision(database.db);
       const publication = committed.identity
         ? prepareSessionEntryReplacementPublication(
@@ -273,7 +324,14 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
             : undefined,
         publication,
       };
-      return transferSessionEntryWorkerCandidate(database, context.admit, candidate);
+      if (incarnation && candidate.publication?.source) {
+        // The publication and its commit receipt share this locally created source.
+        Object.assign(candidate.publication.source, {
+          identity: incarnation,
+          incarnation,
+        });
+      }
+      return publish(database, candidate);
     }),
   );
 }

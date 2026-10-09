@@ -21,6 +21,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { captureEffectAuthority, withEffectPreparation } from "../../shared/effect-authority.js";
@@ -797,19 +798,14 @@ it.each([false, true])(
 it("enrolls approval mutations in the same physical receipt authority boundary", async () => {
   await withOpenClawTestState({ label: "cron-authority-approval-enrollment" }, async (fixture) => {
     const owner = await seed(fixture);
-    const create = workerAdmission.createSqliteWorkerOperationAdmission;
     const stages: string[] = [];
-    const factory = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        create((request, grant) => {
-          if (request.stage === "transaction" || request.stage === "commit") {
-            expect(() => owner.observation.readForPreparation()).toThrow("unavailable");
-            stages.push(request.stage);
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const factory = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction" || request.stage === "commit") {
+        expect(() => owner.observation.readForPreparation()).toThrow("unavailable");
+        stages.push(request.stage);
+      }
+      admit(request, grant);
+    });
     try {
       await expect(
         revokeCronStandingGrant({

@@ -92,10 +92,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
     return undefined;
   }
   const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
+  if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {
     return undefined;
   }
   if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
@@ -150,16 +147,9 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 100;
   }
-  let best: TextScaleStop = TEXT_SCALE_STOPS[0];
-  let bestDist = Math.abs(value - best);
-  for (const stop of TEXT_SCALE_STOPS) {
-    const dist = Math.abs(value - stop);
-    if (dist < bestDist) {
-      best = stop;
-      bestDist = dist;
-    }
-  }
-  return best;
+  return TEXT_SCALE_STOPS.reduce((best, stop) =>
+    Math.abs(value - stop) < Math.abs(value - best) ? stop : best,
+  );
 }
 
 export const UI_APPEARANCE_DEFAULTS = {
@@ -246,9 +236,10 @@ function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
 }
 
-function normalizeBooleanSetting<T extends boolean | undefined>(value: unknown, fallback: T) {
-  return typeof value === "boolean" ? value : fallback;
-}
+type BooleanSettingKey = {
+  [K in keyof UiPreferences]-?: UiPreferences[K] extends boolean | undefined ? K : never;
+}[keyof UiPreferences] &
+  keyof PersistedUiSettings;
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -498,6 +489,10 @@ export function loadUiPreferences(
             ),
           )
         : null;
+    const booleanSetting = <K extends BooleanSettingKey>(key: K) => {
+      const value = parsed[key];
+      return typeof value === "boolean" ? value : defaults[key];
+    };
     const settings: UiPreferences = {
       gatewayUrl,
       sessionKey: scopedSessionSelection.sessionKey,
@@ -510,32 +505,17 @@ export function loadUiPreferences(
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
       tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
-      chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
-      chatShowToolCalls: normalizeBooleanSetting(
-        parsed.chatShowToolCalls,
-        defaults.chatShowToolCalls,
-      ),
-      chatPersistCommentary: normalizeBooleanSetting(
-        parsed.chatPersistCommentary,
-        defaults.chatPersistCommentary,
-      ),
-      chatShowTaskProgress: normalizeBooleanSetting(
-        parsed.chatShowTaskProgress,
-        defaults.chatShowTaskProgress,
-      ),
-      chatCollapseTaskProgress: normalizeBooleanSetting(
-        parsed.chatCollapseTaskProgress,
-        defaults.chatCollapseTaskProgress,
-      ),
+      chatShowThinking: booleanSetting("chatShowThinking"),
+      chatShowToolCalls: booleanSetting("chatShowToolCalls"),
+      chatPersistCommentary: booleanSetting("chatPersistCommentary"),
+      chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
+      chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
-      composerHoldToRecord: normalizeBooleanSetting(
-        parsed.composerHoldToRecord,
-        defaults.composerHoldToRecord,
-      ),
+      composerHoldToRecord: booleanSetting("composerHoldToRecord"),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -559,15 +539,9 @@ export function loadUiPreferences(
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
-      sidebarLiveActivity: normalizeBooleanSetting(
-        parsed.sidebarLiveActivity,
-        defaults.sidebarLiveActivity,
-      ),
+      sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
-      showAdvancedSettings: normalizeBooleanSetting(
-        parsed.showAdvancedSettings,
-        defaults.showAdvancedSettings,
-      ),
+      showAdvancedSettings: booleanSetting("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
       textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,

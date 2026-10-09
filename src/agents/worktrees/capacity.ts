@@ -175,7 +175,9 @@ export function createWorktreeDiskAdmission(params: {
 export async function estimateWorktreeGitBytes(
   repoRoot: string,
   ref: string,
-  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> = {},
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> & {
+    preparationKey?: string;
+  } = {},
 ): Promise<number> {
   return await runGitWorkerOperation(
     {
@@ -184,6 +186,7 @@ export async function estimateWorktreeGitBytes(
         repoRoot,
         ref,
         replacementRefBase: process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/",
+        preparationKey: options.preparationKey,
       },
     },
     options,

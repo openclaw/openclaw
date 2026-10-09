@@ -7,6 +7,7 @@ import type {
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { withPluginStateWorkerReceipt } from "./plugin-state-publication.js";
 import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
@@ -171,7 +172,9 @@ export function executePluginStateCommand(
       runOpenClawStateWriteTransaction(
         (store) => {
           admit("transaction");
-          deletePluginStateEntry(store.db, command.input);
+          withPluginStateWorkerReceipt(store.db, () =>
+            deletePluginStateEntry(store.db, command.input),
+          );
           admit("commit");
         },
         { ...options, database },
@@ -181,7 +184,7 @@ export function executePluginStateCommand(
       runOpenClawStateWriteTransaction(
         (store) => {
           admit("transaction");
-          const result = (() => {
+          const result = withPluginStateWorkerReceipt(store.db, () => {
             switch (command.type) {
               case "pluginState.appendJournal":
                 return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);
@@ -234,7 +237,7 @@ export function executePluginStateCommand(
               default:
                 throw new Error("Plugin-state read command entered its write path");
             }
-          })();
+          });
           admit("commit");
           return result;
         },

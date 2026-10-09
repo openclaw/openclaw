@@ -649,16 +649,16 @@ export class ManagedWorktreeService {
         base: sourceProfile?.commit ?? gitBase,
         sourceProfile,
         prepareCommit: async (commit) => {
+          const guard = { signal: params.signal, assertCurrent: params.commitGuard };
           await logWorktreeBase(repository.repoRoot, base, commit, {
             worktreePath,
             ownerId: params.ownerId,
             now: this.now(),
-            signal: params.signal,
-            assertCurrent: params.commitGuard,
+            ...guard,
           });
           return (gitBytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
-            signal: params.signal,
-            assertCurrent: params.commitGuard,
+            ...guard,
+            preparationKey: base.preparationKey,
           }));
         },
         requireSpace: (cloneBytes) =>

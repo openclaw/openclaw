@@ -38,12 +38,8 @@ function normalizedAliases<T extends string | undefined>(
   return new Set([primary, ...normalizeTrimmedStringList(aliases)]);
 }
 
-function durableKeysByInteraction(): Map<string, Set<string>> {
-  return resolveGlobalMap(durableAliasStateSymbol);
-}
-
-function durableExactKeysByInteraction(): Map<string, Set<string>> {
-  return resolveGlobalMap(durableExactStateSymbol);
+function durableKeysByInteraction(kind: "alias" | "exact" = "alias"): Map<string, Set<string>> {
+  return resolveGlobalMap(kind === "exact" ? durableExactStateSymbol : durableAliasStateSymbol);
 }
 
 function removeAliasTarget<T extends Set<string> | Map<string, VolatileAliasTarget>>(
@@ -60,12 +56,12 @@ function removeAliasTarget<T extends Set<string> | Map<string, VolatileAliasTarg
 
 export function resetDurableTabAliases(): void {
   durableKeysByInteraction().clear();
-  durableExactKeysByInteraction().clear();
+  durableKeysByInteraction("exact").clear();
 }
 
 export function clearDurableTabAliases(storageKey: string): void {
   removeAliasTarget(durableKeysByInteraction(), storageKey);
-  removeAliasTarget(durableExactKeysByInteraction(), storageKey);
+  removeAliasTarget(durableKeysByInteraction("exact"), storageKey);
 }
 
 export function rememberDurableTabAliases(
@@ -76,7 +72,7 @@ export function rememberDurableTabAliases(
 ): void {
   clearDurableTabAliases(storageKey);
   const mappings = durableKeysByInteraction();
-  const exactMappings = durableExactKeysByInteraction();
+  const exactMappings = durableKeysByInteraction("exact");
   for (const profile of normalizedAliases(identity.profile, profileAliases)) {
     const exactKey = interactionKey({ ...identity, profile });
     const exactStorageKeys = exactMappings.get(exactKey) ?? new Set<string>();
@@ -101,26 +97,23 @@ function readAliasCandidates<T>(
 }
 
 export function readDurableTabAlias(identity: AliasIdentity, kind: "alias" | "exact" = "alias") {
-  const mappings = kind === "exact" ? durableExactKeysByInteraction() : durableKeysByInteraction();
-  return readAliasCandidates(mappings.get(interactionKey(identity)));
+  return readAliasCandidates(durableKeysByInteraction(kind).get(interactionKey(identity)));
 }
 
 function volatileAliasTargetKey(target: VolatileAliasTarget): string {
   return JSON.stringify([target.sessionKey, target.tabKey]);
 }
 
-function volatileAliasesByInteraction(): Map<string, Map<string, VolatileAliasTarget>> {
-  return resolveGlobalMap(volatileAliasStateSymbol);
-}
-
-function volatileExactTargetsByInteraction(): Map<string, Map<string, VolatileAliasTarget>> {
-  return resolveGlobalMap(volatileExactStateSymbol);
+function volatileAliasesByInteraction(
+  kind: "alias" | "exact" = "alias",
+): Map<string, Map<string, VolatileAliasTarget>> {
+  return resolveGlobalMap(kind === "exact" ? volatileExactStateSymbol : volatileAliasStateSymbol);
 }
 
 export function clearVolatileTabAliases(sessionKey: string, tabKey: string): void {
   const targetKey = volatileAliasTargetKey({ sessionKey, tabKey });
   removeAliasTarget(volatileAliasesByInteraction(), targetKey);
-  removeAliasTarget(volatileExactTargetsByInteraction(), targetKey);
+  removeAliasTarget(volatileAliasesByInteraction("exact"), targetKey);
 }
 
 export function rememberVolatileTabAliases(
@@ -132,7 +125,7 @@ export function rememberVolatileTabAliases(
   clearVolatileTabAliases(identity.sessionKey, tabKey);
   const target = { sessionKey: identity.sessionKey, tabKey };
   const mappings = volatileAliasesByInteraction();
-  const exactMappings = volatileExactTargetsByInteraction();
+  const exactMappings = volatileAliasesByInteraction("exact");
   for (const profile of normalizedAliases(identity.profile, profileAliases)) {
     const exactKey = interactionKey({ ...identity, profile });
     const exactTargets = exactMappings.get(exactKey) ?? new Map<string, VolatileAliasTarget>();
@@ -148,12 +141,10 @@ export function rememberVolatileTabAliases(
 }
 
 export function readVolatileTabAlias(identity: AliasIdentity, kind: "alias" | "exact" = "alias") {
-  const mappings =
-    kind === "exact" ? volatileExactTargetsByInteraction() : volatileAliasesByInteraction();
-  return readAliasCandidates(mappings.get(interactionKey(identity)));
+  return readAliasCandidates(volatileAliasesByInteraction(kind).get(interactionKey(identity)));
 }
 
 export function forgetVolatileTabAlias(identity: AliasIdentity): void {
   volatileAliasesByInteraction().delete(interactionKey(identity));
-  volatileExactTargetsByInteraction().delete(interactionKey(identity));
+  volatileAliasesByInteraction("exact").delete(interactionKey(identity));
 }

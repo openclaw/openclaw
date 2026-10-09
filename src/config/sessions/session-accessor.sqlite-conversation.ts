@@ -15,6 +15,11 @@ import {
   serializeStoredConversationRouteContext,
   type ConversationRouteContext,
 } from "./conversation-route-context.js";
+import {
+  conversationPublication,
+  type ConversationAssociationRow,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
@@ -134,8 +139,10 @@ export function prepareConversationIdentities(
   if (!identities.length) {
     return undefined;
   }
+  // RETURNING order is unspecified; each address must have only its final postimage.
+  const current = new Map(identities.map((identity) => [identity.conversationRef, identity]));
   return encodeSqliteStringSet(
-    identities.flatMap((identity) => [
+    [...current.values()].flatMap((identity) => [
       identity.conversationRef,
       identity.channel,
       identity.accountId,
@@ -157,9 +164,9 @@ export function upsertConversationIdentities(
   database: OpenClawAgentDatabase,
   encoded: string | undefined,
   updatedAt: number,
-): void {
+): ConversationPublication | undefined {
   if (encoded === undefined) {
-    return;
+    return undefined;
   }
   const db = getSessionKysely(database.db);
   const columns = [
@@ -177,7 +184,7 @@ export function upsertConversationIdentities(
     "metadata_json",
   ] as const;
   const fields = sqliteStringSetEntries(encoded).as("field");
-  executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
@@ -219,8 +226,10 @@ export function upsertConversationIdentities(
           metadata_json: eb.ref("excluded.metadata_json"),
           updated_at: updatedAt,
         })),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  return conversationPublication.stageRows(database, { catalogues: rows });
 }
 
 /** Links one external address to its local context without conflating the two identities. */
@@ -259,6 +268,8 @@ export function linkSessionConversation(params: {
           )
         : null
       : serializeStoredConversationRouteContext(conversation.routeContext, updatedAt);
+  const associations: ConversationAssociationRow[] = [];
+  const removedAssociations: ConversationAssociationRow[] = [];
   if (conversation.role === "primary") {
     const stalePrimaryRows = executeSqliteQuerySync(
       database.db,
@@ -270,7 +281,7 @@ export function linkSessionConversation(params: {
         .where("conversation_id", "!=", conversation.identity.conversationRef),
     ).rows;
     if (stalePrimaryRows.length > 0) {
-      executeSqliteQuerySync(
+      const related = executeSqliteQuerySync(
         database.db,
         db
           .insertInto("session_conversations")
@@ -293,30 +304,36 @@ export function linkSessionConversation(params: {
               route_context_json: eb.ref("excluded.route_context_json"),
               last_seen_at: updatedAt,
             })),
-          ),
-      );
-      executeSqliteQuerySync(
+          )
+          .returningAll(),
+      ).rows;
+      associations.push(...related);
+      const removed = executeSqliteQuerySync(
         database.db,
         db
           .deleteFrom("session_conversations")
           .where("session_id", "=", sessionId)
           .where("role", "=", "primary")
-          .where("conversation_id", "!=", conversation.identity.conversationRef),
-      );
+          .where("conversation_id", "!=", conversation.identity.conversationRef)
+          .returningAll(),
+      ).rows;
+      removedAssociations.push(...removed);
     }
   }
 
   // A conversation has exactly one role within a session. Remove stale role rows
   // before inserting the current one because role participates in the table PK.
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     database.db,
     db
       .deleteFrom("session_conversations")
       .where("session_id", "=", sessionId)
       .where("conversation_id", "=", conversation.identity.conversationRef)
-      .where("role", "!=", conversation.role),
-  );
-  executeSqliteQuerySync(
+      .where("role", "!=", conversation.role)
+      .returningAll(),
+  ).rows;
+  removedAssociations.push(...removed);
+  const linked = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("session_conversations")
@@ -333,6 +350,9 @@ export function linkSessionConversation(params: {
           route_context_json: routeContextJson,
           last_seen_at: updatedAt,
         }),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  associations.push(...linked);
+  conversationPublication.stageRows(database, { associations, removedAssociations });
 }

@@ -3,7 +3,6 @@ import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/n
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
-import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioClearReason,
@@ -172,18 +171,23 @@ export function createTalkRealtimeRelaySession(
     initialItems: params.initialItems ?? [],
     runIdPrefix: "talk-realtime-relay-consult",
     surface: "a gateway-relay Talk session",
-    registerRun: ({ runId }) => {
+    registerRun: async ({ runId, assertCurrent }) => {
       if (!getActiveRelay()) {
         throw new Error("Realtime gateway-relay session is closed");
       }
-      registerTalkRealtimeRelayAgentRun({
+      const registration = await registerTalkRealtimeRelayAgentRun({
         relaySessionId,
         connId: params.connId,
         sessionKey: canonicalKey,
         runId,
+        assertCurrent,
       });
+      if (!getActiveRelay() || !registration.isCurrent()) {
+        registration.release();
+        throw new Error("Realtime gateway-relay session is closed");
+      }
+      return registration;
     },
-    isRunCurrent: (runId) => getActiveRelay()?.activeAgentRuns.get(runId) === canonicalKey,
   });
   const runAgentConsult = bindTalkRealtimeRelayAgentConsult(
     consultRunner.runPrompt,
@@ -427,8 +431,7 @@ export function createTalkRealtimeRelaySession(
         confirmationReadiness.observeUserTranscript(text, false);
       }
       const previousTranscriptSeq = relay.voiceTranscriptSeq;
-      const enqueueTranscript = (source?: ClientVoiceSessionSource) =>
-        enqueueRelayVoiceTranscript(relay, role, text, source);
+      const enqueueTranscript = () => enqueueRelayVoiceTranscript(relay, role, text);
       if (
         final &&
         !(relay.closing?.runTranscript

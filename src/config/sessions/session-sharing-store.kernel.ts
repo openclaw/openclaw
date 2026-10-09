@@ -7,13 +7,8 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type { InternalSessionEntry } from "./types.js";
-
-export type SessionMember = {
-  identityId: string;
-  addedBy: string;
-  addedAt: number;
-};
 
 export type SessionMembersSnapshot = {
   entry: InternalSessionEntry | undefined;

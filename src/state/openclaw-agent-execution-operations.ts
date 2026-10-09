@@ -14,6 +14,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
+import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
@@ -24,6 +25,7 @@ let transcript:
   | {
       initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
       assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
+      readPublication: typeof import("../config/sessions/session-transcript-authority.js").readStagedSessionTranscriptAuthority;
     }
   | undefined;
 
@@ -31,10 +33,12 @@ export function prepareAgentTranscript() {
   return Promise.all([
     import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
     import("../config/sessions/session-accessor.sqlite-scope.js"),
-  ]).then(([header, scope]) => {
+    import("../config/sessions/session-transcript-authority.js"),
+  ]).then(([header, scope, authority]) => {
     transcript = {
       initialize: header.ensureTranscriptHeader,
       assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
+      readPublication: authority.readStagedSessionTranscriptAuthority,
     };
   });
 }
@@ -46,7 +50,7 @@ export async function loadAgentTranscriptOperations() {
       if (!transcript) {
         throw new Error("Session transcript initialization was not prepared");
       }
-      const { initialize } = transcript;
+      const { initialize, readPublication } = transcript;
       const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
       assertIdentity(input);
       return context.writeTransaction(
@@ -67,6 +71,7 @@ export async function loadAgentTranscriptOperations() {
               },
             },
           );
+          publication.transcriptPublication = readPublication(current);
           deferSqliteWorkerCommitReceipt(current.db, publication);
           context.admit("commit", publication);
           return publication;
@@ -593,6 +598,8 @@ export async function loadConversationDeliveryOperations() {
 }
 
 export async function loadConversationRegistryOperations() {
+  const { deferConversationWorkerReceipt } =
+    await import("../config/sessions/session-accessor.sqlite-conversation-publication.js");
   const { prepareConversationIdentities, upsertConversationIdentities } =
     await import("../config/sessions/session-accessor.sqlite-conversation.js");
   const { selectConversationRowsFromDatabase, resolveConversationInDatabase } =
@@ -610,7 +617,10 @@ export async function loadConversationRegistryOperations() {
     ) => {
       const prepared = prepareConversationIdentities(input.identities);
       return writeTransaction("conversation.register", "Conversation registration", (database) => {
-        upsertConversationIdentities(database, prepared, input.discoveredAt);
+        const publication = upsertConversationIdentities(database, prepared, input.discoveredAt);
+        if (publication && typeof publication.source.identity === "string") {
+          deferConversationWorkerReceipt(database.db, publication);
+        }
         const rows = input.query
           ? selectConversationRowsFromDatabase(database, input.query)
           : undefined;
@@ -678,6 +688,7 @@ export async function loadUsageCacheOperations() {
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+    Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &

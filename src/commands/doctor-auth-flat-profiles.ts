@@ -901,15 +901,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         unresolvedSidecarProfileIds.size > 0
           ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
           : undefined;
-      const awsSdkMarkers =
-        isRecord(rawStore) && isRecord(rawStore.profiles)
-          ? readAwsSdkAuthProfileMarkers(candidate)
-          : null;
-      if (awsSdkMarkers && isRecord(rawStore)) {
-        removeAwsSdkProfileMarkers(
-          rawStore,
-          awsSdkMarkers.map((profile) => profile.profileId),
-        );
+      const rawProfiles =
+        isRecord(rawStore) && isRecord(rawStore.profiles) ? rawStore.profiles : undefined;
+      const awsSdkMarkers = rawProfiles ? readAwsSdkAuthProfileMarkers(candidate) : null;
+      if (rawProfiles && awsSdkMarkers) {
+        for (const { profileId } of awsSdkMarkers) {
+          delete rawProfiles[profileId];
+        }
       }
       const canonicalizedSecretRefs = normalizeLegacyAuthProfileFields(rawStore);
       const maybeCanonicalStore =
@@ -1229,15 +1227,6 @@ function readAwsSdkAuthProfileMarkers(
     });
   }
   return markers.length > 0 ? markers : null;
-}
-
-function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: string[]): void {
-  if (!isRecord(raw.profiles)) {
-    return;
-  }
-  for (const profileId of profileIds) {
-    delete raw.profiles[profileId];
-  }
 }
 
 function rewriteMappedAuthProfileRefs(

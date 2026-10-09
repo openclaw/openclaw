@@ -18,6 +18,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  type AgentDatabaseRegistryChange,
   type OpenClawAgentDatabaseRegistryReadResult,
   type OpenClawAgentDatabaseRegistrationCommit,
   type OpenClawRegisteredAgentDatabase,
@@ -106,9 +107,6 @@ export function readOpenClawAgentDatabaseRegistryToken(
 ): symbol {
   return activateRegisteredAgentDatabasesMemo(options).token;
 }
-
-/** An in-process witness from the canonical invalidator, never serialized as authority. */
-export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: symbol }>;
 
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
