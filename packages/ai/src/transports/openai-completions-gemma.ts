@@ -100,10 +100,12 @@ export function createGemmaToolCallRecoverer() {
       buffer = "";
       return result;
     },
-    flush(): TextToolCallRecoveryPart[] {
+    flush(allowRecovery = true): TextToolCallRecoveryPart[] {
       const text = buffer;
       buffer = "";
-      return text ? (recoverGemmaCalls(text) ?? [{ kind: "text", text }]) : [];
+      passthrough ||= !allowRecovery;
+      const recovered = allowRecovery ? recoverGemmaCalls(text) : undefined;
+      return text ? (recovered ?? [{ kind: "text", text }]) : [];
     },
   };
 }

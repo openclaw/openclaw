@@ -164,6 +164,44 @@ describe("Gemma tool-call text recovery", () => {
     expect(events.some((event) => event.type === "toolcall_end")).toBe(false);
   });
 
+  it.each([true, false])(
+    "declines recovery with mixed native calls (raw first: %s)",
+    async (rawFirst) => {
+      const output = createAssistantOutput(model);
+      const events: CapturedStreamEvent[] = [];
+      const raw = makeCompletionsChunk({ content: call });
+      const native = makeCompletionsChunk({
+        tool_calls: [
+          {
+            index: 0,
+            id: "native-call",
+            type: "function",
+            function: { name: "read", arguments: '{"path":"probe.txt"}' },
+          },
+        ],
+      });
+      await processCompletionsStream(
+        streamChunks([
+          ...(rawFirst ? [raw, native] : [native, raw]),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+      );
+      const text = { type: "text", text: call };
+      const tool = {
+        type: "toolCall",
+        id: "native-call",
+        name: "read",
+        arguments: { path: "probe.txt" },
+      };
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toMatchObject(rawFirst ? [text, tool] : [tool, text]);
+      expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+    },
+  );
+
   it("bounds buffered candidates", async () => {
     const output = createAssistantOutput(model);
     await expect(

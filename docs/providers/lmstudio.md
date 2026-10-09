@@ -124,7 +124,9 @@ For Gemma 4 models using `openai-completions`, OpenClaw recovers complete standa
 including when the call is the last content before `finish_reason: "stop"`.
 Recovery preserves raw string arguments and requires complete argument objects;
 incomplete calls, prose, and code examples remain text. Truncated, filtered,
-cancelled, or unterminated streams do not authorize recovered calls.
+cancelled, or unterminated streams do not authorize recovered calls. If native
+tool calls also appear in the stream, they remain authoritative and raw text is
+not promoted.
 
 ### Thinking compatibility
 

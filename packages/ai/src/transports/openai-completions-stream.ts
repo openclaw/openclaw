@@ -332,6 +332,18 @@ export async function processCompletionsStream(
       appendPartitionedVisibleDelta(delta);
     }
   };
+  // Recover raw arguments before reasoning-tag filtering can alter their bytes.
+  const flushGemmaToolCallRecoverer = (allowRecovery = true) => {
+    for (const part of gemmaToolCallRecoverer?.flush(allowRecovery) ?? []) {
+      if (part.kind === "toolCall") {
+        appendRecoveredToolCall(part);
+      } else {
+        for (const delta of reasoningTagTextPartitioner.pushVisible(part.text)) {
+          appendPartitionedVisibleDelta(delta);
+        }
+      }
+    }
+  };
   const sealTextBeforeReasoning = () => {
     if (currentBlock?.type !== "text" && !reasoningTagTextPartitioner.hasPending()) {
       return;
@@ -480,6 +492,8 @@ export async function processCompletionsStream(
       }
       const toolCallDeltas = normalizedDelta.toolCalls;
       if (toolCallDeltas.length > 0) {
+        // Native calls own mixed streams; emit pending raw text in its original position.
+        flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
         flushReasoningTagTextPartitioner();
         rememberPendingCommentaryTags(
@@ -581,16 +595,7 @@ export async function processCompletionsStream(
   if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
     throw new Error("Stream ended without finish_reason");
   }
-  // Recover raw arguments before reasoning-tag filtering can alter their bytes.
-  for (const part of gemmaToolCallRecoverer?.flush() ?? []) {
-    if (part.kind === "toolCall") {
-      appendRecoveredToolCall(part);
-    } else {
-      for (const delta of reasoningTagTextPartitioner.pushVisible(part.text)) {
-        appendPartitionedVisibleDelta(delta);
-      }
-    }
-  }
+  flushGemmaToolCallRecoverer();
   flushReasoningTagTextPartitioner();
   appendRecoveredParts(deepSeekToolCallRecoverer?.flush() ?? []);
   for (const part of deepSeekTextFilter?.flush() ?? []) {
