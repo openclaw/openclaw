@@ -107,6 +107,10 @@ setup explains the limitation and names CPU execution in the confirmation.
 For other acceleration backends, run a compatible server yourself and choose
 **Existing llama-server**.
 
+Runtime validation allows up to two minutes per executable version check so
+macOS security assessment and Metal initialization can finish after installation
+or when reusing a runtime. Setup remains cancellable during validation.
+
 The verified macOS builds require macOS 13.3 or later, and setup stops before
 downloading on older releases. To keep managed chat and local embeddings there,
 build `llama-server` on that Mac and set
