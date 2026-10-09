@@ -332,6 +332,11 @@ and their stored predicates while retaining the full synchronous assertion for
 native commit. Custom SDK assertion wrappers are not executed in restoration
 worker grants; existing writer adapter selection remains unchanged.
 
+`cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
+joins the selected database owner's pending startup preparation before capturing
+its physical identity. Prepared agents do not wait. Failed preparation still
+surfaces through normal database admission checks; Gateway shutdown cancels the wait.
+
 ### Memory runtime replacement
 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`

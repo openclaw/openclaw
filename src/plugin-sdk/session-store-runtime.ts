@@ -359,7 +359,11 @@ export function resolveSessionStoreBackupPaths(params: {
   return [...backupPaths];
 }
 
-/** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
+/**
+ * Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store.
+ * Joins pending startup preparation before capturing the database identity; failed preparation
+ * still surfaces through normal admission checks. Prepared agents do not wait.
+ */
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactsCleanupParams,
 ): Promise<SessionLifecycleArtifactsCleanupResult> {
