@@ -33,6 +33,7 @@ class MemoryBeforeRequesterSequencer extends BaseSequencer {
 const config = createUnitFastVitestConfig();
 export default {
   ...config,
+  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
   test: {
     ...config.test,
     include: [memoryTest, "src/agents/cli-runner/bundle-mcp.requester-lifecycle.test.ts"],

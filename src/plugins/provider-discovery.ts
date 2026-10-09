@@ -17,21 +17,8 @@ const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
 );
 
-function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
-  return provider.catalog ?? provider.staticCatalog;
-}
-
-function createProviderConfigRecord(): Record<string, ModelProviderConfig> {
-  return Object.create(null) as Record<string, ModelProviderConfig>;
-}
-
-function isSafeProviderConfigKey(value: string): boolean {
-  return value !== "" && !isBlockedObjectKey(value);
-}
-
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
-  result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
   providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
 }>;
 
@@ -73,7 +60,7 @@ export async function resolveRuntimePluginDiscoveryProviders(
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter(
       (provider) =>
-        resolveProviderCatalogOrderHook(provider) ||
+        (provider.catalog ?? provider.staticCatalog) ||
         (params.includeSyntheticAuthProviders === true &&
           (typeof provider.resolveSyntheticAuth === "function" ||
             typeof provider.prepareSyntheticAuth === "function")),
@@ -84,15 +71,15 @@ export async function resolveRuntimePluginDiscoveryProviders(
 export function groupPluginDiscoveryProvidersByOrder(
   providers: ProviderPlugin[],
 ): Record<ProviderCatalogOrder, ProviderPlugin[]> {
-  const grouped = {
+  const grouped: Record<ProviderCatalogOrder, ProviderPlugin[]> = {
     simple: [],
     profile: [],
     paired: [],
     late: [],
-  } as Record<ProviderCatalogOrder, ProviderPlugin[]>;
+  };
 
   for (const provider of providers) {
-    const order = resolveProviderCatalogOrderHook(provider)?.order ?? "late";
+    const order = (provider.catalog ?? provider.staticCatalog)?.order ?? "late";
     grouped[order].push(provider);
   }
 
@@ -118,29 +105,20 @@ export function normalizePluginDiscoveryResult(params: {
   }
 
   const projection = copyProviderCatalogResultProjection(result);
-  if (projection.kind === "provider") {
-    const normalized = createProviderConfigRecord();
-    for (const providerId of [
-      params.provider.id,
-      ...(params.provider.aliases ?? []),
-      ...(params.provider.hookAliases ?? []),
-    ]) {
-      const normalizedKey = normalizeProviderId(providerId);
-      if (!isSafeProviderConfigKey(normalizedKey)) {
-        continue;
-      }
-      normalized[normalizedKey] = projection.provider;
-    }
-    return normalized;
-  }
-
-  const normalized = createProviderConfigRecord();
-  if (projection.kind !== "providers") {
-    return normalized;
-  }
-  for (const [key, value] of projection.providers) {
+  const normalized = Object.create(null) as Record<string, ModelProviderConfig>;
+  const entries =
+    projection.kind === "provider"
+      ? [
+          params.provider.id,
+          ...(params.provider.aliases ?? []),
+          ...(params.provider.hookAliases ?? []),
+        ].map((id) => [id, projection.provider] as const)
+      : projection.kind === "providers"
+        ? projection.providers
+        : [];
+  for (const [key, value] of entries) {
     const normalizedKey = normalizeProviderId(key);
-    if (!isSafeProviderConfigKey(normalizedKey) || !value) {
+    if (!normalizedKey || isBlockedObjectKey(normalizedKey)) {
       continue;
     }
     normalized[normalizedKey] = value;
@@ -196,10 +174,12 @@ export async function runProviderCatalog(params: {
 export function runProviderStaticCatalog(params: {
   provider: ProviderPlugin;
   signal?: AbortSignal;
+  providerIds?: readonly string[];
 }) {
   params.signal?.throwIfAborted();
   return params.provider.staticCatalog?.run({
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.providerIds ? { providerIds: params.providerIds } : {}),
     config: {},
     env: {},
     resolveProviderApiKey: () => ({
@@ -220,6 +200,8 @@ export function runProviderStaticCatalog(params: {
 export async function prepareProviderStaticCatalog(params: {
   providers: readonly ProviderPlugin[];
   signal?: AbortSignal;
+  /** Provider ids the caller will resolve from these catalogs; absent for unscoped validation. */
+  providerIds?: readonly string[];
 }): Promise<PreparedProviderStaticCatalog> {
   const entries: PreparedProviderStaticCatalogEntry[] = [];
   const byOrder = groupPluginDiscoveryProvidersByOrder([...params.providers]);
@@ -228,12 +210,15 @@ export async function prepareProviderStaticCatalog(params: {
       if (!provider.staticCatalog) {
         continue;
       }
-      const result = await runProviderStaticCatalog({ provider, signal: params.signal });
+      const result = await runProviderStaticCatalog({
+        provider,
+        signal: params.signal,
+        providerIds: params.providerIds,
+      });
       params.signal?.throwIfAborted();
       entries.push(
         Object.freeze({
           provider,
-          result,
           providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
         }),
       );

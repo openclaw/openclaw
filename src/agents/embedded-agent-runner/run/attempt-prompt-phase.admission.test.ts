@@ -1,11 +1,10 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
@@ -15,7 +14,7 @@ import type { PromptSubmissionCall } from "./attempt-prompt-phase.test-support.j
 const { createFixture, mocks } = await vi.hoisted(
   async () => await import("./attempt-prompt-phase.test-support.js"),
 );
-const tempStateDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempStateDirs = useSessionStoreTempDirs(afterAll, "openclaw-prompt-projection-admission-");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -29,7 +28,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
 });
 
@@ -37,7 +35,7 @@ describe("prompt projection write admission", () => {
   it.each([false, true])(
     "admits projection persistence before provider dispatch and rechecks cancellation (abort: %s)",
     async (abort) => {
-      const stateDir = tempStateDirs.make("openclaw-prompt-projection-admission-");
+      const stateDir = tempStateDirs.make();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const scope = {
         agentId: "main",
@@ -90,6 +88,7 @@ describe("prompt projection write admission", () => {
             expect.objectContaining({ error: reason }),
           );
         } else {
+          expect(mocks.handlePromptError).not.toHaveBeenCalled();
           expect(markers()).toMatchObject([{ customType: "openclaw.cache-ttl" }]);
           expect(dispatched).toBe(true);
         }

@@ -22,15 +22,9 @@ export type BrowserDashboardDefinition = BrowserDashboardIdentity & {
   title?: string;
 };
 
-export type BrowserDashboardResponse = {
-  sessionKey: string;
-  name: string;
-  instanceId: string;
-  revision: number;
+export type BrowserDashboardResponse = Omit<BrowserDashboardDefinition, "agentId" | "profile"> & {
   paused: boolean;
   stopping: boolean;
-  url: string;
-  title?: string;
   browserTab?: { target: "host"; profile: string; targetId: string };
 };
 

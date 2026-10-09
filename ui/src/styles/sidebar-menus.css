@@ -124,9 +124,13 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
-  /* One typography for every row label, value, and choice in the panel. */
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
   line-height: 1.55;
+}
+
+/* People has text-only submenu rows, not the wider Sessions form controls. */
+.sidebar-people-filter-menu .sidebar-session-filter-panel {
+  width: max-content;
 }
 
 .sidebar-session-menu-section {
@@ -386,13 +390,13 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 .shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel {
   position: fixed;
   z-index: 121;
-  inset: auto 0 0;
-  width: 100%;
+  inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left);
+  width: auto;
   max-width: none;
-  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - var(--space-7));
+  max-height: calc(var(--shell-canvas-height) - var(--safe-area-top) - var(--space-7));
   /* Rows and headers keep the issues sheet's side inset. */
-  padding-inline: var(--space-3);
-  padding-block-end: calc(var(--menu-padding) + env(safe-area-inset-bottom, 0px));
+  padding-inline: var(--chat-mobile-edge-inset);
+  padding-block-end: calc(var(--menu-padding) + var(--shell-safe-area-bottom));
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   animation: sidebar-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
@@ -414,7 +418,6 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   }
 }
 
-/* Long choice lists fade at an edge they scroll past. */
 .sidebar-session-filter-panel .picker-select__options[data-fade-start] {
   mask-image: linear-gradient(to bottom, transparent, black 16px);
 }

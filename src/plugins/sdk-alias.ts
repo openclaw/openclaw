@@ -15,6 +15,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
@@ -34,6 +35,7 @@ import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   createJitiAliasContentCacheKey,
   normalizePluginLoaderAliasMapForJiti,
+  sanitizeJitiCachePathSegment,
 } from "./sdk-alias-normalization.js";
 import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
@@ -70,11 +72,6 @@ function readSdkJsonFile(filePath: string): unknown {
   });
   const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
   return parsed?.ok ? parsed.value : null;
-}
-
-function sanitizeJitiCachePathSegment(value: string): string {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
 }
 
 function resolveJitiFsCacheRoot(): string {
@@ -247,9 +244,9 @@ function resolveTrustedOpenClawRootFromArgvHint(params: {
   return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
-function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
+function findNearestPluginSdkPackageRoot(startDir: string): string | null {
   let cursor = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     const subpaths = readPluginSdkSubpathsFromPackageRoot(cursor);
     if (subpaths) {
       return cursor;
@@ -296,7 +293,6 @@ function dedupeResolvedPaths(paths: readonly string[]): string[] {
 function listAncestorPluginRuntimeModuleCandidates(params: {
   starts: readonly (string | undefined)[];
   orderedKinds: readonly PluginSdkAliasCandidateKind[];
-  maxDepth?: number;
 }): string[] {
   const candidates: string[] = [];
   for (const start of params.starts) {
@@ -304,8 +300,7 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
       continue;
     }
     let cursor = path.resolve(start);
-    const maxDepth = params.maxDepth ?? 12;
-    for (let i = 0; i < maxDepth; i += 1) {
+    for (let i = 0; i < 12; i += 1) {
       candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
       const parent = path.dirname(cursor);
       if (parent === cursor) {
@@ -393,6 +388,7 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
+  "compiled-subprocess-testing",
   "plugin-test-api",
   "plugin-test-contracts",
   "plugin-state-test-runtime",
@@ -447,14 +443,6 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
 ];
-const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
-  ".ts",
-  ".mts",
-  ".js",
-  ".mjs",
-  ".cts",
-  ".cjs",
-] as const;
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
@@ -632,7 +620,7 @@ function listBundledPluginPublicSurfaceSourceBasenames(params: {
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .flatMap((fileName) => {
-        const ext = PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.find((candidateExt) =>
+        const ext = PUBLIC_SURFACE_SOURCE_EXTENSIONS.find((candidateExt) =>
           fileName.endsWith(candidateExt),
         );
         if (!ext) {
@@ -663,7 +651,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
       "extensions",
       params.dirName,
     );
-    for (const ext of kind === "dist" ? [".js"] : PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+    for (const ext of kind === "dist" ? [".js"] : PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
       const candidate = path.join(root, `${params.basename}${ext}`);
       if (pluginCacheExistsSync(candidate)) {
         return candidate;
@@ -793,92 +781,58 @@ function resolveWorkspacePackageAliasMap(
 function isBundledPluginModulePath(params: {
   packageRoot: string;
   modulePath: string;
-  pluginId: string;
+  pluginId?: string;
 }) {
   const normalizedModulePath = path.resolve(params.modulePath);
-  const roots = [
-    path.join(params.packageRoot, "extensions", params.pluginId),
-    path.join(params.packageRoot, "dist", "extensions", params.pluginId),
-    path.join(params.packageRoot, "dist-runtime", "extensions", params.pluginId),
-  ];
-  return roots.some(
-    (root) =>
-      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
-  );
-}
-
-function isAnyBundledPluginModulePath(params: { packageRoot: string; modulePath: string }) {
-  const normalizedModulePath = path.resolve(params.modulePath);
-  return ["extensions", path.join("dist", "extensions"), path.join("dist-runtime", "extensions")]
-    .map((segment) => path.join(params.packageRoot, segment))
-    .some((root) => normalizedModulePath.startsWith(`${root}${path.sep}`));
-}
-
-function isOfficialInstalledPluginPackageRoot(params: {
-  packageRoot: string;
-  packageName: string;
-}) {
-  const [scope, name] = params.packageName.split("/");
-  if (!scope || !name) {
-    return false;
-  }
-  const segments = path.resolve(params.packageRoot).split(path.sep).filter(Boolean);
-  const last = segments.at(-1);
-  const packageScope = segments.at(-2);
-  const nodeModules = segments.at(-3);
-  return last === name && packageScope === scope && nodeModules === "node_modules";
+  return ["", "dist", "dist-runtime"].some((layout) => {
+    const root = path.join(params.packageRoot, layout, "extensions", params.pluginId ?? "");
+    return (
+      (params.pluginId !== undefined && normalizedModulePath === root) ||
+      normalizedModulePath.startsWith(`${root}${path.sep}`)
+    );
+  });
 }
 
 function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
   let cursor = path.dirname(path.resolve(params.modulePath));
   for (let depth = 0; depth < 12; depth += 1) {
     const packageJson = readPluginSdkPackageJson(cursor);
-    if (packageJson) {
-      return (
-        packageJson.name === params.packageName &&
-        isOfficialInstalledPluginPackageRoot({
-          packageRoot: cursor,
-          packageName: params.packageName,
-        })
-      );
+    if (!packageJson) {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+      continue;
     }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
+    if (packageJson.name !== params.packageName) {
+      return false;
     }
-    cursor = parent;
+    const [scope, name] = params.packageName.split("/");
+    const segments = path.resolve(cursor).split(path.sep).filter(Boolean);
+    return Boolean(
+      scope &&
+      name &&
+      segments.at(-1) === name &&
+      segments.at(-2) === scope &&
+      segments.at(-3) === "node_modules",
+    );
   }
   return false;
-}
-
-function isTrustedPrivatePluginSdkOwnerPath(params: {
-  packageRoot: string;
-  modulePath: string;
-  owner: PrivatePluginSdkSubpathOwner;
-}) {
-  if (
-    isBundledPluginModulePath({
-      packageRoot: params.packageRoot,
-      modulePath: params.modulePath,
-      pluginId: params.owner.bundledPluginId,
-    })
-  ) {
-    return true;
-  }
-  return params.owner.officialInstalledPackageName
-    ? isOfficialInstalledPluginModulePath({
-        modulePath: params.modulePath,
-        packageName: params.owner.officialInstalledPackageName,
-      })
-    : false;
 }
 
 function listTrustedPrivatePluginSdkOwnerKeys(params: {
   packageRoot: string;
   modulePath: string;
 }): string[] {
-  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
-    isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }),
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter(
+    (owner) =>
+      isBundledPluginModulePath({ ...params, pluginId: owner.bundledPluginId }) ||
+      (owner.officialInstalledPackageName &&
+        isOfficialInstalledPluginModulePath({
+          modulePath: params.modulePath,
+          packageName: owner.officialInstalledPackageName,
+        })),
   ).map((owner) => owner.bundledPluginId);
 }
 
@@ -970,7 +924,7 @@ function createPluginSdkScopedAliases(context: PluginLoaderAliasContext) {
         }
         continue;
       }
-      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
         if (pluginCacheExistsSync(candidate)) {
           targets.set(subpath, candidate);
@@ -1034,7 +988,7 @@ export function preparePluginLoaderAliases(
       ? listTrustedPrivatePluginSdkOwnerKeys({ packageRoot: ownerPackageRoot, modulePath })
       : [],
     bundledPlugin: ownerPackageRoot
-      ? isAnyBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath })
+      ? isBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath })
       : false,
   };
   const cache = getPluginCache();
@@ -1188,16 +1142,12 @@ function resolvePluginRuntimeModuleCandidates(
       );
     }
     const dedupedCandidates = dedupeResolvedPaths(candidates);
-    for (const candidate of dedupedCandidates) {
-      if (pluginCacheExistsSync(candidate)) {
-        return {
-          modulePath,
-          packageRoot,
-          candidates: dedupedCandidates,
-          resolvedPath: candidate,
-        };
-      }
-    }
+    return {
+      modulePath,
+      packageRoot,
+      candidates: dedupedCandidates,
+      resolvedPath: dedupedCandidates.find(pluginCacheExistsSync) ?? null,
+    };
   } catch (error) {
     return {
       modulePath,
@@ -1207,12 +1157,6 @@ function resolvePluginRuntimeModuleCandidates(
       error: formatErrorMessage(error),
     };
   }
-  return {
-    modulePath,
-    packageRoot,
-    candidates: dedupeResolvedPaths(candidates),
-    resolvedPath: null,
-  };
 }
 
 export function buildPluginLoaderJitiOptions(

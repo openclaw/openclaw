@@ -39,11 +39,6 @@ export function resolveOpenAIProviderConfigRecord(
   );
 }
 
-type OpenAIRealtimeClientSecretResult = {
-  value: string;
-  expiresAt?: number;
-};
-
 type OpenAIRealtimeClientSecretRequest = {
   authToken: string;
   auditContext: string;
@@ -51,7 +46,7 @@ type OpenAIRealtimeClientSecretRequest = {
   authRejectedMessage?: string;
 };
 
-async function createOpenAIRealtimeSecret(
+export async function createOpenAIRealtimeClientSecret(
   params: OpenAIRealtimeClientSecretRequest,
   {
     createProviderHttpError,
@@ -59,8 +54,8 @@ async function createOpenAIRealtimeSecret(
     resolveProviderRequestHeaders,
     fetchWithSsrFGuard,
   }: OpenAIRealtimeHost,
-  label: string,
-): Promise<OpenAIRealtimeClientSecretResult> {
+  label = "OpenAI Realtime",
+) {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
   const { response, release } = await fetchWithSsrFGuard({
     url,
@@ -114,18 +109,4 @@ async function createOpenAIRealtimeSecret(
     value: clientSecret,
     ...(expiresAtMs === undefined ? {} : { expiresAt: expiresAtMs }),
   };
-}
-
-export async function createOpenAIRealtimeClientSecret(
-  params: OpenAIRealtimeClientSecretRequest,
-  runtime: OpenAIRealtimeHost,
-): Promise<OpenAIRealtimeClientSecretResult> {
-  return createOpenAIRealtimeSecret(params, runtime, "OpenAI Realtime");
-}
-
-export async function createOpenAIRealtimeTranscriptionClientSecret(
-  params: OpenAIRealtimeClientSecretRequest,
-  runtime: OpenAIRealtimeHost,
-): Promise<OpenAIRealtimeClientSecretResult> {
-  return createOpenAIRealtimeSecret(params, runtime, "OpenAI Realtime transcription");
 }

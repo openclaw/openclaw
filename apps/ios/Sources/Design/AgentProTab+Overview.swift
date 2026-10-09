@@ -153,7 +153,7 @@ extension AgentProTab {
             let haystack = [
                 self.agentName(for: agent),
                 agent.id,
-                self.normalized(agent.workspace),
+                agent.workspace?.trimmedNonEmpty,
                 RootSidebar.agentModelLabel(agent),
             ]
                 .compactMap(\.self)
@@ -163,8 +163,8 @@ extension AgentProTab {
     }
 
     var activeAgentID: String {
-        normalized(appModel.selectedAgentId)
-            ?? normalized(appModel.gatewayDefaultAgentId)
+        appModel.selectedAgentId?.trimmedNonEmpty
+            ?? appModel.gatewayDefaultAgentId?.trimmedNonEmpty
             ?? "main"
     }
 

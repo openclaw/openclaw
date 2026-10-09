@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
@@ -48,16 +49,18 @@ async function listProcesses(tempDir: string): Promise<ProcessRow[]> {
   return rows;
 }
 
-async function waitForFixtureEvents(logPath: string, count: number): Promise<FixtureEvent[]> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const events = await readFixtureEvents(logPath);
-    if (events.length >= count) {
-      return events;
-    }
-    await delay(20);
-  }
-  throw new Error(`timed out waiting for ${count} process fixture events`);
+function fixtureReadiness(child: ChildProcessWithoutNullStreams, count: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const lines = createInterface({ input: child.stdout });
+    let received = 0;
+    lines.on("line", () => {
+      if (++received === count) {
+        lines.close();
+        resolve();
+      }
+    });
+    child.once("close", () => lines.close());
+  });
 }
 
 async function readFixtureEvents(logPath: string): Promise<FixtureEvent[]> {
@@ -125,7 +128,9 @@ describe.skipIf(process.platform === "win32")("Codex app-server process containm
     },
   );
 
-  it("reaps descendants in independent and root process groups before close returns", async () => {
+  it("reaps descendants in independent and root process groups before close returns", async ({
+    signal,
+  }) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transport-process-"));
     const logPath = path.join(tempDir, "processes.jsonl");
     const rootPath = path.join(tempDir, "root.mjs");
@@ -141,6 +146,7 @@ const [logPath, role] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 appendFileSync(logPath, JSON.stringify({ role, pid: process.pid, pgid }) + "\\n");
 for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
+process.send({ ready: true });
 setInterval(() => {}, 1_000);
 `,
     );
@@ -152,9 +158,11 @@ import { execFileSync, spawn } from "node:child_process";
 const [logPath, role, descendantPath] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 appendFileSync(logPath, JSON.stringify({ role, pid: process.pid, pgid }) + "\\n");
-const descendant = spawn(process.execPath, [descendantPath, logPath, role.replace("leader", "descendant")], { stdio: "ignore" });
+const descendant = spawn(process.execPath, [descendantPath, logPath, role.replace("leader", "descendant")], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+descendant.on("message", (message) => process.send(message));
 descendant.unref();
 for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
+process.send({ ready: true });
 setInterval(() => {}, 1_000);
 `,
     );
@@ -167,9 +175,11 @@ const [logPath, leaderPath, descendantPath] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 appendFileSync(logPath, JSON.stringify({ role: "root", pid: process.pid, pgid }) + "\\n");
 for (const [role, detached] of [["separate-leader", true], ["shared-leader", false]]) {
-  const child = spawn(process.execPath, [leaderPath, logPath, role, descendantPath], { detached, stdio: "ignore" });
+  const child = spawn(process.execPath, [leaderPath, logPath, role, descendantPath], { detached, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  child.on("message", () => process.stdout.write("ready\\n"));
   child.unref();
 }
+process.stdout.write("ready\\n");
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 `,
@@ -180,8 +190,15 @@ process.stdin.on("end", () => process.exit(0));
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    const ready = fixtureReadiness(root, 5);
+    const closed = once(root, "close");
     try {
-      const events = await waitForFixtureEvents(logPath, 5);
+      await withinTest(
+        awaitGateBeforeSettlement(ready, closed, "timed out waiting for 5 process fixture events"),
+        signal,
+      );
+      // Every fixture appends its identity before relaying readiness through the root's stdout.
+      const events = await readFixtureEvents(logPath);
       const eventByRole = new Map(events.map((event) => [event.role, event]));
       const rootEvent = eventByRole.get("root");
       const separateLeader = eventByRole.get("separate-leader");
@@ -210,7 +227,7 @@ process.stdin.on("end", () => process.exit(0));
     }
   });
 
-  it.each([
+  it.for([
     ["reuse", true],
     ["late", false],
     ["reparented", false],
@@ -221,7 +238,8 @@ process.stdin.on("end", () => process.exit(0));
     ["snapshot-failure", true],
     ["inspection-timeout", true],
     ["extended", false],
-  ] as const)("revalidates identities while quiescing: %s", async (mode, sentinelSurvived) => {
+  ] as const)("revalidates identities while quiescing: %s", async (scenario, ctx) => {
+    const [mode, sentinelSurvived] = scenario;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-identity-reuse-"));
     const rootPath = path.join(tempDir, "root.mjs");
     const sentinelPath = path.join(tempDir, "sentinel.mjs");
@@ -242,6 +260,7 @@ const [sentinelPath, sentinelPidPath] = process.argv.slice(2);
 const sentinel = spawn(process.execPath, [sentinelPath], { detached: true, stdio: "ignore" });
 sentinel.unref();
 writeFileSync(sentinelPidPath, String(sentinel.pid));
+process.stdout.write("ready\\n");
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 `,
@@ -250,18 +269,16 @@ process.stdin.on("end", () => process.exit(0));
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    const ready = fixtureReadiness(root, 1);
+    const rootClosed = once(root, "close");
     let restoreInspection: (() => void) | undefined;
     try {
-      let sentinelPid: number | undefined;
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline) {
-        const contents = await fs.readFile(sentinelPidPath, "utf8").catch(() => "");
-        if (contents) {
-          sentinelPid = Number(contents);
-          break;
-        }
-        await delay(20);
-      }
+      await withinTest(
+        awaitGateBeforeSettlement(ready, rootClosed, "Missing root or sentinel process identity"),
+        ctx.signal,
+      );
+      // The root writes this PID before writing readiness to its owned stdout.
+      const sentinelPid = Number(await fs.readFile(sentinelPidPath, "utf8"));
       const initial = await processSnapshot.readCodexAppServerProcessSnapshot();
       const rootIdentity = initial?.find((row) => row.pid === root.pid);
       const sentinelIdentity = initial?.find((row) => row.pid === sentinelPid);

@@ -5,7 +5,7 @@ import {
   createPluginCommandRuntime,
   type PluginCommandDispatchContext,
 } from "../../plugins/plugin-command-runtime.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withDiscordNativeAdminFixture } from "./discord-native-owner.test-support.js";
 
 it("carries current Team-admin authority through registered slash commands without bypassing admission", async () => {

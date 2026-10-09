@@ -27,7 +27,7 @@ describe("Codex Computer Use periodic health", () => {
       "thread/start",
       {
         input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
+        developerInstructions: "OpenClaw Computer Use readiness check",
         ephemeral: true,
       },
       { timeoutMs: 60_000 },
@@ -73,7 +73,7 @@ describe("Codex Computer Use periodic health", () => {
         threadId: "health-probe-thread-1",
         server: "cua_repl",
         tool: "js",
-        arguments: { code: "await cua.getState();" },
+        arguments: { code: "await cua.listApps();" },
       },
       { timeoutMs: 60_000 },
     );

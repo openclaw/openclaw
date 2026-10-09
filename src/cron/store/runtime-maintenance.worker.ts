@@ -3,7 +3,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
-import { loadedCronStoreFromRows, loadCronRows, upsertCronJobRow } from "./row-codec.js";
+import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import {
   pruneCronRunHistoryInDatabase,
   readCronRunRecordsInDatabase,
@@ -113,6 +113,7 @@ export function scheduleUnownedCronJobsInWorker(
         if (!job || activeJobIds.has(row.job_id)) {
           continue;
         }
+        const previousEnabled = job.enabled ?? true;
         if (
           recomputeSingleJobForMaintenance(
             state,
@@ -125,7 +126,7 @@ export function scheduleUnownedCronJobsInWorker(
             { reservations, isJobActive: (jobId) => active.has(jobId) },
           )
         ) {
-          upsertCronJobRow(db, input.storeKey, job, row.sort_order);
+          updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
           outcome.jobs.push(job);
           outcome.changed = true;
         }
@@ -166,7 +167,7 @@ export function recordCronFailureAlertOutcomeInWorker(
         job.state.lastFailureNotificationDelivered = input.outcome.delivered;
         job.state.lastFailureNotificationDeliveryStatus = input.outcome.status;
         job.state.lastFailureNotificationDeliveryError = input.outcome.error;
-        upsertCronJobRow(db, input.storeKey, job, row.sort_order);
+        updateCronRuntimeRow(db, input.storeKey, job);
       }
       return retainCronRuntimeMutationOutcome("cron.recordFailureAlertOutcome", db, input.nonce, {
         job: ownsCycle ? job : undefined,

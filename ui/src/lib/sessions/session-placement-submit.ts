@@ -6,6 +6,7 @@ import {
   readChatInputReceipt,
 } from "../chat/history-message-identity.ts";
 import { formatUiError } from "../format-error.ts";
+import type { SessionCapability } from "./session-capability.ts";
 import { isUiGlobalSessionKey } from "./session-key.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -34,6 +35,7 @@ type SessionPlacementRecoveryRetirement = "resolved" | "interrupted";
 
 export async function advanceSessionPlacementDraft(params: {
   client: Pick<GatewayBrowserClient, "request">;
+  describe: SessionCapability["describe"];
   recovery: SessionPlacementRecovery;
   persistRecovery?: boolean;
   cleanupOnCancellation: () => boolean;
@@ -56,7 +58,7 @@ export async function advanceSessionPlacementDraft(params: {
   const isCurrentOwner = () => params.isLifecycleCurrent() && params.ownsRecovery();
   const deleteDraft = async (recovered = recovering) => {
     const cleanup = recovered ? deleteRecoveredSessionPlacementDraft : deleteSessionPlacementDraft;
-    const error = await cleanup(params.client, recovery.sessionKey, recovery.agentId);
+    const error = await cleanup(params, recovery.sessionKey, recovery.agentId);
     if (!error) {
       params.clearRecovery("resolved");
     }
@@ -154,7 +156,7 @@ export async function advanceSessionPlacementDraft(params: {
   }
 
   const placementStart = await startSessionPlacementInitialTurn(
-    params.client,
+    params,
     {
       key: recovery.sessionKey,
       agentId: recovery.agentId,

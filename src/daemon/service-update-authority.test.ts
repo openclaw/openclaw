@@ -82,40 +82,6 @@ it("retains recovery material when a native writer has not settled", async () =>
   expect(restore).not.toHaveBeenCalled();
 });
 
-it("a retained installer guard stays bound to its original closed scope", async () => {
-  let retained!: () => void;
-  await withGatewayServiceUpdateAuthority(
-    undefined,
-    async (assertCurrent) => {
-      retained = assertCurrent;
-      await Promise.resolve();
-      assertCurrent();
-    },
-    { updateOwned: false, assertRecoveryCurrent: () => {} },
-  );
-  expect(() => retained()).toThrow("has closed");
-});
-
-it.skipIf(process.platform === "win32")(
-  "native client retains its registered receiver process group",
-  async () => {
-    const parentGroup = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
-      encoding: "utf8",
-    });
-    expect(parentGroup.status).toBe(0);
-    const result = await withGatewayServiceUpdateAuthority(
-      () => {},
-      () =>
-        execFileUtf8(process.execPath, [
-          "-e",
-          `const {spawnSync}=require("node:child_process"); process.stdout.write(spawnSync("ps",["-o","pgid=","-p",String(process.pid)],{encoding:"utf8"}).stdout);`,
-        ]),
-    );
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(parentGroup.stdout.trim());
-  },
-);
-
 it.each([
   { revoked: false, nested: false },
   { revoked: true, nested: false },
@@ -125,6 +91,13 @@ it.each([
   const root = dirs.make("native-authority-");
   const effect = path.join(root, "effect");
   let current = true;
+  const parentGroup =
+    process.platform === "win32" || revoked || nested
+      ? undefined
+      : spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" });
+  if (parentGroup) {
+    expect(parentGroup.status).toBe(0);
+  }
   const run = withGatewayServiceUpdateAuthority(
     () => {
       if (!current) {
@@ -137,9 +110,13 @@ it.each([
         current = !revoked;
         const result = await execFileUtf8(process.execPath, [
           "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`,
+          `require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned");
+          if (${parentGroup !== undefined}) process.stdout.write(require("node:child_process").spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {encoding: "utf8"}).stdout);`,
         ]);
         expect(result.code, result.stderr).toBe(0);
+        if (parentGroup) {
+          expect(result.stdout.trim()).toBe(parentGroup.stdout.trim());
+        }
       };
       await (nested ? withGatewayServiceUpdateAuthority(() => {}, invoke) : invoke());
     },
@@ -251,20 +228,25 @@ it("native plist publication rechecks after asynchronous preparation, without st
 });
 
 it.each([true, false])(
-  "async work cannot retain native authority after completion (update=%s)",
+  "retained guards and async work lose authority at scope closure (update=%s)",
   async (updateOwned) => {
     let release!: () => void;
     const ready = new Promise<void>((resolve) => {
       release = resolve;
     });
     let late!: Promise<void>;
+    let retained!: () => void;
     await withGatewayServiceUpdateAuthority(
-      () => {},
-      async () => {
+      undefined,
+      async (assertCurrent) => {
+        retained = assertCurrent;
+        await Promise.resolve();
+        assertCurrent();
         late = ready.then(() => assertGatewayServiceFallbackAllowed("late detached launch"));
       },
-      { updateOwned },
+      { updateOwned, assertRecoveryCurrent: () => {} },
     );
+    expect(() => retained()).toThrow("has closed");
     release();
     await expect(late).rejects.toThrow("has closed");
     expect(assertGatewayServiceUpdateCurrent).not.toThrow();

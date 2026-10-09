@@ -11,7 +11,7 @@ Docker is **optional**. Use it for an isolated, throwaway Gateway environment or
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
-Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+Hosting mutually untrusted users? Run a separate Gateway for each trust boundary, ideally under separate OS users or hosts. See [Security trust model](/gateway/security/trust-model).
 
 ## Prerequisites
 
@@ -257,12 +257,30 @@ archives follow the normal Doctor repair rules. Keep these files with your
 pre-upgrade backup; a rollback must restore the matching state as well as the old
 image. See [rollback](/install/updating#rollback).
 
+Retries with the same candidate build, database files, and target schemas verify and reuse the
+first completed backup group for the full database inventory, including after a
+partially completed migration. A temporary `.bak.capturing` file records an
+unfinished capture and is durably removed before migration starts. An interrupted
+capture is recaptured; a missing or damaged member of a completed group stops
+migration and preserves the surviving snapshots for recovery. Repeated
+failed attempts therefore do not create another full backup group each time.
+Older backup groups remain available for operator-managed rollback.
+Doctor records these originals for `openclaw update cleanup --dry-run`. They stay
+protected until Doctor verifies that the migration completed and a later update
+finishes successfully. Cleanup can then retire the recorded group after your
+confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
+files with your pre-upgrade backups while you still need the matching rollback.
+
 On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
-does not require an operator step. The migration owner publishes a complete,
-exclusive hardlink, syncs it before removing the old name, and can recover an
-interrupted source/claim pair without replacing another file. This preserves the
-source inode and exact bytes. The filesystem must support same-directory hardlinks
-and directory synchronization when native no-replace rename is unavailable.
+does not require an operator step in native `auto` mode when same-directory
+hardlinks are supported. fs-safe preserves the source inode and bytes through
+exclusive hardlink publication and unlink. Native `require` mode still refuses
+the unsupported primitive. Doctor recovers interrupted source/claim pairs without
+replacing another file. Its separate missing-addon/native-off compatibility path
+syncs the source and directory before removing the old name; native moves do not
+promise per-move crash durability. Archive hardening and durable recovery
+checkpoints remain owned by Doctor.
+SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
 
 Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
@@ -274,6 +292,10 @@ database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,
 incompatible columns, and other changes that cannot be reconstructed safely still require Doctor; startup
 does not recreate a missing data table as an empty one.
+
+On Linux hosts without file creation timestamps, normal SQLite writes and
+permission repairs can change the reported file birth time. These changes do
+not invalidate the open database; actual file replacement still stops admission.
 
 Startup exits with code `78` when required state cannot be migrated safely:
 for example, source identities conflict, data is unreadable, another writer owns
@@ -397,7 +419,7 @@ The route is protected by Gateway authentication; don't expose a separate public
 
 ### Health checks
 
-Container probe endpoints (no auth required):
+Container check endpoints (no auth required):
 
 ```bash
 curl -fsS http://127.0.0.1:18789/healthz   # liveness
@@ -406,7 +428,7 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
-Use `/startupz` for an orchestrator startup or readiness probe so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
+Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
 

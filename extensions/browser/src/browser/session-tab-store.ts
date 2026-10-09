@@ -4,19 +4,25 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
 import type { BrowserDashboardIdentity } from "../browser-dashboard.types.js";
 import {
+  assertBrowserSessionTabAuthority,
   getBrowserStateRuntime,
   getPendingBrowserDashboardRegistrations,
   getOptionalBrowserStateRuntime,
   setBrowserStateRuntime,
   type BrowserStateRuntime,
-  type BrowserDashboardRegistration,
   type BrowserSessionTabOperationKey,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
   clearDurableTabAliases,
   rememberDurableTabAliases,
   resetDurableTabAliases,
 } from "./session-tab-ephemeral-aliases.js";
+import {
+  browserSessionTabNativeIdentity,
+  browserSessionTabStorageKey,
+  resolveBrowserSessionKey,
+} from "./session-tab-identity.js";
 import {
   activeDurableStorageKeys,
   forgetColdNativeActivity,
@@ -116,12 +122,6 @@ export function parseBrowserDashboardStopIntent(
     ? parsed.data
     : undefined;
 }
-
-export type BrowserSessionTabAuthority = {
-  runtime?: BrowserStateRuntime;
-  assertCurrent?: () => void;
-  dashboardRegistration?: BrowserDashboardRegistration;
-};
 
 export async function readBrowserDashboardStopIntent(
   identity: BrowserDashboardIdentity,
@@ -254,14 +254,6 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   }
 }
 
-export function assertBrowserSessionTabAuthority(authority: BrowserSessionTabAuthority) {
-  const runtime = authority.runtime ?? getBrowserStateRuntime();
-  if (getOptionalBrowserStateRuntime() !== runtime) {
-    throw new Error("Browser session tab store owner changed");
-  }
-  authority.assertCurrent?.();
-}
-
 export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
@@ -270,6 +262,7 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   }
   return withCurrent({
     assertCurrent: () => assertBrowserSessionTabAuthority({ ...authority, runtime }),
+    sessionEntryCurrent: authority.sessionEntryCurrent,
   });
 }
 
@@ -470,37 +463,16 @@ export async function dispatchBrowserTabClose<T>(
   return await admitted?.result;
 }
 
-export function browserSessionTabStorageKey(record: {
-  sessionKey: string;
-  nativeTargetId: string;
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-}): string {
-  return `sha256:${createHash("sha256")
-    .update(
-      JSON.stringify([
-        record.sessionKey,
-        record.nativeTargetId,
-        record.profileFingerprint,
-        record.browserInstanceFingerprint,
-      ]),
-    )
-    .digest("hex")}`;
-}
-
-export function browserSessionTabNativeIdentity(
-  record: Pick<BrowserSessionTabRecord, "sessionKey" | "profile" | "nativeTargetId">,
-): string {
-  return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
-}
-
 export function compareBrowserSessionTabProfileAliases(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function parseBrowserSessionTabRecord(value: unknown): BrowserSessionTabRecord | undefined {
   const parsed = browserSessionTabRecordSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return parsed.success &&
+    resolveBrowserSessionKey(parsed.data.sessionKey) === parsed.data.sessionKey
+    ? parsed.data
+    : undefined;
 }
 
 export function sameBrowserSessionTabRecord(

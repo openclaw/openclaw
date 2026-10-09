@@ -1,4 +1,3 @@
-// Validates config after an approved OpenClaw write and asks for one repair.
 import { isSystemAgentInferenceUnavailableError } from "./inference-error.js";
 
 function unavailable(reason: string): string {

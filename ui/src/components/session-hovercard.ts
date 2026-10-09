@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type {
   ControlUiSessionPullRequest,
@@ -61,24 +61,13 @@ type SessionHovercardInput = SessionHovercardContextInput & {
 };
 
 let channelAvatarElementLoad: Promise<unknown> | undefined;
-function ensureChannelAvatarElement(): void {
-  channelAvatarElementLoad ??= import("./channel-avatar.ts");
-}
 
-function pullRequestStateIcon(state: ControlUiSessionPullRequest["state"]) {
-  switch (state) {
-    case "open":
-      return icons.gitPullRequest;
-    case "draft":
-      return icons.gitPullRequestDraft;
-    case "merged":
-      return icons.gitMerge;
-    case "closed":
-      return icons.gitPullRequestClosed;
-    default:
-      return state satisfies never;
-  }
-}
+const PULL_REQUEST_STATE_ICONS = {
+  open: icons.gitPullRequest,
+  draft: icons.gitPullRequestDraft,
+  merged: icons.gitMerge,
+  closed: icons.gitPullRequestClosed,
+} satisfies Record<ControlUiSessionPullRequest["state"], TemplateResult>;
 
 function renderDiffStats(item: { additions?: number; deletions?: number }) {
   if (item.additions === undefined && item.deletions === undefined) {
@@ -105,16 +94,16 @@ function renderDiffStats(item: { additions?: number; deletions?: number }) {
 function sessionAgeBucket(diffMs: number): { value: number; unit: SessionAgeUnit } {
   const days = Math.abs(diffMs) / (24 * 60 * 60_000);
   if (days >= 365) {
-    return { value: Math.max(1, Math.round(days / 365)), unit: "year" };
+    return { value: Math.round(days / 365), unit: "year" };
   }
   if (days >= 28) {
-    return { value: Math.max(1, Math.round(days / 30)), unit: "month" };
+    return { value: Math.round(days / 30), unit: "month" };
   }
   if (days >= 7) {
-    return { value: Math.max(1, Math.round(days / 7)), unit: "week" };
+    return { value: Math.round(days / 7), unit: "week" };
   }
   if (days >= 1) {
-    return { value: Math.max(1, Math.round(days)), unit: "day" };
+    return { value: Math.round(days), unit: "day" };
   }
   return bucketRelativeTimeMs(Math.abs(diffMs));
 }
@@ -154,18 +143,7 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
   }).format(value);
 }
 
-type SessionAttribution = {
-  creator?: SessionCreatedActor;
-  primaryIdentity: SessionParticipant["identity"] | undefined;
-  primaryLabel: string;
-  participants: SessionParticipant[];
-  otherCount: number;
-};
-
-function sessionAttribution(
-  row: SidebarSessionHovercardRow,
-  selfUserId: string | undefined,
-): SessionAttribution | undefined {
+function sessionAttribution(row: SidebarSessionHovercardRow, selfUserId: string | undefined) {
   const creator = row.createdActor;
   const creatorLabel = creator?.label?.trim() || creator?.id?.trim();
   const participantIds = new Set<string>();
@@ -279,7 +257,7 @@ function renderSessionAttribution({
       >`
     : nothing;
   if (creator && row.channelAvatarUrl) {
-    ensureChannelAvatarElement();
+    channelAvatarElementLoad ??= import("./channel-avatar.ts");
   }
   const primaryAvatar =
     creator && row.channelAvatarUrl
@@ -452,7 +430,7 @@ function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
       data-checks=${pullRequest.checks?.state ?? nothing}
       aria-label=${checks ? `${state} · ${checks}` : state}
       title=${checks ? `${state} · ${checks}` : state}
-      >${pullRequestStateIcon(pullRequest.state)}</span
+      >${PULL_REQUEST_STATE_ICONS[pullRequest.state]}</span
     >
     <span class="session-hovercard__pr-title">${pullRequest.title}</span>
     ${renderDiffStats(pullRequest)}

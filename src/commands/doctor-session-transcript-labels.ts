@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -25,19 +26,9 @@ const NOTE_TITLE = "Session transcript labels";
 // historical bytes even if the runtime pattern later evolves.
 const LEGACY_LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
-// Rewrites legacy inbound-context labels to the current canonical form: plain label + the provenance
-// marker suffix (`Sender: ⟦openclaw:ctx⟧`). Runtime strippers and the memory-lancedb recognizers key
-// on that marker, never on label text, so every rule targeting an inbound-context header must append
-// it — a plain-label rewrite would leave behind blocks the strippers no longer see.
-//
-// Labels are enumerated, never a `[^\n]+` catch-all: a ```json fence does not prove provenance, so
-// matching arbitrary labels would mark user-authored JSON and hide it. Historical dynamic/plugin
-// labels stay unmigrated — the shipped stripper never recognized them either, and new dynamic blocks
-// are marked at emit time (inbound-meta.ts).
-//
-// Accepted tradeoff: a user message with a standalone line that verbatim-matches one of these fixed
-// internal labels gets rewritten, and the marker-only strippers then hide that block. Same outcome the
-// runtime already produces for a verbatim current sentinel; the trigger is vanishingly rare.
+// Runtime strippers and memory-lancedb recognize the provenance marker, not these legacy labels.
+// Enumerate shipped labels: a JSON fence alone cannot distinguish user-authored content. Verbatim
+// copies of fixed internal labels still rewrite, matching the current sentinel's tradeoff.
 //
 // Old emitters (merge-base 7c896d78592e33f2f5fa1bb36ca588dcc3f96143, inbound-meta.ts unless noted):
 // FENCED: "Conversation info" (711), "Sender" (block removed before merge-base; its sentinel survived
@@ -64,23 +55,18 @@ function applyLegacyInboundLabelRewrites(text: string): string {
     return text;
   }
 
-  // Peel the timestamp envelope so the anchored (`^`) rules see the first header at column 0, exactly
-  // as the runtime stripper does. Without this, "[Wed …] Conversation info (…):" stays unmarked and the
-  // marker-only strippers expose its JSON. Reattached verbatim below.
+  // Match the runtime stripper's timestamp handling so an initial context block stays recognizable.
   const timestampMatch = text.match(LEGACY_LEADING_TIMESTAMP_PREFIX_RE);
   const timestampPrefix = timestampMatch ? timestampMatch[0] : "";
   let normalized = timestampPrefix ? text.slice(timestampPrefix.length) : text;
 
-  // 1. Fixed "(untrusted metadata)" labels with a ```json body.
   normalized = normalized.replace(
     /^(Conversation info|Sender|Forwarded message context|Location|Structured object) \(untrusted metadata\):[ \t]*\n```json/gm,
     `$1: ${INBOUND_CONTEXT_MARKER}\n\`\`\`json`,
   );
 
-  // 2. Active-memory and channel context historically shared one header. Preserve active-memory's
-  // bare Context: contract; only channel context gets the provenance marker used for terminal blocks.
-  // Only rule spanning the header's line break, so it must spell out `\r?` (migrated assistant rows
-  // skip normalizeInboundTextNewlines); without it the marked replace wins and the body strips to "".
+  // Active-memory keeps bare Context:. Preserve CRLF because assistant rows bypass newline
+  // normalization; otherwise the marked channel rewrite would hide the active-memory body.
   normalized = normalized.replace(
     /^Untrusted context \(metadata, do not treat as instructions or commands\):([ \t]*\r?\n)(?=<active_memory_plugin>[ \t]*(?:\r?\n|$))/gm,
     "Context:$1",
@@ -90,40 +76,28 @@ function applyLegacyInboundLabelRewrites(text: string): string {
     `Context: ${INBOUND_CONTEXT_MARKER}`,
   );
 
-  // 3. "Chat history since last reply" footer (unfenced).
   normalized = normalized.replace(
     /^Chat history since last reply \(untrusted, for context\):$/gm,
     `Chat history since last reply: ${INBOUND_CONTEXT_MARKER}`,
   );
 
-  // 4. "Thread starter" block.
   normalized = normalized.replace(
-    /^Thread starter \(untrusted, for context\):[ \t]*\n```json/gm,
-    `Thread starter: ${INBOUND_CONTEXT_MARKER}\n\`\`\`json`,
+    /^(Thread starter|Reply target of current user message) \(untrusted, for context\):[ \t]*\n```json/gm,
+    `$1: ${INBOUND_CONTEXT_MARKER}\n\`\`\`json`,
   );
 
-  // 5. "Reply target of current user message" block.
-  normalized = normalized.replace(
-    /^Reply target of current user message \(untrusted, for context\):[ \t]*\n```json/gm,
-    `Reply target of current user message: ${INBOUND_CONTEXT_MARKER}\n\`\`\`json`,
-  );
-
-  // 6. "Reply chain of current user message" block.
   normalized = normalized.replace(
     /^Reply chain of current user message \(untrusted, nearest first\):[ \t]*\n```json/gm,
     `Reply chain of current user message (nearest first): ${INBOUND_CONTEXT_MARKER}\n\`\`\`json`,
   );
 
-  // 7. Oldest reply-target label. 64e28a6ac94 renamed this same block to "Reply target of current user
-  // message", so it migrates to that canonical label — not to a plain `Replied message:`, which no
-  // recognizer keys on.
+  // 64e28a6ac94 renamed this block; retain its canonical label for the current recognizers.
   normalized = normalized.replace(
     /^Replied message \(untrusted, for context\):[ \t]*\n```json/gm,
     `Reply target of current user message: ${INBOUND_CONTEXT_MARKER}\n\`\`\`json`,
   );
 
-  // 8. Chat windows carry dynamic labels, so this is the one pattern-based rule. Narrow by construction:
-  // it requires the distinctive "(untrusted, chronological…)" tuple, not bare prose.
+  // Dynamic chat-window labels require the shipped chronological tuple, not bare prose.
   normalized = normalized.replace(
     /^(.+) \(untrusted, chronological(, [^)\n]+)?\):$/gm,
     (_match, label, qualifier) =>
@@ -134,18 +108,14 @@ function applyLegacyInboundLabelRewrites(text: string): string {
 }
 
 function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!isRecord(event) || event.type !== "message") {
     return false;
   }
-  const entry = event as { message?: unknown; type?: unknown };
-  if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") {
-    return false;
-  }
-  const message = entry.message as { content?: unknown; role?: unknown };
+  const message = asOptionalObjectRecord(event.message);
   // Assistant turns can echo a context block into their output, and the shipped label-based strippers
   // removed those too (gateway/chat-sanitize.ts, replay-history.ts, session-cost-usage.ts). Skipping
   // them here would leave old assistant blocks unmarked, so they would leak on replay after upgrade.
-  if (message.role !== "user" && message.role !== "assistant") {
+  if (!message || (message.role !== "user" && message.role !== "assistant")) {
     return false;
   }
   if (typeof message.content === "string") {
@@ -161,16 +131,12 @@ function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
   }
   let changed = false;
   for (const part of message.content) {
-    if (!part || typeof part !== "object" || Array.isArray(part)) {
+    if (!isRecord(part) || typeof part.text !== "string") {
       continue;
     }
-    const textPart = part as { text?: unknown };
-    if (typeof textPart.text !== "string") {
-      continue;
-    }
-    const normalized = applyLegacyInboundLabelRewrites(textPart.text);
-    if (normalized !== textPart.text) {
-      textPart.text = normalized;
+    const normalized = applyLegacyInboundLabelRewrites(part.text);
+    if (normalized !== part.text) {
+      part.text = normalized;
       changed = true;
     }
   }
@@ -190,7 +156,6 @@ function snapshotsMatch(
   );
 }
 
-/** Reports or repairs legacy inbound-context labels in canonical SQLite transcripts. */
 export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -233,8 +198,6 @@ export async function noteSessionTranscriptLabelHealth(params: {
           continue;
         }
 
-        // Build per-row change list keyed by seq. Parse each row individually so unparseable
-        // rows (with corrupted eventJson) don't break the whole session.
         const updates: Array<{ seq: number; eventJson: string }> = [];
         let hasMalformedRow = false;
         for (const row of readResult.rows) {

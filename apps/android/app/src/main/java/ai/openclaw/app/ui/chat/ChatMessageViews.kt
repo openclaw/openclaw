@@ -70,7 +70,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -531,8 +530,9 @@ internal fun ChatManagedImage(
   var image by remember(artifactId) { mutableStateOf<ImageBitmap?>(null) }
   var failed by remember(artifactId) { mutableStateOf(false) }
   var retryGeneration by rememberSaveable(artifactId) { mutableStateOf(0) }
+  val decodeDispatcher = LocalChatImageDecodeDispatcher.current
 
-  LaunchedEffect(artifactId, resolverReady, retryGeneration) {
+  LaunchedEffect(artifactId, resolverReady, retryGeneration, decodeDispatcher) {
     if (!resolverReady) {
       failed = true
       image = null
@@ -543,7 +543,7 @@ internal fun ChatManagedImage(
     val loaded = runCatching { loadImage(artifactId) }.getOrNull()
     image =
       loaded?.let { value ->
-        withContext(Dispatchers.Default) { decodeImageBytes(value.bytes)?.asImageBitmap() }
+        withContext(decodeDispatcher) { decodeImageBytes(value.bytes)?.asImageBitmap() }
       }
     failed = image == null
   }
@@ -561,24 +561,19 @@ internal fun ChatManagedImage(
         color = ClawTheme.colors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
       ) {
-        Text(
-          nativeString("Image unavailable · Tap to retry"),
-          modifier = Modifier.padding(12.dp),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
+        ChatImageStatus(nativeString("Image unavailable · Tap to retry"))
       }
     }
 
     else -> {
-      Text(
-        nativeString("Loading image…"),
-        modifier = Modifier.padding(12.dp),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
+      ChatImageStatus(nativeString("Loading image…"))
     }
   }
+}
+
+@Composable
+private fun ChatImageStatus(text: String) {
+  Text(text, modifier = Modifier.padding(12.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
 }
 
 @Composable

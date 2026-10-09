@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type {
   PluginStateComparisonLimits,
@@ -16,6 +17,7 @@ import type {
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import type { PluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
+import type { RuntimeHealthClearSelection } from "./runtime-health-records.js";
 
 type Namespace = { pluginId: string; namespace: string };
 type Key = Namespace & { key: string };
@@ -47,6 +49,13 @@ export type PluginStateWorkerRequests = {
     output: PluginStateCompareResult<unknown>;
   };
   "pluginState.register": { input: Register; output: void };
+  "pluginState.replaceEntry": { input: Register; output: void };
+  "pluginState.replace": {
+    input: Omit<Register, "key" | "valueJson" | "ttlMs"> & {
+      entries: readonly Pick<Register, "key" | "valueJson" | "ttlMs">[];
+    };
+    output: void;
+  };
   "pluginState.registerIfAbsent": {
     input: Register;
     output: boolean;
@@ -68,12 +77,20 @@ export type PluginStateWorkerRequests = {
   };
   "pluginState.count": { input: Namespace; output: number };
   "pluginState.clear": { input: Namespace; output: void };
+  "pluginState.clearRuntimeHealth": {
+    input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
+    output: void;
+  };
   "pluginState.sweep": { input: undefined; output: number };
 };
 
 export type PluginStateWorkerOperations = {
   [Request in keyof PluginStateWorkerRequests]: {
-    input: PluginStateWorkerRequests[Request]["input"];
+    input: PluginStateWorkerRequests[Request]["input"] extends undefined
+      ? undefined
+      : PluginStateWorkerRequests[Request]["input"] & {
+          sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
+        };
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };
 };
@@ -113,6 +130,16 @@ export const pluginStateWorkerOperations = {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to register plugin state entry.",
+  },
+  "pluginState.replace": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state namespace.",
+  },
+  "pluginState.replaceEntry": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state entry.",
   },
   "pluginState.registerIfAbsent": {
     operation: "register",
@@ -158,6 +185,11 @@ export const pluginStateWorkerOperations = {
     operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear plugin state namespace.",
+  },
+  "pluginState.clearRuntimeHealth": {
+    operation: "clear",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to clear runtime health records.",
   },
   "pluginState.sweep": {
     operation: "sweep",

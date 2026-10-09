@@ -27,11 +27,12 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "./chat-clawhub-card.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -61,22 +62,22 @@ import {
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { renderReplyPreview, type ReplyPreview } from "./chat-reply-preview-render.ts";
+import { renderReplyLine, type ReplyLine } from "./chat-reply-attribution.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   renderToolApprovalReviews,
   renderToolCard,
   renderToolIcon,
   renderPluginToolResult,
   resolveCollapsedToolDetail,
-  shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolOutcome,
+  type ToolRenderOptions,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
@@ -127,9 +128,7 @@ function renderInlineToolCards(
         return renderToolCard(card, {
           ...opts,
           expanded,
-          onToggleExpanded: opts.onToggleToolExpanded
-            ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
-            : () => undefined,
+          onToggleExpanded: () => opts.onToggleToolExpanded?.(disclosureId, expanded),
         });
       })}
     </div>
@@ -179,7 +178,7 @@ export function renderGroupedMessage(
     isForwarded?: boolean;
     sessionKey?: string;
     presented?: boolean;
-    transcriptVisible?: boolean;
+    transcriptVisible?: PresentationValue;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -187,7 +186,6 @@ export function renderGroupedMessage(
     showToolCalls?: boolean;
     runActive?: boolean;
     asyncQuestions?: AsyncQuestionPresentation;
-    autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isUserMessageExpanded?: (messageId: string) => boolean;
@@ -217,12 +215,14 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    subagents?: ToolRenderOptions["subagents"];
+    fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
-    onResolveReply?: (replyToId: string) => void;
+    /** This message's own "Replying to" line, drawn inside the bubble. */
+    replyLine?: ReplyLine;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
   },
@@ -544,6 +544,10 @@ export function renderGroupedMessage(
   const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
+  const transcriptVisible =
+    typeof opts.transcriptVisible === "object"
+      ? opts.transcriptVisible.isPresented()
+      : opts.transcriptVisible;
   const renderBody = () => html`
     ${
       sourceRole === "assistant"
@@ -562,7 +566,7 @@ export function renderGroupedMessage(
       videoPreviews.map(
         (item) => html`
           <div class="chat-image-frame chat-video-preview">
-            ${opts.transcriptVisible === false ? nothing : renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
+            ${transcriptVisible === false ? nothing : presentedContent(opts.transcriptVisible ?? true, renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview"))}
           </div>
         `,
       ),
@@ -617,21 +621,12 @@ export function renderGroupedMessage(
       class="${bubbleClasses}"
       ${opts.entryRef ? ref(opts.entryRef) : nothing}
       data-message-id=${messageKey}
+      data-file-session-key=${opts.fileLinkSessionKey ?? nothing}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}
     >
-      ${renderReplyPreview(
-        normalizedMessage.replyTarget,
-        normalizedMessage.replyTarget?.kind === "id"
-          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
-              normalizedMessage.replyPreview)
-          : undefined,
-        opts.onOpenReply,
-        opts.onResolveReply,
-        normalizedMessage.replyTarget?.kind === "id" &&
-          opts.replyNavigationId === normalizedMessage.replyTarget.id,
-      )}
+      ${opts.replyLine ? renderReplyLine(opts.replyLine, opts, true) : nothing}
       ${
         onlyToolCards
           ? renderInlineToolCards(toolCards, toolRenderOptions)
@@ -651,14 +646,11 @@ export function renderGroupedMessage(
                       aria-expanded=${String(toolMessageExpanded)}
                       @pointerenter=${syncToolDisclosureOverflow}
                       @focus=${syncToolDisclosureOverflow}
-                      @click=${(event: MouseEvent) => {
-                        if (shouldToggleSelectableDisclosure(event)) {
-                          opts.onToggleToolMessageExpanded?.(
-                            toolMessageDisclosureId,
-                            toolMessageExpanded,
-                          );
-                        }
-                      }}
+                      @click=${() =>
+                        opts.onToggleToolMessageExpanded?.(
+                          toolMessageDisclosureId,
+                          toolMessageExpanded,
+                        )}
                     >
                       <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                       <span class="chat-tool-disclosure__content">

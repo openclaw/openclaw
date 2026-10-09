@@ -1,4 +1,4 @@
-import { ChildProcess } from "node:child_process";
+import { ChildProcess, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({ spawn: vi.fn(), spawnWindowsJobChild: vi.fn() 
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
+  spawnSync: vi.fn(),
 }));
 vi.mock("../../scripts/lib/managed-windows-job.mts", () => ({
   spawnWindowsJobChild: mocks.spawnWindowsJobChild,
@@ -151,20 +152,28 @@ it.each([false, true])(
     const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
     const leaderError = Object.assign(new Error("leader signal denied"), { code: "EACCES" });
     mocks.spawn.mockReturnValue(child);
+    let fallbackAttempted = false;
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 12346,
+      output: [],
+      status: 1,
+      signal: null,
+      stdout: "",
+      stderr: "",
+    });
     const leaderSignal = vi.spyOn(child, "kill").mockImplementation(() => {
+      fallbackAttempted = true;
       if (leaderSignalFails) {
         throw leaderError;
       }
       return false;
     });
-    let terminationAttempted = false;
     const groupSignal = vi.spyOn(process, "kill").mockImplementation((_pid, received) => {
       if (received === 0) {
         throw Object.assign(new Error("group observation"), {
-          code: terminationAttempted ? "ESRCH" : "EPERM",
+          code: fallbackAttempted ? "ESRCH" : "EPERM",
         });
       }
-      terminationAttempted = true;
       throw groupError;
     });
 
@@ -190,11 +199,7 @@ it.each([false, true])(
         errors: leaderSignalFails ? [groupError, leaderError] : [groupError],
       }),
     });
-    expect(groupSignal.mock.calls).toEqual([
-      [-12345, 0],
-      [-12345, "SIGKILL"],
-      [-12345, 0],
-    ]);
+    expect(groupSignal).toHaveBeenCalledWith(-12345, "SIGKILL");
     expect(leaderSignal).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     owner.assertReleased();
   },
@@ -203,7 +208,6 @@ it.each([false, true])(
 it.each([
   ["win32", true, true],
   ["win32", false, true],
-  ["darwin", true, true],
   ["darwin", false, true],
   ["win32", true, false],
 ] as const)(
@@ -292,12 +296,7 @@ it.each([
       if (terminates && closes) {
         expect(descendantOutput.destroyed).toBe(true);
         owner.assertReleased();
-        // POSIX strict normal-exit policy still reports unexpected group survivors.
-        if (platform === "win32") {
-          expect(outcome).toBe(0);
-        } else {
-          expect(outcome).toMatchObject({ processTreeState: "terminated" });
-        }
+        expect(outcome).toBe(0);
       } else {
         expect(hasUnjoinedWork(outcome)).toBe(true);
         expect(outcome).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });

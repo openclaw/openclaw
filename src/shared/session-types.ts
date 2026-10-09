@@ -3,6 +3,7 @@ import type {
   ModelChoice,
   SessionCreatedActor,
   SessionPerson,
+  SessionOwnerSessionCount,
   SessionsAssignOwnerParams,
 } from "../../packages/gateway-protocol/src/index.js";
 
@@ -46,11 +47,12 @@ export type GatewayAgentRow = Pick<
 export type SessionActivityPulse = {
   since: number;
   until: number;
-  /** One bucket per elapsed hour of the civil day, 23–25 on DST days. */
-  hours: number[];
+  /** Counts between consecutive caller-supplied boundaries. */
+  buckets: number[];
   sessions: number;
-  started: number;
-  /** Sessions with an active run anywhere in the filtered set, not only since `since`. */
+  /** Sessions created within `activeMinutes`; omitted for an unbounded time filter. */
+  started?: number;
+  /** Sessions with an active run anywhere in the filtered set. */
   running: number;
   people?: number;
 };
@@ -67,10 +69,14 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   hasMore?: boolean;
   /** Complete owner facet for the filtered result, independent of pagination. */
   owners?: SessionOwnerFacetIdentity[];
+  /** Complete visible open/running ownership summary, before pagination. */
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionPerson[];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
-  /** Civil-day activity from `activityPulseSince` to `activityPulseUntil`, before pagination. */
+  /** Earliest activeMinutes boundary among visible candidates, before person filters/pagination. */
+  activityExpiresAt?: number;
+  /** Window-wide statistics and caller-defined activity buckets, before pagination. */
   activityPulse?: SessionActivityPulse;
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;

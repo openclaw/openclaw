@@ -1,6 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { executeSendAction } from "./outbound-send-service.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),
@@ -38,12 +39,6 @@ function createContext(overrides: Partial<ExecuteSendContext>): ExecuteSendConte
 }
 
 describe("accepted plugin delivery outcomes", () => {
-  let executeSendAction: OutboundSendServiceModule["executeSendAction"];
-
-  beforeAll(async () => {
-    ({ executeSendAction } = await import("./outbound-send-service.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

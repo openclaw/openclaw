@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DRIVER_PACKAGE = "@trycua/cua-driver";
 
@@ -75,19 +76,14 @@ function resolveArtifactPlatform(
   return { kind: "not-applicable" };
 }
 
-function readJson(pathname: string): unknown {
-  return JSON.parse(fs.readFileSync(pathname, "utf8"));
-}
-
 export function readPackageIdentity(pathname: string): { name?: string; version?: string } {
-  const value = readJson(pathname);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(JSON.parse(fs.readFileSync(pathname, "utf8")));
+  if (!record) {
     return {};
   }
-  const record = value as Record<string, unknown>;
   return {
-    name: typeof record.name === "string" ? record.name : undefined,
-    version: typeof record.version === "string" ? record.version : undefined,
+    name: readStringField(record, "name"),
+    version: readStringField(record, "version"),
   };
 }
 

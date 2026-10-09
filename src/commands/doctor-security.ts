@@ -1,4 +1,3 @@
-/** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
@@ -73,30 +72,6 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
-function execSecurityRank(value: ExecSecurity): number {
-  switch (value) {
-    case "deny":
-      return 0;
-    case "allowlist":
-      return 1;
-    case "full":
-      return 2;
-  }
-  throw new Error("Unsupported exec security value");
-}
-
-function execAskRank(value: ExecAsk): number {
-  switch (value) {
-    case "off":
-      return 0;
-    case "on-miss":
-      return 1;
-    case "always":
-      return 2;
-  }
-  throw new Error("Unsupported exec ask value");
-}
-
 function collectExecPolicyConflictWarnings(
   cfg: OpenClawConfig,
   approvals: ExecApprovalsFile,
@@ -114,12 +89,7 @@ function collectExecPolicyConflictWarnings(
     const scopeExecConfig = params.scopeExecConfig;
     const globalExecConfig = params.globalExecConfig;
     if (
-      !scopeExecConfig?.mode &&
-      !scopeExecConfig?.security &&
-      !scopeExecConfig?.ask &&
-      !globalExecConfig?.mode &&
-      !globalExecConfig?.security &&
-      !globalExecConfig?.ask
+      ![scopeExecConfig, globalExecConfig].some((exec) => exec?.mode || exec?.security || exec?.ask)
     ) {
       return;
     }
@@ -137,10 +107,8 @@ function collectExecPolicyConflictWarnings(
     const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
     const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
     const securityConflict =
-      securityConfigured &&
-      execSecurityRank(snapshot.security.requested) > execSecurityRank(snapshot.security.effective);
-    const askConflict =
-      askConfigured && execAskRank(snapshot.ask.requested) < execAskRank(snapshot.ask.effective);
+      securityConfigured && snapshot.security.requested !== snapshot.security.effective;
+    const askConflict = askConfigured && snapshot.ask.requested !== snapshot.ask.effective;
     if (!securityConflict && !askConflict) {
       return;
     }
@@ -155,17 +123,16 @@ function collectExecPolicyConflictWarnings(
     if (canonicalModeSource) {
       configParts.push(`${canonicalModeSource}="${snapshot.mode.requested}"`);
     }
-    if (securityConflict) {
-      if (!canonicalModeSource) {
-        configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+    for (const [field, conflict] of [
+      [snapshot.security, securityConflict],
+      [snapshot.ask, askConflict],
+    ] as const) {
+      if (conflict) {
+        if (!canonicalModeSource) {
+          configParts.push(`${field.requestedSource}="${field.requested}"`);
+        }
+        hostParts.push(`${field.hostSource}="${field.host}"`);
       }
-      hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
-    }
-    if (askConflict) {
-      if (!canonicalModeSource) {
-        configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
-      }
-      hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
     }
 
     findings.push({
@@ -268,7 +235,6 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAudi
   ];
 }
 
-/** Collects doctor security findings without emitting terminal notes. */
 export async function collectSecurityWarnings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -309,7 +275,7 @@ export async function collectSecurityWarnings(
     defaults: cfg.secrets?.defaults,
   }).ref;
   findings.push(
-    ...findSecretStoreRedactedValueFindings({ database: { env } }).map(
+    ...(await findSecretStoreRedactedValueFindings({ database: { env } })).map(
       (finding): SecurityAuditFinding => ({
         checkId: "doctor.secret_store_redacted_value",
         severity: "warn",
@@ -391,7 +357,6 @@ export async function collectSecurityWarnings(
         ].join("\n"),
       });
     } else {
-      // Auth is configured, but still warn about network exposure
       findings.push({
         checkId: "gateway.bind_network_accessible",
         severity: "warn",
@@ -439,7 +404,6 @@ function renderSecurityFindingLines(finding: SecurityAuditFinding): string[] {
   return lines;
 }
 
-/** Emits security warnings plus the deep audit follow-up command. */
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const findings = await collectSecurityWarnings(cfg);
   if (findings.length > 0) {

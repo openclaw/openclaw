@@ -6,14 +6,11 @@ import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-
 import { isPathInside } from "../infra/path-guards.js";
 import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type {
   NodeWorkerPreparedWorkspaceInput,
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
 import {
-  NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   NODE_WORKSPACE_DRAIN_COMMAND,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -32,7 +29,12 @@ import {
   runNodeWorkerWorkspaceTransfer,
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
-import { workspaceCommandEnv } from "./node-worker-workspace-commands.js";
+import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
+import {
+  nodeWorkspaceManifestCapture,
+  runNodeWorkspaceManifestCapture,
+  workspaceCommandEnv,
+} from "./node-worker-workspace-commands.js";
 import {
   assertWorkspaceArgv,
   removeNodeWorkerWorkspaceEntry,
@@ -52,6 +54,7 @@ import {
   type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
 import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+import { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
 import {
   listOwnedEntries,
   listOwnedDirectories,
@@ -99,6 +102,7 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly deletingWorkspaceGenerations = new Set<string>();
   private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
   readonly processes = new NodeWorkerWorkspaceProcesses();
+  readonly quiescence = new NodeWorkerWorkspaceQuiescence();
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv; ephemeral?: boolean } = {}) {
     const env = options.env ?? process.env;
@@ -118,6 +122,14 @@ export class NodeWorkerWorkspaceRuntime {
       options.ephemeral === true,
     );
     this.env = snapshotNodeWorkerEnv(env);
+  }
+
+  async checkAdmission(): Promise<void> {
+    const probe = await createNodeWorkerTempWorkspace({
+      rootDir: this.root,
+      prefix: ".hosting-admission-",
+    });
+    await probe.cleanup();
   }
 
   /** Only the fresh provisioning owner may register, before Gateway readiness is committed. */
@@ -204,8 +216,8 @@ export class NodeWorkerWorkspaceRuntime {
 
   private currentLocalProtection(
     gatewayNamespace: string,
-    retainedDuringPass: ReadonlySet<string>,
-    launches: readonly NodeWorkerWorkspaceLaunchReference[],
+    retainedDuringPass?: ReadonlySet<string>,
+    launches: readonly NodeWorkerWorkspaceLaunchReference[] = [],
   ): Set<string> {
     const protectedGenerations = new Set(retainedDuringPass);
     for (const generationKey of this.activeWorkspaceOperations.keys()) {
@@ -265,12 +277,7 @@ export class NodeWorkerWorkspaceRuntime {
         }
       }
       this.acceptedSnapshots.set(input.gatewayNamespace, next);
-      const retainedDuringPass = new Set<string>();
-      for (const generationKey of this.activeWorkspaceOperations.keys()) {
-        if (generationKey.startsWith(`${input.gatewayNamespace}/`)) {
-          retainedDuringPass.add(generationKey);
-        }
-      }
+      const retainedDuringPass = this.currentLocalProtection(input.gatewayNamespace);
       const protections = this.activeRetainProtections.get(input.gatewayNamespace) ?? new Set();
       protections.add(retainedDuringPass);
       this.activeRetainProtections.set(input.gatewayNamespace, protections);
@@ -512,6 +519,7 @@ export class NodeWorkerWorkspaceRuntime {
     signal?: AbortSignal,
     gateway?: NodeWorkerTransferGateway,
   ): Promise<NodeWorkerWorkspaceExecResult> {
+    const assertProcessCurrent = this.processes.captureAdmission(input, input.generation);
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
     const registered = await this.prepared.store?.find(input.environmentId);
@@ -607,7 +615,6 @@ export class NodeWorkerWorkspaceRuntime {
           if (!gateway?.url) {
             throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
           }
-          const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
             seedsRoot: this.seedsRoot,
             gatewayNamespace: input.gatewayNamespace,
@@ -621,7 +628,7 @@ export class NodeWorkerWorkspaceRuntime {
               ? { prepared: { row: prepared, store: this.prepared.store } }
               : {}),
             transfer: input.transfer,
-            hashMemo,
+            hashMemo: takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey),
             signal,
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest
@@ -649,37 +656,64 @@ export class NodeWorkerWorkspaceRuntime {
           return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
         if (input.resetWorkspace) {
+          if (input.nativeProcessOwner || input.process) {
+            assertProcessCurrent();
+          }
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
           fs.rmSync(workspacePath, { recursive: true, force: true });
         }
         const workspaceDir = prepared
           ? workspacePath
           : ensureContainedDirectory(sessionRoot, workspaceName);
-        assertWorkspaceArgv(workspaceDir, input.argv);
         const commandEnv = workspaceCommandEnv(homeDir, this.env);
-        if (input.process) {
-          return await this.processes.execute({
-            input,
-            workspaceDir,
-            env: commandEnv,
+        if (input.quiescence) {
+          if (input.argv[1] !== workspaceDir) {
+            throw new Error("INVALID_REQUEST: workspace quiescence root does not match its owner");
+          }
+          const stdout = await this.quiescence.execute(
+            {
+              input,
+              workspaceDir,
+              env: commandEnv,
+              retainWorkspace: () =>
+                this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
+            },
             signal,
-            retainWorkspace: () =>
-              this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
-          });
+          );
+          return projectWorkspaceOperationResult(workspaceDir, stdout);
         }
-        const result = await runCommandWithTimeout(input.argv, {
-          cwd: workspaceDir,
-          baseEnv: commandEnv,
-          ...(input.input === undefined ? {} : { input: input.input }),
+        assertWorkspaceArgv(workspaceDir, input.argv);
+        const capture = input.process
+          ? undefined
+          : nodeWorkspaceManifestCapture(input.argv, workspaceDir);
+        if (capture) {
+          const stdout = await runNodeWorkspaceManifestCapture({
+            ...capture,
+            home: homeDir,
+            memo: input.input,
+            env: this.env,
+            signal: AbortSignal.any([
+              ...(signal ? [signal] : []),
+              AbortSignal.timeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+            ]),
+          });
+          return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
+        }
+        const processContext = {
+          input,
+          assertCurrent: assertProcessCurrent,
+          workspaceDir,
+          env: commandEnv,
+          signal,
+          retainWorkspace: () =>
+            this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
+        };
+        if (input.process) {
+          return await this.processes.execute(processContext);
+        }
+        const result = await this.processes.executeForeground({
+          ...processContext,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          ...(signal ? { signal } : {}),
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-          maxOutputBytes: {
-            stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-            stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-          },
-          terminateOnOutputLimit: true,
         });
         return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });

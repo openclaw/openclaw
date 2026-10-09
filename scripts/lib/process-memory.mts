@@ -522,3 +522,44 @@ export function readProcessMemoryCapacity(params: MemoryLimitParams) {
       : Math.min(cgroupMemory.limitBytes, physicalLimitBytes);
   return { ...cgroupMemory, capacityBytes, limitBytes, availableBytes: hostAvailableBytes };
 }
+
+/** Verify actual kernel containment, rather than accepting an environment or manager claim. */
+export function hasLinuxMemoryContainment(
+  maxBytes: number,
+  params: MemoryLimitParams = {},
+  scope?: string,
+) {
+  if ((params.platform ?? process.platform) !== "linux") {
+    return false;
+  }
+  const resolved = resolveCgroupMemoryLimitPaths(params);
+  if (
+    !resolved.sawObservedV2Mapping ||
+    resolved.cgroupRecordReadFailed ||
+    resolved.sawUnresolvedCgroupLimit
+  ) {
+    return false;
+  }
+  const files = params.fs ?? fs;
+  return resolved.paths.some((file) => {
+    if (path.basename(file) !== "memory.max") {
+      return false;
+    }
+    if (scope && path.basename(path.dirname(file)) !== scope) {
+      return false;
+    }
+    try {
+      const limit = parseCgroupMemoryLimitBytes(files.readFileSync(file, "utf8"));
+      const directory = path.dirname(file);
+      return (
+        limit !== null &&
+        limit > 0 &&
+        limit <= maxBytes &&
+        files.readFileSync(path.join(directory, "memory.swap.max"), "utf8").trim() === "0" &&
+        files.readFileSync(path.join(directory, "memory.oom.group"), "utf8").trim() === "1"
+      );
+    } catch {
+      return false;
+    }
+  });
+}

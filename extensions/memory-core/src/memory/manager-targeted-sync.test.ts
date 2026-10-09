@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
@@ -23,18 +24,21 @@ describe("memory targeted session sync", () => {
     const activateFallbackProvider = vi.fn(async () => true);
     const syncArchiveFiles = vi
       .fn()
-      .mockRejectedValueOnce(new Error("embedding backend failed"))
+      .mockRejectedValueOnce(
+        createMemoryEmbeddingOperationError({
+          operation: "batch",
+          cause: "embedding backend failed",
+        }),
+      )
       .mockResolvedValueOnce(undefined);
     const sessionsDirtyFiles = new Set(["/tmp/targeted-fallback.jsonl", "/tmp/other-dirty.jsonl"]);
 
     const result = await runMemoryTargetedSessionSync({
       hasSessionSource: true,
       targetArchiveFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
-      reason: "post-compaction",
       progress: undefined,
       sessionsDirtyFiles,
       syncArchiveFiles,
-      shouldFallbackOnError: () => true,
       activateFallbackProvider,
     });
 
@@ -62,12 +66,10 @@ describe("memory targeted session sync", () => {
     const result = await runMemoryTargetedSessionSync({
       hasSessionSource: true,
       targetArchiveFiles: new Set(sessionsDirtyFiles),
-      reason: "post-compaction",
       progress: undefined,
       ...dirtyState,
       sessionsDirtyFiles,
       syncArchiveFiles: async () => undefined,
-      shouldFallbackOnError: () => false,
       activateFallbackProvider: async () => false,
     });
 

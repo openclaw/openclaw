@@ -3,6 +3,7 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -14,7 +15,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
 import type { AgentHarnessModelCatalogResult } from "./harness/types.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   loadProviderScopedThinkingCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
@@ -24,16 +25,55 @@ import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
+  prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const runtimeFixture = usePreparedModelRuntimeHarness({ label: "native-picker" }, () => {
   vi.restoreAllMocks();
 });
 const { mocks } = runtimeFixture;
+
+function setProviderCatalog(
+  entries: ModelCatalogEntry[],
+  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
+) {
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+    entries,
+    routeVariants: [...entries],
+    ...(providerOutcomes ? { providerOutcomes } : {}),
+  });
+}
+
+function expectModels(
+  actual: readonly ModelCatalogEntry[] | undefined,
+  ...expected: Partial<ModelCatalogEntry>[]
+) {
+  for (const model of expected) {
+    expect(actual).toContainEqual(expect.objectContaining(model));
+  }
+}
+
+async function renewProvider(owner: PreparedModelRuntimeSnapshot, provider: string) {
+  const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!;
+  inventory.providers.get(provider)!.expiresAt = 0;
+  const published = createDeferredCore();
+  const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "catalog-published") {
+      published.resolve();
+    }
+  });
+  try {
+    owner.refreshExpiredModelCatalog!();
+    await published.promise;
+  } finally {
+    unsubscribe();
+  }
+}
 
 async function fixture(standalone = false, cold = false, runtimeA = "native-a") {
   const { resolveNativeModelPrimary } =
@@ -71,7 +111,7 @@ async function fixture(standalone = false, cold = false, runtimeA = "native-a") 
     allowGatewaySubagentBinding: true,
   };
   mocks.configuredAgentIds = ["pro"];
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({ entries: [], routeVariants: [] });
+  setProviderCatalog([]);
   if (!standalone) {
     // Gateway commits start background discovery. Publish the cold owner separately after activation.
     if (cold) {
@@ -148,11 +188,10 @@ it("reuses native thinking observations across messages and refreshes invalidate
 
 it("reuses published native facts without renewing providers during warm API and native turns", async () => {
   const { input, owner, b, loadA, loadB } = await fixture();
+  // Settle startup's full acquisition so the refresh below discovers the new provider rows.
+  await owner.loadFullModelCatalog!();
   const api = { provider: "provider-c", id: "model", name: "API model" };
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [api],
-    routeVariants: [api],
-  });
+  setProviderCatalog([api]);
   await owner.loadFullModelCatalog!({ refresh: true });
   const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!;
   inventory.providers.get(api.provider)!.expiresAt = 0;
@@ -182,12 +221,7 @@ it("reuses published native facts without renewing providers during warm API and
       model: selection.modelId,
       agentRuntime: selection.runtime,
     });
-    expect(thinking).toContainEqual(
-      expect.objectContaining({
-        provider: selection.provider,
-        id: selection.modelId,
-      }),
-    );
+    expectModels(thinking, { provider: selection.provider, id: selection.modelId });
     expect.soft(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(providerCalls);
     expect(lease.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(b));
   }
@@ -306,53 +340,9 @@ it("does not share a failed pending native discovery with another runtime, and r
   expect(loadB).toHaveBeenCalledTimes(calls);
   loadA.mockResolvedValue([a]);
   const recovered = await owner.loadFullModelCatalog!({ refresh: true });
-  expect(recovered.entries).toEqual(
-    expect.arrayContaining([expect.objectContaining(a), expect.objectContaining(b)]),
-  );
+  expectModels(recovered.entries, a, b);
   expect(recovered.authoritative).not.toBe(false);
   expect(recovered.refreshFailed).toBeUndefined();
-});
-
-it("restores the fresh API route when a native harness returns an untagged host model", async () => {
-  const { owner, b, loadB } = await fixture(true, true);
-  loadB.mockResolvedValue([{ ...b, contextWindow: 8_000 }]);
-  await owner.loadFullModelCatalog!({ refresh: true });
-  const previousApi = {
-    provider: b.provider,
-    id: b.id,
-    name: "API model",
-    api: "openai-completions" as const,
-    baseUrl: "https://old.synthetic.test/v1",
-    contextWindow: 16_000,
-  };
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [previousApi],
-    routeVariants: [previousApi],
-  });
-  const initial = await owner.loadFullModelCatalog!({ refresh: true });
-  expect(initial.entries.find((entry) => entry.provider === b.provider)).toMatchObject({
-    nativeRuntime: b.nativeRuntime,
-    contextWindow: 8_000,
-  });
-  const freshApi = {
-    ...previousApi,
-    api: "openai-responses" as const,
-    baseUrl: "https://fresh.synthetic.test/v1",
-    contextWindow: 32_000,
-  };
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [freshApi],
-    routeVariants: [freshApi],
-  });
-  loadB.mockResolvedValue([{ provider: b.provider, id: b.id, name: "Host model" }]);
-
-  const refreshed = await owner.loadFullModelCatalog!({ refresh: true });
-
-  for (const entries of [refreshed.entries, refreshed.routeVariants]) {
-    const routes = entries.filter((entry) => entry.provider === b.provider && entry.id === b.id);
-    expect(routes).toContainEqual(expect.objectContaining({ ...freshApi, name: "Host model" }));
-    expect(routes.some((entry) => entry.nativeRuntime)).toBe(false);
-  }
 });
 
 it("keeps observed untagged models without restoring API rows deleted during native discovery", async () => {
@@ -368,10 +358,7 @@ it("keeps observed untagged models without restoring API rows deleted during nat
     contextWindow: 16_000,
   };
   const removedApi = { ...previousApi, id: "removed-api" };
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [previousApi, removedApi],
-    routeVariants: [previousApi, removedApi],
-  });
+  setProviderCatalog([previousApi, removedApi]);
   await owner.loadFullModelCatalog!({ refresh: true });
   const harnessOnly = { provider: b.provider, id: "harness-only", name: "Harness-only model" };
   const alternateHost = {
@@ -385,7 +372,6 @@ it("keeps observed untagged models without restoring API rows deleted during nat
   };
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  let renewed = createDeferredCore();
   loadB.mockImplementationOnce(async () => {
     entered.resolve();
     await release.promise;
@@ -400,11 +386,6 @@ it("keeps observed untagged models without restoring API rows deleted during nat
     modelId: harnessOnly.id,
     runtime: b.nativeRuntime,
   });
-  const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-    if (event.phase === "catalog-published") {
-      renewed.resolve();
-    }
-  });
   try {
     await entered.promise;
     const freshApi = {
@@ -413,14 +394,8 @@ it("keeps observed untagged models without restoring API rows deleted during nat
       baseUrl: "https://fresh.synthetic.test/v1",
       contextWindow: 32_000,
     };
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [freshApi],
-      routeVariants: [freshApi],
-    });
-    const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!;
-    inventory.providers.get(b.provider)!.expiresAt = 0;
-    owner.refreshExpiredModelCatalog!();
-    await renewed.promise;
+    setProviderCatalog([freshApi]);
+    await renewProvider(owner, b.provider);
     const providerPublication = owner.readFullModelCatalog!()!;
     expect(providerPublication.routeVariants).toContainEqual(expect.objectContaining(freshApi));
     expect(providerPublication.routeVariants.some((entry) => entry.id === removedApi.id)).toBe(
@@ -430,11 +405,7 @@ it("keeps observed untagged models without restoring API rows deleted during nat
     const catalog = await selected;
     expect(catalog.routeVariants).toContainEqual(expect.objectContaining(alternateHost));
     for (const entries of [catalog.entries, catalog.routeVariants]) {
-      expect(entries).toContainEqual(expect.objectContaining(harnessOnly));
-      expect(entries).toContainEqual(
-        expect.objectContaining({ ...freshApi, name: "Observed host model" }),
-      );
-      expect(entries).toContainEqual(expect.objectContaining(siblingHost));
+      expectModels(entries, harnessOnly, { ...freshApi, name: "Observed host model" }, siblingHost);
       expect(entries.some((entry) => entry.id === removedApi.id)).toBe(false);
       expect(entries.some((entry) => entry.provider === b.provider && entry.nativeRuntime)).toBe(
         false,
@@ -442,42 +413,26 @@ it("keeps observed untagged models without restoring API rows deleted during nat
     }
     const nativeCalls = loadB.mock.calls.length;
     const latestApi = { ...freshApi, contextWindow: 64_000 };
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [latestApi],
-      routeVariants: [latestApi],
-    });
-    renewed = createDeferredCore();
-    resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!.providers.get(
-      b.provider,
-    )!.expiresAt = 0;
-    owner.refreshExpiredModelCatalog!();
-    await renewed.promise;
+    setProviderCatalog([latestApi]);
+    await renewProvider(owner, b.provider);
     expect(loadB).toHaveBeenCalledTimes(nativeCalls);
-    expect(owner.readFullModelCatalog!()?.routeVariants).toContainEqual(
-      expect.objectContaining(alternateHost),
-    );
+    expectModels(owner.readFullModelCatalog!()?.routeVariants, alternateHost);
     for (const entries of [
       owner.readFullModelCatalog!()!.entries,
       owner.readFullModelCatalog!()!.routeVariants,
     ]) {
-      expect(entries).toContainEqual(expect.objectContaining(harnessOnly));
-      expect(entries).toContainEqual(
-        expect.objectContaining({ ...latestApi, name: "Observed host model" }),
-      );
+      expectModels(entries, harnessOnly, { ...latestApi, name: "Observed host model" });
       expect(entries.some((entry) => entry.id === removedApi.id)).toBe(false);
     }
     const selection = { provider: b.provider, modelId: harnessOnly.id, runtime: b.nativeRuntime };
     loadB.mockRejectedValueOnce(new Error("Host discovery unavailable"));
     await owner.loadNativeModelCatalog!(selection).catch(() => undefined);
-    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(
-      expect.objectContaining(harnessOnly),
-    );
+    expectModels(owner.readFullModelCatalog!()?.entries, harnessOnly);
     loadB.mockResolvedValue([]);
     const cleared = await owner.loadNativeModelCatalog!(selection);
     for (const entries of [cleared.entries, cleared.routeVariants]) {
       expect(entries.some((entry) => entry.id === harnessOnly.id)).toBe(false);
-      expect(entries).toContainEqual(expect.objectContaining(latestApi));
-      expect(entries).toContainEqual(expect.objectContaining(siblingHost));
+      expectModels(entries, latestApi, siblingHost);
     }
     expect(cleared.refreshFailed).toBeUndefined();
     expect(cleared.routeVariants.some((entry) => entry.baseUrl === alternateHost.baseUrl)).toBe(
@@ -486,7 +441,6 @@ it("keeps observed untagged models without restoring API rows deleted during nat
   } finally {
     release.resolve();
     await selected.catch(() => undefined);
-    unregister();
   }
 });
 
@@ -494,18 +448,10 @@ it("publishes fresh API models when every native harness fails during a full ref
   const { owner, a, b, loadA, loadB } = await fixture(true, true);
   const previousApi = { provider: "api-provider", id: "old-api", name: "Old API model" };
   const ready = { provider: previousApi.provider, status: "ready" } as const;
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [previousApi],
-    routeVariants: [previousApi],
-    providerOutcomes: [ready],
-  });
+  setProviderCatalog([previousApi], [ready]);
   await owner.loadFullModelCatalog!({ refresh: true });
   const freshApi = { ...previousApi, id: "fresh-api", name: "Fresh API model" };
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [freshApi],
-    routeVariants: [freshApi],
-    providerOutcomes: [ready],
-  });
+  setProviderCatalog([freshApi], [ready]);
   loadA.mockRejectedValue(new Error("Native A unavailable"));
   loadB.mockRejectedValue(new Error("Native B unavailable"));
 
@@ -513,13 +459,7 @@ it("publishes fresh API models when every native harness fails during a full ref
 
   const catalog = owner.readFullModelCatalog!()!;
   for (const entries of [catalog.entries, catalog.routeVariants]) {
-    expect(entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining(freshApi),
-        expect.objectContaining(a),
-        expect.objectContaining(b),
-      ]),
-    );
+    expectModels(entries, freshApi, a, b);
     expect(entries.some((entry) => entry.id === previousApi.id)).toBe(false);
   }
   expect(catalog).toMatchObject({ authoritative: false, refreshFailed: true });
@@ -564,12 +504,7 @@ it("keeps a newly selected native model when a queued full refresh partly fails"
     const catalog = await refreshed;
     expect(catalog).toMatchObject({ authoritative: false, refreshFailed: true });
     for (const entries of [catalog.entries, catalog.routeVariants]) {
-      expect(entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining(updatedA),
-          expect.objectContaining(updatedB),
-        ]),
-      );
+      expectModels(entries, updatedA, updatedB);
       expect(entries.some((entry) => entry.provider === b.provider && entry.id === b.id)).toBe(
         false,
       );
@@ -585,11 +520,7 @@ it.each(["__proto__", "constructor"])(
   async (runtimeA) => {
     const { owner, a, b, loadA, loadB } = await fixture(true, false, runtimeA);
     const api = { provider: "api-provider", id: "model", name: "API model" };
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [api],
-      routeVariants: [api],
-      providerOutcomes: [{ provider: api.provider, status: "ready" }],
-    });
+    setProviderCatalog([api], [{ provider: api.provider, status: "ready" }]);
     loadB.mockResolvedValue({
       entries: [b],
       outcomes: [{ provider: b.provider, status: "ready" }],
@@ -616,25 +547,10 @@ it.each(["__proto__", "constructor"])(
     expect(partial.authoritative).toBe(false);
     expect(partial.refreshFailed).toBeUndefined();
     expect(partial.providerOutcomes).toContainEqual(failure);
-    expect(partial.entries).toEqual(
-      expect.arrayContaining([expect.objectContaining(a), expect.objectContaining(updatedB)]),
-    );
+    expectModels(partial.entries, a, updatedB);
 
     const nativeCalls = loadA.mock.calls.length;
-    const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!;
-    inventory.providers.get(api.provider)!.expiresAt = 0;
-    const published = createDeferredCore();
-    const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
-      if (event.phase === "catalog-published") {
-        published.resolve();
-      }
-    });
-    try {
-      owner.refreshExpiredModelCatalog!();
-      await published.promise;
-    } finally {
-      unsubscribe();
-    }
+    await renewProvider(owner, api.provider);
     const renewed = owner.readFullModelCatalog!()!;
     expect(loadA).toHaveBeenCalledTimes(nativeCalls);
     expect(renewed.authoritative).toBe(false);
@@ -656,11 +572,7 @@ it("keeps API provider readiness independent of a failed native runtime for the 
   const { owner, a, loadA } = await fixture(true);
   const api = { provider: a.provider, id: "api-model", name: "API model" };
   const ready = { provider: a.provider, status: "ready" } as const;
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [api],
-    routeVariants: [api],
-    providerOutcomes: [ready],
-  });
+  setProviderCatalog([api], [ready]);
   loadA.mockResolvedValue({
     entries: [],
     outcomes: [{ provider: a.provider, status: "unavailable", rejectionScope: "catalog" }],
@@ -735,4 +647,84 @@ it("does not publish a pending native refresh after its owner is replaced", asyn
   }
   await refresh;
   expect(owner.isCurrent()).toBe(false);
+});
+
+it("renews native observations without retaining harness-only host projections", async () => {
+  const provider = "custom";
+  const native = { provider, id: "native", name: "Native", nativeRuntime: "fixture-native" };
+  const host = { provider, id: "host-only", name: "Host only" };
+  const api = { provider, id: "api", name: "API" };
+  const profile = {
+    type: "oauth" as const,
+    provider,
+    accountId: "fixture-account",
+    access: "before",
+    refresh: "before-refresh",
+    expires: 1_900_000_000_000,
+  };
+  const setProfile = (value: typeof profile) => {
+    mocks.preparedAuthStore = { version: 1, profiles: { "custom:default": value } };
+    const { provider: _provider, accountId: _accountId, ...credential } = value;
+    mocks.authStorage.getAll.mockReturnValue({ custom: credential });
+  };
+  setProfile(profile);
+  const load = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => [native, host]);
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "fixture-native",
+      source: "fixture",
+      harness: {
+        id: "fixture-native",
+        label: "Fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        loadModelCatalog: load,
+      },
+    });
+    return registry;
+  });
+  mocks.configuredAgentIds = ["default"];
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+    entries: [api],
+    routeVariants: [api],
+    providerOutcomes: [{ provider, status: "ready" }],
+  }));
+  const input = runtimeFixture.agentInput("default", {
+    agents: { defaults: { model: "custom/api" } },
+  });
+  const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+  await refreshPreparedModelRuntimeSnapshots(input.config, options);
+  const original = await prepareModelRuntimeSnapshot(input);
+  const initial = await original.loadFullModelCatalog!();
+  expect(initial.entries).toEqual(
+    expect.arrayContaining([native, host, api].map((entry) => expect.objectContaining(entry))),
+  );
+
+  const started = createDeferred();
+  const release = createDeferred<ModelCatalogEntry[]>();
+  load.mockImplementation(async () => {
+    started.resolve();
+    return release.promise;
+  });
+  setProfile({ ...profile, access: "after", refresh: "after-refresh" });
+  let discovery: Promise<unknown> | undefined;
+  try {
+    await refreshPreparedModelRuntimeSnapshots(input.config, options);
+    const renewed = await prepareModelRuntimeSnapshot(input);
+    discovery = renewed.loadFullModelCatalog!({ changedOnly: true });
+    await started.promise;
+    const pending = renewed.readFullModelCatalog!()!;
+    expect(pending.entries).toEqual(
+      expect.arrayContaining([native, api].map((entry) => expect.objectContaining(entry))),
+    );
+    expect(pending.entries).not.toContainEqual(expect.objectContaining(host));
+    expect(pending.routeVariants).not.toContainEqual(expect.objectContaining(host));
+    release.resolve([native, host]);
+    await discovery;
+    expect(renewed.readFullModelCatalog!()!.entries).toContainEqual(expect.objectContaining(host));
+  } finally {
+    release.resolve([native, host]);
+    await discovery;
+  }
 });

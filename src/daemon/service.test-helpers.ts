@@ -64,6 +64,10 @@ export function buildSystemdUnitPropertyOutput(
     JSON.stringify({ type: "as", data: params.dropInPaths ?? [] }),
     JSON.stringify({ type: "b", data: params.needDaemonReload ?? false }),
     JSON.stringify({ type: "s", data: params.loadState ?? "loaded" }),
+    JSON.stringify({ type: "s", data: "enabled" }),
+    JSON.stringify({ type: "s", data: "active" }),
+    JSON.stringify({ type: "b", data: true }),
+    JSON.stringify({ type: "b", data: false }),
   ].join("\n");
 }
 

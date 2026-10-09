@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   PreparedAgentCredentialMode,
   PreparedAgentCredentialModes,
@@ -87,28 +87,20 @@ function convertAuthProfileCredentialToAgent(
   cred: AuthProfileCredential,
   options?: ResolveAgentCredentialMapOptions,
 ): AgentCredential | null {
-  if (cred.type === "api_key") {
-    const key = normalizeOptionalString(cred.key) ?? "";
-    if (!key) {
-      // A configured secret ref proves the credential exists, but this converter
-      // must not resolve or leak the actual secret value.
-      return coerceSecretRef(cred.keyRef) !== null ? secretRefPlaceholder(options) : null;
-    }
-    return { type: "api_key", key };
-  }
-
-  if (cred.type === "token") {
-    if (cred.expires !== undefined) {
+  if (cred.type === "api_key" || cred.type === "token") {
+    if (cred.type === "token" && cred.expires !== undefined) {
       const expires = asDateTimestampMs(cred.expires);
       if (expires === undefined || Date.now() >= expires) {
         return null;
       }
     }
-    const token = normalizeOptionalString(cred.token) ?? "";
-    if (!token) {
-      return coerceSecretRef(cred.tokenRef) !== null ? secretRefPlaceholder(options) : null;
+    const key = normalizeOptionalString(cred.type === "api_key" ? cred.key : cred.token);
+    if (!key) {
+      // A configured ref proves existence, never authority to resolve its secret here.
+      const ref = cred.type === "api_key" ? cred.keyRef : cred.tokenRef;
+      return parseSecretRef(ref) !== null ? secretRefPlaceholder(options) : null;
     }
-    return { type: "api_key", key: token };
+    return { type: "api_key", key };
   }
 
   if (cred.type === "oauth") {

@@ -1,4 +1,3 @@
-// Defines Slack channel configuration types.
 import type {
   ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
@@ -8,14 +7,13 @@ import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
-  ChannelExecApprovalTarget,
   ChannelReactionConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
 import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
@@ -26,11 +24,7 @@ export type SlackDmConfig = {
   groupChannels?: Array<string | number>;
 };
 
-export type SlackChannelConfig = {
-  /** If false, disable the bot in this channel. */
-  enabled?: boolean;
-  /** Require mentioning the bot to trigger replies. */
-  requireMention?: boolean;
+export type SlackChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
   /** Override mention gating in threads started by this bot; omitted preserves implicit mention policy. */
   requireMentionInBotThreads?: boolean;
   /**
@@ -40,34 +34,24 @@ export type SlackChannelConfig = {
   ignoreOtherMentions?: boolean;
   /** Override Slack reply/thread behavior for this channel. */
   replyToMode?: ReplyToMode;
-  /** Optional tool policy overrides for this channel. */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Allow bot-authored messages to trigger replies (default: true). Set to "mentions" to only allow bot messages that @mention this bot. */
   allowBots?: boolean | "mentions";
   /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Allowlist of users that can invoke the bot in this channel. */
   users?: Array<string | number>;
-  /** Optional skill filter for this channel. */
-  skills?: string[];
-  /** Optional system prompt for this channel. */
-  systemPrompt?: string;
   /** Slack presence polling and agent wake mode for this channel. */
   presenceEvents?: SlackPresenceEventsConfig;
 };
 
-type SlackPresenceEventsMode = "off" | "auto" | "on";
-
 type SlackPresenceEventsConfig = {
   /** Presence wake mode. Default: off. */
-  mode?: SlackPresenceEventsMode;
+  mode?: "off" | "auto" | "on";
   /** Override the default presence-event guidance. Empty omits guidance. Maximum: 20,000 characters. */
   prompt?: string;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
 // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   /** Slack progress presentation. "compact" keeps one editable text draft. Default: "card". */
@@ -76,7 +60,6 @@ export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   nativeTaskCards?: boolean;
 };
 export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;
-export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
 export type SlackCapabilitiesConfig = string[];
 
@@ -175,7 +158,6 @@ export type SlackAccountConfig = Omit<
      * Example: { direct: "all", group: "first", channel: "off" }.
      */
     replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
-    /** Thread session behavior. */
     thread?: SlackThreadConfig;
     /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
     presenceEvents?: SlackPresenceEventsConfig;
@@ -188,7 +170,6 @@ export type SlackAccountConfig = Omit<
   };
 
 export type SlackConfig = {
-  /** Optional per-account Slack configuration (multi-account). */
   accounts?: Record<string, SlackAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;

@@ -26,7 +26,12 @@ vi.mock("./cli-auth-seam.js", () => {
 
 import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
-import { claude5ContractCases } from "./model-contract-cases.test-support.js";
+import {
+  claude5ContractCases,
+  createModelRegistry,
+  expectFields,
+  levelIds,
+} from "./model-contract-cases.test-support.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
@@ -38,37 +43,11 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createModelRegistry(models: ProviderRuntimeModel[]) {
-  return {
-    find(providerId: string, modelId: string) {
-      return (
-        models.find(
-          (model) =>
-            model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-        ) ?? null
-      );
-    },
-  };
-}
-
 const requireRecord = createRequireRecord("object", "expected-label");
-
-function expectFields(value: unknown, fields: Record<string, unknown>) {
-  const record = requireRecord(value, "record");
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
-}
 
 function expectModelParams(models: unknown, modelId: string, params: Record<string, unknown>) {
   const model = requireRecord(requireRecord(models, "models")[modelId], modelId);
   expectFields(model.params, params);
-}
-
-function levelIds(profile: unknown): Array<unknown> {
-  const levels = requireRecord(profile, "thinking profile").levels;
-  expect(Array.isArray(levels), "thinking levels").toBe(true);
-  return (levels as Array<{ id?: unknown }>).map((level) => level.id);
 }
 
 const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
@@ -329,6 +308,7 @@ describe("anthropic provider replay hooks", () => {
 
     const models = next?.agents?.defaults?.models;
     expectModelParams(models, "anthropic/claude-opus-4-6", { cacheRetention: "short" });
+    expectModelParams(models, "anthropic/claude-sonnet-5-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-4-6", { cacheRetention: "short" });
   });
@@ -347,7 +327,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/claude-opus-4-7" },
             models: {
               "anthropic/claude-opus-4-7": {},
@@ -355,7 +334,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     expectFields(next?.agents?.defaults?.heartbeat, {
       every: "1h",
@@ -363,6 +342,7 @@ describe("anthropic provider replay hooks", () => {
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     for (const modelId of [
       "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5-5",
       "anthropic/claude-sonnet-5",
       "anthropic/claude-fable-5",
       "anthropic/claude-fable-5-1",
@@ -455,7 +435,6 @@ describe("anthropic provider replay hooks", () => {
           },
           entries: {
             main: {
-              default: true,
               model: { primary: "anthropic/opus-4.7" },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
@@ -563,7 +542,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/opus-5.0" },
             models: {
               "anthropic/opus-5.0": { alias: "Future Opus" },
@@ -571,7 +549,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     expect(models["anthropic/opus-5.0"]).toEqual({
@@ -659,6 +637,7 @@ describe("anthropic provider replay hooks", () => {
       defaultLevel = "high",
       cost,
       thinkingLevelMap,
+      thinkingLevels,
       checksMedia,
       restoresMissingCost,
       checksCliPolicy,
@@ -690,11 +669,7 @@ describe("anthropic provider replay hooks", () => {
         provider: "anthropic",
         modelId,
       } as never);
-      expect(levelIds(profile)).toStrictEqual(
-        defaultLevel === "medium"
-          ? ["low", "medium", "high", "xhigh", "max"]
-          : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-      );
+      expect(levelIds(profile)).toStrictEqual(thinkingLevels);
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe(defaultLevel);
       const normalized = provider.normalizeResolvedModel?.({
         provider: "anthropic",
@@ -705,7 +680,19 @@ describe("anthropic provider replay hooks", () => {
           ...(checksCliPolicy
             ? {}
             : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
-          ...(restoresMissingCost ? { cost: undefined } : {}),
+          ...(restoresMissingCost
+            ? {
+                cost:
+                  restoresMissingCost === "tiers" && cost
+                    ? {
+                        input: cost.input,
+                        output: cost.output,
+                        cacheRead: cost.cacheRead,
+                        cacheWrite: cost.cacheWrite,
+                      }
+                    : undefined,
+              }
+            : {}),
         } as ProviderRuntimeModel,
       } as never);
       expectFields(normalized, {
@@ -1361,14 +1348,17 @@ describe("anthropic provider replay hooks", () => {
       name: "rejects invalid setup-token expiry during non-interactive preflight",
       opts: { tokenExpiresIn: "nope" },
       error: "Invalid --token-expires-in",
-      partialError: true,
+    },
+    {
+      name: "rejects missing setup-token input during non-interactive preflight",
+      opts: { token: "" },
+      error: "Anthropic setup-token auth requires --token with a valid setup-token.",
     },
   ] as Array<{
     name: string;
     opts: Record<string, string>;
     error?: string;
-    partialError?: boolean;
-  }>)("$name", async ({ opts, error, partialError }) => {
+  }>)("$name", async ({ opts, error }) => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
     if (!setupTokenAuth?.validateNonInteractive) {
@@ -1376,7 +1366,7 @@ describe("anthropic provider replay hooks", () => {
     }
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    const valid = await setupTokenAuth.validateNonInteractive({
+    const validation = setupTokenAuth.validateNonInteractive({
       authChoice: "setup-token",
       config: {},
       baseConfig: {},
@@ -1385,15 +1375,13 @@ describe("anthropic provider replay hooks", () => {
       resolveApiKey: vi.fn(async () => null),
     });
 
-    expect(valid).toBe(!error);
     if (error) {
-      expect(runtime.error).toHaveBeenCalledWith(
-        partialError ? expect.stringContaining(error) : error,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      await expect(validation).rejects.toThrow(error);
     } else {
-      expect(runtime.error).not.toHaveBeenCalled();
+      await expect(validation).resolves.toBe(true);
     }
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("omits setup-token expiry when duration overflows the Date range", async () => {

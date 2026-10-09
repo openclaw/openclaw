@@ -1,6 +1,10 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
@@ -18,8 +22,6 @@ vi.unmock("node:child_process");
 
 const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
-const NATIVE_SECOND_CATALOG =
-  "<available_skills><skill><name>bravo-native</name><description>Refreshed catalog.</description></skill></available_skills>";
 
 /**
  * Serves the Responses wire for the real Codex binary and records every request
@@ -159,32 +161,53 @@ function developerMessageText(request: JsonObject | undefined): string {
   return JSON.stringify(input.filter((item) => isJsonObject(item) && item.role === "developer"));
 }
 
+async function createNativeFixture(modelId: string, contextWindow = 200_000) {
+  const root = await fs.realpath(tempDir);
+  const native = await createCodexNativeTestState(root);
+  for (const [name, value] of Object.entries(native.env)) {
+    if (value !== undefined) {
+      vi.stubEnv(name, value);
+    }
+  }
+  const fixture = await startResponsesFixture();
+  await writeCodexFixtureConfig({
+    root,
+    codexHome: native.codexHome,
+    modelId,
+    port: fixture.port,
+    contextWindow,
+  });
+  const attemptOptions: Parameters<typeof runCodexAppServerAttempt>[1] = {
+    pluginConfig: {
+      appServer: {
+        command: native.command,
+        args: ["app-server"],
+        homeScope: "user",
+        sandbox: "read-only",
+        approvalPolicy: "never",
+      },
+    },
+    nativeHookRelay: { enabled: false },
+  };
+  const createParams = (filename: string, sessionKey?: string) => {
+    const params = createNativeRunParams(path.join(root, filename), native.cwd, sessionKey);
+    params.modelId = modelId;
+    params.model = { ...params.model, id: modelId };
+    params.trigger = "user";
+    params.timeoutMs = 20_000;
+    return params;
+  };
+  return { native, fixture, attemptOptions, createParams };
+}
+
 describe("native Codex skill delivery", () => {
   it("delivers the ordinary root catalog when model metadata owns collaboration instructions", async () => {
-    const root = await fs.realpath(tempDir);
-    const native = await createCodexNativeTestState(root);
-    for (const [name, value] of Object.entries(native.env)) {
-      if (value !== undefined) {
-        vi.stubEnv(name, value);
-      }
-    }
-    const fixture = await startResponsesFixture();
-    const modelId = "skill-carrier-model";
-    await writeCodexFixtureConfig({
-      root,
-      codexHome: native.codexHome,
-      modelId,
-      port: fixture.port,
-      contextWindow: 200_000,
-    });
+    const { fixture, attemptOptions, createParams } =
+      await createNativeFixture("skill-carrier-model");
     let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
     try {
-      const params = createNativeRunParams(path.join(root, "session.jsonl"), native.cwd);
-      params.modelId = modelId;
-      params.model = { ...params.model, id: modelId };
+      const params = createParams("session.jsonl");
       params.prompt = "What is the weather in Wilmington today?";
-      params.trigger = "user";
-      params.timeoutMs = 20_000;
       const otherSkills = Array.from(
         { length: 40 },
         (_, index) =>
@@ -195,10 +218,7 @@ describe("native Codex skill delivery", () => {
         skills: [],
       };
       const result = await runCodexAppServerAttempt(params, {
-        pluginConfig: {
-          appServer: { command: native.command, args: ["app-server"], homeScope: "user" },
-        },
-        nativeHookRelay: { enabled: false },
+        ...attemptOptions,
         clientFactory: async (options) => {
           client = await createIsolatedCodexAppServerClient(options);
           return client;
@@ -222,63 +242,173 @@ describe("native Codex skill delivery", () => {
     }
   }, 45_000);
 
+  it("delivers and refreshes persona through an external WebSocket Harness", async ({ signal }) => {
+    const { native, fixture, createParams } = await createNativeFixture("persona-carrier-model");
+    // The OS assigns the port while the native listener owns it throughout.
+    // An external client must not accidentally qualify for the stdio relay.
+    const harness = spawn(native.command, ["app-server", "--listen", "ws://127.0.0.1:0"], {
+      cwd: native.cwd,
+      env: native.env,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+    try {
+      const listening = new Promise<string>((resolve, reject) => {
+        let stderr = "";
+        harness.once("error", reject);
+        harness.once("exit", (code) =>
+          reject(new Error(`Native WebSocket exited: ${code} ${stderr}`)),
+        );
+        harness.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+          const match = stderr.match(/listening on:\s*(ws:\/\/127\.0\.0\.1:\d+)/);
+          if (match?.[1]) {
+            resolve(match[1]);
+          }
+        });
+      });
+      const url = await withinTest(listening, signal);
+      const soulPath = path.join(native.cwd, "SOUL.md");
+      const firstSoul = "SYNTHETIC_REMOTE_PERSONA_FIRST";
+      const editedSoul = "SYNTHETIC_REMOTE_PERSONA_EDITED";
+      const sharedUser = "SYNTHETIC_SHARED_USER";
+      const personalUser = "SYNTHETIC_PERSONAL_USER";
+      const personalPath = path.join(native.cwd, "users", "alice", "USER.md");
+      await fs.writeFile(path.join(native.cwd, "USER.md"), sharedUser);
+      registerInternalHook("agent:bootstrap", (event) => {
+        // Supply the same authenticated-selection metadata as the personal loader.
+        const context = event.context as {
+          bootstrapFiles: Array<{
+            name: string;
+            path: string;
+            content?: string;
+            missing: boolean;
+            personalUser?: true;
+          }>;
+        };
+        context.bootstrapFiles.push({
+          name: "USER.md",
+          path: personalPath,
+          content: personalUser,
+          missing: false,
+          personalUser: true,
+        });
+      });
+      const threadIds = new Set<string>();
+      for (const [index, soul] of [firstSoul, editedSoul, undefined].entries()) {
+        if (soul) {
+          await fs.writeFile(soulPath, soul);
+        } else {
+          await fs.unlink(soulPath);
+        }
+        const params = createParams("remote-persona.jsonl");
+        params.disableTools = false;
+        params.runId = `remote-persona-${index}`;
+        params.prompt = `Ordinary remote turn ${index}.`;
+        const result = await runCodexAppServerAttempt(params, {
+          pluginConfig: {
+            appServer: {
+              transport: "websocket",
+              url,
+              sandbox: "read-only",
+              approvalPolicy: "never",
+            },
+          },
+          nativeHookRelay: { enabled: false },
+          clientFactory: async (options) => {
+            if (!client) {
+              client = await createIsolatedCodexAppServerClient(options);
+              client.addNotificationHandler((notification) => {
+                if (notification.method === "turn/started" && isJsonObject(notification.params)) {
+                  const threadId = notification.params.threadId;
+                  if (typeof threadId === "string") {
+                    threadIds.add(threadId);
+                  }
+                }
+              });
+            }
+            return client;
+          },
+        });
+        expect(result.terminal).toEqual({ kind: "ok" });
+        // No personal overlay may enter native history or configuration, both of
+        // which can be inherited by native children (including full-history forks).
+        expect(JSON.stringify(fixture.requests)).not.toContain(personalUser);
+        expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
+          expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
+        );
+        const text = developerMessageText(fixture.requests.at(-1));
+        expect(text).toContain(sharedUser);
+        expect(text).toContain("Synthetic model-owned Default policy.");
+        if (soul) {
+          expect(text).toContain(soul);
+          if (index === 1) {
+            expect(text.lastIndexOf(editedSoul)).toBeGreaterThan(text.lastIndexOf(firstSoul));
+          }
+        } else {
+          // Resume replaces the current section; historical turns may still
+          // contain old text, so inspect the latest policy handoff.
+          const latestDeveloper = fixture.requests.at(-1)?.input;
+          expect(Array.isArray(latestDeveloper)).toBe(true);
+          const handoffs = Array.isArray(latestDeveloper)
+            ? latestDeveloper.filter(
+                (item) =>
+                  isJsonObject(item) &&
+                  item.role === "developer" &&
+                  JSON.stringify(item).includes("complete current OpenClaw"),
+              )
+            : [];
+          expect(handoffs.length).toBeGreaterThan(0);
+          expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
+          expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
+        }
+      }
+      expect(threadIds.size).toBe(1);
+    } finally {
+      if (client) {
+        await client.closeAndWait();
+      }
+      if (harness.exitCode === null && harness.signalCode === null) {
+        const closed = once(harness, "close");
+        harness.kill("SIGTERM");
+        await closed;
+      }
+      await fixture.close();
+    }
+  }, 90_000);
+
   it.each([
-    {
-      label: "an edited catalog",
-      refreshed: NATIVE_SECOND_CATALOG,
-      current: NATIVE_SECOND_CATALOG,
-    },
     {
       label: "a withdrawn catalog",
       refreshed: undefined,
-      current: "skills catalog is empty",
+      current: "refreshable thread instructions are empty",
     },
   ])(
     "keeps $label visible to the model after native compaction rebuilds the incognito thread",
     async ({ refreshed, current }) => {
-      const root = await fs.realpath(tempDir);
-      const native = await createCodexNativeTestState(root);
-      for (const [name, value] of Object.entries(native.env)) {
-        if (value !== undefined) {
-          vi.stubEnv(name, value);
-        }
-      }
-      const fixture = await startResponsesFixture();
-      const modelId = "skill-carrier-model";
       // auto_compact_token_limit resolves to 900, so a turn reporting 5_000
       // tokens forces the next turn to compact before it samples.
-      const contextWindow = 1_000;
+      const { fixture, attemptOptions, createParams } = await createNativeFixture(
+        "skill-carrier-model",
+        1_000,
+      );
       const overAutoCompactLimitTokens = 5_000;
-      await writeCodexFixtureConfig({
-        root,
-        codexHome: native.codexHome,
-        modelId,
-        port: fixture.port,
-        contextWindow,
-      });
       const sessionKey = `agent:main:dashboard:incognito-native-compaction-${refreshed ? "edit" : "removal"}`;
       await seedRunSessionOwnerForTest("session-1", sessionKey);
-      const sessionFile = path.join(root, "incognito-compaction-session.jsonl");
       let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
       try {
         const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
           const before = fixture.requests.length;
-          const params = createNativeRunParams(sessionFile, native.cwd, sessionKey);
+          const params = createParams("incognito-compaction-session.jsonl", sessionKey);
           // A native-tool-restricted turn always starts a transient thread, which
           // would replace the live incognito thread this regression depends on.
           params.disableTools = false;
           params.runId = runId;
-          params.modelId = modelId;
-          params.model = { ...params.model, id: modelId };
           params.prompt = prompt;
-          params.trigger = "user";
           params.timeoutMs = 60_000;
           params.skillsSnapshot = catalog ? { prompt: catalog, skills: [] } : undefined;
           const result = await runCodexAppServerAttempt(params, {
-            pluginConfig: {
-              appServer: { command: native.command, args: ["app-server"], homeScope: "user" },
-            },
-            nativeHookRelay: { enabled: false },
+            ...attemptOptions,
             clientFactory: async (options) => {
               // One physical client across turns: an ephemeral thread has no
               // resume source, so reuse depends on this live subscription.

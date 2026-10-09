@@ -9,6 +9,7 @@ import { clearCommandLane, setCommandLaneConcurrency } from "../../process/comma
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -18,6 +19,7 @@ import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-s
 import { CronService } from "../service.js";
 import { createCronStoreHarness, createNoopLogger } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 
@@ -44,6 +46,7 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
   const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
   const queueUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.commandQueue);
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
+  await closeOpenClawStateDatabaseAsync();
   const node = resolveTestNodeExecPath();
   const runChild = (killAfterAck: boolean) =>
     runCommandBuffered(
@@ -142,7 +145,9 @@ it.each(["cleared", "write-failed"] as const)(
       throw new Error("Expected cron mutation completion");
     }
     if (failure === "write-failed") {
-      database.exec(`CREATE TEMP TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+      database.exec(`CREATE TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+        WHEN NEW.store_key = '${cronStoreKey(storePath).replaceAll("'", "''")}'
+          AND NEW.job_id = '${job.id}'
         BEGIN SELECT RAISE(ABORT, 'manual receipt unavailable'); END;`);
     }
     try {

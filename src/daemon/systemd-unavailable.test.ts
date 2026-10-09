@@ -104,7 +104,7 @@ printf 's "252.39"\\n'
       await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
       await expect(assertSystemdAvailable(env)).rejects.toThrow(
         errorCode === "EACCES"
-          ? "service-manager probe could not start"
+          ? "service-manager check could not start"
           : "systemctl not available",
       );
 
@@ -182,6 +182,8 @@ printf 's "252.39"\\n'
         try {
           await ready.promise;
           await vi.advanceTimersByTimeAsync(500);
+          // Command deadlines take their decision one timer turn after expiry.
+          await vi.advanceTimersToNextTimerAsync();
           return await result;
         } finally {
           await vi.runOnlyPendingTimersAsync();

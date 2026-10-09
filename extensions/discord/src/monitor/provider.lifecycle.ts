@@ -65,7 +65,7 @@ async function restartGatewayAfterReadyTimeout(params: {
     let drainTimeout: ReturnType<typeof setTimeout> | undefined;
     let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
     const ignoreSocketError = () => {};
-    const clearTimers = () => {
+    const cleanup = () => {
       if (drainTimeout) {
         clearTimeout(drainTimeout);
         drainTimeout = undefined;
@@ -74,9 +74,6 @@ async function restartGatewayAfterReadyTimeout(params: {
         clearTimeout(terminateCloseTimeout);
         terminateCloseTimeout = undefined;
       }
-    };
-    const cleanup = () => {
-      clearTimers();
       socket.removeListener("close", onClose);
       socket.removeListener("error", ignoreSocketError);
     };
@@ -142,8 +139,7 @@ function parseGatewayCloseCode(message: string): number | undefined {
   if (!match?.[1]) {
     return undefined;
   }
-  const code = Number.parseInt(match[1], 10);
-  return Number.isFinite(code) ? code : undefined;
+  return Number.parseInt(match[1], 10);
 }
 
 function resolveTransportActivityAt(event: unknown): number {
@@ -318,19 +314,14 @@ async function waitForGatewayReady(params: {
     return "stopped";
   };
 
-  if (!params.gateway) {
-    const attempt = await waitUntilReady();
-    if (attempt === "timeout") {
-      throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
-    }
-    return;
-  }
-
   let attempt = 0;
   while (!params.abortSignal?.aborted) {
     const result = await waitUntilReady();
     if (result !== "timeout") {
       return;
+    }
+    if (!params.gateway) {
+      throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
     }
 
     attempt += 1;
@@ -351,11 +342,7 @@ async function waitForGatewayReady(params: {
       lastError: "startup-not-ready",
     });
     await params.beforeRestart?.();
-    await restartGatewayAfterReadyTimeout({
-      gateway: params.gateway,
-      abortSignal: params.abortSignal,
-      runtime: params.runtime,
-    });
+    await restartGatewayAfterReadyTimeout(params);
     if (params.abortSignal?.aborted) {
       return;
     }
@@ -504,11 +491,7 @@ export async function runDiscordGatewayLifecycle(params: {
     }
 
     await waitForDiscordGatewayStop({
-      gateway: gateway
-        ? {
-            disconnect: () => gateway.disconnect(),
-          }
-        : undefined,
+      gateway,
       abortSignal: params.abortSignal,
       gatewaySupervisor: params.gatewaySupervisor,
       onGatewayEvent: handleGatewayEvent,

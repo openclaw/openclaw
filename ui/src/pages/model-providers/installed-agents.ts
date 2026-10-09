@@ -158,7 +158,6 @@ export class InstalledAgentsController {
         },
       },
       {
-        key: `installed-agent:${agent.id}`,
         raw: {
           plugins: { entries: { acpx: { config: { nativeAgents: { [agent.id]: enabled } } } } },
         },

@@ -10,6 +10,7 @@ import { formatContextLimitTruncationNotice } from "./context-truncation-notice.
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import {
+  estimateRenderedLlmBoundaryTokenPressure,
   shouldPreemptivelyCompactBeforePrompt,
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
@@ -80,20 +81,15 @@ function restoreTranscriptPromptText(
   if (typeof content === "string") {
     restoredMessage = Object.assign(messageRest, { content: transcriptText });
   } else if (Array.isArray(content)) {
-    let restored = false;
     const nextContent = content.map((block) => {
-      if (restored || !block || typeof block !== "object") {
+      if (restoredMessage !== message || !isToolResultTextBlock(block) || block.type !== "text") {
         return block;
       }
-      const textBlock = block as { type?: unknown; text?: unknown };
-      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-        return block;
-      }
-      restored = true;
+      restoredMessage = messageRest;
       return Object.assign({}, block, { text: transcriptText });
     });
-    if (restored) {
-      restoredMessage = Object.assign(messageRest, { content: nextContent });
+    if (restoredMessage !== message) {
+      Object.assign(restoredMessage, { content: nextContent });
     }
   }
   cache.set(message, restoredMessage);
@@ -136,10 +132,6 @@ function replaceToolResultContent(
   } as AgentMessage;
   Reflect.deleteProperty(result, "details");
   return result;
-}
-
-function estimateBudgetToRawChars(maxChars: number): number {
-  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 function truncateToolResultToChars(
@@ -222,7 +214,9 @@ function truncateToolResultToChars(
       content.filter(isText),
       imageCount > 0
         ? omissionNotice(0)
-        : formatContextLimitTruncationNotice(Math.max(1, estimateBudgetToRawChars(omittedChars))),
+        : formatContextLimitTruncationNotice(
+            Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
+          ),
     );
   }
 
@@ -231,33 +225,6 @@ function truncateToolResultToChars(
     minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   });
   return replaceToolResultContent(msg, truncatedText);
-}
-
-function enforceToolResultLimit(params: {
-  messages: AgentMessage[];
-  maxSingleToolResultChars: number;
-}): AgentMessage[] {
-  const { messages, maxSingleToolResultChars } = params;
-  const estimateCache = createMessageCharEstimateCache();
-  return projectMessages(messages, (message) =>
-    truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
-  );
-}
-
-function toMidTurnPrecheckRequest(
-  result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
-): MidTurnPrecheckRequest | null {
-  if (result.route === "fits") {
-    return null;
-  }
-  return {
-    route: result.route,
-    estimatedPromptTokens: result.estimatedPromptTokens,
-    promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
-    overflowTokens: result.overflowTokens,
-    toolResultReducibleChars: result.toolResultReducibleChars,
-    effectiveReserveTokens: result.effectiveReserveTokens,
-  };
 }
 
 /**
@@ -273,6 +240,8 @@ export function installContextEngineLoopHook(params: {
   sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
+  reserveTokens?: () => number;
+  getSystemPrompt?: () => string | undefined;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -287,6 +256,7 @@ export function installContextEngineLoopHook(params: {
   isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
+  const sessionIdentity = { sessionId, sessionKey };
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
@@ -339,8 +309,7 @@ export function installContextEngineLoopHook(params: {
       if (!params.deferredTurn) {
         if (typeof contextEngine.afterTurn === "function") {
           await contextEngine.afterTurn({
-            sessionId,
-            sessionKey,
+            ...sessionIdentity,
             sessionTarget: params.sessionTarget,
             sessionFile,
             messages: transcriptMessages,
@@ -357,16 +326,14 @@ export function installContextEngineLoopHook(params: {
           const newMessages = transcriptMessages.slice(prePromptMessageCount);
           if (typeof contextEngine.ingestBatch === "function") {
             await contextEngine.ingestBatch({
-              sessionId,
-              sessionKey,
+              ...sessionIdentity,
               messages: newMessages,
               isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
-                sessionId,
-                sessionKey,
+                ...sessionIdentity,
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
@@ -389,13 +356,21 @@ export function installContextEngineLoopHook(params: {
         (sum, message) => sum + estimateTokens(message),
         0,
       );
+      // The pending exchange already includes the active prompt; reserve only
+      // the system prompt here, using the same pressure estimate as turn start.
+      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
+        systemPrompt: params.getSystemPrompt?.(),
+        prompt: "",
+      });
+      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
       const assembled = await contextEngine.assemble({
-        sessionId,
-        sessionKey,
+        ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
         ...params.deferredTurn,
         tokenBudget:
-          tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
+          tokenBudget === undefined
+            ? undefined
+            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
@@ -445,10 +420,10 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = enforceToolResultLimit({
-      messages: sourceMessages,
-      maxSingleToolResultChars,
-    });
+    const estimateCache = createMessageCharEstimateCache();
+    const contextMessages = projectMessages(sourceMessages, (message) =>
+      truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
+    );
     if (params.midTurnPrecheck?.enabled) {
       const prePromptMessageCount = Math.max(
         0,
@@ -474,7 +449,6 @@ export function installToolResultContextGuard(params: {
           reserveTokens: params.midTurnPrecheck.reserveTokens(),
           toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
         });
-        const request = toMidTurnPrecheckRequest(precheck);
         log.debug(
           `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
             `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
@@ -482,7 +456,15 @@ export function installToolResultContextGuard(params: {
             `promptBudgetBeforeReserve=${precheck.promptBudgetBeforeReserve} ` +
             `overflowTokens=${precheck.overflowTokens}`,
         );
-        if (request) {
+        if (precheck.route !== "fits") {
+          const request: MidTurnPrecheckRequest = {
+            route: precheck.route,
+            estimatedPromptTokens: precheck.estimatedPromptTokens,
+            promptBudgetBeforeReserve: precheck.promptBudgetBeforeReserve,
+            overflowTokens: precheck.overflowTokens,
+            toolResultReducibleChars: precheck.toolResultReducibleChars,
+            effectiveReserveTokens: precheck.effectiveReserveTokens,
+          };
           params.midTurnPrecheck.onMidTurnPrecheck?.(request);
           throw new MidTurnPrecheckSignal(request);
         }

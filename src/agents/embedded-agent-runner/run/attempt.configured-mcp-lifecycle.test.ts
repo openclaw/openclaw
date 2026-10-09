@@ -8,7 +8,7 @@ import {
 import type { SessionMcpRuntime } from "../../agent-bundle-mcp-types.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { wrapToolDefinitions } from "../../sessions/tools/tool-definition-wrapper.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   cleanupTempPaths,
@@ -113,7 +113,7 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
             throw new Error("The embedded runner did not prepare its session tools");
           }
           const model = options.model;
-          const tools = wrapToolDefinitions(options.customTools);
+          const tools = options.customTools.map((definition) => wrapToolDefinition(definition));
           expect(tools.map((tool) => tool.name)).toContain(cataloged ? "tool_call" : toolName);
           if (cataloged) {
             expect(tools.map((tool) => tool.name)).not.toContain(toolName);
@@ -198,7 +198,7 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
             sessionId: "embedded-session",
             sessionKey,
             toolCallId: cataloged
-              ? "tool_search_code:delayed-call:silent__delayed_local:1"
+              ? "tool_call:delayed-call:silent__delayed_local:1"
               : "delayed-call",
           }),
         ]);
@@ -216,9 +216,7 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
           runId,
           sessionId: "embedded-session",
           sessionKey,
-          toolCallId: cataloged
-            ? "tool_search_code:delayed-call:silent__delayed_local:1"
-            : "delayed-call",
+          toolCallId: cataloged ? "tool_call:delayed-call:silent__delayed_local:1" : "delayed-call",
         });
         expect(requests).toHaveLength(2);
         expect(requests[1]?.filter((message) => message.role === "toolResult")).toEqual([

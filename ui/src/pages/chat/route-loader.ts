@@ -43,7 +43,7 @@ import {
   type SessionReferenceResolution,
   type SessionRoutePresentation,
 } from "./route-loader-short-resolve.ts";
-import type { ChatRouteData, SessionRouteCandidate } from "./session-route-data.ts";
+import type { ChatRouteData } from "./session-route-data.ts";
 
 export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
 
@@ -75,14 +75,21 @@ function locationWithoutNavigationHints(location: RouteLocation): RouteLocation 
 }
 
 function configuredMainKey(context: ApplicationContext): string {
-  return resolveUiConfiguredMainKey({
-    agentsList: context.agents.state.agentsList,
-    hello: context.gateway.snapshot.hello,
-  });
+  if (!hasConfiguredMainKey(context) && context.sessions.cachedRoutingDefaults) {
+    return context.sessions.cachedRoutingDefaults.mainKey;
+  }
+  return (
+    context.offlineSessionDefaults?.mainKey ??
+    resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    })
+  );
 }
 
 function hasConfiguredMainKey(context: ApplicationContext): boolean {
   return Boolean(
+    context.offlineSessionDefaults?.mainKey.trim() ||
     context.agents.state.agentsList?.mainKey?.trim() ||
     (context.gateway.snapshot.phase === "connected" && context.gateway.snapshot.hello),
   );
@@ -167,19 +174,20 @@ function mainSessionKey(
   });
 }
 
-function candidatesForResolution(
+function ambiguousSessionRouteData(
   context: ApplicationContext,
   face: BoardFace,
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
   location: RouteLocation,
   preferenceDerived: boolean,
-): SessionRouteCandidate[] {
+  shortId: string,
+): Extract<ChatRouteData, { kind: "ambiguous" }> {
   const resolvedRows = resolution.sessions.flatMap((row) => {
     const uuid = sessionKeyUuid(row.key);
     return uuid ? [{ row, uuid }] : [];
   });
   const uuids = resolvedRows.map(({ uuid }) => uuid);
-  return resolvedRows.flatMap(({ row, uuid }) => {
+  const candidates = resolvedRows.flatMap(({ row, uuid }) => {
     const prefix = uniqueShortIdPrefix(uuid, uuids, resolution.truncated);
     if (!prefix) {
       return [];
@@ -202,6 +210,7 @@ function candidatesForResolution(
         ]
       : [];
   });
+  return { kind: "ambiguous", shortId, candidates, truncated: resolution.truncated, face };
 }
 
 function resolvedSessionRouteData(params: {
@@ -308,6 +317,13 @@ export async function loadChatRoute(
   const { target } = resolvedTarget;
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const presentation = {
+    context,
+    isResolutionSourceCurrent,
+    location: routeLocation,
+    face,
+    preferenceDerived,
+  };
   const revalidatedResolution =
     revalidation?.sessionKey &&
     (target.kind === "short" || (target.kind === "literal" && target.slugCandidate))
@@ -322,7 +338,8 @@ export async function loadChatRoute(
     throw new Error("The Gateway connection changed while resolving the session.");
   }
   const defaultsUsable =
-    hasConfiguredMainKey(context) && context.agents.state.agentsList?.scope !== "global";
+    hasConfiguredMainKey(context) &&
+    (context.offlineSessionDefaults?.scope ?? context.agents.state.agentsList?.scope) !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
     const sessionKey = buildCatalogSessionKey(catalogKey);
@@ -374,13 +391,9 @@ export async function loadChatRoute(
       );
       if (resolution?.kind === "unique") {
         const resolved = resolvedMainSessionRouteData({
-          context,
-          isResolutionSourceCurrent,
-          location: routeLocation,
-          face,
+          ...presentation,
           row: resolution.session,
           target,
-          preferenceDerived,
         });
         return resolved ?? notFound({ routeId: face });
       }
@@ -434,12 +447,8 @@ export async function loadChatRoute(
             ));
       if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
-          context,
-          isResolutionSourceCurrent,
-          location: routeLocation,
-          face,
+          ...presentation,
           row: resolution.session,
-          preferenceDerived,
         });
         return resolved
           ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
@@ -450,19 +459,14 @@ export async function loadChatRoute(
           return missingSessionRouteData(context, face, target.agentId);
         }
         if (resolution?.kind === "ambiguous") {
-          return {
-            kind: "ambiguous",
-            shortId: target.slugCandidate,
-            candidates: candidatesForResolution(
-              context,
-              face,
-              resolution,
-              routeLocation,
-              preferenceDerived,
-            ),
-            truncated: resolution.truncated,
+          return ambiguousSessionRouteData(
+            context,
             face,
-          };
+            resolution,
+            routeLocation,
+            preferenceDerived,
+            target.slugCandidate,
+          );
         }
       }
     }
@@ -512,12 +516,17 @@ export async function loadChatRoute(
     };
   }
   let localRow = cached?.row;
-  if (!cached && defaultsUsable && !preferenceDerived && !revalidation) {
+  if (!cached && !preferenceDerived && !revalidation) {
     await context.sessions.whenCachedRosterSettled();
     signal.throwIfAborted();
     // Only the pre-hello cached roster resolves a short id locally; a connected
-    // load keeps the Gateway's authoritative sessions.resolve answer.
-    if (context.sessions.state.resultCached) {
+    // load keeps the Gateway's authoritative sessions.resolve answer. Routing
+    // hints belong to the same cache lifecycle, independently of agent discovery.
+    if (
+      context.gateway.snapshot.phase !== "connected" &&
+      (defaultsUsable || context.sessions.cachedRoutingDefaults?.scope === "per-sender") &&
+      context.sessions.state.resultCached
+    ) {
       localRow = findLocalSessionReference(
         context.sessions.state.result?.sessions ?? [],
         target,
@@ -543,10 +552,8 @@ export async function loadChatRoute(
           return null;
         }
         const canonical = resolvedSessionRouteData({
-          context,
+          ...presentation,
           isResolutionSourceCurrent: resolution.isCurrent,
-          location: routeLocation,
-          face,
           row: resolved.session,
           preferenceDerived: false,
           shortId: target.shortId,
@@ -578,12 +585,8 @@ export async function loadChatRoute(
     );
     if (literalResolution?.kind === "unique") {
       const literal = resolvedSessionRouteData({
-        context,
-        isResolutionSourceCurrent,
-        location: routeLocation,
-        face,
+        ...presentation,
         row: literalResolution.session,
-        preferenceDerived,
       });
       return literal ?? notFound({ routeId: face });
     }
@@ -592,28 +595,20 @@ export async function loadChatRoute(
       : notFound({ routeId: face });
   }
   if (resolution.kind === "ambiguous") {
-    return {
-      kind: "ambiguous",
-      shortId: target.shortId,
-      candidates: candidatesForResolution(
-        context,
-        face,
-        resolution,
-        routeLocation,
-        preferenceDerived,
-      ),
-      truncated: resolution.truncated,
+    return ambiguousSessionRouteData(
+      context,
       face,
-    };
+      resolution,
+      routeLocation,
+      preferenceDerived,
+      target.shortId,
+    );
   }
   const resolved = resolvedSessionRouteData({
-    context,
+    ...presentation,
     // RPC resolution owns the connection acquired after a cold route waited for hello.
     isResolutionSourceCurrent: resolution.isCurrent,
-    location: routeLocation,
-    face,
     row: resolution.session,
-    preferenceDerived,
     shortId: target.shortId,
   });
   return resolved

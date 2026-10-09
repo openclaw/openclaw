@@ -83,30 +83,34 @@ describe("Crabbox gate payload identity", () => {
 
 // The production launcher targets the Linux AWS guest's Bash and sha256sum.
 describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {
-  it("preserves positional arguments, literal payload bytes and EXIT cleanup", () => {
-    const command = "set -euo pipefail; printf '%s\\n' '$HOME `false` $(false)'";
-    const result = launch(command);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(
-      `head:${headSha} command:openclaw_gate\n$HOME \`false\` $(false)\ncleanup:0\n`,
-    );
-    expect(result.stderr).toBe("");
-  });
-
-  it("keeps child errexit even through the bootstrap's conditional failure capture", () => {
-    const result = launch("set -euo pipefail; /bin/bash -c 'exit 37'; printf unreachable");
-    expect(result.status).toBe(37);
-    expect(result.stdout).toBe(`head:${headSha} command:openclaw_gate\ncleanup:37\n`);
-  });
-
-  it("keeps early bootstrap errexit and never invokes the gate", () => {
-    const result = launch(
+  it.each([
+    [
+      "literal bytes",
+      "set -euo pipefail; printf '%s\\n' '$HOME `false` $(false)'",
+      0,
+      "$HOME `false` $(false)\n",
+    ],
+    ["child errexit", "set -euo pipefail; /bin/bash -c 'exit 37'; printf unreachable", 37],
+    [
+      "early bootstrap errexit",
       "printf unreachable",
+      1,
+      "",
       bootstrap.replace("command_status=0", "false\ncommand_status=0"),
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe(`head:${headSha} command:openclaw_gate\ncleanup:1\n`);
-  });
+    ],
+  ] as const)(
+    "preserves %s and EXIT cleanup",
+    (_label, command, exitCode, output = "", source = bootstrap) => {
+      const result = launch(command, source);
+      expect(result.status).toBe(exitCode);
+      expect(result.stdout).toBe(
+        `head:${headSha} command:openclaw_gate\n${output}cleanup:${exitCode}\n`,
+      );
+      if (exitCode === 0) {
+        expect(result.stderr).toBe("");
+      }
+    },
+  );
 
   it("runs a payload larger than the Linux single-argument limit as exact script bytes", () => {
     const output = path.join(temporaryDirectory(), "command.sh");
@@ -117,19 +121,15 @@ describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {
     expect(result.stdout).toContain("cleanup:0\n");
   });
 
-  it.each([0, 1, 2, 3])("rejects altered identity argument %i before bootstrap", (index) => {
+  it.each([0, 1, 2, 3, "bytes"] as const)("rejects altered %s before bootstrap", (index) => {
     const result = launch("printf unreachable", bootstrap, (transport) => {
-      transport.args = transport.args.map((arg, position) =>
-        position === index ? "f".repeat(arg.length) : arg,
-      );
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).toBe("");
-  });
-
-  it("rejects altered uploaded bytes before bootstrap", () => {
-    const result = launch("printf unreachable", bootstrap, (transport) => {
-      transport.input += "# changed\n";
+      if (index === "bytes") {
+        transport.input += "# changed\n";
+      } else {
+        transport.args = transport.args.map((arg, position) =>
+          position === index ? "f".repeat(arg.length) : arg,
+        );
+      }
     });
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");

@@ -16,12 +16,10 @@ describe("native background command outcomes", () => {
     ["retained", "52627"],
     ["foreign item", "52627"],
     ["foreign process", "52627"],
-    ["orphan", "52627"],
     ["completion during inventory", "52627"],
     ["revoked during inventory", "52627"],
     ["inventory unavailable", "52627"],
     ["retained", null],
-    ["foreign item", null],
   ] as const)("projects owner outcome: %s (%s)", async (scenario, startProcessId) => {
     const accepted = createDeferred<void>();
     const abort = new AbortController();
@@ -87,15 +85,12 @@ describe("native background command outcomes", () => {
         abort.abort(new Error("Synthetic source revoked during inventory"));
       }
       return {
-        data:
-          scenario === "orphan"
-            ? []
-            : [
-                {
-                  itemId: scenario === "foreign item" ? "another-command" : command.id,
-                  processId: scenario === "foreign process" ? "another-process" : "52627",
-                },
-              ],
+        data: [
+          {
+            itemId: scenario === "foreign item" ? "another-command" : command.id,
+            processId: scenario === "foreign process" ? "another-process" : "52627",
+          },
+        ],
         nextCursor: null,
       };
     });

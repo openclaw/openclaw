@@ -98,9 +98,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @state() private actionError = "";
   @state() private actionPending = false;
   private readonly coreWidgetLoader = new LazyCustomElementRequestController(this);
-  private readonly pluginSubscriptions = new SubscriptionsController(this).watch(
+  private readonly pluginSubscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
-    (plugins, notify) => plugins.subscribe(notify),
   );
   private readonly appView = new BoardMcpAppLifecycle({
     active: () => this.active,
@@ -252,7 +251,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           })
         : widget.grantState === "rejected"
           ? renderBoardWidgetRejected({
-              widget,
               disabled: this.busy || this.actionPending || !this.canMutate,
               onRemove: () => void this.runAction(() => callbacks.remove(widget)),
             })
@@ -320,7 +318,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             canMutate: this.canMutate,
             canGrant: this.canGrant,
           },
-          nothing,
           this.active,
         );
       }

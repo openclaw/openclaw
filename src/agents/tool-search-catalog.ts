@@ -117,13 +117,6 @@ function classifyTool(tool: CatalogTool): {
   return { source: "openclaw", sourceName: pluginId || "core" };
 }
 
-function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgentTool {
-  if (!hookContext || isToolWrappedWithBeforeToolCallHook(tool)) {
-    return tool;
-  }
-  return wrapToolWithBeforeToolCallHook(tool, hookContext);
-}
-
 export function prepareToolSearchCatalogExecutionTool(
   entry: ToolSearchCatalogEntry,
   options: { prepareInput?: boolean; validateInput?: boolean },
@@ -157,8 +150,12 @@ function toCatalogEntry(
   const classified = classifyTool(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
+  // SAFETY: source classification excludes client callbacks from the native hook wrapper.
+  const nativeTool = tool as AnyAgentTool;
   const catalogTool =
-    source === "client" ? tool : wrapCatalogTool(tool as AnyAgentTool, hookContext);
+    source !== "client" && hookContext && !isToolWrappedWithBeforeToolCallHook(nativeTool)
+      ? wrapToolWithBeforeToolCallHook(nativeTool, hookContext)
+      : tool;
   return {
     id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,
     source,
@@ -291,13 +288,7 @@ function registerToolSearchCatalog(params: {
   params.catalogRef.onChange?.();
 }
 
-export function clearToolSearchCatalog(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): void {
+export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogRef }): void {
   if (params.catalogRef) {
     // Capture only aggregate facts before releasing executable state. Disposal
     // can wake an in-flight wait that still needs its final diagnostics.
@@ -311,6 +302,8 @@ export function clearToolSearchCatalog(params: {
       );
     }
     params.catalogRef.current = undefined;
+    delete params.catalogRef.directOnlyToolNames;
+    delete params.catalogRef.baselineDirectOnlyToolNames;
     disposeCodeModeResults(params.catalogRef);
     disposeToolSearchSchedule(params.catalogRef);
     params.catalogRef.disposeObserver?.();
@@ -496,6 +489,10 @@ export function applyToolCatalogCompaction(
       toolExecutionAllow: params.toolExecutionAllow,
     });
   }
+  catalogRef.directOnlyToolNames = new Set(
+    visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
+  );
+  catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
   return {
     tools: visible,
     compacted: catalog.length > 0,
@@ -508,10 +505,6 @@ export function applyToolCatalogCompaction(
 export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
   const catalogRef = params.catalogRef;

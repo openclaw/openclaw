@@ -10,10 +10,8 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import {
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
-} from "../../config/sessions/lifecycle.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
+import { hasTerminalMainSessionTranscriptNewerThanRegistrySync } from "../../config/sessions/lifecycle.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -77,6 +75,14 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
+type SessionRequest = {
+  cfg: OpenClawConfig;
+  to?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+};
+
 export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
   const next = {
     ...entry,
@@ -96,6 +102,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
     restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryReceiptState: undefined,
     restartRecoveryDeliveryToolCallId: undefined,
@@ -382,14 +389,9 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
-function resolveSessionKeyForRequestInternal(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  createMissingSessionId: boolean;
-}): SessionKeyResolution {
+function resolveSessionKeyForRequestInternal(
+  opts: SessionRequest & { createMissingSessionId: boolean },
+): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -566,23 +568,13 @@ export function resolveExistingSessionKeyForRequest(opts: {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
 }
 
-export function resolveSessionKeyForRequestCore(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionKeyResolution {
+export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKeyResolution {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
-export function resolveSession(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionResolution {
+export async function resolveSession(
+  opts: SessionRequest & { signal?: AbortSignal; assertCurrent?: () => void },
+): Promise<SessionResolution> {
   const sessionCfg = opts.cfg.session;
   const {
     agentId: resolvedAgentId,
@@ -633,16 +625,21 @@ export function resolveSession(opts: {
         (skipImplicitExpiry ||
           evaluateSessionFreshness({
             updatedAt: sessionEntry.updatedAt,
-            ...resolveSessionLifecycleTimestamps({
-              entry: sessionEntry,
-              agentId: sessionAgentId,
-              sessionKey,
-              storePath,
-            }),
+            ...(sessionKey
+              ? await resolveSessionLifecycleTimestampsAsync({
+                  entry: sessionEntry,
+                  agentId: sessionAgentId,
+                  sessionKey,
+                  storePath,
+                  signal: opts.signal,
+                })
+              : {}),
             now,
             policy: resetPolicy,
           }).fresh))
     : false;
+  opts.signal?.throwIfAborted();
+  opts.assertCurrent?.();
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;

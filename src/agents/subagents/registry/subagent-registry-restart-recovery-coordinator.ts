@@ -3,18 +3,24 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
-} from "./subagent-registry-restart-recovery.js";
+} from "./subagent-registry-restart-recovery-types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createInterruptedRecoveryCoordinator(params: {
   runs: Map<string, SubagentRunRecord>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   finalizeRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
@@ -29,40 +35,75 @@ export function createInterruptedRecoveryCoordinator(params: {
     retryAt?: number;
     retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   };
-  let attempts = new WeakMap<SubagentRunRecord, Attempt>();
+  let attempts = new Map<string, Attempt>();
   let unsubscribe: (() => void) | undefined;
   const invalidate = (entry: SubagentRunRecord) => {
-    if (attempts.delete(entry)) {
+    if (attempts.delete(entry.runId)) {
       params.schedule(1_000);
     }
   };
   const observe = () => {
     unsubscribe ??= sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change) {
-        for (const entry of params.getRunsForChildSession(change.sessionKey)) {
-          invalidate(entry);
-        }
-      } else {
-        for (const entry of params.runs.values()) {
-          invalidate(entry);
-        }
+      const entries =
+        "sessionKey" in change
+          ? params.getRunsForChildSession(change.sessionKey, change.agentId)
+          : params.runs.values();
+      for (const entry of entries) {
+        invalidate(entry);
       }
     });
   };
-  const ownsRow = (runId: string, entry: SubagentRunRecord) =>
-    params.runs.get(runId) === entry &&
-    getLatestSubagentRunByChildSessionKeyFromRuns(
-      params.getRunsForChildSession(entry.childSessionKey),
-      entry.childSessionKey,
-    ) === entry;
+  const recoveryFacts = (entry: SubagentRunRecord) => [
+    getSubagentRunRuntimeKey(entry),
+    entry.execution.status,
+    entry.execution.startedAt,
+    entry.execution.endedAt,
+    entry.execution.lifecycleGeneration,
+    JSON.stringify(entry.execution.restartRecovery),
+    entry.pauseReason,
+    JSON.stringify(entry.killIntent),
+    JSON.stringify(entry.killReconciliation),
+    entry.suppressAnnounceReason,
+    entry.terminalOwner,
+  ];
+  const ownsRow = (runId: string, entry: SubagentRunRecord) => {
+    const current = params.runs.get(runId);
+    const expected = recoveryFacts(entry);
+    return (
+      current !== undefined &&
+      isSameSubagentRunOwner(current, entry) &&
+      recoveryFacts(current).every((fact, index) => fact === expected[index]) &&
+      isSameSubagentRunOwner(
+        getLatestSubagentRunForChild(
+          params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+          entry,
+        ),
+        entry,
+      )
+    );
+  };
 
   return {
+    prune() {
+      for (const runId of attempts.keys()) {
+        if (!params.runs.has(runId)) {
+          attempts.delete(runId);
+        }
+      }
+    },
     reset() {
       unsubscribe?.();
       unsubscribe = undefined;
-      attempts = new WeakMap();
+      attempts = new Map();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
+      if (
+        entry.execution.restartRecovery === undefined &&
+        entry.terminalOwner !== "interrupted-recovery" &&
+        (getAgentRunContext(runId) || typeof entry.execution.endedAt === "number")
+      ) {
+        return false;
+      }
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const gatewayRuntime = params.getGatewayRuntime();
       const isGatewayCurrent = () =>
@@ -71,26 +112,24 @@ export function createInterruptedRecoveryCoordinator(params: {
       const isCurrent = (targetRunId: string, candidate: SubagentRunRecord) =>
         isGatewayCurrent() && ownsRow(targetRunId, candidate);
       if (!isCurrent(runId, entry)) {
-        attempts.delete(entry);
+        attempts.delete(entry.runId);
         // Superseded rows still belong to the sweeper's ordinary orphan cleanup.
         return false;
       }
+      const preparation = gatewayRuntime?.prepareRestartRecovery();
+      if (preparation) {
+        const pausedUntilMs = await preparation;
+        if (!isCurrent(runId, entry)) {
+          return true;
+        }
+        if (pausedUntilMs !== undefined) {
+          params.schedule(Math.max(1, pausedUntilMs - Date.now()));
+          return true;
+        }
+      }
       observe();
-      const facts = [
-        lifecycleGeneration,
-        gatewayRuntime,
-        entry.execution.status,
-        entry.execution.startedAt,
-        entry.execution.endedAt,
-        entry.execution.lifecycleGeneration,
-        entry.execution.restartRecovery,
-        entry.pauseReason,
-        entry.killIntent,
-        entry.killReconciliation,
-        entry.suppressAnnounceReason,
-        entry.terminalOwner,
-      ];
-      const previous = attempts.get(entry);
+      const facts = [lifecycleGeneration, gatewayRuntime, ...recoveryFacts(entry)];
+      const previous = attempts.get(entry.runId);
       const unchanged = previous?.facts.every((fact, index) => fact === facts[index])
         ? previous
         : undefined;
@@ -103,7 +142,7 @@ export function createInterruptedRecoveryCoordinator(params: {
       }
       const evaluatedAttempts = attempts;
       const pending: Attempt = { facts, delayMs: 0 };
-      attempts.set(entry, pending);
+      attempts.set(entry.runId, pending);
       const result = await params.recoverRow({
         runId,
         entry,
@@ -115,18 +154,18 @@ export function createInterruptedRecoveryCoordinator(params: {
       if (
         attempts !== evaluatedAttempts ||
         !isGatewayCurrent() ||
-        params.runs.get(runId) !== entry
+        !isSameSubagentRunOwner(params.runs.get(runId), entry)
       ) {
         return true;
       }
-      const unchangedDuringRead = attempts.get(entry) === pending;
-      attempts.delete(entry);
+      const unchangedDuringRead = attempts.get(entry.runId) === pending;
+      attempts.delete(entry.runId);
       if (result.status === "ignored" || result.status === "handled") {
         if (result.status === "handled" && result.retained && unchangedDuringRead) {
           const attempt = { facts, delayMs: 0, retained: result.retained };
-          attempts.set(entry, attempt);
+          attempts.set(entry.runId, attempt);
           void result.retained.released?.then(() => {
-            if (attempts.get(entry) === attempt) {
+            if (attempts.get(entry.runId) === attempt) {
               invalidate(entry);
             }
           });
@@ -138,23 +177,49 @@ export function createInterruptedRecoveryCoordinator(params: {
           60_000,
           unchanged && unchangedDuringRead ? Math.max(1_000, unchanged.delayMs * 2) : 1_000,
         );
-        attempts.set(entry, { facts, delayMs, retryAt: Date.now() + delayMs });
+        attempts.set(entry.runId, {
+          facts,
+          delayMs,
+          retryAt: Date.now() + delayMs,
+        });
         params.schedule(delayMs);
         return true;
       }
       if (!isCurrent(runId, entry)) {
         return true;
       }
+      let expectedObservation = entry;
       const finalized = await params.finalizeRun({
         runId,
         expectedEntry: entry,
-        isRecoveryCurrent: () => isCurrent(runId, entry) && result.isRecoveryCurrent?.() !== false,
-        isChildSessionEffectsCurrent: result.isChildSessionEffectsCurrent,
+        recoveryCurrent: {
+          isHostCurrent: () =>
+            isCurrent(runId, expectedObservation) &&
+            result.recoveryCurrent?.isHostCurrent() !== false,
+          prepare: async () =>
+            isCurrent(runId, expectedObservation) &&
+            (await result.recoveryCurrent?.prepare()) !== false &&
+            isCurrent(runId, expectedObservation) &&
+            result.recoveryCurrent?.isHostCurrent() !== false,
+          onPublished: (published) => {
+            if (
+              !isSameSubagentRunOwner(published, entry) ||
+              published.execution.status !== "terminal"
+            ) {
+              throw new SubagentRegistryMutationRejectedError(
+                "Subagent recovery publication changed its execution owner",
+              );
+            }
+            result.recoveryCurrent?.onPublished?.(published);
+            expectedObservation = published;
+          },
+        },
+        sessionEffects: result.sessionEffects,
         error: result.error,
         endedAt: result.endedAt,
         suppressSessionEffects: result.suppressSessionEffects,
       });
-      if (!isCurrent(runId, entry)) {
+      if (!isCurrent(runId, expectedObservation)) {
         return true;
       }
       if (!finalized) {

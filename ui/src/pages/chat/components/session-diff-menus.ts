@@ -163,28 +163,16 @@ class SessionDiffMenu extends OpenClawLightDomElement {
   }
 
   private renderViewMenu(menu: Extract<SessionDiffMenuData, { kind: "view" }>) {
+    const item = (value: string, label: Parameters<typeof t>[0]) =>
+      html`<wa-dropdown-item class="session-menu__item" value=${value}>
+        <span class="session-menu__text">${t(label)}</span>
+      </wa-dropdown-item>`;
     return html`
-      <wa-dropdown-item class="session-menu__item" value="collapse-all">
-        <span class="session-menu__text">${t("chat.sessionDiff.collapseAll")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="session-menu__item" value="expand-all">
-        <span class="session-menu__text">${t("chat.sessionDiff.expandAll")}</span>
-      </wa-dropdown-item>
+      ${item("collapse-all", "chat.sessionDiff.collapseAll")}
+      ${item("expand-all", "chat.sessionDiff.expandAll")}
       <div class="session-menu__separator" role="separator"></div>
-      <wa-dropdown-item class="session-menu__item" value="toggle-wrap">
-        <span class="session-menu__text"
-          >${t(
-            menu.wrap ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping",
-          )}</span
-        >
-      </wa-dropdown-item>
-      <wa-dropdown-item class="session-menu__item" value="toggle-split">
-        <span class="session-menu__text"
-          >${t(
-            menu.split ? "chat.sessionDiff.switchUnified" : "chat.sessionDiff.switchSplit",
-          )}</span
-        >
-      </wa-dropdown-item>
+      ${item("toggle-wrap", menu.wrap ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping")}
+      ${item("toggle-split", menu.split ? "chat.sessionDiff.switchUnified" : "chat.sessionDiff.switchSplit")}
     `;
   }
 

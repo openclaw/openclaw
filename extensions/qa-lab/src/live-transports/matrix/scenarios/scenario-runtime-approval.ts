@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatApprovalResultValue } from "../../shared/live-approval-result.js";
+import {
+  resolveLiveQaApprovalDecision,
+  waitForLiveQaApprovalDecision,
+} from "../../shared/live-approval-request.js";
+import {
+  assertApprovalDecisionResult,
+  formatApprovalResultValue,
+  readAcceptedApprovalRequest,
+} from "../../shared/live-approval-result.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
@@ -272,27 +280,6 @@ async function reactToApproval(params: {
   };
 }
 
-function assertApprovalDecisionResult(params: {
-  approvalId: string;
-  decision: MatrixQaApprovalDecision;
-  result: unknown;
-}) {
-  const result =
-    typeof params.result === "object" && params.result !== null
-      ? (params.result as { decision?: unknown; id?: unknown })
-      : null;
-  if (result?.id !== params.approvalId) {
-    throw new Error(
-      `approval decision result id was ${formatApprovalResultValue(result?.id)} instead of ${params.approvalId}`,
-    );
-  }
-  if (result?.decision !== params.decision) {
-    throw new Error(
-      `approval decision was ${formatApprovalResultValue(result?.decision)} instead of ${params.decision}`,
-    );
-  }
-}
-
 async function requestApproval(
   context: MatrixQaScenarioContext,
   kind: ChannelApprovalKind,
@@ -337,17 +324,12 @@ async function waitForApprovalDecision(params: {
   context: MatrixQaScenarioContext;
   kind: ChannelApprovalKind;
 }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  const method =
-    params.kind === "exec" ? "exec.approval.waitDecision" : "plugin.approval.waitDecision";
-  return await gatewayCall(
-    method,
-    { id: params.approvalId },
-    {
-      expectFinal: true,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
+  return waitForLiveQaApprovalDecision({
+    approvalId: params.approvalId,
+    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    kind: params.kind,
+    timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+  });
 }
 
 async function resolveApprovalDecision(params: {
@@ -356,29 +338,13 @@ async function resolveApprovalDecision(params: {
   decision: MatrixQaApprovalDecision;
   kind: ChannelApprovalKind;
 }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
-  return await gatewayCall(
-    method,
-    { decision: params.decision, id: params.approvalId },
-    {
-      expectFinal: false,
-      timeoutMs: 5_000,
-    },
-  );
-}
-
-function readAcceptedApprovalRequest(result: unknown) {
-  const accepted =
-    typeof result === "object" && result !== null
-      ? (result as { id?: unknown; status?: unknown })
-      : null;
-  if (accepted?.status !== "accepted") {
-    throw new Error(
-      `approval request status was ${formatApprovalResultValue(accepted?.status)} instead of accepted`,
-    );
-  }
-  return accepted;
+  return resolveLiveQaApprovalDecision({
+    approvalId: params.approvalId,
+    decision: params.decision,
+    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    kind: params.kind,
+    timeoutMs: 5_000,
+  });
 }
 
 function assertAcceptedApprovalRequest(params: { approvalId: string; result: unknown }) {

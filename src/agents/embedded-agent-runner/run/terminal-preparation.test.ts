@@ -71,6 +71,7 @@ async function prepareAttempt(input: {
   admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
   sourceReplyDeliveryMode?: "message_tool_only";
+  heartbeat?: { continuesConversation: boolean };
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -81,7 +82,8 @@ async function prepareAttempt(input: {
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: "user",
+      trigger: input.heartbeat ? "heartbeat" : "user",
+      ...(input.heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
       timeoutMs: 60_000,
       ...(input.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
@@ -550,7 +552,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(false);
   });
 
-  it("uses the yielded assistant for paused-turn payload classification", async () => {
+  it("excludes cleanup and earlier completed assistants from clean-yield payloads", async () => {
     const completedAssistant = assistantMessage("stop");
     const yieldedAssistant = {
       ...assistantMessage("aborted"),
@@ -576,7 +578,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     });
 
     expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
+      expect.objectContaining({ lastAssistant: undefined, currentAssistant: null }),
     );
   });
 
@@ -598,6 +600,40 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
     );
   });
+
+  it.each([
+    { continuesConversation: false, warns: true },
+    { continuesConversation: true, warns: false },
+  ])(
+    "keeps a failed command's NO_REPLY silent only when the heartbeat continues a conversation ($continuesConversation)",
+    async ({ continuesConversation, warns }) => {
+      const actual = await vi.importActual<{
+        buildEmbeddedRunPayloads: typeof buildEmbeddedRunPayloads;
+      }>("./payloads.js");
+      payloadMocks.buildEmbeddedRunPayloads.mockImplementation(actual.buildEmbeddedRunPayloads);
+      const silent: AssistantMessage = {
+        ...assistantMessage("stop"),
+        content: [{ type: "text", text: "NO_REPLY" }],
+      };
+      const prepared = await prepareAttempt({
+        attempt: attemptResult({
+          assistantTexts: ["NO_REPLY"],
+          messagesSnapshot: [silent],
+          lastAssistant: silent,
+          currentAttemptAssistant: silent,
+          currentAttemptCompletedAssistant: silent,
+          lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+        }),
+        heartbeat: { continuesConversation },
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
+
+      expect(prepared.payloads.some((payload) => payload.isError === true)).toBe(warns);
+    },
+  );
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {

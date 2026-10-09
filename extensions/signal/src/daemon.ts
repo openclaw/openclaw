@@ -27,10 +27,8 @@ type SignalDaemonOpts = {
 };
 
 export type SignalDaemonHandle = {
-  pid?: number;
   stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
-  isExited: () => boolean;
 };
 
 const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1_500;
@@ -89,8 +87,6 @@ export async function waitForSignalDaemonReady(params: {
   baseUrl: string;
   abortSignal?: AbortSignal;
   startupDeadlineMs: number;
-  logAfterMs: number;
-  logIntervalMs?: number;
   runtime: RuntimeEnv;
   waitForTransportReadyFn?: typeof waitForTransportReady;
 }): Promise<void> {
@@ -99,8 +95,8 @@ export async function waitForSignalDaemonReady(params: {
   await waitForTransportReadyFn({
     label: "signal daemon",
     timeoutMs,
-    logAfterMs: params.logAfterMs,
-    logIntervalMs: params.logIntervalMs,
+    logAfterMs: 10_000,
+    logIntervalMs: 10_000,
     pollIntervalMs: 150,
     abortSignal: params.abortSignal,
     runtime: params.runtime,
@@ -225,17 +221,15 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
   let exited = false;
-  let settledExit = false;
   let stopPromise: Promise<void> | undefined;
   let resolveExit!: (value: SignalDaemonExitEvent) => void;
   const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
     resolveExit = resolve;
   });
   const settleExit = (value: SignalDaemonExitEvent) => {
-    if (settledExit) {
+    if (exited) {
       return;
     }
-    settledExit = true;
     exited = true;
     resolveExit(value);
   };
@@ -271,9 +265,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   });
 
   return {
-    pid: child.pid ?? undefined,
     exited: exitedPromise,
-    isExited: () => exited,
     stop: () => {
       if (exited) {
         return Promise.resolve();

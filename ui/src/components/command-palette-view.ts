@@ -1,4 +1,4 @@
-import { html, noChange, nothing } from "lit";
+import { html, noChange, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
   pathForAgentPanel,
@@ -12,7 +12,6 @@ import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palett
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
-  formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
@@ -35,6 +34,7 @@ import { COMMAND_PALETTE_INPUT_ID, renderCommandPaletteInput } from "./command-p
 import { renderCommandPaletteResult } from "./command-palette-result.ts";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderKeyboardShortcut, renderShortcutText } from "./kbd.ts";
 import "./modal-dialog.ts";
 import "./tooltip.ts";
 import {
@@ -252,6 +252,10 @@ function resolvePaletteResults(props: CommandPaletteProps) {
   return { hideSearch, matches, grouped, items, activeIndex };
 }
 
+function renderPaletteHint(shortcut: TemplateResult, label: string) {
+  return html`<span class="cmd-palette__hint">${shortcut}${" "}<span>${label}</span></span>`;
+}
+
 export function renderCommandPalette(readProps: () => CommandPaletteProps) {
   const props = readProps();
   if (!props.open) {
@@ -282,7 +286,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
   const startDisabled = props.composing || !props.draft.canSubmit;
   const startReason =
     props.draft.disabledReason ?? (props.draft.hasPrompt ? undefined : t("palette.promptRequired"));
-  const startShortcut = formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter);
+  const startShortcut = renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter);
   const searchSettled =
     Boolean(props.searchQuery.trim()) &&
     !props.sessionSearchPending &&
@@ -358,7 +362,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                   }
                 }}
               >
-                ${startLabel}<kbd>${startShortcut}</kbd>
+                ${startLabel}${startShortcut}
               </button>
             </openclaw-tooltip>
             ${props.draft.renderControls()}
@@ -473,21 +477,20 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                               >${icons.messageSquarePlus}</span
                             >
                             <h2>${t("palette.noResults")}</h2>
-                            <p>${t("palette.noResultsStart", { shortcut: startShortcut })}</p>
+                            <p>
+                              ${renderShortcutText(t("palette.noResultsStart", { shortcut: "{shortcut}" }), renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, { inline: true }))}
+                            </p>
                           </div>`
                         : nothing
                     }
                     <div id="cmd-palette-keys" class="cmd-palette__footer">
                       ${
                         items.length > 0 && !props.query.includes("\n")
-                          ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
-                              <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>`
+                          ? html`${renderPaletteHint(renderKbd(["↑", "↓"]), t("palette.footer.navigate"))}
+                            ${renderPaletteHint(renderKbd("↵"), t("palette.footer.select"))}`
                           : nothing
                       }
-                      <span
-                        ><kbd>${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newline)}</kbd>
-                        ${t("palette.footer.newline")}</span
-                      >
+                      ${renderPaletteHint(renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.newline), t("palette.footer.newline"))}
                     </div>
                   `
             }

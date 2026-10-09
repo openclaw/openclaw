@@ -11,9 +11,6 @@ type BotBatchResponse = {
   data?: { bots?: Record<string, { name?: string }> };
 };
 type BotBatchResult = BotBatchResponse | "permission" | "failure";
-type BotNameClient = ReturnType<typeof createFeishuClient> & {
-  request(params: { method: "GET"; url: string; timeout: number }): Promise<unknown>;
-};
 
 const POSITIVE_TTL_MS = 10 * 60_000;
 const NEGATIVE_TTL_MS = 60_000;
@@ -92,12 +89,12 @@ async function requestBotName(params: {
   const { account, openId, log } = params;
   const query = new URLSearchParams({ bot_ids: openId });
   try {
-    const client = createFeishuClient(account) as BotNameClient;
-    const response = (await client.request({
+    const client = createFeishuClient(account);
+    const response = await client.request<BotBatchResponse>({
       method: "GET",
       url: `/open-apis/bot/v3/bots/basic_batch?${query.toString()}`,
       timeout: REQUEST_TIMEOUT_MS,
-    })) as BotBatchResponse;
+    });
     const code = response.code ?? 0;
     if (code === 0) {
       return response;

@@ -248,6 +248,7 @@ describe("doctor agent memory schema repair", () => {
     recreateUnreleasedInlineMemoryMetadata(laterPath);
     const laterBefore = fs.readFileSync(laterPath);
     const agentDatabase = await import("../state/openclaw-agent-db.js");
+    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
     const integrityWorker = await import("../infra/sqlite-integrity-worker.js");
     const sqlite = await import("../infra/node-sqlite.js");
     const startAdmission = createDeferred();
@@ -270,9 +271,9 @@ describe("doctor agent memory schema repair", () => {
         return open(pathname, options);
       });
     const close = vi.spyOn(agentDatabase, "closeOpenClawAgentDatabaseByPath");
-    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    const migrate = agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance;
     const repair = vi
-      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .spyOn(agentMaintenance, "migrateOpenClawAgentDatabaseForMaintenance")
       .mockImplementationOnce(async (options, maintenance) => {
         await migrate(options, maintenance);
         const removed = openOpenClawStateDatabase({ env })
@@ -386,14 +387,15 @@ describe("doctor agent memory schema repair", () => {
       const laterPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
       closeOpenClawAgentDatabasesForTest();
       recreateUnreleasedInlineMemoryMetadata(databasePath);
-      const agentDatabase = await import("../state/openclaw-agent-db.js");
-      const withLease = agentDatabase.withAgentDatabaseMaintenanceLease;
+      const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
+      const agentMaintenanceLease = await import("../state/openclaw-agent-db-maintenance-lease.js");
+      const withLease = agentMaintenanceLease.withAgentDatabaseMaintenanceLease;
       const lease = vi
-        .spyOn(agentDatabase, "withAgentDatabaseMaintenanceLease")
+        .spyOn(agentMaintenanceLease, "withAgentDatabaseMaintenanceLease")
         .mockImplementationOnce((options, run) =>
           withLease(options, async (maintenance) => {
             if (change === "already-repaired") {
-              await agentDatabase.migrateOpenClawAgentDatabaseForMaintenance(
+              await agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance(
                 { agentId: "worker-1", pathname: databasePath },
                 maintenance,
               );
@@ -457,9 +459,9 @@ describe("doctor agent memory schema repair", () => {
           peer.close();
         }
       };
-      const agentDatabase = await import("../state/openclaw-agent-db.js");
-      const withLease = agentDatabase.withAgentDatabaseMaintenanceLease;
-      const lease = vi.spyOn(agentDatabase, "withAgentDatabaseMaintenanceLease");
+      const agentMaintenanceLease = await import("../state/openclaw-agent-db-maintenance-lease.js");
+      const withLease = agentMaintenanceLease.withAgentDatabaseMaintenanceLease;
+      const lease = vi.spyOn(agentMaintenanceLease, "withAgentDatabaseMaintenanceLease");
       if (timing === "before-doctor") {
         publishPeerRegistration();
       } else {

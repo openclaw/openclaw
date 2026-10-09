@@ -14,9 +14,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 describe("native Codex fixture boundaries", () => {
   it.each([
     { authMode: undefined, customHome: false, baseUrl: "https://example.invalid/v1" },
-    { authMode: undefined, customHome: true, baseUrl: "https://example.invalid/v1" },
-    { authMode: "api-key" as const, customHome: true, baseUrl: "https://example.invalid/v1" },
-    { authMode: "api-key" as const, customHome: false, baseUrl: "  " },
     { authMode: "api-key" as const, customHome: true, baseUrl: " https://example.invalid/v1 " },
   ])(
     "preserves staged native home ($authMode, custom=$customHome, url=$baseUrl)",

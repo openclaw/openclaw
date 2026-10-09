@@ -54,14 +54,6 @@ export async function readJsonObject(
   }
 }
 
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return isRecord(value) ? value : {};
-}
-
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);

@@ -1,10 +1,6 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
-/**
- * Agent transcript redaction helpers.
- *
- * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
- */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -223,8 +219,8 @@ function isOpenAITextSignature(
 ): boolean {
   if (value.startsWith("{")) {
     try {
-      const parsed = JSON.parse(value) as unknown;
-      if (!parsed || typeof parsed !== "object" || !isPlainTranscriptObject(parsed)) {
+      const parsed = safeParseJsonRecord(value);
+      if (!parsed) {
         return false;
       }
       if (!Object.keys(parsed).every((key) => key === "v" || key === "id" || key === "phase")) {
@@ -347,20 +343,16 @@ function shouldPreserveOpaqueProviderPayload(
   );
 }
 
-function sanitizeOpenAIReasoningSignature(
+export function sanitizeOpenAIReasoningSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
+  if (!isOpenAIResponsesRoute(route) && !isCustomProviderRoute(route)) {
     return undefined;
   }
+  const parsed = safeParseJsonRecord(value);
   if (
     !parsed ||
-    typeof parsed !== "object" ||
-    !isPlainTranscriptObject(parsed) ||
     parsed.type !== "reasoning" ||
     (parsed.summary !== undefined && !Array.isArray(parsed.summary))
   ) {
@@ -416,19 +408,12 @@ function sanitizeOpenAICompletionsToolSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJsonRecord(value);
   const isValidEncryptedData = isOpenAICompletionsRoute(route)
     ? isStructurallyValidOpaqueReplayToken
     : isCredentialSafeOpaqueReplayToken;
   if (
     !parsed ||
-    typeof parsed !== "object" ||
-    !isPlainTranscriptObject(parsed) ||
     parsed.type !== "reasoning.encrypted" ||
     typeof parsed.data !== "string" ||
     !isValidEncryptedData(parsed.data) ||
@@ -587,8 +572,6 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
-      (isOpenAIResponsesRoute(currentAssistantRoute) ||
-        isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "thinking" &&
       key === "thinkingSignature" &&
       typeof item === "string"

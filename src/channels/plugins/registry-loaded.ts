@@ -9,13 +9,12 @@ import {
   type ActivePluginChannelRegistrySnapshot,
 } from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 type ChannelPluginView = {
   snapshot: ActivePluginChannelRegistrySnapshot;
   sorted: ActiveChannelPluginRuntimeShape[];
-  byId: Map<string, ActiveChannelPluginRuntimeShape>;
   entriesById: Map<string, ActivePluginChannelRegistration>;
 };
 
@@ -43,7 +42,6 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
   const selectedRegistry = registry ?? snapshot.registry;
 
   const seen = new Set<string>();
-  const byId = new Map<string, ActiveChannelPluginRuntimeShape>();
   const entriesById = new Map<string, ActivePluginChannelRegistration>();
   if (selectedRegistry && Array.isArray(selectedRegistry.channels)) {
     for (const entry of selectedRegistry.channels) {
@@ -55,17 +53,17 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
       // Channel registration is first-wins. Keep its implementation and
       // provenance together so a colliding plugin cannot borrow its authority.
       seen.add(id);
-      byId.set(plugin.id, plugin);
       entriesById.set(plugin.id, { ...entry, plugin });
     }
   }
 
-  const sorted = [...byId.values()].toSorted(compareChannelPlugins);
+  const sorted = [...entriesById.values()]
+    .map((entry) => entry.plugin)
+    .toSorted(compareChannelPlugins);
 
   const view = {
     snapshot: currentRegistry ? snapshot : { registry: selectedRegistry, version: 0 },
     sorted,
-    byId,
     entriesById,
   };
   if (currentRegistry) {
@@ -82,7 +80,7 @@ export function listLoadedChannelPlugins(): ActiveChannelPluginRuntimeShape[] {
 /** Lists one exact registry without substituting a pinned or active registry. */
 export function listLoadedChannelPluginsForRegistry(
   registry: ActivePluginChannelRegistry,
-): ChannelPlugin[] {
+): AnyChannelPlugin[] {
   return resolveChannelPlugins(registry).sorted.slice();
 }
 
@@ -93,11 +91,11 @@ export function getLoadedChannelPluginById(
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelPlugins().byId.get(resolvedId);
+  return resolveChannelPlugins().entriesById.get(resolvedId)?.plugin;
 }
 
 /** Returns one loaded channel plugin without triggering bundled discovery. */
-export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
+export function getLoadedChannelPluginForRead(id: ChannelId): AnyChannelPlugin | undefined {
   return getLoadedChannelPluginById(id);
 }
 

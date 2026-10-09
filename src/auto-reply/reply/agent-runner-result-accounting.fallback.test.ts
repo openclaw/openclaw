@@ -11,7 +11,9 @@ import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/stor
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -20,12 +22,16 @@ let root: string;
 let storePath: string;
 let sequence = 0;
 beforeAll(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fallback-projection-"));
+  // openclaw-temp-dir: allow suite database root drains before removal
+  root = fs.mkdtempSync(
+    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-fallback-projection-"),
+  );
   storePath = path.join(root, "openclaw-agent.sqlite");
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabasesAsync(root);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -224,7 +230,6 @@ it.each([false, true])(
       activeModel: "plain",
     });
     for (const changed of [
-      { status: "running" as const },
       { lastRunId: "another-run" },
       { sessionId: "another-session" },
       { providerOverride: "another-provider", modelOverride: "another-model" },
@@ -232,6 +237,21 @@ it.each([false, true])(
       const row = project({ ...stored, ...changed });
       expect(row.activeModel, JSON.stringify(changed)).toBeUndefined();
       expect(row.activeModelProvider, JSON.stringify(changed)).toBeUndefined();
+    }
+
+    const activeRunId = `${context.runId}-active`;
+    registerAgentRunContext(activeRunId, {
+      agentId: "main",
+      sessionId: entry.sessionId,
+      sessionKey: context.sessionKey,
+      projectSessionActive: true,
+    });
+    try {
+      const row = project(stored);
+      expect(row.activeModel).toBeUndefined();
+      expect(row.activeModelProvider).toBeUndefined();
+    } finally {
+      clearAgentRunContext(activeRunId);
     }
 
     const recoveryRunId = `${context.runId}-recovery`;

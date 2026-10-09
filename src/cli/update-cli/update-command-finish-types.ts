@@ -1,5 +1,5 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";

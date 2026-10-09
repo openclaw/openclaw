@@ -20,8 +20,14 @@ const params = {
   mode: "dispatch" as const,
 };
 
-function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
-  return { request: request as GatewayBrowserClient["request"] };
+function clientWith(
+  request: ReturnType<typeof vi.fn>,
+): Parameters<typeof startSessionPlacementInitialTurn>[0] {
+  const client = { request: request as GatewayBrowserClient["request"] };
+  return {
+    client,
+    describe: (target) => client.request("sessions.describe", target),
+  };
 }
 
 describe("session placement startup", () => {

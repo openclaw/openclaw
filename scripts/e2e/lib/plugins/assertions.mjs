@@ -1,4 +1,3 @@
-// Assertions for plugin install/runtime E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +11,7 @@ import {
   assertClawHubExternalInstallContract,
 } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
   readPluginInstallRecords,
@@ -23,7 +23,6 @@ import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 
@@ -51,9 +50,7 @@ async function withTimeout(label, timeoutMs, run) {
   try {
     return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
   }
 }
 
@@ -421,25 +418,7 @@ function assertLocalPluginRemoved(scenario) {
 function assertGitPlugin() {
   const repoUrl = process.argv[3];
   const gitRef = process.argv[4];
-  assertSimplePlugin(
-    scratchFile("plugins-git.json"),
-    scratchFile("plugins-git-inspect.json"),
-    "demo-plugin-git",
-    "demo.git",
-  );
-
-  const inspect = readJson(scratchFile("plugins-git-inspect.json"));
-  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-git")) {
-    throw new Error(`expected demo-git cli command, got ${inspect.cliCommands?.join(", ")}`);
-  }
-
-  assertTextFileIncludes(
-    scratchFile("plugins-git-cli.txt"),
-    "demo-plugin-git:pong",
-    "git plugin CLI output",
-  );
-
-  const record = getInstallRecords()["demo-plugin-git"];
+  const record = assertPluginCli("git", "demo.git", "pong", "git");
   if (!record) {
     throw new Error("missing git install record for demo-plugin-git");
   }
@@ -479,6 +458,30 @@ function assertGitPlugin() {
     path.dirname(installPath),
     "utf8",
   );
+}
+
+function assertPluginCli(suffix, method, reply, cliLabel) {
+  const pluginId = `demo-plugin-${suffix}`;
+  const cliCommand = `demo-${suffix}`;
+  assertSimplePlugin(
+    scratchFile(`plugins-${suffix}.json`),
+    scratchFile(`plugins-${suffix}-inspect.json`),
+    pluginId,
+    method,
+  );
+
+  const inspect = readJson(scratchFile(`plugins-${suffix}-inspect.json`));
+  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes(cliCommand)) {
+    throw new Error(`expected ${cliCommand} cli command, got ${inspect.cliCommands?.join(", ")}`);
+  }
+
+  assertTextFileIncludes(
+    scratchFile(`plugins-${suffix}-cli.txt`),
+    `${pluginId}:${reply}`,
+    `${cliLabel} plugin CLI output`,
+  );
+
+  return getInstallRecords()[pluginId];
 }
 
 function assertGitPluginRemoved() {
@@ -545,25 +548,7 @@ function assertLocalPathUpdateSkipped() {
 }
 
 function assertNpmPlugin() {
-  assertSimplePlugin(
-    scratchFile("plugins-npm.json"),
-    scratchFile("plugins-npm-inspect.json"),
-    "demo-plugin-npm",
-    "demo.npm",
-  );
-
-  const inspect = readJson(scratchFile("plugins-npm-inspect.json"));
-  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-npm")) {
-    throw new Error(`expected demo-npm cli command, got ${inspect.cliCommands?.join(", ")}`);
-  }
-
-  assertTextFileIncludes(
-    scratchFile("plugins-npm-cli.txt"),
-    "demo-plugin-npm:pong",
-    "npm plugin CLI output",
-  );
-
-  const record = getInstallRecords()["demo-plugin-npm"];
+  const record = assertPluginCli("npm", "demo.npm", "pong", "npm");
   if (!record) {
     throw new Error("missing npm install record for demo-plugin-npm");
   }
@@ -705,25 +690,7 @@ function assertMarketplaceUpdated() {
 
 function assertGitPluginUpdated() {
   const beforeCommit = process.argv[3];
-  assertSimplePlugin(
-    scratchFile("plugins-git-update.json"),
-    scratchFile("plugins-git-update-inspect.json"),
-    "demo-plugin-git-update",
-    "demo.git.update.v2",
-  );
-
-  const inspect = readJson(scratchFile("plugins-git-update-inspect.json"));
-  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-git-update")) {
-    throw new Error(`expected demo-git-update cli command, got ${inspect.cliCommands?.join(", ")}`);
-  }
-
-  assertTextFileIncludes(
-    scratchFile("plugins-git-update-cli.txt"),
-    "demo-plugin-git-update:pong-v2",
-    "updated git plugin CLI output",
-  );
-
-  const record = getInstallRecords()["demo-plugin-git-update"];
+  const record = assertPluginCli("git-update", "demo.git.update.v2", "pong-v2", "updated git");
   if (!record) {
     throw new Error("missing git update install record for demo-plugin-git-update");
   }
@@ -787,11 +754,7 @@ async function assertClawHubPreflight() {
       `ClawHub package preflight failed for ${packageName}: ${response.status} ${rawDetail}`,
     );
   }
-  const detail = await withTimeout(
-    `ClawHub package preflight JSON for ${packageName}`,
-    limits.timeoutMs,
-    () => JSON.parse(rawDetail),
-  );
+  const detail = JSON.parse(rawDetail);
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {
     throw new Error(`ClawHub package ${packageName} is not installable as a plugin: ${family}`);

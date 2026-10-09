@@ -78,7 +78,7 @@ command handling is enabled for the surface.
     plugins: false,
     debug: false,
     restart: true, // enables /restart and /update
-    ownerAllowFrom: ["discord:123456789012345678"],
+    ownerAllowFrom: ["discord:user:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
@@ -142,9 +142,13 @@ command handling is enabled for the surface.
   first owner. Control UI pairing has an explicit owner checkbox. Authorized
   non-owners receive a refusal with the exact configuration command for their
   sender ID when using an owner-only command such as `/restart` or `/update`.
-  Use `channel:id` (for example, `discord:123456789012345678`). If an upgrade
-  leaves a legacy `channel:user:id` owner entry, run `openclaw doctor --fix`.
-  Doctor rewrites recognized channel entries and reports their list positions.
+  Use the channel's direct-user target, for example `discord:user:123456789012345678`
+  or `telegram:123456789`. Doctor preserves `user:` when the channel requires it
+  to distinguish users from shared conversations. This keeps the same owner usable
+  for both command authorization and heartbeat delivery.
+  If an older update removed that kind, run `openclaw doctor --fix`. Doctor restores
+  it only from matching config backup history; otherwise it reports the exact
+  owner entry to correct after you confirm the user ID.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their
@@ -246,7 +250,7 @@ plugins, and installed skills.
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
-    | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/fast [status\|auto\|on\|off\|ultrafast\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
@@ -262,8 +266,8 @@ plugins, and installed skills.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines. Normal verbose chatter stays off.
-        - `/fast auto|on|off` persists a session override. Use the Sessions UI `inherit` option to clear it.
-        - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`. Direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
+        - `/fast auto|on|off|ultrafast` persists a session override. Use `/fast default` or the Sessions UI `inherit` option to clear it.
+        - `/fast` is provider-specific: ordinary Fast starts from priority on OpenAI/Codex. Codex requests Ultrafast only for an explicit `"ultrafast"` selection and an authenticated app-server catalog that advertises it for the selected native model. Fast, Auto, and unspecified selections never automatically upgrade. Set `appServer.enableUltrafast: false` to disable Ultrafast: explicit `/fast ultrafast` then sends ordinary Fast (`priority`) without an Ultrafast catalog check. Saving the preference does not guarantee provider fulfillment. Standard and inactive Auto remain off. Direct Anthropic Fast requests map to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
       </Accordion>
@@ -610,7 +614,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
     - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.
     - Chat login applies saved credentials directly to the running Gateway. If sign-in status cannot be confirmed, use `/login refresh`, then `/models`; you do not need to repeat authentication.
-    - **`/stop`** targets the active chat session to abort the current run.
+    - **`/stop`** targets the active chat session to abort the selected run and stop its ordinary Gateway or sandbox commands, including commands that already yielded a process handle. Later model runs, commands, and queued input remain untouched while Stop prepares cancellation. It waits for command cleanup and reports an error if cleanup cannot be confirmed. Services started with `background: true` keep running; stop those separately with their process handle.
 
   </Accordion>
   <Accordion title="Slack specifics">

@@ -2,10 +2,7 @@ import { html, render, type LitElement } from "lit";
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
-import {
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "../pages/chat/chat-pane-embedded-panels.ts";
+import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
 import { renderSidebarRegion } from "../pages/chat/chat-pane-sidebar-layout.ts";
 import {
@@ -35,7 +32,6 @@ export async function renderPanelFixture(
     renderSidebarRegion({
       presentationId: "sidebar-layout-fixture",
       availableWidth: 1400,
-      availableSlots: ["detail", "workspace"],
       callbacks: {
         activatePanel: vi.fn(),
         togglePanelExpanded: vi.fn(),
@@ -48,8 +44,6 @@ export async function renderPanelFixture(
       layout,
       narrow: false,
       panelDefinitions: definitions,
-      panelActions: {},
-      panelTemplates: sidebarPanelTemplates(definitions),
       primary: html`<main>Chat</main>`,
       requestUpdate: vi.fn(),
     }),
@@ -123,12 +117,11 @@ export function createReviewFixture() {
           chat: threadProps("review-intent", state.sessionKey) as ChatProps,
           content,
           host: state,
+          requestUpdate: vi.fn(),
         }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
-        embedded: true,
-      }),
+      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state)),
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
   };
-  return { file, list, mount, preview, rails, renderPanels, sessions, state };
+  return { context, file, list, mount, preview, rails, renderPanels, sessions, state };
 }

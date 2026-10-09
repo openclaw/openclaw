@@ -324,12 +324,9 @@ suite.define(() => {
                 marginRight: getComputedStyle(
                   document.querySelector<HTMLElement>(".content--chat")!,
                 ).marginRight,
-                reservation: document.documentElement.style.getPropertyValue(
-                  "--oc-browser-reserve-right",
-                ),
               })),
             )
-            .toEqual({ marginRight: "0px", reservation: "0px" });
+            .toEqual({ marginRight: "0px" });
           await expect
             .poll(() =>
               page
@@ -350,9 +347,6 @@ suite.define(() => {
                 const region = document.querySelector<HTMLElement>(".sidebar-region")!;
                 return {
                   marginRight: getComputedStyle(content).marginRight,
-                  reservation: document.documentElement.style.getPropertyValue(
-                    "--oc-browser-reserve-right",
-                  ),
                   spansRegion:
                     Math.abs(
                       panel.getBoundingClientRect().width - region.getBoundingClientRect().width,
@@ -362,7 +356,6 @@ suite.define(() => {
             )
             .toEqual({
               marginRight: "0px",
-              reservation: "0px",
               spansRegion: dock === "bottom",
             });
         },
@@ -874,18 +867,12 @@ suite.define(() => {
           const terminalTooltip = terminalLabel.locator("../..");
           await terminalLabel.locator("..").hover();
           await page.waitForTimeout(200);
-          expect(
-            await terminalTooltip
-              .locator("wa-tooltip")
-              .evaluate((tooltip) => Reflect.get(tooltip, "open")),
-          ).toBe(false);
+          expect(await terminalTooltip.getAttribute("open")).toBeNull();
           await openFromPlus(page, "Review");
           await sidePanel(page)
             .getByRole("button", { name: "Close tab: shell 1", exact: true })
             .click();
-          await sidePanel(page)
-            .getByRole("button", { name: "Close Terminal", exact: true })
-            .click();
+          // Closing the last terminal tab removes the Terminal slot; Review stays.
           await expect.poll(() => tabLabels(page)).toEqual(["Review"]);
           // Closing back down to a strip that fits must release the shrink state:
           // the in-pill fade is a symptom of overflow, so labels that fit again

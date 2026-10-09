@@ -1,9 +1,12 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 type KeywordSearchOptions = Omit<Parameters<typeof searchKeyword>[0], "db" | "query">;
 
@@ -20,10 +23,17 @@ function searchKeywordFixture(
     limit: 10,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-    buildFtsQuery,
-    bm25RankToScore,
     ...options,
   });
+}
+
+function supportsFts(): boolean {
+  const { db, schema } = createMemorySearchDb();
+  try {
+    return schema.ftsAvailable;
+  } finally {
+    db.close();
+  }
 }
 
 describe("searchKeyword trigram fallback", () => {
@@ -211,15 +221,6 @@ describe("searchKeyword trigram fallback", () => {
 });
 
 describe("searchKeyword FTS MATCH fallback", () => {
-  function supportsFts(): boolean {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      return schema.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   function createFtsDb() {
     const { db, schema } = createMemorySearchDb();
     if (!schema.ftsAvailable) {
@@ -248,10 +249,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
         endLine: 3,
       });
 
-      const brokenBuildFtsQuery = () => "BROKEN <<<";
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
+      });
       const results = await searchKeywordFixture(db, "Agent", {
         sourceFilter: { sql: " AND source IN (?)", params: ["sessions"] },
-        buildFtsQuery: brokenBuildFtsQuery,
       });
 
       expect(results.length).toBe(1);
@@ -284,10 +286,10 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       // A single-substring LIKE '%Agent cron%' would miss row 1 because
       // the words are not adjacent. Per-token LIKE should find it.
-      const brokenBuildFtsQuery = () => "BROKEN <<<";
-      const results = await searchKeywordFixture(db, "Agent cron", {
-        buildFtsQuery: brokenBuildFtsQuery,
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
       });
+      const results = await searchKeywordFixture(db, "Agent cron");
 
       // Per-token fallback: both "Agent" AND "cron" must match
       expect(results.length).toBe(1);
@@ -309,9 +311,10 @@ describe("searchKeyword FTS MATCH fallback", () => {
         endLine: 1,
       });
 
-      await searchKeywordFixture(db, "test", {
-        buildFtsQuery: () => "BROKEN <<<",
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("FTS5 MATCH unavailable");
       });
+      await searchKeywordFixture(db, "test");
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const [warning] = warnSpy.mock.calls[0] ?? [];
@@ -396,15 +399,6 @@ describe("searchKeyword ranked limits", () => {
 });
 
 describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
-  function supportsFts(): boolean {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      return schema.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   const itWithFts = supportsFts() ? it : it.skip;
 
   itWithFts("returns FTS hits indexed under a different embedding model", async () => {

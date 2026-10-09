@@ -3,13 +3,10 @@
 if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
   exec /bin/bash "$0" "$@"
 fi
-# Package-installed release journey smoke with provider, plugins, ClickClack,
-# agent turn, and restart survival.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-user-journey-e2e" OPENCLAW_RELEASE_USER_JOURNEY_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_RELEASE_USER_JOURNEY_E2E_SKIP_BUILD:-0}"

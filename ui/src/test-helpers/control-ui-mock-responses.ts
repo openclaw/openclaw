@@ -7,6 +7,8 @@ export function createControlUiMockResponses(
   input: {
     methodResponses: Record<string, unknown>;
     defaultAgentId: string;
+    agentModel?: string | null;
+    startupPendingResponses?: number;
     sessions: Pick<ReturnType<typeof createControlUiSessionFixtures>, "list" | "listResponse">;
     groupRenames: () => readonly { from: string; to: string | null }[];
   },
@@ -24,6 +26,65 @@ export function createControlUiMockResponses(
   };
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessions = input.sessions;
+
+  const startupPendingResponses = new Map(
+    [
+      "sessions.resolve",
+      "sessions.describe",
+      "sessions.catalog.list",
+      "sessions.list",
+      "models.list",
+    ].map((method) => [method, input.startupPendingResponses ?? 0] as const),
+  );
+
+  function startupPending(method: string) {
+    const pendingResponses = startupPendingResponses.get(method) ?? 0;
+    if (pendingResponses > 0) {
+      startupPendingResponses.set(method, pendingResponses - 1);
+      const agentId = input.defaultAgentId;
+      const reason = `Agent ${agentId} has not completed startup inspection and preparation. The 5 second foreground startup budget elapsed; inspection continues.`;
+      const repairHint = "Stop the Gateway, run openclaw doctor --fix, and restart.";
+      return {
+        __mockError: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: 250,
+          message: `${reason}\n${repairHint}`,
+          details: {
+            code: "agent-database-inspection-pending",
+            agentId,
+            paths: [`/mock/state/agents/${agentId}/openclaw-agent.sqlite`],
+            reason,
+            repairHint,
+          },
+        },
+      };
+    }
+    return undefined;
+  }
+
+  function applyAgentModel(method: string, value: unknown): unknown {
+    if (!input.agentModel || !isRecord(value)) {
+      return value;
+    }
+    const applyAgentsList = (agentsList: unknown): unknown => {
+      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
+        return agentsList;
+      }
+      return {
+        ...agentsList,
+        agents: agentsList.agents.map((agent) =>
+          isRecord(agent) && !Object.hasOwn(agent, "model")
+            ? { ...agent, model: { primary: input.agentModel } }
+            : agent,
+        ),
+      };
+    };
+    if (method === "agents.list") {
+      return applyAgentsList(value);
+    }
+    return value;
+  }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
     if (Object.is(actual, expected)) {
@@ -218,6 +279,8 @@ export function createControlUiMockResponses(
 
   return {
     select: configuredResponse,
+    startupPending,
+    applyAgentModel,
     sessionList: sessionListResponse,
     cases: responseCases,
     sequence: responseSequence,

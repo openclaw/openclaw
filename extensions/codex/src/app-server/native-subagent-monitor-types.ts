@@ -26,7 +26,7 @@ export type NativeSubagentMonitorRuntime = {
 
 export type NativeSubagentMonitorClient = Pick<
   CodexAppServerClient,
-  "request" | "addNotificationHandler" | "addCloseHandler" | "getTransportPid"
+  "request" | "addNotificationHandler" | "addCloseHandler"
 >;
 
 export type NativeModelSource = NonNullable<
@@ -95,6 +95,7 @@ export type ParentOwner = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
   modelExecutionCancelled?: true;
   modelExecutionSettled?: true;
+  isTurnYielded?: () => boolean;
   nativeReviewRequirement?: { required: boolean };
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
@@ -166,7 +167,6 @@ export type NativeTurnState = "active" | NativeTurnEnd;
 export type NativeTurnObservation = {
   turnId: string;
   state: NativeTurnState | undefined;
-  startObserved?: true;
 };
 
 export type ChildState = NativeSubagentAssignment & {
@@ -208,14 +208,14 @@ export type KnownChild = {
   assignment: NativeSubagentAssignment & { terminal: boolean; unanchored?: true };
   turnId?: string;
   observedTurns: Map<string, { awaitingInteraction?: true }>;
-  pendingTurns: Array<{
-    turnId: string;
-    state: NativeTurnState | undefined;
-    admittedOwner?: ParentOwner;
-    admittedSubmission?: CodexNativeSubagentSubmission;
-    modelSource?: NativeModelExecution;
-    completionCustody?: AgentHarnessCompletionCustody;
-  }>;
+  pendingTurns: Array<
+    NativeTurnObservation & {
+      admittedOwner?: ParentOwner;
+      admittedSubmission?: CodexNativeSubagentSubmission;
+      modelSource?: NativeModelExecution;
+      completionCustody?: AgentHarnessCompletionCustody;
+    }
+  >;
   agentPaths: Set<string>;
 };
 
@@ -226,10 +226,9 @@ export type RecoveredCompletion = CodexNativeSubagentCompletion & {
 export type ThreadRecovery = {
   parentThreadId?: string;
   agentPath?: string;
-  assignmentTurnId?: string;
   nativeTurnId?: string;
   nativeTurnState?: NativeTurnState;
-  observedPendingTurns: Array<{ turnId: string; state: NativeTurnState | undefined }>;
+  observedPendingTurns: NativeTurnObservation[];
   completion?: RecoveredCompletion;
   fallbackCompletion?: RecoveredCompletion;
   resumable: boolean;
@@ -248,7 +247,6 @@ export type MonitorOptions = {
   recoveryPollDelaysMs?: readonly number[];
   completionDeliveryRetryDelaysMs?: readonly number[];
   completionDeliveryMaxRetries?: number;
-  now?: () => number;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;

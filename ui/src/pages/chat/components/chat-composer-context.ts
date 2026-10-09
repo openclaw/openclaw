@@ -13,8 +13,6 @@ import {
   formatQuotaReset,
   type ProviderQuotaGroup,
   type ProviderUsageDisplayProps,
-  type QuotaBudgetSummary,
-  type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
@@ -70,60 +68,16 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [
-    Number.parseInt(h.slice(0, 2), 16),
-    Number.parseInt(h.slice(2, 4), 16),
-    Number.parseInt(h.slice(4, 6), 16),
-  ];
-}
-
-let cachedThemeNoticeColors: {
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
-}
-
 function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
-): {
-  pct: number;
-  used: number;
-  limit: number;
-  input: number | null;
-  output: number | null;
-  cost: number | null;
-  detail: string;
-  color: string;
-  bg: string;
-  warning: boolean;
-  approximate: boolean;
-  fromLastPrompt: boolean;
-} | null {
-  const used = session?.totalTokens;
+) {
+  const used = asNonNegativeFiniteNumber(session?.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
     session,
     defaultContextTokens,
   );
-  if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
+  if (used === undefined || !limit) {
     return null;
   }
   const approximate = session?.totalTokensFresh === false;
@@ -135,45 +89,23 @@ function getContextNoticeViewModel(
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
-  const cost =
-    typeof session?.estimatedCostUsd === "number" &&
-    Number.isFinite(session.estimatedCostUsd) &&
-    session.estimatedCostUsd >= 0
-      ? session.estimatedCostUsd
-      : null;
-  const usage = {
+  const cost = asNonNegativeFiniteNumber(session?.estimatedCostUsd) ?? null;
+  let color = "var(--muted)";
+  let bg = "color-mix(in srgb, var(--muted) 8%, transparent)";
+  if (warning) {
+    const mix = Math.min(Math.max((ratio - CONTEXT_NOTICE_RATIO) / 0.1, 0), 1);
+    color = `color-mix(in srgb, var(--warn), var(--danger) ${mix * 100}%)`;
+    bg = `color-mix(in srgb, ${color} ${8 + 8 * mix}%, transparent)`;
+  }
+  return {
+    pct,
     fromLastPrompt,
     used,
     limit,
     input,
     output,
     cost,
-  };
-  if (!warning) {
-    return {
-      pct,
-      ...usage,
-      detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
-      color: "var(--muted)",
-      bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
-      warning,
-      approximate,
-    };
-  }
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
-  const mix = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * mix);
-  const g = Math.round(wg + (dg - wg) * mix);
-  const b = Math.round(wb + (db - wb) * mix);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * mix;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
-  return {
-    pct,
-    ...usage,
-    detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+    detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
     color,
     bg,
     warning,
@@ -218,28 +150,8 @@ function formatBudgetAmount(amount: number, unit: string): string {
   return `${amount.toFixed(2)} ${unit}`;
 }
 
-function renderLimitBar(usedPercent: number, ariaLabel: string) {
+function renderQuotaRow(label: string, usedPercent: number, value: string, reset?: string | null) {
   const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
-  return html`
-    <div
-      class="context-usage__limit-bar"
-      role="progressbar"
-      aria-label=${ariaLabel}
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow=${usedPercent}
-    >
-      <span
-        class=${severity ? `context-usage__limit-fill--${severity}` : ""}
-        style="width: ${usedPercent}%"
-      ></span>
-    </div>
-  `;
-}
-
-function renderQuotaLimitRow(limit: QuotaLimitSummary) {
-  const label = formatUsageWindowLabel(limit.label);
-  const reset = formatQuotaReset(limit.resetAt);
   return html`
     <div class="context-usage__limit">
       <div class="context-usage__limit-head">
@@ -252,28 +164,22 @@ function renderQuotaLimitRow(limit: QuotaLimitSummary) {
                 >`
               : nothing
           }
-          <strong>${limit.usedPercent}%</strong>
+          <strong>${value}</strong>
         </span>
       </div>
-      ${renderLimitBar(limit.usedPercent, label)}
-    </div>
-  `;
-}
-
-function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
-  const label = budget.label || t("chat.composer.contextUsage.usageCredits");
-  const usedPercent = Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100)));
-  const value = t("chat.composer.contextUsage.budgetValue", {
-    used: formatBudgetAmount(budget.used, budget.unit),
-    limit: formatBudgetAmount(budget.limit, budget.unit),
-  });
-  return html`
-    <div class="context-usage__limit">
-      <div class="context-usage__limit-head">
-        <span class="context-usage__limit-label">${label}</span>
-        <span class="context-usage__limit-meta"><strong>${value}</strong></span>
+      <div
+        class="context-usage__limit-bar"
+        role="progressbar"
+        aria-label=${label}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow=${usedPercent}
+      >
+        <span
+          class=${severity ? `context-usage__limit-fill--${severity}` : ""}
+          style="width: ${usedPercent}%"
+        ></span>
       </div>
-      ${renderLimitBar(usedPercent, label)}
     </div>
   `;
 }
@@ -300,8 +206,24 @@ function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
         : nothing
     }
     <div class="context-usage__limits">
-      ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
-      ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+      ${group.windows.map((limit) =>
+        renderQuotaRow(
+          formatUsageWindowLabel(limit.label),
+          limit.usedPercent,
+          `${limit.usedPercent}%`,
+          formatQuotaReset(limit.resetAt),
+        ),
+      )}
+      ${group.budgets.map((budget) =>
+        renderQuotaRow(
+          budget.label || t("chat.composer.contextUsage.usageCredits"),
+          Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100))),
+          t("chat.composer.contextUsage.budgetValue", {
+            used: formatBudgetAmount(budget.used, budget.unit),
+            limit: formatBudgetAmount(budget.limit, budget.unit),
+          }),
+        ),
+      )}
     </div>
     <div class="context-usage__provenance" data-chat-usage-provider="true">
       <span>${t("sessionsView.provider")}:</span>

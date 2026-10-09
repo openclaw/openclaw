@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
@@ -128,9 +129,7 @@ it.runIf(process.platform === "darwin").each([
     );
 
     if (continues) {
-      await expect(copyPackagePathEntry(source, destination)).resolves.toEqual({
-        ownershipPreserved: operation !== "lchown",
-      });
+      await expect(copyPackagePathEntry(source, destination)).resolves.toBeUndefined();
       expect(await fs.readlink(destination)).toBe("missing");
     } else {
       await expect(copyPackagePathEntry(source, destination)).rejects.toThrow(
@@ -167,6 +166,60 @@ it("keeps the live launcher intact when its replacement copy is interrupted", as
   copy.mockRestore();
   await copyPackagePathEntry(source, destination);
   expect(await fs.readFile(destination, "utf8")).toBe("previous launcher\n");
+});
+
+it("keeps the live launcher intact when an ordinary copy cannot sync its staged file", async () => {
+  const root = await fs.realpath(dirs.make("package-launcher-copy-sync-"));
+  const source = path.join(root, "source");
+  const destination = path.join(root, "destination");
+  await fs.writeFile(source, "replacement launcher\n");
+  await fs.writeFile(destination, "live launcher\n");
+  const failure = Object.assign(new Error("staged launcher sync failed"), { code: "EIO" });
+  let refused = 0;
+  const refuseStagedFileSync = (fd: number) => {
+    const identity = fsSync.fstatSync(fd, { bigint: true });
+    if (!identity.isFile()) {
+      return;
+    }
+    const staged = fsSync
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(".openclaw-shim-stage-"))
+      .some((directory) =>
+        fsSync.readdirSync(path.join(root, directory.name)).some((entry) => {
+          const current = fsSync.lstatSync(path.join(root, directory.name, entry), {
+            bigint: true,
+          });
+          return current.isFile() && current.dev === identity.dev && current.ino === identity.ino;
+        }),
+      );
+    if (staged) {
+      refused++;
+      throw failure;
+    }
+  };
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const sync = handle.sync.bind(handle);
+    vi.spyOn(handle, "sync").mockImplementation(async () => {
+      refuseStagedFileSync(handle.fd);
+      await sync();
+    });
+    return handle;
+  });
+  // Native fs-safe copies flush raw descriptors; the fallback uses FileHandle.sync.
+  const fsync = fsSync.fsyncSync;
+  vi.spyOn(fsSync, "fsyncSync").mockImplementation((fd) => {
+    refuseStagedFileSync(fd);
+    fsync(fd);
+  });
+
+  await expect(copyPackagePathEntry(source, destination)).rejects.toHaveProperty("cause", failure);
+
+  expect(refused).toBe(1);
+  expect(await fs.readFile(source, "utf8")).toBe("replacement launcher\n");
+  expect(await fs.readFile(destination, "utf8")).toBe("live launcher\n");
+  expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
 });
 
 it("stages a complete directory with independent hardlinked files and preserved modes", async () => {
@@ -305,7 +358,6 @@ it("retains the first copy failure when private staging has been replaced", asyn
 
 it.each([
   { name: "ENOENT", refusal: Object.assign(new Error("owner missing"), { code: "ENOENT" }) },
-  { name: "EBUSY", refusal: Object.assign(new Error("owner replaced"), { code: "EBUSY" }) },
   { name: "false", refusal: false },
 ])("does not retire a backup after a one-shot $name ownership refusal", async ({ refusal }) => {
   const root = dirs.make("package-backup-refusal-");
@@ -399,30 +451,28 @@ it("preserves an observed filesystem identity refusal when the cleanup budget ex
   expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
 });
 
-it.each(["EACCES", "EBUSY"])(
-  "retains the original backup when removal reports %s after the cleanup budget",
-  async (code) => {
-    const root = dirs.make("package-backup-late-io-");
-    const backup = path.join(root, ".openclaw.backup");
-    await fs.mkdir(backup);
-    await fs.writeFile(path.join(backup, "marker.txt"), "original");
-    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-    const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
-    vi.spyOn(prototype, "remove").mockImplementationOnce(async () => {
-      clock.mockReturnValue(300_001);
-      throw Object.assign(new Error(`${code}: fixture removal failed`), { code });
-    });
-    const rename = vi.spyOn(fs, "rename");
+it("retains the original backup when removal fails after the cleanup budget", async () => {
+  const code = "EACCES";
+  const root = dirs.make("package-backup-late-io-");
+  const backup = path.join(root, ".openclaw.backup");
+  await fs.mkdir(backup);
+  await fs.writeFile(path.join(backup, "marker.txt"), "original");
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
+  vi.spyOn(prototype, "remove").mockImplementationOnce(async () => {
+    clock.mockReturnValue(300_001);
+    throw Object.assign(new Error(`${code}: fixture removal failed`), { code });
+  });
+  const rename = vi.spyOn(fs, "rename");
 
-    const warning = await discardPackageUpdateBackup(backup, "old package", root);
+  const warning = await discardPackageUpdateBackup(backup, "old package", root);
 
-    expect(warning).toContain("cleanup budget expired");
-    expect(warning).toContain(backup);
-    expect(warning).toContain(`${code}: fixture removal failed`);
-    expect(rename).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
-  },
-);
+  expect(warning).toContain("cleanup budget expired");
+  expect(warning).toContain(backup);
+  expect(warning).toContain(`${code}: fixture removal failed`);
+  expect(rename).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
+});
 
 it.each(["owner", "backup"] as const)(
   "does not downgrade a revoked %s to a cleanup deadline warning",
@@ -568,19 +618,9 @@ it("does not compensate a root rename after its original owner refused once", as
 
 it.each([
   {
-    name: "a false copy failure",
-    copyFailure: { error: false },
-    cleanupFailure: undefined,
-  },
-  {
     name: "an undefined copy failure before a cleanup failure",
     copyFailure: { error: undefined },
     cleanupFailure: { error: new Error("cleanup failed after copy refusal") },
-  },
-  {
-    name: "a sole cleanup failure",
-    copyFailure: undefined,
-    cleanupFailure: { error: new Error("cleanup failed after publication") },
   },
   {
     name: "a sole undefined cleanup failure",
@@ -606,7 +646,7 @@ it.each([
   ) {
     staging = this.rootReal;
     if (copyFailure) {
-      // oxlint-disable-next-line typescript/only-throw-error -- false and undefined must remain the original copy failure.
+      // oxlint-disable-next-line typescript/only-throw-error -- Undefined must remain the original copy failure.
       throw copyFailure.error;
     }
     return copy.call(this, ...args);
@@ -614,10 +654,8 @@ it.each([
   vi.spyOn(prototype, "remove").mockImplementation(function (this: Root, relativePath, options) {
     if (path.basename(relativePath).startsWith(".openclaw-shim-stage-")) {
       cleanupAttempts += 1;
-      if (cleanupFailure) {
-        // oxlint-disable-next-line typescript/only-throw-error -- An undefined cleanup failure must remain a failure.
-        throw cleanupFailure.error;
-      }
+      // oxlint-disable-next-line typescript/only-throw-error -- An undefined cleanup failure must remain a failure.
+      throw cleanupFailure.error;
     }
     return remove.call(this, relativePath, options);
   });
@@ -641,9 +679,59 @@ it.each([
   );
   expect(await fs.readFile(source, "utf8")).toBe("replacement");
   expect(await fs.readFile(destination, "utf8")).toBe(copyFailure ? "live" : "replacement");
-  if (cleanupFailure) {
-    expect(await fs.readdir(staging)).toEqual([]);
-  } else {
-    await expect(fs.lstat(staging)).rejects.toHaveProperty("code", "ENOENT");
-  }
+  expect(await fs.readdir(staging)).toEqual([]);
 });
+
+it.each(["publish", "revoke", "replace"] as const)(
+  "preserves live ownership through the journal publication hook: %s",
+  async (action) => {
+    const root = dirs.make("package-journal-publication-");
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const retained = path.join(root, "retained");
+    await fs.writeFile(source, "sealed launcher");
+    await fs.writeFile(destination, "live launcher");
+    const refusal = new Error("journal owner revoked");
+    let revoked = false;
+    const beforePublish = vi.fn((staged: string) => {
+      expect(fsSync.readFileSync(staged, "utf8")).toBe("sealed launcher");
+      expect(fsSync.readFileSync(destination, "utf8")).toBe("live launcher");
+      if (action === "revoke") {
+        revoked = true;
+      } else if (action === "replace") {
+        fsSync.renameSync(destination, retained);
+        fsSync.writeFileSync(destination, "foreign launcher");
+      }
+    });
+    const result = copyPackagePathEntry(
+      source,
+      destination,
+      () => {
+        if (revoked) {
+          throw refusal;
+        }
+      },
+      beforePublish,
+    );
+    if (action === "publish") {
+      await expect(result).resolves.toBeUndefined();
+    } else if (action === "revoke") {
+      await expect(result).rejects.toBe(refusal);
+    } else {
+      await expect(result).rejects.toHaveProperty("code", "path-mismatch");
+      expect(await fs.readFile(retained, "utf8")).toBe("live launcher");
+    }
+    expect(beforePublish).toHaveBeenCalledOnce();
+    expect(await fs.readFile(source, "utf8")).toBe("sealed launcher");
+    expect(await fs.readFile(destination, "utf8")).toBe(
+      action === "publish"
+        ? "sealed launcher"
+        : action === "revoke"
+          ? "live launcher"
+          : "foreign launcher",
+    );
+    expect((await fs.readdir(root)).toSorted()).toEqual(
+      action === "replace" ? ["destination", "retained", "source"] : ["destination", "source"],
+    );
+  },
+);

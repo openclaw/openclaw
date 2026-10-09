@@ -102,7 +102,7 @@ export function createBoardHarness(
     getMcpAppSandboxPort: () => 18790,
     getSessionEventSubscriberConnIds: () => [],
     getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: {} } },
       mcp: { apps: { enabled: true } },
       tools: { exec: { mode: "ask" } },
     }),

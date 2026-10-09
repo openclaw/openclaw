@@ -14,6 +14,7 @@ import {
   type ModelCatalogEntry,
   modelSupportsInput,
 } from "../agents/model-catalog.js";
+import { normalizeCatalogRouteBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
@@ -175,18 +176,11 @@ export function resolveGatewayModelThinkingProfile(
   return resolveGatewayModelThinkingFacts(params).metadata;
 }
 
-type GatewaySessionThinkingProjectionParams = {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentId: string;
-  sessionKey: string;
-  entry?: SessionEntry;
-  preparedAcpMeta?: SessionEntry["acp"] | null;
+type GatewaySessionThinkingProjectionParams = Parameters<
+  typeof resolveGatewaySessionRuntimeProjection
+>[0] & {
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
-  metadataSnapshot?: PluginMetadataSnapshot;
-  rowContext?: SessionListRowContext;
   providerPolicySource?: ThinkingProviderPolicySource;
 };
 
@@ -265,13 +259,17 @@ export function getSessionDefaults(
     agentId?: string;
     modelRef?: ModelRef;
     allowPluginNormalization?: boolean;
-    metadataSnapshot?: PluginMetadataSnapshot;
+    metadataSnapshot?: PluginMetadataSnapshot | null;
     providerPolicySource?: ThinkingProviderPolicySource;
   },
 ): GatewaySessionsDefaults {
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
   );
+  const manifestPlugins = options?.metadataSnapshot === null ? [] : options?.metadataSnapshot;
+  const providerPolicySource =
+    options?.providerPolicySource ??
+    (options?.metadataSnapshot !== undefined ? "active" : undefined);
   const resolved =
     options?.modelRef ??
     (options?.agentId
@@ -279,19 +277,20 @@ export function getSessionDefaults(
           cfg,
           agentId,
           allowPluginNormalization: options.allowPluginNormalization,
-          manifestPlugins: options.metadataSnapshot,
+          manifestPlugins,
         })
       : resolveConfiguredModelRef({
           cfg,
           defaultProvider: DEFAULT_PROVIDER,
           defaultModel: DEFAULT_MODEL,
           allowPluginNormalization: options?.allowPluginNormalization,
-          manifestPlugins: options?.metadataSnapshot,
+          manifestPlugins,
         }));
   const displayModel = resolveSessionDisplayModelIdentityRefCached({
     cfg,
     provider: resolved.provider,
     model: resolved.model,
+    metadataSnapshot: options?.metadataSnapshot,
   });
   const catalogEntry = modelCatalog
     ? findModelCatalogEntry(modelCatalog, {
@@ -330,17 +329,16 @@ export function getSessionDefaults(
     agentId,
     modelCatalog:
       modelCatalog ??
-      (options?.providerPolicySource !== undefined &&
-      options.providerPolicySource !== "active-or-bundled"
+      (providerPolicySource !== undefined && providerPolicySource !== "active-or-bundled"
         ? []
         : undefined),
     sessionKey,
-    providerPolicySource: options?.providerPolicySource,
+    providerPolicySource,
   });
   return {
     modelProvider: displayModel.provider ?? resolved.provider,
     model: displayModel.model ?? resolved.model,
-    contextTokens: contextTokens ?? null,
+    contextTokens,
     contextWindow: contextWindowProfile.contextWindow,
     contextWindows: contextWindowProfile.contextWindows,
     contextWindowDefault: contextWindowProfile.contextWindowDefault,
@@ -353,17 +351,7 @@ export function getSessionDefaults(
 }
 
 function normalizeGatewayModelCapabilityBaseUrl(value: string | undefined): string | undefined {
-  const baseUrl = normalizeOptionalString(value);
-  if (!baseUrl) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(baseUrl);
-    parsed.pathname = parsed.pathname.replace(/\/+$/u, "") || "/";
-    return parsed.toString();
-  } catch {
-    return baseUrl.replace(/\/+$/u, "");
-  }
+  return normalizeCatalogRouteBaseUrl(normalizeOptionalString(value));
 }
 
 function isGatewayModelExplicitlyConfiguredTextOnly(params: {
@@ -414,9 +402,6 @@ function resolveGatewayProviderStaticModel(params: {
     return undefined;
   }
 
-  if (isGatewayModelExplicitlyConfiguredTextOnly(params)) {
-    return undefined;
-  }
   const configuredProvider = findNormalizedProviderValue(
     params.snapshot.config.models?.providers,
     params.provider,
@@ -425,6 +410,9 @@ function resolveGatewayProviderStaticModel(params: {
   const configuredModel = configuredProvider?.models?.find(
     (model) => normalizeLowercaseStringOrEmpty(model.id) === normalizedModelId,
   );
+  if (configuredModel?.input !== undefined && !configuredModel.input.includes("image")) {
+    return undefined;
+  }
   const configuredApi = configuredModel?.api ?? configuredProvider?.api;
   if (configuredApi && configuredApi !== staticEntry.api) {
     return undefined;
@@ -555,18 +543,19 @@ export function resolveSessionDisplayModelIdentityRefCached(params: {
   cfg: OpenClawConfig;
   provider?: string;
   model?: string;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
   rowContext?: SessionListRowContext;
 }): { provider?: string; model?: string } {
   const ctx = params.rowContext;
   const key = ctx ? createSessionRowModelCacheKey(params.provider, params.model) : undefined;
   const cached = key === undefined ? undefined : ctx?.displayModelIdentityByKey.get(key);
-  if (cached) {
-    return cached;
+  if (cached && cached.metadataSnapshot === params.metadataSnapshot) {
+    return cached.identity;
   }
   const provider = normalizeOptionalString(params.provider);
   const model = normalizeOptionalString(params.model);
   let value = { provider, model };
-  if (provider && model && isCliProvider(provider, params.cfg)) {
+  if (provider && model && isCliProvider(provider, params.cfg, params.metadataSnapshot)) {
     const identity = (model.includes("/")
       ? parseModelRef(model, provider, {
           allowPluginNormalization: false,
@@ -579,12 +568,16 @@ export function resolveSessionDisplayModelIdentityRefCached(params: {
           runtime: identity.provider,
           config: params.cfg,
           includeSetupRegistry: true,
+          metadataSnapshot: params.metadataSnapshot,
         }) ?? identity.provider,
       model: identity.model,
     };
   }
   if (ctx && key !== undefined) {
-    ctx.displayModelIdentityByKey.set(key, value);
+    ctx.displayModelIdentityByKey.set(key, {
+      metadataSnapshot: params.metadataSnapshot,
+      identity: value,
+    });
   }
   return value;
 }
@@ -593,6 +586,7 @@ export function projectSessionPatchResult(params: {
   canonicalKey: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  preparedAcpMeta: SessionEntry["acp"] | null;
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
   storePath: string;
@@ -617,6 +611,7 @@ export function projectSessionPatchResult(params: {
     model: resolved.model,
     sessionKey: params.canonicalKey,
     entry: params.entry,
+    preparedAcpMeta: params.preparedAcpMeta,
     modelCatalog,
     modelCatalogRouteVariants: params.modelCatalogRouteVariants,
   });
@@ -624,13 +619,16 @@ export function projectSessionPatchResult(params: {
     catalogEntry: thinking.catalogEntry,
     selected: params.entry.contextWindow,
   });
+  const entry = projectPublicSessionEntry(params.entry);
+  delete entry.skillsSnapshot;
+  delete entry.systemPromptReport;
   return {
     ok: true,
     path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
       agentId: params.targetAgentId,
     }).path,
     key: params.canonicalKey,
-    entry: projectPublicSessionEntry(params.entry),
+    entry,
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,

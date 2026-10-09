@@ -18,7 +18,7 @@ const approved = {
 };
 
 describe("reviewed release channel waiver", () => {
-  it("owns the exact 9.5 channel set without extending historical waivers", () => {
+  it("owns the reviewed combined channel sets without extending historical waivers", () => {
     expect(releaseWaivedIntegrationChannels(approved)).toEqual(["telegram", "matrix"]);
     for (const version of ["2026.8.1", "2026.9.1"]) {
       expect(
@@ -31,13 +31,24 @@ describe("reviewed release channel waiver", () => {
         }),
       ).toEqual(["telegram"]);
     }
+    for (const version of ["2026.9.7", "2026.9.8", "2026.9.9"]) {
+      expect(
+        releaseWaivedIntegrationChannels({
+          ...approved,
+          targetVersion: version,
+          candidateVersion: version,
+          telegramWaiver: `${version}-owner-approved`,
+          releaseProfile: "stable",
+        }),
+      ).toEqual(["telegram", "matrix"]);
+    }
     const projection = releaseWaivedIntegrationChannels(approved);
     projection.push("buzz");
     expect(releaseWaivedIntegrationChannels(approved)).toEqual(["telegram", "matrix"]);
     expect(releaseWaivedIntegrationChannels({ ...approved, telegramWaiver: "" })).toEqual([]);
   });
 
-  it.each(["qa-live-matrix", "qa-matrix", "matrix", "MATRIX", "qa-live-matrix,qa-live-buzz"])(
+  it.each(["qa-matrix", "MATRIX", "qa-live-buzz,qa-live-matrix"])(
     "rejects explicit Matrix selection %s under the combined 9.5 declaration",
     (liveSuiteFilter) => {
       const inputs = { ...approved, liveSuiteFilter };

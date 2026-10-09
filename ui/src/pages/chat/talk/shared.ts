@@ -1,5 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TalkClientToolCallResult } from "../../../../../packages/gateway-protocol/src/schema/channels.js";
+import type { AgentWaitResult as GatewayAgentWaitResult } from "../../../../../src/agents/run-wait.types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -58,8 +59,6 @@ export type RealtimeTalkEventInput<TPayload = unknown> = Omit<
 
 export type RealtimeTalkSessionResult = RealtimeVoiceBrowserSession & {
   voiceSessionId?: string;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
 };
 
 export type RealtimeTalkWebRtcSdpSessionResult = Extract<
@@ -95,8 +94,6 @@ export type RealtimeTalkTransportContext = {
   callbacks: RealtimeTalkCallbacks;
   input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
 };
 
 export function createRealtimeTalkEventEmitter(
@@ -184,37 +181,27 @@ type ChatPayload = {
   message?: unknown;
 };
 
-type AgentWaitResult = {
+type AgentWaitResult = Omit<Partial<GatewayAgentWaitResult>, "status" | "timeoutPhase"> & {
   status?: string;
-  error?: string;
-  stopReason?: string;
-  endedAt?: number;
-  pendingError?: boolean;
   timeoutPhase?: string;
-  providerStarted?: boolean;
   aborted?: boolean;
-  livenessState?: string;
-  yielded?: boolean;
 };
 
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 
 function extractTextFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const record = asOptionalObjectRecord(message);
+  if (!record) {
     return "";
   }
-  const record = message as Record<string, unknown>;
   if (typeof record.text === "string") {
     return record.text;
   }
   const content = Array.isArray(record.content) ? record.content : [];
   const parts = content
     .map((block) => {
-      if (!block || typeof block !== "object") {
-        return "";
-      }
-      const entry = block as Record<string, unknown>;
-      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+      const entry = asOptionalObjectRecord(block);
+      return entry?.type === "text" && typeof entry.text === "string" ? entry.text : "";
     })
     .filter(Boolean);
   return parts.join("\n\n").trim();
@@ -264,31 +251,27 @@ function waitForChatResult(params: {
       return;
     }
     const timer = window.setTimeout(() => {
-      settleReject(new Error("OpenClaw tool call timed out"));
+      settle(new Error("OpenClaw tool call timed out"));
     }, params.timeoutMs);
     let settled = false;
     let emptyFinalWaitStarted = false;
     let emptyFinalFallbackTimer: number | undefined;
     const onAbort = () => {
-      settleReject(new DOMException("OpenClaw tool call aborted", "AbortError"));
+      settle(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
     let unsubscribe: () => void = () => undefined;
-    const settleResolve = (value: string) => {
+    const settle = (result: string | Error | DOMException) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      resolve(value);
-    };
-    const settleReject = (error: Error | DOMException) => {
-      if (settled) {
-        return;
+      if (typeof result === "string") {
+        resolve(result);
+      } else {
+        reject(result);
       }
-      settled = true;
-      cleanup();
-      reject(error);
     };
     const waitForEmptyFinalFallback = () => {
       if (emptyFinalWaitStarted) {
@@ -306,18 +289,18 @@ function waitForChatResult(params: {
           }
           const waitError = getTerminalAgentWaitError(result);
           if (waitError) {
-            settleReject(waitError);
+            settle(waitError);
             return;
           }
           if (result?.status === "timeout") {
             return;
           }
           emptyFinalFallbackTimer = window.setTimeout(() => {
-            settleResolve("OpenClaw finished with no text.");
+            settle("OpenClaw finished with no text.");
           }, EMPTY_FINAL_FALLBACK_GRACE_MS);
         })
         .catch((error: unknown) => {
-          settleReject(error instanceof Error ? error : new Error(String(error)));
+          settle(error instanceof Error ? error : new Error(String(error)));
         });
     };
     unsubscribe = params.client.addEventListener((evt: GatewayEventFrame) => {
@@ -332,16 +315,16 @@ function waitForChatResult(params: {
       if (payload.state === "final") {
         const finalText = extractTextFromMessage(payload.message);
         if (finalText) {
-          settleResolve(finalText);
+          settle(finalText);
           return;
         }
         waitForEmptyFinalFallback();
       } else if (payload.state === "aborted") {
-        settleReject(
+        settle(
           new DOMException(payload.errorMessage ?? "OpenClaw tool call aborted", "AbortError"),
         );
       } else if (payload.state === "error") {
-        settleReject(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
+        settle(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
     function cleanup() {
@@ -362,8 +345,7 @@ function emitRealtimeTalkAgentProgress(
   if (!emitTalkEvent || payload.stream !== "tool") {
     return;
   }
-  const data = payload.data && typeof payload.data === "object" ? payload.data : {};
-  const record = data as Record<string, unknown>;
+  const record = asOptionalObjectRecord(payload.data) ?? {};
   const phase = typeof record.phase === "string" ? record.phase : undefined;
   const name = typeof record.name === "string" ? record.name : undefined;
   const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : undefined;
@@ -495,10 +477,10 @@ function maybeSpeakRealtimeTalkControlResult(
   speakControlResult: ((message: string) => void) | undefined,
   suppressSpeechForModes: readonly RealtimeVoiceAgentControlMode[] | undefined,
 ): void {
-  if (!speakControlResult || !result || typeof result !== "object") {
+  const record = asOptionalObjectRecord(result);
+  if (!speakControlResult || !record) {
     return;
   }
-  const record = result as Record<string, unknown>;
   const mode =
     typeof record.mode === "string" ? (record.mode as RealtimeVoiceAgentControlMode) : undefined;
   if (mode && suppressSpeechForModes?.includes(mode)) {

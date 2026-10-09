@@ -7,6 +7,7 @@ import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -489,7 +490,11 @@ class SessionStorageSettings extends OpenClawLightDomElement {
           ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/config-agents/sessions#cold-storage")}
         </div>
       `)}
-      <details class="settings-page" ?open=${this.advancedExpanded}>
+      <details
+        class="settings-page"
+        ?open=${this.advancedExpanded}
+        ${shellLayoutTraits({ settingsPage: true })}
+      >
         <summary class="settings-section__heading">
           ${t("configView.sessionStorage.advanced")}
         </summary>
@@ -501,16 +506,4 @@ class SessionStorageSettings extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-session-storage-settings")) {
   customElements.define("openclaw-session-storage-settings", SessionStorageSettings);
-}
-
-export function renderSessionStorage(props: {
-  mutationDisabled: boolean;
-  advancedExpanded: boolean;
-  editor: TemplateResult | typeof nothing;
-}) {
-  return html`<openclaw-session-storage-settings
-    .mutationDisabled=${props.mutationDisabled}
-    .advancedExpanded=${props.advancedExpanded}
-    .editor=${props.editor}
-  ></openclaw-session-storage-settings>`;
 }

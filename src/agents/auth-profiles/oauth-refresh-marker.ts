@@ -105,22 +105,19 @@ export function createOAuthRefreshFence(params: {
     ...rest
   } = params.credential;
   const claimId = randomBytes(16).toString("hex");
+  const marker = (kind: "access" | "refresh", secret: string) =>
+    `${OAUTH_REFRESH_FENCE_PREFIX}${claimId}:${kind}:${buildOAuthRefreshSecretDigest({
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      kind,
+      secret,
+    })}`;
   return {
     ...rest,
     type: "oauth",
     provider: params.credential.provider,
-    access: `${OAUTH_REFRESH_FENCE_PREFIX}${claimId}:access:${buildOAuthRefreshSecretDigest({
-      profileId: params.profileId,
-      provider: params.credential.provider,
-      kind: "access",
-      secret: access,
-    })}`,
-    refresh: `${OAUTH_REFRESH_FENCE_PREFIX}${claimId}:refresh:${buildOAuthRefreshSecretDigest({
-      profileId: params.profileId,
-      provider: params.credential.provider,
-      kind: "refresh",
-      secret: refresh,
-    })}`,
+    access: marker("access", access),
+    refresh: marker("refresh", refresh),
     expires: 1,
   };
 }

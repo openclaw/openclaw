@@ -44,7 +44,6 @@ import {
   selectCurrentPluginMetadataCache,
 } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
@@ -152,6 +151,9 @@ export async function prepareGatewayServerBootstrap(input: {
         signal,
         env: process.env,
         reuseStartupSchemaPreparation: true,
+        agentAdmissionConfig: captureConfigOverrideApplier()(
+          startupConfigSnapshotRead.snapshot.config,
+        ),
         onAgentInspection: (stats) =>
           startupTrace.detail("state.schema-preflight", Object.entries(stats)),
       });
@@ -197,9 +199,6 @@ export async function prepareGatewayServerBootstrap(input: {
     "config.runtime-imports",
     () => import("./server-startup-config.js"),
   );
-  const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
-    cacheRejections: true,
-  });
   const { applyGatewayAuthOverridesForStartupPreflight, loadGatewayStartupConfigSnapshot } =
     await startupConfigModulePromise;
 
@@ -471,27 +470,45 @@ export async function prepareGatewayServerBootstrap(input: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.loadGatewayWorkerEnvironmentStartupState();
         });
-  const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
-    await startupTrace.measure("plugins.bootstrap-imports", loadStartupPluginsModule);
+  const { prepareGatewayPluginBootstrap } = await startupTrace.measure(
+    "plugins.bootstrap-imports",
+    () => import("./server-startup-plugins.js"),
+  );
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
   const resolvePluginGatewayContext = () => pluginGatewayContext.current;
+  const startupSessionDatabases: import("./server-startup-session-migration.js").PreparedStartupSessionDatabase[] =
+    [];
   if (opts.updateCanary) {
     log.warn("candidate gateway: session catalogs and maintenance deferred until activation");
-  } else {
-    await startupTrace.measure("startup.maintenance", () =>
-      runGatewayStartupMaintenance({
-        cfgAtStart,
-        startupRuntimeConfig,
-        minimalTestGateway,
-        log,
-      }),
+  } else if (!minimalTestGateway) {
+    await startupTrace.measure("state.desktop-approval-admission", async () => {
+      const { migrateLegacyDesktopStreamOptOuts } =
+        await import("../infra/device-pairing-node-desktop-migration.js");
+      const retired = await migrateLegacyDesktopStreamOptOuts(cfgAtStart);
+      if (retired > 0) {
+        log.warn(
+          `Preserved disabled desktop access for ${retired} paired node(s); approve their updated desktop capability to enable sharing.`,
+        );
+      }
+    });
+    startupSessionDatabases.push(
+      ...(await startupTrace.measure("sessions.admission", async () => {
+        const { prepareGatewayStartupSessions } =
+          await import("./server-startup-session-migration.js");
+        return prepareGatewayStartupSessions({ cfg: cfgAtStart, env: process.env, log });
+      })),
     );
   }
   publishSystemEventStoreConfig(cfgAtStart);
-  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
-    prepareGatewayPluginBootstrap({
+  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", async () => {
+    if (!opts.updateCanary) {
+      const { initSubagentRegistry } =
+        await import("../agents/subagents/registry/subagent-registry.js");
+      await initSubagentRegistry();
+    }
+    return prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
@@ -499,8 +516,8 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       ambientEnvTriggers,
       log,
-    }),
-  );
+    });
+  });
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
@@ -555,11 +572,11 @@ export async function prepareGatewayServerBootstrap(input: {
     minimalTestGateway,
     ambientEnvTriggers,
     startupTrace,
-    loadStartupPluginsModule,
     configSnapshot,
     startupConfigLoad,
     startupActivationSourceConfig,
     startupRuntimeConfig,
+    startupSessionDatabases,
     cfgAtStart,
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,

@@ -107,14 +107,6 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
   const baseConfig: OpenClawConfig =
     snapshot.valid && snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const mode = opts.mode ?? "local";
-  if (mode !== "local" && mode !== "remote") {
-    rejectOnboardingOption(
-      opts,
-      runtime,
-      `Invalid --mode "${String(mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    return;
-  }
 
   if (isMigrationImport(opts)) {
     // Import flow owns its own commit path because migrations may intentionally

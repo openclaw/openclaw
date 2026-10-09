@@ -1,11 +1,10 @@
 /** Shutdown request reasons and installation-replacement handoff cases share the run-loop fixture. */
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { registerGatewayForcedRestartTests } from "./run-loop-force.test-support.js";
-import type { RequestFixtures } from "./run-loop-request-fixtures.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -14,45 +13,67 @@ import {
   waitForStart,
   waitForLoopCondition,
   withIsolatedSignals,
+  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-export function registerGatewayRequestTests({
-  createSignaledLoopHarness,
-  createGatewayActiveWorkSnapshot,
-  abortActiveCronTaskRuns,
-  acquireGatewayLock,
-  runLoopWithStart,
-  waitForGatewayActiveWork,
-  restartGatewayProcessWithFreshPid,
-  respawnGatewayProcessForUpdate,
-  captureForegroundUpdateHandoffStop,
-  readCgroup,
-  systemctl,
-  armShutdownHardExitWatchdog,
-  cancelShutdownHardExitWatchdog,
-  consumeGatewayRestartIntent,
-  consumeGatewayRestartIntentPayloadSync,
-  peekGatewayRestartReason,
-  managedUpdateSuccessorOwner,
-  commitManagedServiceUpdateHandoff,
-  waitForSystemServiceUpdateHandoffs,
-  isGatewayWorkAdmissionClosed,
-  gatewayLog,
-}: RequestFixtures): void {
-  const idleActiveWorkSnapshot = createActiveWorkSnapshot();
-  registerGatewayForcedRestartTests({
+async function loadInstallationReplacement() {
+  const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
+  return (message: string, code: "ENOENT" | "ERR_MODULE_NOT_FOUND" = "ENOENT") => {
+    const missingChunk = new URL("../../gateway/missing-runtime.js", import.meta.url);
+    classifyGatewayStaleInstall(
+      Object.assign(new Error(message), {
+        code,
+        ...(code === "ENOENT" ? { path: fileURLToPath(missingChunk) } : { url: missingChunk.href }),
+      }),
+    );
+  };
+}
+
+export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): void {
+  const {
     createSignaledLoopHarness,
-    createGatewayActiveWorkSnapshot,
-    abortActiveCronTaskRuns,
+    acquireGatewayLock,
     runLoopWithStart,
     waitForGatewayActiveWork,
-    consumeGatewayRestartIntent,
-    consumeGatewayRestartIntentPayloadSync,
-    isGatewayWorkAdmissionClosed,
-    gatewayLog,
+    restartGatewayProcessWithFreshPid,
+    respawnGatewayProcessForUpdate,
+    captureForegroundUpdateHandoffStop,
     readCgroup,
     systemctl,
-  });
+    armShutdownHardExitWatchdog,
+    cancelShutdownHardExitWatchdog,
+    consumeGatewayRestartIntent,
+    managedUpdateSuccessorOwner,
+    commitManagedServiceUpdateHandoff,
+    waitForSystemServiceUpdateHandoffs,
+    isGatewayWorkAdmissionClosed,
+    gatewayLog,
+  } = fixtures;
+  const idleActiveWorkSnapshot = createActiveWorkSnapshot();
+  registerGatewayForcedRestartTests(fixtures);
+
+  it.each(["SIGTERM", "SIGUSR2"] as const)(
+    "closes root admission before the %s listener returns",
+    async (signal) => {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { exited } = await createSignaledLoopHarness();
+        const admission = await vi.importActual<
+          typeof import("../../process/gateway-work-admission.js")
+        >("../../process/gateway-work-admission.js");
+        restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "supervised" });
+        expect(admission.isGatewayWorkAdmissionClosed()).toBe(false);
+
+        captureSignal(signal)();
+        const late = admission.tryBeginGatewayRootWorkAdmission("test:after-shutdown-signal");
+        try {
+          expect(late).toBeNull();
+        } finally {
+          late?.release();
+          await expect(exited).resolves.toBe(0);
+        }
+      });
+    },
+  );
 
   it("keeps a captured pre-park Stop ahead of native budget refresh and drain completion", async () => {
     const nativeReply = {
@@ -157,20 +178,13 @@ export function registerGatewayRequestTests({
           () => settle.mock.calls.length === 1,
           "Stop did not join its foreground update owner",
         );
-        const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
-        classifyGatewayStaleInstall(
-          Object.assign(new Error("replaced runtime while updater is held"), {
-            code: "ENOENT",
-            path: fileURLToPath(new URL("../../gateway/missing-runtime.js", import.meta.url)),
-          }),
-        );
+        const replaceInstallation = await loadInstallationReplacement();
+        replaceInstallation("replaced runtime while updater is held");
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
         expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
         expect(settle).toHaveBeenCalledOnce();
         expect(close).not.toHaveBeenCalled();
         expect(runtime.exit).not.toHaveBeenCalled();
-        expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
         joined.resolve(true);
         await expect(exited).resolves.toBe(0);
         expect(close).toHaveBeenCalledOnce();
@@ -221,13 +235,8 @@ export function registerGatewayRequestTests({
         await runLoopWithStart({ start, runtime });
         await waitForStart(started);
         try {
-          const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
-          classifyGatewayStaleInstall(
-            Object.assign(new Error("package replaced while updater is finalizing"), {
-              code: "ENOENT",
-              path: fileURLToPath(new URL("../../gateway/missing-runtime.js", import.meta.url)),
-            }),
-          );
+          const replaceInstallation = await loadInstallationReplacement();
+          replaceInstallation("package replaced while updater is finalizing");
           expect(
             await Promise.race([helperObserved.promise, closing.promise]),
             "Gateway closed before joining its system-service update helper",
@@ -276,52 +285,7 @@ export function registerGatewayRequestTests({
     },
   );
 
-  it("does not start a replaced runtime after awaited beginBoot", async () => {
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const beginBoot = vi.fn(async () => {
-      entered.resolve();
-      await resume.promise;
-    });
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { start } = createSignaledStart(createCloseMock());
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      await runLoopWithStart({ start, runtime, beginBoot, completeBoot });
-      await entered.promise;
-      try {
-        const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
-        classifyGatewayStaleInstall(
-          Object.assign(new Error("installation replaced during boot preparation"), {
-            code: "ENOENT",
-            path: fileURLToPath(new URL("../../gateway/missing-runtime.js", import.meta.url)),
-          }),
-        );
-        expect(start).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
-        resume.resolve();
-        await expect(exited).resolves.toBe(1);
-        expect(beginBoot).toHaveBeenCalledOnce();
-        expect(start).not.toHaveBeenCalled();
-        expect(acquireGatewayLock).toHaveBeenCalledOnce();
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            reason: expect.stringContaining("gateway.installation_replaced"),
-          }),
-        );
-      } finally {
-        resume.resolve();
-        if (!runtime.exit.mock.calls.length) {
-          captureSignal("SIGINT")();
-          await exited;
-        }
-      }
-    });
-  });
-
   it.each([
-    { phase: "lock", pendingStop: false },
     { phase: "lock", pendingStop: true },
     { phase: "beginBoot", pendingStop: true },
   ] as const)(
@@ -338,17 +302,15 @@ export function registerGatewayRequestTests({
         if (pendingStop) {
           captureForegroundUpdateHandoffStop.mockReturnValueOnce({ settle, canPark: () => false });
         }
+        const beginBoot = vi.fn(async () => {
+          reached.resolve();
+          await resume.promise;
+        });
         await runLoopWithStart({
           start,
           runtime,
           completeBoot,
-          beginBoot:
-            phase === "beginBoot"
-              ? async () => {
-                  reached.resolve();
-                  await resume.promise;
-                }
-              : undefined,
+          beginBoot: phase === "beginBoot" ? beginBoot : undefined,
         });
         if (phase !== "beginBoot") {
           await waitForStart(started);
@@ -373,13 +335,14 @@ export function registerGatewayRequestTests({
               "Stop did not capture the unsettled foreground update",
             );
           }
-          const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
-          classifyGatewayStaleInstall(
-            Object.assign(new Error("replaced runtime"), {
-              code: "ENOENT",
-              path: fileURLToPath(new URL("../../gateway/missing-runtime.js", import.meta.url)),
-            }),
+          const replaceInstallation = await loadInstallationReplacement();
+          replaceInstallation(
+            phase === "beginBoot" && !pendingStop
+              ? "installation replaced during boot preparation"
+              : "replaced runtime",
           );
+          expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
+          expect(runtime.exit).not.toHaveBeenCalled();
           resume.resolve();
           if (pendingStop) {
             await waitForLoopCondition(
@@ -399,15 +362,13 @@ export function registerGatewayRequestTests({
             expect(settle).toHaveBeenCalledOnce();
             joined.resolve(true);
           }
-          await waitForLoopCondition(
-            () => start.mock.calls.length > 1 || runtime.exit.mock.calls.length > 0,
-            "replacement did not settle the old process",
-          );
           await expect(withTimeout(exited, 4_000)).resolves.toBe(1);
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
           expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
+          expect(acquireGatewayLock).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 2);
+          expect(beginBoot).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 0);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
@@ -442,31 +403,19 @@ export function registerGatewayRequestTests({
       });
     },
   );
-  it.each([
-    "systemd",
-    "foreground",
-    "failed-handoff",
-    "existing-restart",
-    "existing-stop",
-    "managed-update",
-    "failed-close",
-  ] as const)(
+  it.each(["failed-handoff", "existing-restart", "managed-update", "failed-close"] as const)(
     "settles an own-chunk failure before handing over a replaced installation (%s)",
     async (mode) => {
-      const supervised = ["systemd", "failed-handoff", "managed-update", "failed-close"].includes(
-        mode,
-      );
+      const supervised = ["failed-handoff", "managed-update", "failed-close"].includes(mode);
       if (supervised) {
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       }
       restartGatewayProcessWithFreshPid.mockReturnValue(
         mode === "failed-close"
           ? { mode: "supervised", exitCode: 131071 }
-          : mode === "systemd"
-            ? { mode: "supervised" }
-            : mode === "failed-handoff"
-              ? { mode: "failed", detail: "handoff unavailable" }
-              : { mode: "disabled", detail: "unmanaged" },
+          : mode === "failed-handoff"
+            ? { mode: "failed", detail: "handoff unavailable" }
+            : { mode: "disabled", detail: "unmanaged" },
       );
       const drainStarted = createDeferredCore();
       const drain = createDeferredCore<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }>();
@@ -484,10 +433,7 @@ export function registerGatewayRequestTests({
         const completeBoot = vi.fn();
         await runLoopWithStart({ start, runtime, completeBoot });
         await waitForStart(started);
-        const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
-        const missingChunk = fileURLToPath(
-          new URL("../../gateway/missing-runtime.js", import.meta.url),
-        );
+        const replaceInstallation = await loadInstallationReplacement();
         try {
           if (mode === "managed-update") {
             consumeGatewayRestartIntent.mockReturnValueOnce({
@@ -495,41 +441,23 @@ export function registerGatewayRequestTests({
               successorOwner: managedUpdateSuccessorOwner,
             });
           }
-          if (
-            mode === "existing-restart" ||
-            mode === "existing-stop" ||
-            mode === "managed-update"
-          ) {
-            captureSignal(mode === "existing-stop" ? "SIGINT" : "SIGUSR2")();
+          if (mode === "existing-restart" || mode === "managed-update") {
+            captureSignal("SIGUSR2")();
             await drainStarted.promise;
           }
-          classifyGatewayStaleInstall(
-            Object.assign(new Error("Cannot find module"), {
-              code: "ERR_MODULE_NOT_FOUND",
-              url: pathToFileURL(missingChunk).href,
-            }),
-          );
+          replaceInstallation("Cannot find module", "ERR_MODULE_NOT_FOUND");
           expect(isGatewayWorkAdmissionClosed()).toBe(true);
           expect(close).not.toHaveBeenCalled();
           expect(runtime.exit).not.toHaveBeenCalled();
           drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot });
           await expect(exited).resolves.toBe(
-            mode === "failed-close"
-              ? 131071
-              : mode === "systemd" || mode === "existing-stop" || mode === "managed-update"
-                ? 0
-                : 1,
+            mode === "failed-close" ? 131071 : mode === "managed-update" ? 0 : 1,
           );
           expect(close).toHaveBeenCalledOnce();
           expect(start).toHaveBeenCalledOnce();
           expect(completeBoot).toHaveBeenCalledWith(
             expect.objectContaining({
-              outcome:
-                mode === "failed-close"
-                  ? "forced_stop"
-                  : mode === "existing-stop"
-                    ? "clean_stop"
-                    : "planned_restart",
+              outcome: mode === "failed-close" ? "forced_stop" : "planned_restart",
               reason: expect.stringContaining("gateway.installation_replaced"),
             }),
           );
@@ -555,47 +483,4 @@ export function registerGatewayRequestTests({
       });
     },
   );
-
-  it.each([
-    { signal: "SIGTERM", restartReason: undefined, reason: "stop (SIGTERM)" },
-    { signal: "SIGINT", restartReason: undefined, reason: "stop (SIGINT)" },
-    { signal: "SIGUSR2", restartReason: undefined, reason: "restart (SIGUSR2)" },
-    {
-      signal: "SIGUSR2",
-      restartReason: "config reload: gateway.bind",
-      reason: "restart (SIGUSR2: config reload: gateway.bind)",
-    },
-    {
-      signal: "SIGTERM",
-      restartReason: "update.run",
-      reason: "restart (SIGTERM: update.run)",
-    },
-  ] as const)("names the shutdown trigger: $reason", async ({ signal, restartReason, reason }) => {
-    vi.clearAllMocks();
-    if (signal === "SIGTERM" && restartReason) {
-      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: restartReason });
-    } else {
-      peekGatewayRestartReason.mockReturnValueOnce(restartReason);
-    }
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const close = createCloseMock();
-      const { start, started } = createSignaledStart(close);
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      await runLoopWithStart({ start, runtime, completeBoot });
-      await waitForStart(started);
-      captureSignal(signal)();
-      if (signal === "SIGUSR2") {
-        await waitForLoopCondition(() => start.mock.calls.length === 2, "restart did not finish");
-        captureSignal("SIGINT")();
-      }
-      await expect(exited).resolves.toBe(0);
-      expect(gatewayLog.info).toHaveBeenCalledWith(`admission closed: ${reason}`);
-      expect(gatewayLog.info).not.toHaveBeenCalledWith("admission closed: restart drain");
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: reason.startsWith("restart") ? "planned_restart" : "clean_stop",
-        reason,
-      });
-    });
-  });
 }

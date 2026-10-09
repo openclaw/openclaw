@@ -3,10 +3,7 @@ import {
   getSessionBindingService,
   resolveRuntimeConversationBindingRouteAsync,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import {
-  resolveThreadBindingsEnabled,
-  testing as sessionBindingTesting,
-} from "openclaw/plugin-sdk/conversation-runtime";
+import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -35,56 +32,45 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it.each([
-  {
+it("keeps an unbound direct route available while thread bindings are disabled", async () => {
+  const scenario = {
     kind: "direct" as const,
     peerId: "100000000000000009",
     conversationId: "user:100000000000000009",
-  },
-  { kind: "channel" as const, peerId: "100000000000000003", conversationId: "100000000000000003" },
-])(
-  "keeps an unbound $kind route available while thread bindings are disabled",
-  async (scenario) => {
+  };
+  const manager = createNoopThreadBindingManager("work");
+  try {
+    const conversation = {
+      channel: "discord",
+      accountId: "work",
+      conversationId: scenario.conversationId,
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "work",
+      peer: { kind: scenario.kind, id: scenario.peerId },
+    });
     expect(
-      resolveThreadBindingsEnabled({
-        channelEnabledRaw: undefined,
-        sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
-      }),
-    ).toBe(false);
-    const manager = createNoopThreadBindingManager("work");
-    try {
-      const conversation = {
-        channel: "discord",
-        accountId: "work",
-        conversationId: scenario.conversationId,
-      };
-      const route = resolveAgentRoute({
+      inspectDiscordConversationRouteOwner({
         cfg,
-        channel: "discord",
         accountId: "work",
-        peer: { kind: scenario.kind, id: scenario.peerId },
-      });
-      expect(
-        inspectDiscordConversationRouteOwner({
-          cfg,
-          accountId: "work",
-          conversation: { kind: scenario.kind, peerId: scenario.peerId },
-        }),
-      ).toEqual({ kind: "agent", agentId: route.agentId });
-      const resolved = await resolveRuntimeConversationBindingRouteAsync({ route, conversation });
-      expect({ ...resolved, route: Object.fromEntries(Object.entries(resolved.route)) }).toEqual({
-        bindingOwnerAvailable: true,
-        bindingRecord: null,
-        route,
-      });
-      await expect(
-        getSessionBindingService().resolveByConversationAsync(conversation),
-      ).resolves.toBeNull();
-    } finally {
-      await manager.stop();
-    }
-  },
-);
+        conversation: { kind: scenario.kind, peerId: scenario.peerId },
+      }),
+    ).toEqual({ kind: "agent", agentId: route.agentId });
+    const resolved = await resolveRuntimeConversationBindingRouteAsync({ route, conversation });
+    expect({ ...resolved, route: Object.fromEntries(Object.entries(resolved.route)) }).toEqual({
+      bindingOwnerAvailable: true,
+      bindingRecord: null,
+      route,
+    });
+    await expect(
+      getSessionBindingService().resolveByConversationAsync(conversation),
+    ).resolves.toBeNull();
+  } finally {
+    await manager.stop();
+  }
+});
 
 it("keeps only the current disabled owner available and refuses work after retirement", async () => {
   const service = getSessionBindingService();

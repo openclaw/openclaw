@@ -31,8 +31,9 @@ type OutputTestDeps = Pick<
 export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   getRequesterSessionActivity: typeof deliveryRuntime.getSubagentRequesterSessionActivity;
   isEmbeddedAgentRunActive: typeof embeddedRuns.isEmbeddedAgentRunActive;
-  resolveRequesterSessionAbandonment: typeof deliveryRuntime.resolveSubagentRequesterSessionAbandonment;
+  resolveRequesterSessionAbandonment: typeof embeddedRuns.resolveEmbeddedRunAbandonment;
   loadSessionEntry: typeof sessionAccessor.loadSessionEntryReadOnly;
+  loadSessionEntryByKey: typeof deliveryRuntime.loadSessionEntryByKey;
   loadRequesterSessionEntry: typeof deliveryRuntime.loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
     ...args: Parameters<typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync>
@@ -43,13 +44,7 @@ export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   sendMessage: typeof deliveryRuntime.sendSubagentAnnounceMessage;
 };
 
-// An exported reader spy does not replace activity's same-module lookup.
-// Fixtures replacing that reader must also provide their activity observation.
-type DeliveryTestOverrides = Partial<SubagentAnnounceDeliveryTestDeps> &
-  (
-    | { loadRequesterSessionEntry?: undefined }
-    | Pick<SubagentAnnounceDeliveryTestDeps, "getRequesterSessionActivity">
-  );
+type DeliveryTestOverrides = Partial<SubagentAnnounceDeliveryTestDeps>;
 
 type Overrides = Partial<AnnounceTestDeps & OutputTestDeps & SubagentAnnounceDeliveryTestDeps>;
 type Scope = "announce" | "output" | "delivery";
@@ -190,6 +185,13 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       current.loadRequesterSessionEntry,
     );
   }
+  if (current.loadSessionEntryByKey) {
+    install(
+      deliveryRuntime.loadSessionEntryByKey,
+      () => vi.spyOn(deliveryRuntime, "loadSessionEntryByKey"),
+      current.loadSessionEntryByKey,
+    );
+  }
   if (current.getRequesterSessionActivity) {
     install(
       deliveryRuntime.getSubagentRequesterSessionActivity,
@@ -206,8 +208,8 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
   }
   if (current.resolveRequesterSessionAbandonment) {
     install(
-      deliveryRuntime.resolveSubagentRequesterSessionAbandonment,
-      () => vi.spyOn(deliveryRuntime, "resolveSubagentRequesterSessionAbandonment"),
+      embeddedRuns.resolveEmbeddedRunAbandonment,
+      () => vi.spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment"),
       current.resolveRequesterSessionAbandonment,
     );
   }

@@ -1,4 +1,3 @@
-// Utility-model preparation and completion for progress narration.
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -68,6 +67,7 @@ export async function generateNarrationWithUtilityModel(params: {
     signal.throwIfAborted();
     const result = await runIsolatedCompletion({
       ...params.prepared,
+      purpose: "progress-narration",
       config: params.cfg,
       systemPrompt: NARRATION_SYSTEM_PROMPT,
       prompt: buildNarrationUserPrompt(params.input),

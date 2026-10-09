@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -17,29 +18,23 @@ const instance = randomUUID();
 let ownWindowsCreationTime;
 let census;
 let actorLease;
+// Orphan ceiling for every fixture process. The owning test's abort signal ends a
+// supervised run; this only bounds processes whose owner died or never cancels.
+const lifetimeCeilingMs = 60_000;
+let operationDeadline;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
 const recordsDir = path.join(root, "pids");
 const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
+const leaseChannelFile = path.join(root, "lease-channel.json");
+const leaseConnections = new Set();
+let leaseChannel;
+let actorChannel;
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
 const localGit = options.localGit ?? options.performance;
-// Preload identity support before the cleanup handshake; its TypeScript graph
-// uses .js specifiers that native Node type stripping cannot resolve.
-let getFileLockProcessStartTime;
-if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
-  if (process.versions.bun) {
-    ({ getFileLockProcessStartTime } = await import("../../../src/shared/pid-alive.ts"));
-  } else {
-    const { tsImport } = await import("tsx/esm/api");
-    ({ getFileLockProcessStartTime } = await tsImport(
-      "../../../src/shared/pid-alive.ts",
-      import.meta.url,
-    ));
-  }
-}
 const refsFile = path.join(root, "refs.json");
 
 function docsPublisherPackages() {
@@ -133,7 +128,64 @@ function recordCommand(tool, cwd, commandArgs, configuration) {
   );
 }
 
+async function startLeaseChannel(onError, token = instance) {
+  leaseChannel = net.createServer((socket) => {
+    leaseConnections.add(socket);
+    socket.once("close", () => leaseConnections.delete(socket));
+    socket.on("error", () => socket.destroy());
+    let authenticated = false;
+    let input = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      input += chunk;
+      if (!authenticated) {
+        const end = input.indexOf("\n");
+        if (end < 0 && input.length <= 128) {
+          return;
+        }
+        if (end < 0 || input.slice(0, end) !== token || !fs.existsSync(lease)) {
+          socket.destroy();
+          return;
+        }
+        authenticated = true;
+        input = input.slice(end + 1);
+        socket.write("ready\n");
+      }
+      if (input) {
+        if (!/^\.+$/u.test(input)) {
+          socket.destroy();
+          return;
+        }
+        input = "";
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    leaseChannel.once("error", reject);
+    leaseChannel.listen(0, "127.0.0.1", () => {
+      leaseChannel.off("error", reject);
+      leaseChannel.on("error", onError);
+      resolve();
+    });
+  });
+  publish("lease-channel.json", { port: leaseChannel.address().port });
+}
+
+function retireLeaseChannel() {
+  for (const socket of leaseConnections) {
+    socket.destroy();
+  }
+  return new Promise((resolve) => {
+    if (leaseChannel) {
+      leaseChannel.close(resolve);
+    } else {
+      resolve();
+    }
+  });
+}
+
 function notifyPublication() {
+  actorChannel?.write(".");
   if (process.connected && process.send) {
     // The owner can close IPC during cleanup. Its exit and existing watchdog
     // still bound readiness; a closed channel must not crash an orphan actor.
@@ -145,6 +197,7 @@ function publish(name, value) {
   const target = path.join(root, name);
   fs.writeFileSync(`${target}.${process.pid}.tmp`, JSON.stringify(value));
   fs.renameSync(`${target}.${process.pid}.tmp`, target);
+  // Notify only after the authoritative record exists.
   notifyPublication();
 }
 
@@ -162,10 +215,10 @@ function assertActorLease() {
   }
 }
 
-function readWindowsProcessCensus(pids) {
+function readWindowsProcessCensus(pids, deadline = operationDeadline) {
   return mode === "supervise"
-    ? census.read(pids)
-    : requestWindowsProcessCensus(root, actorLease, pids);
+    ? census.read(pids, deadline)
+    : requestWindowsProcessCensus(root, actorLease, pids, deadline);
 }
 
 async function record(pid, role, attempt = 0) {
@@ -198,7 +251,7 @@ function records() {
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-async function liveRecords() {
+async function liveRecords(deadline = operationDeadline) {
   const owned = records().filter(
     (entry) =>
       !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
@@ -211,7 +264,7 @@ async function liveRecords() {
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
   const windowsCensus =
-    process.platform === "win32" ? await readWindowsProcessCensus([...pids]) : undefined;
+    process.platform === "win32" ? await readWindowsProcessCensus([...pids], deadline) : undefined;
   if (windowsCensus) {
     for (const entry of owned) {
       if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
@@ -223,9 +276,9 @@ async function liveRecords() {
     }
   } else {
     // Linux can census the owned PID set in one ps call. Apple ps scans the
-    // whole host for multiple PIDs; keep its singleton queries under one budget.
+    // whole host for multiple PIDs; its singleton queries share the caller's
+    // operation deadline, like the Windows witness.
     const pidLists = process.platform === "linux" ? [[...pids]] : [...pids].map((pid) => [pid]);
-    const deadline = Date.now() + 1_000;
     for (const selectedPids of pidLists) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
@@ -275,8 +328,7 @@ async function liveRecords() {
   });
 }
 
-function isWorkflowDescendant(pid, shellPid) {
-  const deadline = Date.now() + 1_000;
+function isWorkflowDescendant(pid, shellPid, deadline = operationDeadline) {
   const visited = new Set();
   while (pid > 1 && !visited.has(pid)) {
     if (pid === shellPid) return true;
@@ -331,12 +383,10 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
   // Readiness belongs to the owned child's lifetime. The supervisor's existing
   // watchdog bounds startup; an independent short timer can preempt legal Git work.
   return new Promise((resolve, reject) => {
-    const watchers = [];
     let finished = false;
     const finish = (ready, error) => {
       if (finished) return;
       finished = true;
-      for (const watcher of watchers) watcher.close();
       child.off("exit", check);
       child.off("error", fail);
       child.off("message", published);
@@ -359,19 +409,9 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
       }
     };
     try {
-      // Owned Node actors signal after publishing. Directory notifications can
-      // be coalesced before the final rename, leaving a true predicate unwoken.
-      // Subscribe before the initial read so publication cannot fall between them.
-      if (child.channel) {
-        child.on("message", published);
-      } else {
-        // Bash cleanup/backoff waits retain their filesystem notification path.
-        for (const directory of [root, recordsDir]) {
-          const watcher = fs.watch(directory, check);
-          watchers.push(watcher);
-          watcher.on("error", fail);
-        }
-      }
+      // Both callers own an IPC actor that signals after atomic publication.
+      // Subscribe before reading so publication cannot fall between the two.
+      child.on("message", published);
       child.once("exit", check);
       child.once("error", fail);
       check();
@@ -399,27 +439,50 @@ function launch(role, attempt) {
   return child;
 }
 
-function holdLease() {
+async function holdLease() {
   actorLease = fs.readFileSync(lease, "utf8");
   const isLive = () => {
     try {
       return fs.readFileSync(lease, "utf8") === actorLease;
     } catch (error) {
-      if (error.code === "ENOENT") return false;
+      if (error.code === "ENOENT" || error.code === "EPERM") return false;
       throw error;
     }
   };
   // Orphans stop themselves when the supervisor releases the lease; no PID discovery/kills.
   // The independent ceiling also covers a supervisor killed before it can unlink the lease.
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + lifetimeCeilingMs;
   const checkLease = () => {
     if (!isLive() || Date.now() >= deadline) {
       process.exit(0);
     }
   };
-  // Watch the owned root before rereading: replacing or retiring the lease
-  // must wake actors immediately, including a change during registration.
-  fs.watch(root, checkLease);
+  // The supervisor owns this connection across intermediate Git parents exiting.
+  // Its retirement or death closes every actor's channel without filesystem polling.
+  const { port } = JSON.parse(fs.readFileSync(leaseChannelFile, "utf8"));
+  actorChannel = net.createConnection({ host: "127.0.0.1", port });
+  actorChannel.once("close", () => {
+    checkLease();
+    process.exit(0);
+  });
+  await new Promise((resolve, reject) => {
+    let reply = "";
+    actorChannel.once("error", reject);
+    actorChannel.once("connect", () => actorChannel.write(`${actorLease}\n`));
+    actorChannel.setEncoding("utf8");
+    actorChannel.on("data", (chunk) => {
+      reply += chunk;
+      if (!reply.includes("\n") && reply.length <= 128) {
+        return;
+      }
+      if (reply !== "ready\n") {
+        reject(new Error("Fixture lease channel rejected its actor"));
+        return;
+      }
+      checkLease();
+      resolve();
+    });
+  });
   setTimeout(checkLease, Math.max(0, deadline - Date.now()));
   checkLease();
   return deadline;
@@ -451,7 +514,7 @@ function writeConsumer(target, tool) {
 }
 
 async function command() {
-  const actorDeadline = holdLease();
+  operationDeadline = await holdLease();
   const descendant = mode === "child" || mode === "grandchild";
   // Descendants publish their actual attempt below. Replacing a provisional PID
   // record can race a Windows reader and fail before readiness with EPERM.
@@ -463,14 +526,6 @@ async function command() {
   }
   if (mode === "observe") {
     await boundary(args[0]);
-    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
-      publish("backoff-ready.json", true);
-      await until(
-        () => fs.existsSync(path.join(root, "backoff-release.json")),
-        "backoff cancellation acknowledgement",
-        actorDeadline,
-      );
-    }
     process.exit(0);
   }
   if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
@@ -505,13 +560,6 @@ async function command() {
   if (descendant) {
     const attempt = Number(args[0]);
     process.on("SIGTERM", () => {
-      if (
-        options.cancelDuringCleanup &&
-        (!options.cleanupCancelMatch ||
-          fs.existsSync(path.join(root, `cleanup-target-${attempt}.json`)))
-      ) {
-        publish("cleanup-started.json", attempt);
-      }
       if (options.cooperativeTrees) {
         process.exit(0);
       }
@@ -770,14 +818,13 @@ async function command() {
       }
     }
     if (options.cancelDuringCleanup) {
-      const pid = process.ppid;
-      publish("owner.json", { pid, startTime: getFileLockProcessStartTime(pid) });
-      await record(pid, "owner");
+      await record(process.ppid, "owner");
       if (
-        options.cleanupCancelMatch &&
+        !options.cleanupCancelMatch ||
         new RegExp(options.cleanupCancelMatch).test([operation, ...args].join(" "))
       ) {
-        publish(`cleanup-target-${attempt}.json`, attempt);
+        // The rendered owner consumes only its currently spawned command's marker.
+        publish(`cleanup-target-${process.pid}.json`, attempt);
       }
     }
     const child = launch("child", attempt);
@@ -1201,6 +1248,7 @@ async function supervise() {
         : undefined;
       try {
         fs.rmSync(lease, { force: true });
+        const channelClosed = retireLeaseChannel();
         sentinel?.kill("SIGKILL");
         if (shell && shell.exitCode === null && shell.signalCode === null) {
           // Only this fixture's still-owned detached shell group may be signaled.
@@ -1225,7 +1273,7 @@ async function supervise() {
         let closeCutoff;
         try {
           await Promise.race([
-            Promise.all(pendingChildren.values()),
+            Promise.all([...pendingChildren.values(), channelClosed]),
             new Promise((_, reject) => {
               closeCutoff = setTimeout(
                 () => reject(new Error("Timed out waiting for direct child close")),
@@ -1241,7 +1289,7 @@ async function supervise() {
         }
         await until(
           async () => {
-            report.cleanupRemaining = await liveRecords();
+            report.cleanupRemaining = await liveRecords(actorEnd);
             return report.cleanupRemaining.length === 0;
           },
           "fixture cleanup",
@@ -1263,6 +1311,7 @@ async function supervise() {
         }
       }
       if (!cleanupError) {
+        report.cancelledDuringCleanup = fs.existsSync(path.join(root, "cleanup-cancelled.json"));
         report.ownedProcesses = records();
         report.boundaries = fs
           .readFileSync(eventsFile, "utf8")
@@ -1319,9 +1368,18 @@ async function supervise() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
   }
-  const supervisorDeadline = Date.now() + 45_000;
-  setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
+  // The owning test's signal bounds the run: a slow host must not lose a race
+  // against a fixture deadline. Cancellation still runs this owned cleanup.
+  process.on("message", (message) => {
+    if (message?.type === "ci-checkout:cancel") void stop("test cancelled");
+  });
+  operationDeadline = Date.now() + lifetimeCeilingMs;
   try {
+    await startLeaseChannel((error) => void stop(error));
+    if (stopping) {
+      await stopping;
+      return;
+    }
     if (process.platform === "win32") {
       census = createWindowsProcessCensus({
         root,
@@ -1331,7 +1389,7 @@ async function supervise() {
           void stop(error);
         },
       });
-      // Interpreter startup belongs to the existing supervisor watchdog, not a query deadline.
+      // Interpreter startup belongs to the owning test's cancellation, not a query deadline.
       await census.ready;
       if (stopping) {
         await stopping;
@@ -1356,7 +1414,7 @@ async function supervise() {
           cwd: workspace,
           env: { PATH: commandPath },
           encoding: "utf8",
-          timeout: 2_000,
+          timeout: Math.max(1, operationDeadline - Date.now()),
           killSignal: "SIGKILL",
         },
       );
@@ -1450,55 +1508,6 @@ source "$2"`,
     if (shell.pid) {
       await record(shell.pid, "shell");
     }
-    const ready = (name) =>
-      waitForReady(
-        () => fs.existsSync(path.join(root, name)),
-        shell,
-        () => Boolean(stopping),
-      );
-    if (options.cancelDuringCleanup && (await ready("cleanup-started.json"))) {
-      const owner = JSON.parse(fs.readFileSync(path.join(root, "owner.json"), "utf8"));
-      // File policies exec into Bash's PID; raw Git owners are its direct children.
-      // Revalidate the observed birth and exact placement after awaited readiness.
-      if (
-        (owner.pid !== shell.pid &&
-          (options.performance
-            ? !isWorkflowDescendant(owner.pid, shell.pid)
-            : Number(
-                fs
-                  .readFileSync(`/proc/${owner.pid}/status`, "utf8")
-                  .match(/^PPid:\s+(\d+)$/mu)?.[1],
-              ) !== shell.pid)) ||
-        owner.startTime === null ||
-        getFileLockProcessStartTime(owner.pid) !== owner.startTime ||
-        stopping ||
-        shell.exitCode !== null ||
-        shell.signalCode !== null
-      ) {
-        throw new Error("Git owner changed before cleanup cancellation");
-      }
-      process.kill(owner.pid, "SIGTERM");
-      report.cancelledDuringCleanup = true;
-    }
-    if (options.cancelDuringBackoff) {
-      try {
-        await until(
-          () =>
-            Boolean(stopping) ||
-            shell.exitCode !== null ||
-            shell.signalCode !== null ||
-            fs.existsSync(path.join(root, "backoff-ready.json")),
-          "owned backoff readiness",
-          supervisorDeadline,
-        );
-        if (!stopping && shell.exitCode === null && shell.signalCode === null) {
-          await boundary("backoff-cancel");
-          shell.kill("SIGTERM");
-        }
-      } finally {
-        publish("backoff-release.json", true);
-      }
-    }
     const code = await closed;
     if (stopping) {
       // A signal can start cleanup while the supervised shell is closing. Keep
@@ -1535,6 +1544,22 @@ source "$2"`,
 
 if (mode === "supervise") {
   await supervise();
+} else if (mode === "lease-owner") {
+  try {
+    await startLeaseChannel(
+      (error) => {
+        throw error;
+      },
+      fs.readFileSync(lease, "utf8"),
+    );
+    process.stdout.write("ready\n");
+    await new Promise((resolve) => {
+      process.stdin.once("end", resolve);
+      process.stdin.resume();
+    });
+  } finally {
+    await retireLeaseChannel();
+  }
 } else {
   await command();
 }

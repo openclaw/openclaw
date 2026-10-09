@@ -166,7 +166,7 @@ export function createMessageEndContext(
   return ctx;
 }
 
-export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} to be called`);

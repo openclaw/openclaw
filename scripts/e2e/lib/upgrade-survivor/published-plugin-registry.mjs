@@ -4,13 +4,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { inspectNpmPackageTarball } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const [registryDir, destination] = process.argv.slice(2);
 assert(registryDir && destination, "Expected candidate registry and published archive directories");
-const manifest = JSON.parse(
-  fs.readFileSync(path.join(registryDir, "prepublish-plugin-registry.json"), "utf8"),
-);
+const manifest = readJson(path.join(registryDir, "prepublish-plugin-registry.json"));
 const integrity = (file) =>
   `sha512-${createHash("sha512").update(fs.readFileSync(file)).digest("base64")}`;
 

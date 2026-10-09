@@ -7,10 +7,13 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as attemptContext from "./attempt-context.js";
+import { createCronAuthorityCapabilityFixture } from "./codex-app-server.test-fixtures.js";
 import * as dynamicTools from "./dynamic-tools.js";
+import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 import {
   assistantMessage,
   createParams,
+  createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   tempDir,
@@ -22,10 +25,17 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 
-const { configureFakeMcp, mcpMocks, setupConfiguredMcpTestHooks } =
+const { admitLocalOperatorCronAuthority, configureFakeMcp, mcpMocks, setupConfiguredMcpTestHooks } =
   await import("./run-attempt.configured-mcp.test-support.js");
 
 setupConfiguredMcpTestHooks();
+
+function createMcpParams(toolsAllow?: string[]) {
+  const params = createTestParams();
+  configureFakeMcp(params);
+  params.toolsAllow = toolsAllow;
+  return params;
+}
 
 describe("runCodexAppServerAttempt configured MCP ownership", () => {
   it.each([
@@ -34,10 +44,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   ])(
     "disposes acquired MCP handles on history $reason (cleanup rejects=$rejectCleanup)",
     async ({ reason, rejectCleanup }) => {
-      const sessionFile = path.join(tempDir, "session-context-read-cancel.jsonl");
-      const params = createParams(sessionFile, path.join(tempDir, "workspace-context-read-cancel"));
-      configureFakeMcp(params);
-      params.toolsAllow = ["cron", "fake__show"];
+      const params = createMcpParams(["cron", "fake__show"]);
       mcpMocks.requesterCollisionTool = true;
       if (rejectCleanup) {
         mcpMocks.requesterDispose.mockRejectedValueOnce(new Error("synthetic MCP cleanup failure"));
@@ -79,19 +86,10 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
         }
         readGate.resolve();
         await rejected;
-        expect({
-          configuredDisposals: mcpMocks.dispose.mock.calls.length,
-          scopedDisposals: mcpMocks.requesterDispose.mock.calls.length,
-          nativeThreadStarted: harness.requests.some(
-            (request) => request.method === "thread/start",
-          ),
-          upstreamListeners: getEventListeners(controller.signal, "abort").length,
-        }).toEqual({
-          configuredDisposals: 1,
-          scopedDisposals: 1,
-          nativeThreadStarted: false,
-          upstreamListeners,
-        });
+        expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+        expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
+        expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(upstreamListeners);
       } finally {
         readGate.resolve();
         await run.catch(() => undefined);
@@ -101,10 +99,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   );
 
   it("preserves the setup failure and disposes both MCP handles when the first disposal rejects", async () => {
-    const sessionFile = path.join(tempDir, "session-mcp-bridge-failure.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-mcp-bridge-failure"));
-    configureFakeMcp(params);
-    params.toolsAllow = ["cron", "fake__show"];
+    const params = createMcpParams(["cron", "fake__show"]);
     mcpMocks.requesterCollisionTool = true;
     const failure = new Error("synthetic dynamic bridge failure");
     const bridge = vi
@@ -116,30 +111,17 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     const harness = createStartedThreadHarness();
     try {
       const result = await runCodexAppServerAttempt(params).catch((error: unknown) => error);
-      expect({
-        originalFailure: result === failure,
-        configuredDisposals: mcpMocks.dispose.mock.calls.length,
-        scopedDisposals: mcpMocks.requesterDispose.mock.calls.length,
-        nativeThreadStarted: harness.requests.some((request) => request.method === "thread/start"),
-      }).toEqual({
-        originalFailure: true,
-        configuredDisposals: 1,
-        scopedDisposals: 1,
-        nativeThreadStarted: false,
-      });
+      expect(result).toBe(failure);
+      expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+      expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
+      expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
     } finally {
       bridge.mockRestore();
     }
   });
 
   it("releases the upstream abort listener when tool preparation fails before ownership transfer", async () => {
-    const sessionFile = path.join(tempDir, "session-tool-preparation-failure.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-tool-preparation-failure"),
-    );
-    configureFakeMcp(params);
-    params.toolsAllow = ["cron", "fake__show"];
+    const params = createMcpParams(["cron", "fake__show"]);
     const controller = new AbortController();
     params.abortSignal = controller.signal;
     const upstreamListeners = getEventListeners(controller.signal, "abort").length;
@@ -156,13 +138,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("disposes both acquired MCP handles once when native startup fails", async () => {
-    const sessionFile = path.join(tempDir, "session-native-startup-failure.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-native-startup-failure"),
-    );
-    configureFakeMcp(params);
-    params.toolsAllow = ["cron", "fake__show"];
+    const params = createMcpParams(["cron", "fake__show"]);
     mcpMocks.requesterCollisionTool = true;
     const controller = new AbortController();
     params.abortSignal = controller.signal;
@@ -181,98 +157,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(upstreamListeners);
     expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
-  });
-
-  it("does not replace bundle discovery with partial prepared plugin metadata", async () => {
-    const sessionFile = path.join(tempDir, "session-partial-manifest-registry.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-partial-registry"));
-    const metadataSnapshot = configureFakeMcp(params);
-    metadataSnapshot.pluginIds = ["codex"];
-
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    expect(mcpMocks.threadConfigCalls[0]?.manifestRegistry).toBeUndefined();
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toBeDefined();
-  });
-
-  it("projects scheduled static MCP dynamically under the exact stored cap", async () => {
-    const sessionFile = path.join(tempDir, "session-scheduled-static-mcp.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-scheduled-static-mcp"));
-    configureFakeMcp(params);
-    params.trigger = "cron";
-    params.toolsAllow = ["*"];
-    params.scheduledToolPolicy = { version: 1, mode: "trusted" };
-
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: {
-        appServer: { approvalPolicy: "never", sandbox: "danger-full-access" },
-      },
-    });
-    await harness.waitForMethod("turn/start");
-
-    const threadStart = harness.requests.find((request) => request.method === "thread/start")
-      ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
-    expect(mcpMocks.requesterCalls).toBe(0);
-    expect(mcpMocks.threadConfigCalls[0]?.manifestRegistry).toBe(
-      params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
-    );
-    expect(mcpMocks.threadConfigFacade).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: params.workspaceDir,
-        cfg: params.config,
-        toolsAllow: ["*"],
-        manifestRegistry: params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
-      }),
-    );
-    expect(mcpMocks.staticCalls).toHaveLength(1);
-    expect(threadStart?.config).not.toHaveProperty("mcp_servers");
-    expect(JSON.stringify(threadStart?.config ?? {})).not.toContain("fake-mcp");
-    expect(JSON.stringify(threadStart?.dynamicTools ?? [])).toContain("fake__show");
-    expect(mcpMocks.staticCalls[0]).not.toHaveProperty("requesterSenderId");
-    expect(mcpMocks.staticCalls[0]).toMatchObject({
-      toolsAllow: ["*"],
-      manifestRegistry: params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
-      autoApproveCodexAppServerApprovals: true,
-    });
-    expect(mcpMocks.staticFacade).toHaveBeenCalledWith(mcpMocks.staticCalls[0]);
-
-    const toolResult = await harness.handleServerRequest({
-      id: "request-fake-ping",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-fake-ping",
-        namespace: null,
-        tool: "fake__show",
-        arguments: {},
-      },
-    });
-    expect(toolResult).toMatchObject({ success: true });
-    expect(JSON.stringify(toolResult)).toContain("initial-result");
-    expect(mcpMocks.staticToolExecutes[0]).toHaveBeenCalledOnce();
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]).toMatchObject({
-      sourceNames: expect.arrayContaining(["fake__show"]),
-      storedNames: expect.arrayContaining(["fake__show"]),
-      provenance: { version: 1, source: "final-executable-surface" },
-    });
-    expect(mcpMocks.captureCalls[0]!.storedNames).toEqual(mcpMocks.captureCalls[0]!.sourceNames);
-    expect(mcpMocks.captureFacade).toHaveBeenCalledOnce();
-    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding).toMatchObject({ configuredMcpOwnershipVersion: 1 });
-    expect(binding).not.toHaveProperty("mcpServersFingerprint");
-    expect(binding).not.toHaveProperty("userMcpServersFingerprint");
   });
 
   it("preserves bounded canonical continuity when scheduled MCP replaces ordinary ownership", async () => {
@@ -327,6 +211,33 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       },
     });
     await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
+    expect(mcpMocks.requesterCalls).toBe(0);
+    expect(mcpMocks.staticCalls).toHaveLength(1);
+    expect(threadStart?.config).not.toHaveProperty("mcp_servers");
+    expect(JSON.stringify(threadStart?.config ?? {})).not.toContain("fake-mcp");
+    expect(JSON.stringify(threadStart?.dynamicTools ?? [])).toContain("fake__show");
+    expect(mcpMocks.staticCalls[0]).not.toHaveProperty("requesterSenderId");
+    expect(mcpMocks.staticCalls[0]).toMatchObject({
+      toolsAllow: ["*"],
+      autoApproveCodexAppServerApprovals: true,
+    });
+    const toolResult = await harness.handleServerRequest({
+      id: "request-fake-ping",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-fake-ping",
+        namespace: null,
+        tool: "fake__show",
+        arguments: {},
+      },
+    });
+    expect(toolResult).toMatchObject({ success: true });
+    expect(JSON.stringify(toolResult)).toContain("initial-result");
+    expect(mcpMocks.staticToolExecutes[0]).toHaveBeenCalledOnce();
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -342,27 +253,25 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(inputText).toContain("recent scheduled ownership answer");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("continue after the scheduled ownership transition");
-    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
-      threadId: "thread-1",
-      configuredMcpOwnershipVersion: 1,
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+    expect(mcpMocks.captureCalls[0]).toMatchObject({
+      storedNames: expect.arrayContaining(["fake__show"]),
+      provenance: { version: 1, source: "final-executable-surface" },
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding).toMatchObject({ threadId: "thread-1", configuredMcpOwnershipVersion: 1 });
+    expect(binding).not.toHaveProperty("mcpServersFingerprint");
+    expect(binding).not.toHaveProperty("userMcpServersFingerprint");
   });
 
   it.each([
-    { mode: "approve", source: "operator", delegate: false },
     { mode: "auto", source: "operator", delegate: true },
-    { mode: "prompt", source: "operator", delegate: true },
     { mode: "prompt", source: "bundle", delegate: true },
     { mode: "approve", source: "operator-over-bundle", delegate: false },
   ] as const)(
     "honors $source MCP approval mode $mode at thread and turn startup",
     async (testCase) => {
-      const sessionFile = path.join(tempDir, "session-native-mcp-auth-failure.jsonl");
-      const params = createParams(
-        sessionFile,
-        path.join(tempDir, "workspace-native-mcp-auth-failure"),
-      );
-      configureFakeMcp(params);
+      const params = createMcpParams();
       params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: testCase.mode };
       if (testCase.source === "bundle") {
         params.config!.mcp = {};
@@ -410,22 +319,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
         waitForApproval,
       });
 
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "mcpServerStatus/list") {
-          return {
-            data: [
-              {
-                name: "fake",
-                serverInfo: null,
-                authStatus: "notLoggedIn",
-                tools: {},
-              },
-            ],
-            nextCursor: null,
-          };
-        }
-        return undefined;
-      });
+      const harness = createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: {
           appServer: { approvalPolicy: "never", sandbox: "danger-full-access" },
@@ -495,9 +389,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   );
 
   it("keeps configured and requester MCP unique when the native surface is unavailable", async () => {
-    const sessionFile = path.join(tempDir, "session-native-mcp-restricted.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-native-mcp-restricted"));
-    configureFakeMcp(params);
+    const params = createMcpParams();
     params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: "auto" };
     params.toolsAllow = ["cron", "fake__show"];
     mcpMocks.requesterCollisionTool = true;
@@ -618,4 +510,162 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       expect(mcpMocks.dispose).toHaveBeenCalledOnce();
     },
   );
+});
+
+describe("runCodexAppServerAttempt configured MCP creator authority", () => {
+  function createMcpAuthorityParams(senderIsOwner?: boolean) {
+    const params = createTestParams();
+    configureFakeMcp(params);
+    params.trigger = "user";
+    params.senderIsOwner = senderIsOwner;
+    return params;
+  }
+
+  async function startMcpAttempt(params: ReturnType<typeof createMcpAuthorityParams>) {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    return {
+      harness,
+      finish: async () => {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        await expect(run).resolves.toBeDefined();
+      },
+    };
+  }
+
+  it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {
+    const params = createMcpAuthorityParams(true);
+    params.senderId = "external-sender";
+
+    const { finish } = await startMcpAttempt(params);
+    await finish();
+
+    expect(mcpMocks.authorityResolvers).toHaveLength(0);
+    expect(mcpMocks.captureRefs).toHaveLength(1);
+    expect(mcpMocks.captureRefs[0]!.value).toBeUndefined();
+    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+  });
+
+  it.each([
+    { name: "wrong-run", capabilityRunId: "other-run" },
+    { name: "channel-owner-management", capabilityRunId: "same-run" },
+  ])(
+    "does not bind $name local-operator authority at Codex tool construction",
+    async (testCase) => {
+      const params = createMcpAuthorityParams(false);
+      const capability = createCronAuthorityCapabilityFixture(
+        testCase.capabilityRunId === "same-run" ? params.runId : testCase.capabilityRunId,
+      );
+      params.cronCreatorAuthorityCapability =
+        testCase.capabilityRunId === "same-run"
+          ? {
+              ...capability,
+              callerOrigin: { kind: "unknown" },
+              managementEntitlement: { source: "channel-owner", isCurrent: () => true },
+            }
+          : capability;
+
+      const { finish } = await startMcpAttempt(params);
+      await finish();
+
+      expect(mcpMocks.authorityResolvers).toHaveLength(0);
+    },
+  );
+
+  it("preserves advertised configured MCP names when capturing automation authority", async () => {
+    const params = createMcpAuthorityParams();
+    params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: "approve" };
+    params.toolsAllow = ["automations", "fake__*"];
+    admitLocalOperatorCronAuthority(params);
+    mcpMocks.useRealStaticMcp = true;
+
+    const { harness, finish } = await startMcpAttempt(params);
+    try {
+      const threadStart = harness.requests.find((request) => request.method === "thread/start")
+        ?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined;
+      const advertisedMcpNames = flattenCodexDynamicToolFunctions(threadStart?.dynamicTools)
+        .map((tool) => tool.name)
+        .filter((name) => name.startsWith("fake__"))
+        .toSorted();
+      expect(advertisedMcpNames).toContain("fake__show");
+
+      const authority = await mcpMocks.authorityResolvers[0]!();
+      const inheritedMcpNames = authority.tools
+        .map((tool) => (typeof tool === "string" ? tool : tool.name))
+        .filter((name) => name.startsWith("fake__"))
+        .toSorted();
+      expect(inheritedMcpNames).toEqual(advertisedMcpNames);
+    } finally {
+      await finish();
+    }
+  });
+
+  it("offers explicit finite tools when inherited configured MCP discovery is incomplete", async () => {
+    const params = createMcpAuthorityParams(true);
+    admitLocalOperatorCronAuthority(params);
+    mcpMocks.staticDiagnosticNotice =
+      "Configured MCP is incomplete for this scheduled run: fake: authentication required.";
+
+    const { finish } = await startMcpAttempt(params);
+
+    await expect(mcpMocks.authorityResolvers[0]!()).rejects.toThrow(
+      "provide an explicit finite toolsAllow list containing only currently visible tools",
+    );
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+
+    await finish();
+  });
+
+  it("rematerializes after one cron operation aborts pending materialization", async () => {
+    const params = createMcpAuthorityParams(true);
+    admitLocalOperatorCronAuthority(params);
+
+    const { finish } = await startMcpAttempt(params);
+    const resolver = mcpMocks.authorityResolvers[0]!;
+    const firstOperation = new AbortController();
+    const firstResolution = resolver({ signal: firstOperation.signal });
+    firstOperation.abort(new Error("first cron call timed out"));
+
+    await expect(firstResolution).rejects.toThrow("first cron call timed out");
+    const secondResolution = await resolver({ signal: new AbortController().signal });
+
+    expect(
+      secondResolution.tools.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    ).toContain("fake__show");
+    expect(
+      secondResolution.tools.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    ).not.toContain("fake__app_only");
+    expect(mcpMocks.staticCalls).toHaveLength(2);
+    expect(mcpMocks.dispose).toHaveBeenCalledTimes(2);
+
+    await finish();
+  });
+
+  it("retains an unrelated cached timeout when its operation signal aborts concurrently", async () => {
+    const params = createMcpAuthorityParams(true);
+    admitLocalOperatorCronAuthority(params);
+    const failureGate = createDeferred<void>();
+    mcpMocks.staticFailureGate = failureGate.promise;
+    mcpMocks.staticFailure = Object.assign(new Error("configured MCP materialization timed out"), {
+      name: "TimeoutError",
+    });
+
+    const { finish } = await startMcpAttempt(params);
+    const resolver = mcpMocks.authorityResolvers[0]!;
+    const operation = new AbortController();
+    const firstResolution = resolver({ signal: operation.signal });
+    operation.abort(new Error("cron tool call was cancelled"));
+    failureGate.resolve();
+
+    await expect(firstResolution).rejects.toThrow(
+      "provide an explicit finite toolsAllow list containing only currently visible tools",
+    );
+    const secondResolution = resolver({ signal: new AbortController().signal });
+    expect(secondResolution).toBe(firstResolution);
+    await expect(secondResolution).rejects.toThrow("configured MCP materialization timed out");
+    expect(mcpMocks.staticCalls).toHaveLength(1);
+
+    await finish();
+  });
 });

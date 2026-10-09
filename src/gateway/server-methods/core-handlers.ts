@@ -20,6 +20,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
   "claws-packages": () =>
     import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
+  "claws-removal-journal": () =>
+    import("./claws-removal-journal.js").then((module) => module.clawsRemovalJournalHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
@@ -94,6 +96,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),
+  backup: () => import("./backup.js").then((module) => module.backupHandlers),
+  storage: () => import("./storage.js").then((module) => module.storageHandlers),
   push: () => import("./push.js").then((module) => module.pushHandlers),
   restart: () => import("./restart.js").then((module) => module.restartHandlers),
   suspend: () => import("./suspend.js").then((module) => module.suspendHandlers),
@@ -126,6 +130,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>
     import("./sessions-mutations.js").then((module) => module.sessionMutationHandlers),
+  "session-processes": () =>
+    import("./session-processes.js").then((module) => module.sessionProcessHandlers),
   "sessions-read": () => import("./sessions-read.js").then((module) => module.sessionReadHandlers),
   "sessions-rewind": () =>
     import("./sessions-rewind.js").then((module) => module.sessionRewindHandlers),
@@ -135,6 +141,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-subscriptions.js").then((module) => module.sessionSubscriptionHandlers),
   "sessions-suggestions": () =>
     import("./sessions-suggestions.js").then((module) => module.sessionSuggestionHandlers),
+  "sessions-reactions": () =>
+    import("./sessions-reactions.js").then((module) => module.sessionReactionHandlers),
   "session-catalog": () =>
     import("./session-catalog.js").then((module) => module.sessionCatalogHandlers),
   "session-discussion": () =>
@@ -160,6 +168,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () => import("./tools-invoke.js").then((module) => module.toolsInvokeHandlers),
   "mcp-app": () => import("./mcp-app.js").then((module) => module.mcpAppHandlers),
+  "mcp-app-onboarding": () =>
+    import("./mcp-app-onboarding.js").then((module) => module.mcpAppOnboardingHandlers),
+  "mcp-app-extensions": () =>
+    import("./mcp-app-extensions.js").then((module) => module.mcpAppExtensionHandlers),
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
@@ -169,6 +181,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   voicewake: () => import("./voicewake.js").then((module) => module.voicewakeHandlers),
   web: () => import("./web.js").then((module) => module.webHandlers),
   "system-agent": () => import("./system-agent.js").then((module) => module.systemAgentHandlers),
+  "system-agent-approvals": () =>
+    import("./system-agent-approvals.js").then((module) => module.systemAgentApprovalHandlers),
   "system-changes": () =>
     import("./system-changes.js").then((module) => module.systemChangesHandlers),
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),

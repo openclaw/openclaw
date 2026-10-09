@@ -737,10 +737,10 @@ describe("Reef SQLite state", () => {
       approved: true,
       approvalDigest: review.approvalDigest,
     });
-    await stores.delivered.add(receiptId);
-    await expect(openStores(createRuntime(stateDir), keys).delivered.has(receiptId)).resolves.toBe(
-      true,
-    );
+    await stores.delivered.confirm(receiptId);
+    await expect(
+      openStores(createRuntime(stateDir), keys).delivered.status(receiptId),
+    ).resolves.toBe("delivered");
   });
 
   it.each(["lookup", "entries"] as const)(
@@ -813,14 +813,29 @@ describe("Reef SQLite state", () => {
       deliveredMaxEntries: 1,
     });
 
-    await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("new");
-    await stores.replay.consume("alice", "first");
+    await expect(stores.replay.claim("alice", receiptId, "a".repeat(64))).resolves.toBe("new");
+    await stores.replay.complete(
+      "alice",
+      receiptId,
+      signReceipt(
+        {
+          id: receiptId,
+          bodyHash: "a".repeat(64),
+          auditHead: "c".repeat(64),
+          status: "accepted",
+        },
+        keys.signing.secretKey,
+      ),
+      { text: "first" },
+    );
     await expect(stores.replay.claim("alice", "second", "b".repeat(64))).rejects.toThrow();
-    await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("duplicate");
+    await expect(stores.replay.claim("alice", receiptId, "a".repeat(64))).resolves.toBe(
+      "duplicate",
+    );
 
-    await stores.delivered.add("first");
-    await expect(stores.delivered.add("second")).rejects.toThrow();
-    await expect(stores.delivered.has("first")).resolves.toBe(true);
+    await stores.delivered.confirm("first");
+    await expect(stores.delivered.confirm("second")).rejects.toThrow();
+    await expect(stores.delivered.status("first")).resolves.toBe("delivered");
   });
 
   it("fails when a pending review claim does not persist", async () => {
@@ -854,7 +869,7 @@ describe("Reef SQLite state", () => {
         : store;
     };
 
-    await expect(openStores(runtime, keys).delivered.add(receiptId)).rejects.toThrow(
+    await expect(openStores(runtime, keys).delivered.confirm(receiptId)).rejects.toThrow(
       "Failed persisting Reef delivered marker",
     );
   });
@@ -902,15 +917,15 @@ describe("Reef delivered markers", () => {
     const sql = observation.calls;
     const delivered = new ReefDeliveredStore(createRuntime(stateDir));
     await expect(delivered.status("m1")).resolves.toBeUndefined();
-    await expect(delivered.has("m1")).resolves.toBe(false);
     await delivered.confirm("m1");
     await expect(delivered.status("m1")).resolves.toBe("delivered");
-    await expect(delivered.has("m1")).resolves.toBe(true);
     await delivered.confirm("m1");
     await expect(delivered.status("m1")).resolves.toBe("delivered");
-    await delivered.add("m2");
+    await delivered.confirm("m2");
     await expect(delivered.status("m2")).resolves.toBe("delivered");
-    await expect(new ReefDeliveredStore(createRuntime(stateDir)).has("m2")).resolves.toBe(true);
+    await expect(new ReefDeliveredStore(createRuntime(stateDir)).status("m2")).resolves.toBe(
+      "delivered",
+    );
     for (const operation of sql) {
       expect(operation).not.toHaveBeenCalled();
     }
@@ -920,7 +935,7 @@ describe("Reef delivered markers", () => {
     const stores = openStores(createRuntime(stateDir), testKeys(), {
       deliveredMaxEntries: 1,
     });
-    await stores.delivered.add("first"); // delivered namespace full
+    await stores.delivered.confirm("first"); // delivered namespace full
     // Confirming into a full delivered namespace fails closed. No marker is
     // retained, so the re-poll re-ingresses before retrying confirmation.
     await expect(stores.delivered.confirm("second")).rejects.toMatchObject({
@@ -942,6 +957,5 @@ describe("Reef delivered markers", () => {
     });
     legacy.registerIfAbsent("legacy-1", { id: "legacy-1" });
     await expect(stores.delivered.status("legacy-1")).resolves.toBe("delivered");
-    await expect(stores.delivered.has("legacy-1")).resolves.toBe(true);
   });
 });

@@ -1,9 +1,4 @@
-/**
- * Reset command implementation.
- *
- * It removes selected config/state/workspace surfaces after confirmation and
- * stops managed gateway services before deleting broader state.
- */
+// Stop managed Gateway services before deleting broader state.
 import { cancel, confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import {
@@ -11,10 +6,10 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isNixMode, resolveConfigPath } from "../config/config.js";
-import { resolveGatewayService } from "../daemon/service.js";
+import { resolveConfigPath } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
+import { stopGatewayForCleanup } from "./cleanup-service.js";
 import {
   removeAgentSessions,
   removePath,
@@ -24,7 +19,6 @@ import {
 
 type ResetScope = "config" | "config+creds+sessions" | "full";
 
-/** CLI options accepted by `openclaw reset`. */
 type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
@@ -32,37 +26,6 @@ type ResetOptions = {
   dryRun?: boolean;
 };
 
-async function stopGatewayIfRunning(runtime: RuntimeEnv): Promise<boolean> {
-  if (isNixMode) {
-    // Nix mode owns service lifecycle outside OpenClaw-managed launchd/systemd
-    // installs, so reset should not try to stop a service it did not create.
-    return true;
-  }
-  const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    runtime.error(`Gateway service check failed: ${String(err)}`);
-    return false;
-  }
-  if (!loaded) {
-    return true;
-  }
-  try {
-    await service.stop({ env: process.env, stdout: process.stdout });
-    return true;
-  } catch (err) {
-    runtime.error(`Gateway stop failed: ${String(err)}`);
-    return false;
-  }
-}
-
-function logBackupRecommendation(runtime: RuntimeEnv) {
-  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
-}
-
-/** Runs the reset command for config, credential/session, or full state scopes. */
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
@@ -134,10 +97,10 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     return;
   }
 
-  logBackupRecommendation(runtime);
+  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
   if (dryRun) {
     runtime.log("[dry-run] stop gateway service");
-  } else if (!(await stopGatewayIfRunning(runtime))) {
+  } else if (!(await stopGatewayForCleanup(runtime, "reset"))) {
     runtime.exit(1);
     return;
   }

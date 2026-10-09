@@ -1,4 +1,6 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
   type OwnedSessionTranscriptWriteContext,
@@ -13,11 +15,13 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
+  runAbortController?: AbortController;
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "abortSignal"
     | "config"
     | "runId"
+    | "replyOperation"
     | "sessionFile"
     | "sessionId"
     | "sessionKey"
@@ -30,6 +34,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   };
 }): Promise<{
   compactionTimeoutMs: number;
+  assertCronRootCurrent?: () => void;
   ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext;
   transcriptLifecycle: ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
@@ -52,18 +57,34 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   await externalAbortController.throwIfFiredAfterPrepCleanup();
   initialWriter?.assertActive();
 
-  const transcriptLifecycle = createEmbeddedAttemptTranscriptLifecycle({
+  const fencedSessionTarget = {
+    ...sessionTarget,
+    expectedLifecycleRevision: attempt.sessionTarget?.expectedLifecycleRevision,
+    expectedWriterRunId: attempt.sessionTarget?.expectedWriterRunId,
+  };
+  // The stable cron root can rotate while its exact run remains stored. Retain
+  // its admitted generation only for this attempt, before compaction adoption.
+  const generation = await prepareCronRootSessionGeneration(
+    {
+      ...sessionTarget,
+      sessionKey: attempt.sessionKey ?? sessionTarget.sessionKey,
+      lifecycleRevision: fencedSessionTarget.expectedLifecycleRevision,
+    },
+    input.runAbortController ? (reason) => input.runAbortController?.abort(reason) : undefined,
+  );
+  const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
     runId: attempt.runId,
     sessionId: attempt.sessionId,
   });
-  const fencedSessionTarget = {
-    ...sessionTarget,
-    ...(attempt.sessionTarget?.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: attempt.sessionTarget.expectedLifecycleRevision }
-      : {}),
-    ...(attempt.sessionTarget?.expectedWriterRunId !== undefined
-      ? { expectedWriterRunId: attempt.sessionTarget.expectedWriterRunId }
-      : {}),
+  const transcriptLifecycle = {
+    ...lifecycle,
+    dispose: async () => {
+      try {
+        await lifecycle.dispose();
+      } finally {
+        generation?.release();
+      }
+    },
   };
   const assertAdmittedActive = attempt.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
@@ -76,18 +97,15 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: fencedSessionTarget,
+    sessionReader: getReplyOperationSessionReader(attempt.replyOperation),
     ...(initialWriter ? { initialWriter } : {}),
     assertCommitAllowed: () => {
       attempt.abortSignal?.throwIfAborted();
       assertAdmittedActive?.();
+      generation?.assertCurrent();
     },
     withTranscriptWrite,
   };
-  const withOwnedTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
-    withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-      withTranscriptWrite(operation),
-    );
-
   externalAbortController.arm();
   try {
     await externalAbortController.throwIfFiredAfterPrepCleanup();
@@ -98,8 +116,12 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
 
   return {
     compactionTimeoutMs: resolveCompactionTimeoutMs(attempt.config),
+    assertCronRootCurrent: generation ? ownedTranscriptWriteContext.assertCommitAllowed : undefined,
     ownedTranscriptWriteContext,
     transcriptLifecycle,
-    withOwnedTranscriptWrite,
+    withOwnedTranscriptWrite: (operation) =>
+      withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+        withTranscriptWrite(operation),
+      ),
   };
 }

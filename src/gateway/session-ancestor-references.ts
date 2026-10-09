@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { SessionAncestorRef } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type {
+  SessionAncestorRef,
+  SessionRow,
+} from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 
 const MAX_ROWS = 128;
 const MAX_CONTENT_CHARS = 128 * 1024;
@@ -8,7 +10,7 @@ const MAX_CONTENT_CHARS = 128 * 1024;
 type DeliveredAncestor = { key: string; content: string; chars: number; revision: string };
 
 /** Prepare immutable viewer content once, before consulting connection delivery history. */
-export function prepareSessionAncestor(row: GatewaySessionRow) {
+export function prepareSessionAncestor(row: SessionRow) {
   const serialized = JSON.stringify(row.snapshotAt === undefined ? row : { ...row, snapshotAt: 0 });
   return {
     row,
@@ -40,7 +42,7 @@ export class SessionAncestorReferences {
   }
 
   prepare(rows: ReturnType<typeof prepareSessionAncestor>[]) {
-    const ancestorSessions: GatewaySessionRow[] = [];
+    const ancestorSessions: SessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
     let updates: Map<string, DeliveredAncestor | undefined> | undefined;
     for (const { row, identity, content, chars } of rows) {

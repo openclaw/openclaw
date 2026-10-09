@@ -8,6 +8,7 @@ import type {
   WASocket,
 } from "baileys";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
@@ -121,18 +122,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     options.socketTiming.defaultQueryTimeoutMs,
   );
 
-  let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
-  const onClose = new Promise<WebListenerCloseReason>((resolve) => {
-    onCloseResolve = resolve;
-  });
-  const resolveClose = (reason: WebListenerCloseReason) => {
-    if (!onCloseResolve) {
-      return;
-    }
-    const resolver = onCloseResolve;
-    onCloseResolve = null;
-    resolver(reason);
-  };
+  const { promise: onClose, resolve: resolveClose } = createDeferred<WebListenerCloseReason>();
 
   const presence = options.selfChatMode ? "unavailable" : "available";
   try {
@@ -228,6 +218,16 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       () => {},
     );
   };
+
+  const currentSocketOperations = (currentSock: WASocket) =>
+    createWhatsAppSocketOperationTimeoutAdapter(currentSock, sendOperationTimeoutMs, {
+      assertCurrent: () => {
+        if (getCurrentSock() !== currentSock) {
+          throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+        }
+      },
+      onSendMessageTimeout: ({ jid, promise }) => trackLateAcceptedSend(jid, promise),
+    });
 
   let reachoutTimeLock: ReachoutTimelockState | undefined;
   let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
@@ -338,15 +338,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (currentSock) {
         try {
           await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
-          const result = await createWhatsAppSocketOperationTimeoutAdapter(
-            currentSock,
-            sendOperationTimeoutMs,
-            {
-              onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
-                trackLateAcceptedSend(timedOutJid, promise);
-              },
-            },
-          ).sendMessage(jid, content, sendOptions);
+          const result = await currentSocketOperations(currentSock).sendMessage(
+            jid,
+            content,
+            sendOptions,
+          );
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {
@@ -387,10 +383,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await createWhatsAppSocketOperationTimeoutAdapter(
-        currentSock,
-        sendOperationTimeoutMs,
-      ).sendPresenceUpdate(presenceLocal, jid);
+      return await currentSocketOperations(currentSock).sendPresenceUpdate(presenceLocal, jid);
     },
   };
 

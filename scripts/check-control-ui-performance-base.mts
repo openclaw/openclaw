@@ -20,9 +20,17 @@ const COMPARISON_BUILD_ENV = {
   OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
 } satisfies NodeJS.ProcessEnv;
 
-function run(command: string, args: string[], cwd = repoRoot, env = process.env): void {
+function run(
+  command: string,
+  args: string[],
+  cwd = repoRoot,
+  env = process.env,
+  acceptFailure = false,
+): boolean {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
-  if (result.error || result.status !== 0) {
+  // A historical source mismatch may exit nonzero; a signal means no trustworthy
+  // build outcome exists and must never enter the absolute-only fallback.
+  if (result.error || result.signal !== null || (!acceptFailure && result.status !== 0)) {
     throw new Error(
       `${path.basename(command)} failed (${result.signal ?? result.status ?? "launch"})`,
       {
@@ -30,6 +38,7 @@ function run(command: string, args: string[], cwd = repoRoot, env = process.env)
       },
     );
   }
+  return result.status === 0;
 }
 
 function resolveCommit(ref: string): string {
@@ -154,15 +163,30 @@ function main(): void {
     // Both builds use the candidate's toolchain and shared dependencies; only
     // base-only dependencies come from its lockfile. Calling Vite directly
     // keeps historical policy out; one identity isolates source bytes.
-    for (const root of [repoRoot, baseRoot]) {
-      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), buildEnv);
-    }
+    const candidateUiRoot = path.join(repoRoot, "ui");
+    const baseUiRoot = path.join(baseRoot, "ui");
+    const candidateBuildArgs = [
+      viteBin,
+      "build",
+      "--config",
+      path.join(candidateUiRoot, "vite.config.ts"),
+    ];
+    const baseBuildArgs = [viteBin, "build", "--config", path.join(baseUiRoot, "vite.config.ts")];
+    run(process.execPath, candidateBuildArgs, candidateUiRoot, buildEnv);
+    const baseBuildPassed = run(process.execPath, baseBuildArgs, baseUiRoot, buildEnv, true);
     const loader = path.join(repoRoot, "scripts/tsx.mjs");
     run(process.execPath, [
       "--import",
       loader,
       "scripts/check-control-ui-precompressed-assets.mts",
     ]);
+    if (!baseBuildPassed) {
+      console.warn(
+        "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+      );
+      run(process.execPath, ["--import", loader, "scripts/check-control-ui-performance.mts"]);
+      return;
+    }
     const baseDist = path.join(baseRoot, "dist/control-ui");
     const baseAssets = path.join(baseDist, "assets");
     // Normalize historical CSS with the candidate's canonical compressor too:

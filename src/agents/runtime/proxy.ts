@@ -8,11 +8,12 @@ import {
   createSseByteGuard,
   parseStreamingJson,
   parseTerminalToolCallArguments,
-  type SseByteGuard,
   type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withResponseBodyTimeout } from "../../infra/http-response-body-timeout.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -22,7 +23,7 @@ import type {
   StopReason,
   ToolCall,
 } from "../../llm/types.js";
-import { EventStream } from "../../llm/utils/event-stream.js";
+import { AssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
@@ -33,23 +34,6 @@ const PROXY_SSE_READ_IDLE_TIMEOUT_MS = 120_000;
 type StreamingToolCall = ToolCall & {
   partialJson: string;
 };
-
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-  constructor() {
-    super(
-      (event) => event.type === "done" || event.type === "error",
-      (event) => {
-        if (event.type === "done") {
-          return event.message;
-        }
-        if (event.type === "error") {
-          return event.error;
-        }
-        throw new Error("Unexpected event type");
-      },
-    );
-  }
-}
 
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
@@ -138,17 +122,8 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
 
 function sanitizeProxyModel(model: Model): Model {
   const { headers: _headers, ...safeModel } = model;
-  return safeModel as Model;
+  return safeModel;
 }
-
-function resolveProxyReadIdleTimeoutMs(timeoutMs: ProxyStreamOptions["timeoutMs"]): number {
-  return resolvePositiveTimerTimeoutMs(timeoutMs, PROXY_SSE_READ_IDLE_TIMEOUT_MS);
-}
-
-type ProxyRequestAbort = {
-  signal: AbortSignal;
-  clear: () => void;
-};
 
 function createProxyRequestTimeoutError(timeoutMs: number): Error {
   const error = new Error(`Proxy request timed out after ${timeoutMs}ms`);
@@ -156,10 +131,7 @@ function createProxyRequestTimeoutError(timeoutMs: number): Error {
   return error;
 }
 
-function buildProxyRequestAbort(
-  callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): ProxyRequestAbort {
+function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs: number) {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(createProxyRequestTimeoutError(timeoutMs));
@@ -172,24 +144,6 @@ function buildProxyRequestAbort(
       clearTimeout(timeoutId);
     },
   };
-}
-
-function isProxyRequestTimeoutError(params: {
-  error: unknown;
-  callerSignal: AbortSignal | undefined;
-  requestSignal: AbortSignal;
-}): boolean {
-  if (params.callerSignal?.aborted || !params.requestSignal.aborted) {
-    return false;
-  }
-  if (!(params.error instanceof Error)) {
-    return false;
-  }
-  return (
-    params.error.name === "AbortError" ||
-    params.error.name === "TimeoutError" ||
-    params.error.message === "Request was aborted"
-  );
 }
 
 async function readProxyErrorData(
@@ -205,38 +159,6 @@ async function readProxyErrorData(
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
 }
 
-async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read">,
-  readIdleTimeoutMs: number,
-  cancel: (reason?: unknown) => Promise<void>,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const timeoutError = new Error(
-      `Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`,
-    );
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      void cancel(timeoutError);
-      reject(timeoutError);
-    }, readIdleTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (error: unknown) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      },
-    );
-  });
-}
-
 function assertProxySsePendingBufferWithinLimit(buffer: string): void {
   const size = new TextEncoder().encode(buffer).byteLength;
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
@@ -249,8 +171,8 @@ export function streamProxy(
   model: Model,
   context: Context,
   options: ProxyStreamOptions,
-): ProxyMessageEventStream {
-  const stream = new ProxyMessageEventStream();
+): AssistantMessageEventStream {
+  const stream = new AssistantMessageEventStream();
 
   void (async () => {
     const partial: AssistantMessage = {
@@ -268,7 +190,10 @@ export function streamProxy(
     let readerReachedEof = false;
     let cancellation: Promise<void> | undefined;
     let cleanupReason: unknown;
-    const readIdleTimeoutMs = resolveProxyReadIdleTimeoutMs(options.timeoutMs);
+    const readIdleTimeoutMs = resolvePositiveTimerTimeoutMs(
+      options.timeoutMs,
+      PROXY_SSE_READ_IDLE_TIMEOUT_MS,
+    );
     const cancelReader = (reason?: unknown) =>
       reader ? (cancellation ??= reader.cancel(reason).catch(() => undefined)) : Promise.resolve();
     const abortHandler = () => void cancelReader("Request aborted by user");
@@ -291,14 +216,15 @@ export function streamProxy(
       })
         .catch((error: unknown) => {
           if (
-            isProxyRequestTimeoutError({
-              error,
-              callerSignal: options.signal,
-              requestSignal: requestAbort.signal,
-            })
+            !options.signal?.aborted &&
+            requestAbort.signal.aborted &&
+            error instanceof Error &&
+            (error.name === "AbortError" ||
+              error.name === "TimeoutError" ||
+              error.message === "Request was aborted")
           ) {
             throw new Error(`Proxy request timed out after ${readIdleTimeoutMs}ms`, {
-              cause: error instanceof Error ? error : undefined,
+              cause: error,
             });
           }
           throw error;
@@ -352,7 +278,16 @@ export function streamProxy(
       };
 
       while (!terminalEventSeen) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs, cancelReader);
+        const { done, value } = await withResponseBodyTimeout({
+          timeoutMs: readIdleTimeoutMs,
+          onTimeout: () =>
+            new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
+          cancel: cancelReader,
+          read: () =>
+            sseReader.read().catch((error: unknown) => {
+              throw toStringifiedError(error);
+            }),
+        });
         if (done) {
           readerReachedEof = cancellation === undefined;
           break;

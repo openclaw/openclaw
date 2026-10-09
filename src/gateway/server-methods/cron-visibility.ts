@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
 import type { CronJob } from "../../cron/types.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
@@ -9,6 +10,7 @@ import {
 } from "../session-sharing-preparation.js";
 import { prepareProjectedSessionSharing } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { resolveCronJobOwnerAgentId } from "./cron-caller-scope.js";
 import type { GatewayClient } from "./types.js";
 
 type CronSessionVisibility = (sessionKey: string, agentId?: string) => boolean;
@@ -96,9 +98,12 @@ export function cronJobVisibilityTarget(job: CronJob | undefined, defaultAgentId
     job.owner?.sessionKey ??
     resolveCronSessionTargetSessionKey(job.sessionTarget) ??
     job.sessionKey;
-  return sessionKey
-    ? { sessionKey, agentId: job.owner?.agentId ?? job.agentId ?? defaultAgentId }
-    : undefined;
+  if (!sessionKey) {
+    return undefined;
+  }
+  const agentId =
+    resolveCronJobOwnerAgentId(job) ?? tryResolveCronJobEffectiveAgentId(job, defaultAgentId);
+  return agentId ? { sessionKey, agentId } : undefined;
 }
 
 export function cronJobIsVisible(

@@ -11,7 +11,7 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { parseWorkerSlotSummary } from "../../../../src/shared/node-list-parse.js";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
 import type {
   NodeListNode,
   NodeWorkerBundleStatus,
@@ -41,7 +41,6 @@ const hostStatsSchema = z
         stats.diskAvailableBytes <= stats.diskTotalBytes),
   );
 
-/** Typed projection of one raw `node.list` row. */
 type NodeListEntry = NodeListNode & {
   caps: string[];
   commands: string[];
@@ -124,7 +123,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerSlotSummary(raw.workerSlots) ?? undefined,
+    workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,
@@ -159,12 +158,10 @@ function buildEntry(
     roles.push("node");
   }
   const operatorLabel = normalizeOptionalString(device?.operatorLabel);
-  const displayName =
-    normalizeOptionalString(device?.displayName) ?? normalizeOptionalString(node?.displayName);
+  const displayName = normalizeOptionalString(device?.displayName) ?? node?.displayName;
   const clientId = normalizeOptionalString(device?.clientId) ?? node?.clientId;
   return {
     id,
-    // Display precedence: operator label, then client display name, then client id, then device id.
     name: operatorLabel ?? displayName ?? clientId ?? id,
     displayName,
     clientId,
@@ -203,12 +200,12 @@ function buildEntry(
 }
 
 function groupKey(entry: DeviceInventoryEntry): string {
-  const name = entry.displayName?.trim().toLowerCase();
+  const name = entry.displayName?.toLowerCase();
   if (name) {
     return `name:${name}`;
   }
-  const clientId = entry.clientId?.trim().toLowerCase();
-  const clientMode = entry.clientMode?.trim().toLowerCase();
+  const clientId = entry.clientId?.toLowerCase();
+  const clientMode = entry.clientMode?.toLowerCase();
   if (clientId || clientMode) {
     return `client:${clientId ?? ""}:${clientMode ?? ""}`;
   }
@@ -221,25 +218,11 @@ function entryRecency(entry: DeviceInventoryEntry): number {
 }
 
 function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
-  if (left.connected !== right.connected) {
-    return left.connected ? -1 : 1;
-  }
-  const recency = entryRecency(right) - entryRecency(left);
-  if (recency !== 0) {
-    return recency;
-  }
-  return left.id.localeCompare(right.id);
+  const order =
+    Number(right.connected) - Number(left.connected) || entryRecency(right) - entryRecency(left);
+  return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
-function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
-  const order = compareEntries(left.primary, right.primary);
-  if (order !== 0) {
-    return order;
-  }
-  return left.name.localeCompare(right.name);
-}
-
-/** Joins paired devices with node catalog rows and groups duplicate pairings. */
 export function buildDeviceInventory(params: {
   paired: PairedDevice[];
   nodes: Array<Record<string, unknown>>;
@@ -261,24 +244,22 @@ export function buildDeviceInventory(params: {
       }
     }
   }
-  const entries: DeviceInventoryEntry[] = [];
-  const seen = new Set<string>();
+  const entries = new Map<string, DeviceInventoryEntry>();
   for (const device of params.paired) {
     const id = normalizeOptionalString(device.deviceId);
-    if (!id || seen.has(id)) {
+    if (!id || entries.has(id)) {
       continue;
     }
-    seen.add(id);
-    entries.push(buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
+    entries.set(id, buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
   }
   for (const [id, node] of nodesById) {
-    if (!seen.has(id)) {
-      entries.push(buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
+    if (!entries.has(id)) {
+      entries.set(id, buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
     }
   }
 
-  const groupsByKey = new Map<string, DeviceInventoryEntry[]>();
-  for (const entry of entries) {
+  const groupsByKey = new Map<string, [DeviceInventoryEntry, ...DeviceInventoryEntry[]]>();
+  for (const entry of entries.values()) {
     const key = groupKey(entry);
     const bucket = groupsByKey.get(key);
     if (bucket) {
@@ -288,21 +269,14 @@ export function buildDeviceInventory(params: {
     }
   }
 
-  const groups: DeviceInventoryGroup[] = [];
-  for (const [key, bucket] of groupsByKey) {
-    const sorted = bucket.toSorted(compareEntries);
-    const primary = sorted[0];
-    if (!primary) {
-      continue;
-    }
-    groups.push({
-      key,
-      name: primary.name,
-      primary,
-      duplicates: sorted.slice(1),
-    });
-  }
-  return groups.toSorted(compareGroups);
+  const groups = [...groupsByKey].flatMap(([key, bucket]) => {
+    const [primary, ...duplicates] = bucket.toSorted(compareEntries);
+    return primary ? [{ key, name: primary.name, primary, duplicates }] : [];
+  });
+  return groups.toSorted((left, right) => {
+    const order = compareEntries(left.primary, right.primary);
+    return order !== 0 ? order : left.name.localeCompare(right.name);
+  });
 }
 
 /**
@@ -331,7 +305,6 @@ export function listStaleInventoryEntries(groups: DeviceInventoryGroup[]): Devic
   );
 }
 
-/** Returns the Gateway self beacon, when present in the current snapshot. */
 export function findGatewayPresence(presence: PresenceEntry[]): PresenceEntry | undefined {
   return presence.find((entry) => normalizeOptionalString(entry.mode)?.toLowerCase() === "gateway");
 }
@@ -377,7 +350,6 @@ export function listUnpairedPresence(
   });
 }
 
-/** Which pairing stores a removal must touch for this entry. */
 export function resolveInventoryRemoval(entry: DeviceInventoryEntry): {
   removeNode: boolean;
   removeDevice: boolean;
