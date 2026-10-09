@@ -33,7 +33,7 @@ const processes = new Map<number, KernelProcess>();
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let onPs: ((pid?: number) => void) | undefined;
-let onSignal: ((pid: number, signal: NodeJS.Signals | number | undefined) => void) | undefined;
+let onSignal: ((...args: Parameters<typeof process.kill>) => void) | undefined;
 
 function add(pid: number, overrides: Partial<KernelProcess> = {}) {
   const entry: KernelProcess = {
