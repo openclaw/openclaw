@@ -8,6 +8,7 @@ import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-
 import type { SessionTranscriptWriteScope } from "../config/sessions/session-accessor.types.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -422,7 +423,7 @@ function appendVoiceTranscript(
                 ? turn?.appendedMessages[0]
                 : await appendTranscriptMessage(transcriptTarget, {
                     ...messageOptions,
-                    beforeFreshMessageCommit: assertFresh,
+                    preparation: { source: composeSessionSourceAssertion([assertFresh]) },
                   });
               if (!appended) {
                 throw new Error("agent session changed before voice transcript append");
