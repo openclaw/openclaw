@@ -125,8 +125,14 @@ type CreateModelAuthAvailabilityResolverParams = {
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
-  /** Ids a ready account listing returned, including hidden rows; absent when not listed. */
-  accountListedModelIds?: (provider: string) => ReadonlySet<string> | undefined;
+  /**
+   * Ids the credential's own ready account listing returned, including hidden rows; absent when
+   * that credential has no ready listing. Another account's listing says nothing about this one.
+   */
+  accountListedModelIds?: (
+    provider: string,
+    profileId: string | undefined,
+  ) => ReadonlySet<string> | undefined;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -1064,13 +1070,24 @@ export function createModelAuthAvailabilityResolver(
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
-    const accountListedModelIds = params.accountListedModelIds?.(provider);
-    if (
-      accountListedModelIds &&
+    const subscriptionSelection =
       routeResolution.routes.length > 1 &&
       routeAuthDecision.kind === "selected" &&
       routeAuthDecision.selection.kind === "selected" &&
-      routeAuthDecision.selection.route.authRequirement === "subscription" &&
+      routeAuthDecision.selection.route.authRequirement === "subscription"
+        ? routeAuthDecision.selection
+        : undefined;
+    const accountListedModelIds =
+      subscriptionSelection &&
+      params.accountListedModelIds?.(
+        provider,
+        subscriptionSelection.source.kind === "profile"
+          ? subscriptionSelection.source.profileId
+          : undefined,
+      );
+    if (
+      subscriptionSelection &&
+      accountListedModelIds &&
       !accountListedModelIds.has(normalizeLowercaseStringOrEmpty(ref.modelId))
     ) {
       // The ready account listing did not return this dual-route id, so its subscription route
@@ -1090,7 +1107,7 @@ export function createModelAuthAvailabilityResolver(
         return {
           availability: false,
           routeResolution,
-          selectedRoute: routeAuthDecision.selection.route,
+          selectedRoute: subscriptionSelection.route,
         };
       }
     }

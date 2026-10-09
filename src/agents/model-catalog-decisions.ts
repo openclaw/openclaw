@@ -304,13 +304,15 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
-    // Read at evaluation time: selected-account discovery replaces outcomes in place.
-    accountListedModelIds: (provider) => {
+    // Read at evaluation time: selected-account discovery replaces outcomes in place. Entitlement
+    // is per account, so only the listing discovery made with this exact credential applies.
+    accountListedModelIds: (provider, profileId) => {
       let listed: Set<string> | undefined;
       for (const outcome of providerOutcomes) {
         if (
           outcome.status === "ready" &&
           outcome.listedModelIds &&
+          outcome.profileId === profileId &&
           normalizeProviderId(outcome.provider) === provider
         ) {
           listed ??= new Set();
