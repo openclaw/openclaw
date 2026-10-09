@@ -165,7 +165,7 @@ export async function runDoctorPluginConvergence(params: {
     quarantinedPlugins,
     ...(migrationInspection.requiredPluginIds.length > 0 ||
     migrationInspection.inspectionRequiredPluginIds.length > 0 ||
-    migrationInspection.statelessPluginIds.length > 0
+    migrationInspection.statelessPlugins.length > 0
       ? { migrationInspection }
       : {}),
     ...(deferredPlugins.size > 0 ? { deferredPlugins: [...deferredPlugins.values()] } : {}),
