@@ -17,7 +17,6 @@ import {
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
 import {
-  DeferredPluginSessionImportSchema,
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
@@ -51,6 +50,7 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,
@@ -80,6 +80,9 @@ export function retireDeferredPluginSessionImport(
     return;
   }
   const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
+  if (recorded.superseded) {
+    return;
+  }
   const hasRemainingSources = () =>
     statMigrationPath(params.target.storePath) ||
     recorded.sources.some((source) => statMigrationPath(source.path));

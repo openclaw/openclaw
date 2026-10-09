@@ -220,10 +220,6 @@ describe("retained session receipt recovery", () => {
       fs.writeFileSync(backupPaths[1]!, bytes);
 
       fs.writeFileSync(source, "");
-      closeOpenClawAgentDatabasesForTest();
-      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-      fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
-      fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
       const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
       const issues = recovered.targets.flatMap((target) => target.issues);
       expect(issues).not.toContainEqual(

@@ -751,6 +751,7 @@ async function inspectOrMigrateTarget(params: {
     }
     records = records.filter((record) => {
       if (!snapshot.snapshot.archivedSessionIds.has(record.entry.sessionId)) {
+        record.preserveCurrentSession = true;
         return true;
       }
       issues.push({
@@ -760,9 +761,6 @@ async function inspectOrMigrateTarget(params: {
       });
       return false;
     });
-    for (const record of records) {
-      record.preserveCurrentSession = true;
-    }
   }
   const referencedTranscriptFiles = new Set(
     allRecords.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),

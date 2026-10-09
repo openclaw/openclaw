@@ -7,15 +7,25 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  readDeferredPluginSessionImportReceipt,
+  rebuildDeferredPluginSessionSourceIndex,
+} from "../infra/deferred-plugin-session-sources.js";
+import * as sessionVerification from "../infra/deferred-plugin-session-verification.js";
 import * as migrationArtifacts from "../infra/session-sqlite-migration-artifact.js";
 import { readOnlySqliteValidationSnapshot } from "../infra/session-sqlite-migration-readers.js";
 import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.session-store.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { seedStaleDeferredPluginSessionImport } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import {
+  seedDeferredPluginSessionSource,
+  seedStaleDeferredPluginSessionImport,
+} from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 it.each([
@@ -232,3 +242,64 @@ it("keeps canonical ACP metadata authoritative on the next Doctor pass", async (
     ).toEqual({ count: 0 });
   });
 });
+
+it.each(["receipt", "physical", "foreign"] as const)(
+  "only supersedes a foreign binding before verification (%s receipt)",
+  async (binding) => {
+    await withOpenClawTestState({ label: "receipt-verification-io" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
+      await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
+      const params = { cfg, target: { agentId: "main", storePath }, sqlitePath, env: state.env };
+      const original = readDeferredPluginSessionImportReceipt(params)!;
+      const recorded = JSON.parse(original.reportJson);
+      recorded.databaseIdentity =
+        binding === "foreign"
+          ? "123:456"
+          : sessionVerification.databaseIdentity(sqlitePath, binding);
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          db.prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?").run(
+            JSON.stringify(recorded),
+            original.sourceKey,
+          );
+        },
+        { env: state.env },
+      );
+      const before = readDeferredPluginSessionImportReceipt(params);
+      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      fs.writeFileSync(source, "");
+      const failure = new Error("EIO: fixture database verification read failed");
+      const verify = vi
+        .spyOn(sessionVerification, "verifyDeferredSessionDatabase")
+        .mockRejectedValue(failure);
+      try {
+        if (binding === "foreign") {
+          await expect(rebuildDeferredPluginSessionSourceIndex(params)).resolves.toBe(true);
+          expect(verify).not.toHaveBeenCalled();
+          expect(readDeferredPluginSessionImportReceipt(params)).toMatchObject({
+            removedSource: false,
+            reportJson: expect.stringContaining('"superseded":"different-database"'),
+          });
+        } else {
+          await expect(rebuildDeferredPluginSessionSourceIndex(params)).rejects.toBe(failure);
+          expect(verify).toHaveBeenCalledOnce();
+          expect(readDeferredPluginSessionImportReceipt(params)).toEqual(before);
+          expect(
+            withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) =>
+                db
+                  .prepare(
+                    "SELECT count(*) AS count FROM migration_runs WHERE status = 'superseded'",
+                  )
+                  .get(),
+              { env: state.env },
+            ),
+          ).toEqual({ count: 0 });
+        }
+      } finally {
+        verify.mockRestore();
+      }
+    });
+  },
+);
