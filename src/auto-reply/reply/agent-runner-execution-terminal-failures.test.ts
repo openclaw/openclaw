@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
@@ -11,10 +16,12 @@ import {
   AgentHarnessSessionSupersededError,
 } from "../../agents/harness/errors.js";
 import {
+  createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
   createSessionPlacementSettlementClosedAbortError,
 } from "../../agents/run-termination.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -34,6 +41,7 @@ import {
   requireMockCall,
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
+  type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { createReplyOperation } from "./reply-run-registry.js";
@@ -376,6 +384,88 @@ describe("executeAgentTurn: terminal failures", () => {
       } finally {
         replyOperation.complete();
         failMock.mockRestore();
+      }
+    },
+  );
+
+  it.for([false, true])(
+    "preserves the prior terminal row when cancellation precedes execution (started=%s)",
+    async (started, { signal }) => {
+      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const { emitAgentEvent } = await import("../../infra/agent-events.js");
+      const reachedBoundary = createDeferred();
+      const release = createDeferred();
+      const upstreamAbort = new AbortController();
+      const replyOperation = createReplyOperation({
+        sessionKey: "agent:main:cancel-boundary",
+        sessionId: "cancel-boundary",
+        resetTriggered: false,
+        upstreamAbortSignal: upstreamAbort.signal,
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        if (started) {
+          await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+          params.onExecutionPhase?.({
+            phase: "model_call_started",
+            provider: "openai",
+            model: "gpt-5.4",
+          });
+        }
+        reachedBoundary.resolve();
+        await release.promise;
+        upstreamAbort.signal.throwIfAborted();
+        throw new Error("Cancellation must stop this candidate");
+      });
+      const pending = executeAgentTurn({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+        opts: { abortSignal: upstreamAbort.signal },
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            reachedBoundary.promise,
+            pending,
+            "Candidate never reached cancellation boundary",
+          ),
+          signal,
+        );
+        upstreamAbort.abort(createAgentRunDirectAbortError());
+        release.resolve();
+        const result = await pending;
+        expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+        const terminals = vi
+          .mocked(emitAgentEvent)
+          .mock.calls.map(([event]) => event)
+          .filter(
+            (event) =>
+              event.runId === result.runId &&
+              event.stream === "lifecycle" &&
+              event.data.phase === "error",
+          );
+        expect(terminals).toHaveLength(1);
+        const terminal = terminals[0]!;
+        const patch = deriveGatewaySessionLifecycleProjectionPatch({
+          entry: {
+            updatedAt: 2,
+            startedAt: 1,
+            endedAt: 2,
+            lastRunId: "prior-completed-run",
+            lastRunError: "prior timeout",
+          },
+          event: { ...terminal, ts: 3 },
+        });
+        if (started) {
+          expect(terminal.data.executionStarted).not.toBe(false);
+          expect(patch).toMatchObject({ status: "killed", abortedLastRun: true });
+        } else {
+          expect(patch).toEqual({});
+          expect(terminal.data).toMatchObject({ executionStarted: false, providerStarted: false });
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => undefined);
+        replyOperation.complete();
       }
     },
   );

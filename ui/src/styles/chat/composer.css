@@ -2303,8 +2303,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   transform: rotate(0deg);
 }
 
-.chat-controls__provider-toggle[aria-expanded="true"] .chat-controls__inline-select-chevron,
-.chat-controls__model-more-toggle[aria-expanded="true"] .chat-controls__inline-select-chevron {
+.chat-controls__provider-toggle[aria-expanded="true"] .chat-controls__inline-select-chevron {
   transform: rotate(180deg);
 }
 
@@ -2454,10 +2453,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   font-size: 12px;
   font-weight: 600;
   cursor: var(--cursor-action);
-}
-
-.chat-controls__model-more-label {
-  flex: 1 1 auto;
 }
 
 .chat-controls__model-option[data-chat-model-highlighted] {

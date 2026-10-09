@@ -14,7 +14,7 @@ import {
   createPluginGenerationCapture,
   createPluginGenerationSourceLookup,
   createPluginSourceFacts,
-  createPluginSourceVerification,
+  assertPluginSourceRootCurrent,
   type PluginSourceCustodyFork,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
@@ -639,13 +639,11 @@ function createPluginGenerationArtifact(
       );
       capturedPaths.set(alias, capturedPaths.get(entry)!);
     }
-    const assertSourceCurrent = createPluginSourceVerification(
-      { rootDir, sourceRoot, entryFile, entry },
-      () => {
-        nativeAdmission.reconcileSourceInputs(inputs);
-        verifyPluginSourceInputs(inputs, inputs.keys());
-      },
-    );
+    const assertSourceCurrent = () => {
+      assertPluginSourceRootCurrent({ rootDir, sourceRoot, entryFile, entry });
+      nativeAdmission.reconcileSourceInputs(inputs);
+      verifyPluginSourceInputs(inputs, inputs.keys());
+    };
     const initialReceipt = receipt.finish();
     assertSourceCurrent();
     nativeAdmission.finish(initialReceipt);

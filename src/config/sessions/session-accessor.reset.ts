@@ -18,6 +18,8 @@ import type {
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
+import { withSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   captureLifecycleDatabaseScope,
@@ -247,6 +249,7 @@ function createStaleReplySessionInitializationResult(
 
 /** Persists one reply-session initialization result with its in-place reset boundary. */
 export async function commitReplySessionInitialization(params: {
+  bindCreation?: (operation: SessionEntryCreationOperation) => () => void;
   commitGuard?: () => void;
   activeSessionKey: string;
   agentId: string;
@@ -359,7 +362,39 @@ export async function commitReplySessionInitialization(params: {
         params.commitGuard?.();
       },
     };
-    await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
+    const bindCreation = params.bindCreation;
+    if (bindCreation) {
+      if (currentEntry || !source?.key.startsWith("file:")) {
+        throw new Error("The original absent session no longer has its prepared creation source");
+      }
+      await withSessionEntryCreationPublication(
+        {
+          agentId: params.agentId,
+          sessionKey: resolved.normalizedKey,
+          file: {
+            path: database.path,
+            agentId: captured.agentId,
+            databaseIdentity: source.key.slice("file:".length),
+            assertCurrent: assertSourceCurrent,
+          },
+        },
+        async (operation) => {
+          const assertCreationCurrent = bindCreation(operation);
+          await applySessionEntryLifecycleMutation(
+            {
+              ...mutation,
+              commitGuard: () => {
+                mutation.commitGuard();
+                assertCreationCurrent();
+              },
+            },
+            { ...captured, path: database.path },
+          );
+        },
+      );
+    } else {
+      await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
+    }
   } catch (error) {
     if (
       !(error instanceof SessionMaintenancePreservationConflictError) &&

@@ -160,9 +160,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        // A heartbeat may consume only its prepared generic selection, never
-        // dedicated reminders or arrivals that were not part of this turn.
-        events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
+        // Producer-owned turns consume only their captured occurrence selection.
+        events:
+          context.isHeartbeat || opts?.internalEventExecution
+            ? (eventContext?.events ?? [])
+            : undefined,
         deferredEventIds: context.isHeartbeat ? eventContext?.deferredEventIds : undefined,
         onEventsAdmitted: context.isHeartbeat ? eventContext?.onEventsAdmitted : undefined,
       });
@@ -208,11 +210,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           skillFilter: opts?.skillFilter,
           skillOverrides: opts?.skillOverrides,
           assertCurrent: composeSessionSourceAssertion(
-            [opts?.operatorAuthority?.assertCurrent],
-            (assertOperatorCurrent) => {
+            [opts?.operatorAuthority?.assertCurrent, opts?.internalEventExecution?.assertCurrent],
+            (assertSourceCurrent) => {
               opts?.abortSignal?.throwIfAborted();
               opts?.replyOperation?.abortSignal.throwIfAborted();
-              assertOperatorCurrent();
+              assertSourceCurrent();
               if (opts?.replyOperation?.result) {
                 throw new Error("Reply operation ended while preparing skills");
               }
@@ -441,6 +443,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       configuredProfileId: params.configuredProfileId,
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
+      reader:
+        providedReplyOperation?.key === authSessionKey
+          ? getReplyOperationSessionReader(providedReplyOperation)
+          : undefined,
       sessionEntry: authSessionEntry,
       sessionStore: authSessionStore,
       sessionKey: authSessionKey,

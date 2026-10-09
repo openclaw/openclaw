@@ -52,6 +52,14 @@ type SourceCustody = {
 };
 export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
 type SourceRoot = { rootDir: string; sourceRoot: string; entryFile?: string; entry?: string };
+type PluginGenerationCaptureArguments = [
+  rootDir: string,
+  entryFile?: string,
+  execute?: <V>(run: () => V) => V,
+  moduleSource?: (filename: string) => string,
+  nativeRecovery?: PluginNativeRecovery,
+  dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+];
 const sourceCustody = new AsyncLocalStorage<{
   sources: Map<string, SourceCustody>;
   closed: boolean;
@@ -90,35 +98,20 @@ export function createPluginGenerationCapture<
   },
 >(
   create: (
-    rootDir: string,
-    entryFile?: string,
-    execute?: <V>(run: () => V) => V,
-    moduleSource?: (filename: string) => string,
-    nativeRecovery?: PluginNativeRecovery,
-    dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
-    retained?: PluginSourceCustodyFork,
-    captureForCustody?: boolean,
+    ...args: [
+      ...PluginGenerationCaptureArguments,
+      retained?: PluginSourceCustodyFork,
+      captureForCustody?: boolean,
+    ]
   ) => T,
 ) {
-  return (
-    rootDir: string,
-    entryFile?: string,
-    execute?: <V>(run: () => V) => V,
-    moduleSource?: (filename: string) => string,
-    nativeRecovery?: PluginNativeRecovery,
-    dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
-  ): T => {
+  return (...args: PluginGenerationCaptureArguments): T => {
+    const [rootDir, entryFile, execute, moduleSource, nativeRecovery, dependencyLookupBoundary] =
+      args;
     const custody =
       execute && !nativeRecovery && !dependencyLookupBoundary && sourceCustody.getStore();
     if (!custody) {
-      return create(
-        rootDir,
-        entryFile,
-        execute,
-        moduleSource,
-        nativeRecovery,
-        dependencyLookupBoundary,
-      );
+      return create(...args);
     }
     if (custody.closed) {
       throw new Error("Plugin source custody has been closed");
@@ -172,19 +165,18 @@ export function createPluginGenerationCapture<
   };
 }
 
-export function createPluginSourceVerification(
-  { rootDir, sourceRoot, entryFile, entry }: SourceRoot,
-  verify: () => void,
-): () => void {
-  return () => {
-    if (
-      fs.realpathSync(rootDir) !== sourceRoot ||
-      (entryFile && fs.realpathSync(entryFile) !== entry)
-    ) {
-      throw new Error("Plugin source root changed after capture");
-    }
-    verify();
-  };
+export function assertPluginSourceRootCurrent({
+  rootDir,
+  sourceRoot,
+  entryFile,
+  entry,
+}: SourceRoot): void {
+  if (
+    fs.realpathSync(rootDir) !== sourceRoot ||
+    (entryFile && fs.realpathSync(entryFile) !== entry)
+  ) {
+    throw new Error("Plugin source root changed after capture");
+  }
 }
 
 function createRetainedSourceVerification(
@@ -195,7 +187,8 @@ function createRetainedSourceVerification(
   missingFiles: readonly string[],
   fileProbes: ReadonlyMap<string, string | undefined>,
 ): () => void {
-  return createPluginSourceVerification(root, () => {
+  return () => {
+    assertPluginSourceRootCurrent(root);
     for (const { source, input } of sources) {
       const canonical = fs.realpathSync(source);
       const inputs = new Map([[canonical, input]]);
@@ -232,7 +225,7 @@ function createRetainedSourceVerification(
         throw new Error("Plugin legacy entry selection changed after capture");
       }
     }
-  });
+  };
 }
 
 function resolveModuleTarget(resolved: string | undefined): string | undefined {
@@ -373,30 +366,14 @@ function createRecoverySourceResolver(
   };
 }
 
-function createRecoverySourceDisposal(
-  recovery: ReturnType<typeof createPluginSourceCapture>,
-  native?: PluginNativeRecovery,
-) {
-  return {
-    dispose: () => {
-      try {
-        recovery.dispose();
-      } finally {
-        native?.dispose();
-      }
-    },
-    disposeAsync: async () => {
-      await Promise.all([recovery.disposeAsync(), ...(native ? [native.disposeAsync()] : [])]);
-    },
-  };
-}
-
-export type PluginRecoverySource = ReturnType<typeof createRecoverySourceDisposal> & {
+export type PluginRecoverySource = {
   rootDir: string;
   sourceCapture: ReturnType<typeof createPluginSourceCapture>;
   native?: PluginNativeRecovery;
   resolve: (source: string) => string;
   fork: () => PluginRecoverySource;
+  dispose: () => void;
+  disposeAsync: () => Promise<void>;
 };
 
 function copyRecoverySource({
@@ -456,7 +433,6 @@ function copyRecoverySource({
     const sourceCapture = recovery;
     const root = relocate(capturedRoot);
     let disposed = false;
-    const disposal = createRecoverySourceDisposal(sourceCapture, native);
     return {
       rootDir: root,
       sourceCapture,
@@ -481,20 +457,24 @@ function copyRecoverySource({
       dispose() {
         if (!disposed) {
           disposed = true;
-          disposal.dispose();
+          try {
+            sourceCapture.dispose();
+          } finally {
+            native?.dispose();
+          }
         }
       },
       async disposeAsync() {
         if (!disposed) {
           disposed = true;
-          await disposal.disposeAsync();
+          await Promise.all([sourceCapture.disposeAsync(), native?.disposeAsync()]);
         }
       },
     };
   } catch (error) {
-    if (recovery) {
-      createRecoverySourceDisposal(recovery, native).dispose();
-    } else {
+    try {
+      recovery?.dispose();
+    } finally {
       native?.dispose();
     }
     if (hasErrnoCode(error, "ENOENT")) {

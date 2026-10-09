@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -120,6 +121,10 @@ export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
+  consumeReadOnlyMaintenancePlan?: (
+    result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
+    assertCurrent: () => void,
+  ) => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
@@ -274,6 +279,38 @@ export async function runSqliteSessionReclamation(params: {
                 }
                 if (readResult.kind !== "maintenance-write-required") {
                   params.onWorkerResult?.(readResult, identity.key.slice(5));
+                }
+                if (
+                  readResult.kind === "maintenance-plan" &&
+                  params.consumeReadOnlyMaintenancePlan
+                ) {
+                  let consuming = true;
+                  const assertConsumptionCurrent = () => {
+                    if (!consuming) {
+                      throw new Error("Session maintenance consumption has ended");
+                    }
+                    assertRequestCurrent();
+                    assertNativeCurrent();
+                  };
+                  try {
+                    assertConsumptionCurrent();
+                    const value = params.consumeReadOnlyMaintenancePlan(
+                      readResult,
+                      assertConsumptionCurrent,
+                    );
+                    if (isPromiseLike(value)) {
+                      void Promise.resolve(value).catch(() => {});
+                      throw new Error("Session maintenance consumers must remain synchronous");
+                    }
+                    assertConsumptionCurrent();
+                  } catch (error) {
+                    if (!(error instanceof SessionEntryChangedDuringReadError)) {
+                      throw error;
+                    }
+                    readResult = { kind: "maintenance-plan-stale" };
+                  } finally {
+                    consuming = false;
+                  }
                 }
                 return readResult;
               };

@@ -264,47 +264,41 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
       argv: [...step.argv.slice(0, 3), JSON.stringify({ mode: "tools" }), ...step.argv.slice(4)],
     };
   }
+  if (
+    step.id !== "agents" &&
+    (step.id !== "channels-discord" ||
+      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") !== -1)
+  ) {
+    return step;
+  }
+  const json = step.argv[3];
+  if (json === undefined) {
+    throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  }
+  let value = JSON.parse(json);
   if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    const agents = JSON.parse(agentsJson);
     // Keyed rosters shipped before explicit ownership; those baselines still
     // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
-      agents.entries.main.default = true;
-      delete agents.ownership;
+      value.entries.main.default = true;
+      delete value.ownership;
     }
     if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
-      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
+      value.list = Object.entries<Record<string, unknown>>(value.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );
-      delete agents.entries;
+      delete value.entries;
     }
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
-  }
-  if (
-    step.id === "channels-discord" &&
-    compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-  ) {
-    const discordJson = step.argv[3];
-    if (discordJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
+  } else {
     // beta.4 retired nested DM policy. Older baselines retain the shipped
     // specimen so candidate Doctor must migrate it without changing access.
-    const { dmPolicy, allowFrom, ...discord } = JSON.parse(discordJson);
-    discord.dm = { policy: dmPolicy, allowFrom };
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(discord), ...step.argv.slice(4)],
-    };
+    const { dmPolicy, allowFrom, ...discord } = value;
+    value = { ...discord, dm: { policy: dmPolicy, allowFrom } };
   }
-  return step;
+  return {
+    ...step,
+    argv: [...step.argv.slice(0, 3), JSON.stringify(value), ...step.argv.slice(4)],
+  };
 }
 
 function* adaptRecipeForBaseline(
