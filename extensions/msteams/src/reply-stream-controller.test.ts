@@ -518,6 +518,42 @@ describe("createTeamsReplyStreamController", () => {
     }
   });
 
+  it("accepts a progress final acknowledgement that arrives after finalize starts", async () => {
+    const stream = makeAcknowledgedStream();
+    let settleClose = (_result: StreamCloseResult) => {};
+    stream.close.mockImplementationOnce(
+      () =>
+        new Promise<StreamCloseResult>((resolve) => {
+          settleClose = resolve;
+        }),
+    );
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "# Status" })).toBeUndefined();
+    const firstEmission = stream.emit.mock.calls[0]?.[0] as unknown;
+    const acknowledgedText =
+      typeof firstEmission === "string"
+        ? firstEmission
+        : (firstEmission as { text?: string } | undefined)?.text;
+
+    const finalization = ctrl.finalize();
+    stream.acknowledge(acknowledgedText ?? "");
+    settleClose(undefined);
+
+    await expect(finalization).resolves.toEqual({
+      visibleReplySent: true,
+      content: "**Status**",
+      logicalContent: "# Status",
+      messageId: "stream-acknowledged",
+    });
+  });
+
   it("ignores progress after final answer streaming starts and settles", async () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
