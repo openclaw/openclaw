@@ -583,6 +583,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             await persistGatewayUserTurnTranscriptBestEffort();
           }
           const replyFinalization = {
+            terminalEntry: sessionBinding,
             requesterContext: ctx,
             abortSignal: activeRunAbort.controller.signal,
             accountId,
@@ -626,6 +627,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (shouldBroadcastAgentError) {
               broadcastChatError({
+                terminalEntry: sessionBinding,
                 context,
                 runId: clientRunId,
                 sessionKey,

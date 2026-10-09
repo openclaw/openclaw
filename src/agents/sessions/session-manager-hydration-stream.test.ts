@@ -129,6 +129,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
     manager.appendMessage(makeUserMessage("keep the original view", 2));
     const before = manager.getPersistedEntries();
     const priorTarget = manager.getSessionTarget();
+    // The closed database makes this a cold read, which runs on the target-discovery lane.
     const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);

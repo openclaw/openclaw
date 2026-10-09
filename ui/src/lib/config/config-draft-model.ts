@@ -519,12 +519,6 @@ function mutateConfigForm(
   syncConfigDraft(state, base);
 }
 
-function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
-  pluginIds.add(pluginId);
-  autoAllowlistedPluginIdsByState.set(state, pluginIds);
-}
-
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
   const pluginIds = autoAllowlistedPluginIdsByState.get(state);
   if (!pluginIds) {
@@ -567,7 +561,9 @@ function syncEnabledPluginAllowlist(
       return;
     }
     setPathValue(draft, ["plugins", "allow"], [...allow, pluginId]);
-    trackAutoAllowlistedPluginId(state, pluginId);
+    const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+    pluginIds.add(pluginId);
+    autoAllowlistedPluginIdsByState.set(state, pluginIds);
     return;
   }
   const autoAllowlistedPluginIds = autoAllowlistedPluginIdsByState.get(state);

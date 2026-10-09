@@ -782,7 +782,6 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     }
 
     const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
-      cfg: params.cfg,
       target,
       env,
     });

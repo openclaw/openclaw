@@ -52,6 +52,27 @@ describe("Skill Workshop autonomy config migration", () => {
     ]);
   });
 
+  it.each([
+    { autonomous: { mode: "auto" }, mode: "off", approvalPolicy: "pending" },
+    { autonomous: undefined, mode: "off", approvalPolicy: "pending" },
+    { autonomous: { mode: "auto" }, mode: "auto", approvalPolicy: "auto" },
+  ] as const)(
+    "maps approvalPolicy=$approvalPolicy with $autonomous.mode to $mode",
+    ({ autonomous, mode, approvalPolicy }) => {
+      const result = migrate({ skills: { workshop: { autonomous, approvalPolicy } } });
+
+      expect(result.raw).toEqual({ skills: { workshop: { autonomous: { mode } } } });
+      expect(result.changes).toEqual([
+        ...(mode === "off"
+          ? [
+              `Set skills.workshop.autonomous.mode to "off" because approvalPolicy "pending" required approval before skill writes, and approvals were removed. ${ENABLE_AUTO_HINT}`,
+            ]
+          : []),
+        "Removed skills.workshop.approvalPolicy; Skill Workshop proposals were removed.",
+      ]);
+    },
+  );
+
   it("keeps current modes unchanged", () => {
     for (const mode of ["off", "auto"]) {
       const result = migrate({ skills: { workshop: { autonomous: { mode } } } });

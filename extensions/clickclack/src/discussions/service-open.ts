@@ -232,6 +232,13 @@ export async function openClickClackDiscussionBinding(
   }
   const serverBaseUrl = normalizedServerBaseUrl(account);
   const credentialFingerprint = discussionCredentialFingerprint(account.token);
+  const revokeChannel = (channelId: string) =>
+    markClickClackDiscussionChannelIdentityRevoked({
+      runtime,
+      accountId: account.accountId,
+      serverBaseUrl,
+      channelId,
+    });
   const unresolved = (await listPendingDiscussionOpens(runtime)).find(
     (pending) => pending.sessionKey === sessionKey,
   );
@@ -257,16 +264,24 @@ export async function openClickClackDiscussionBinding(
   const config = runtime.config.current() as CoreConfig;
   const agentId = resolveSessionAgentIdStrict({ config, sessionKey });
   const fallback = fallbackDiscussionLabel(sessionKey, agentId);
-  const label = resolveDiscussionLabel(entry, sessionKey, agentId);
-  const displayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
-  const section = entry.category?.trim() || account.discussions.section;
-  const externalUrl = controlSessionUrl(
-    account.discussions.controlUrlBase,
-    sessionKey,
-    account.agentId ?? agentId,
-    config.session?.mainKey,
-    label,
-  );
+  const describeChannel = (
+    session: Parameters<typeof resolveDiscussionLabel>[0] & { category?: string },
+  ) => {
+    const label = resolveDiscussionLabel(session, sessionKey, agentId);
+    return {
+      label,
+      displayTitle: label === fallback ? "" : truncateDiscussionDisplayTitle(label),
+      section: session.category?.trim() || account.discussions.section,
+      externalUrl: controlSessionUrl(
+        account.discussions.controlUrlBase,
+        sessionKey,
+        account.agentId ?? agentId,
+        config.session?.mainKey,
+        label,
+      ),
+    };
+  };
+  const { label, displayTitle, section, externalUrl } = describeChannel(entry);
   const assertCurrentAuthority = () => {
     // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
     const currentAccounts = discussionAccounts(runtime.config.current() as CoreConfig);
@@ -359,21 +374,11 @@ export async function openClickClackDiscussionBinding(
       assertCurrentAuthority();
       try {
         if (adopted) {
-          markClickClackDiscussionChannelIdentityRevoked({
-            runtime,
-            accountId: account.accountId,
-            serverBaseUrl,
-            channelId: adopted.id,
-          });
+          revokeChannel(adopted.id);
           resolved = await client.updateChannel(adopted.id, managedFields);
         } else {
           resolved = await client.createChannel(workspace.id, { ...managedFields, kind: "public" });
-          markClickClackDiscussionChannelIdentityRevoked({
-            runtime,
-            accountId: account.accountId,
-            serverBaseUrl,
-            channelId: resolved.id,
-          });
+          revokeChannel(resolved.id);
         }
         break;
       } catch (error) {
@@ -394,12 +399,7 @@ export async function openClickClackDiscussionBinding(
           );
           if (recovered) {
             adopted = recovered;
-            markClickClackDiscussionChannelIdentityRevoked({
-              runtime,
-              accountId: account.accountId,
-              serverBaseUrl,
-              channelId: recovered.id,
-            });
+            revokeChannel(recovered.id);
             assertCurrentAuthority();
             resolved = await client.updateChannel(recovered.id, managedFields);
             break;
@@ -450,18 +450,13 @@ export async function openClickClackDiscussionBinding(
       params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
       throw new Error("OpenClaw session became inactive while opening its ClickClack discussion");
     }
-    const currentLabel = resolveDiscussionLabel(currentEntry, sessionKey, agentId);
-    const currentDisplayTitle =
-      currentLabel === fallback ? "" : truncateDiscussionDisplayTitle(currentLabel);
-    const currentSection = currentEntry.category?.trim() || account.discussions.section;
-    const currentExternalUrl =
-      controlSessionUrl(
-        account.discussions.controlUrlBase,
-        sessionKey,
-        account.agentId ?? agentId,
-        config.session?.mainKey,
-        currentLabel,
-      ) ?? "";
+    const {
+      label: currentLabel,
+      displayTitle: currentDisplayTitle,
+      section: currentSection,
+      externalUrl: updatedExternalUrl,
+    } = describeChannel(currentEntry);
+    const currentExternalUrl = updatedExternalUrl ?? "";
     let currentChannel = channel;
     if (
       currentEntry.sessionId !== entry.sessionId ||
