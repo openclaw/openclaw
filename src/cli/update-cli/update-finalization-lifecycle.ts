@@ -471,16 +471,6 @@ export class UpdateFinalizationLifecycle {
   private finishLedger(exitCode: number, deferredMaintenance?: string): void {
     if (this.runId && this.ownsRun) {
       try {
-        if (deferredMaintenance) {
-          recordUpdateRunPhase(
-            this.runId,
-            "requested",
-            {
-              origin: { nextAction: deferredMaintenance },
-            },
-            this.ledgerOptions,
-          );
-        }
         finishUpdateRun(
           this.runId,
           {
@@ -490,6 +480,7 @@ export class UpdateFinalizationLifecycle {
               : this.failureObservation?.reason === "repair-failed"
                 ? "repair-failed"
                 : undefined,
+            nextAction: deferredMaintenance,
             diagnostics: this.failureObservation,
           },
           this.ledgerOptions,
