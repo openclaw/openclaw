@@ -76,7 +76,7 @@ async function list(options: Parameters<typeof agentsListCommand>[0]) {
 function createConfig(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
     bindings: [{ agentId: "main", match: { channel: "telegram" } }],
   };
@@ -96,7 +96,7 @@ describe("agentsListCommand", () => {
 
   it("keeps the migrated default in JSON after reloading explicit ownership", async () => {
     const agentId = "research";
-    const legacy: OpenClawConfig = {
+    const legacy = {
       agents: {
         list: ["main", "research"].map((id) => ({ id, default: id === agentId })),
       },
@@ -106,7 +106,7 @@ describe("agentsListCommand", () => {
       ...migrated,
       agents: { ...migrated.agents, ownership: "explicit" },
     });
-    for (const config of [legacy, persisted]) {
+    for (const config of [migrated, persisted]) {
       requireValidConfigMock.mockResolvedValueOnce(config);
       expect((await list({ json: true })).json).toMatchObject([
         { id: "main", isDefault: false },
@@ -341,14 +341,12 @@ describe("agentsListCommand", () => {
 
         requireValidConfigMock.mockResolvedValueOnce({
           agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
+            entries: {
+              main: {
                 workspace: path.join(homeAlias, "workspace"),
                 agentDir: path.join(homeAlias, "agents", "main", "agent"),
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig);
         const { text: output } = await withEnvAsync({ OPENCLAW_HOME: home }, () => list({}));

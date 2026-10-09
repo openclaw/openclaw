@@ -38,46 +38,6 @@ export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup):
   );
 }
 
-function resolveProviderChoiceOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoiceOption[] {
-  return resolveProviderSetupFlowContributions({
-    ...params,
-    scope: "text-inference",
-  }).map(({ option, providerId }) => {
-    const choice: AuthChoiceOption = {
-      value: option.value,
-      label: option.label,
-      providerId,
-    };
-    if (option.modelTarget) {
-      choice.modelTarget = option.modelTarget;
-    }
-    if (option.hint) {
-      choice.hint = option.hint;
-    }
-    if (option.assistantPriority !== undefined) {
-      choice.assistantPriority = option.assistantPriority;
-    }
-    if (option.assistantVisibility) {
-      choice.assistantVisibility = option.assistantVisibility;
-    }
-    if (option.group) {
-      choice.groupId = option.group.id;
-      choice.groupLabel = option.group.label;
-      if (option.group.hint) {
-        choice.groupHint = option.group.hint;
-      }
-    }
-    if (option.onboardingFeatured) {
-      choice.onboardingFeatured = true;
-    }
-    return choice;
-  });
-}
-
 /**
  * Format every accepted `--auth-choice` value for CLI help and validation.
  *
@@ -101,41 +61,6 @@ export function formatAuthChoiceChoicesForCli(params?: {
   return uniqueStrings(values).join("|");
 }
 
-function buildAuthChoiceOptions(params: {
-  assistantVisibleOnly?: boolean;
-  detectedProviderIds?: ReadonlySet<string>;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoiceOption[] {
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
-  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
-    optionByValue.set(option.value, option);
-  }
-  for (const option of resolveProviderChoiceOptions({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })) {
-    optionByValue.set(option.value, option);
-  }
-
-  const detectedProviders = new Set(
-    [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
-  );
-  return Array.from(optionByValue.values())
-    .toSorted(compareOptionLabels)
-    .filter(
-      (option) =>
-        option.assistantVisibility !== "detected-only" ||
-        (option.providerId !== undefined &&
-          detectedProviders.has(normalizeProviderId(option.providerId))),
-    )
-    .filter((option) =>
-      params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
-    );
-}
-
 /** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
   includeSkip: boolean;
@@ -148,10 +73,46 @@ export function buildAuthChoiceGroups(params: {
   groups: AuthChoiceGroup[];
   skipOption?: AuthChoiceOption;
 } {
-  const options = buildAuthChoiceOptions({
-    ...params,
-    assistantVisibleOnly: params.assistantVisibleOnly ?? true,
-  });
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
+  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
+    optionByValue.set(option.value, option);
+  }
+  for (const {
+    option: { group, ...option },
+    providerId,
+  } of resolveProviderSetupFlowContributions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    scope: "text-inference",
+  })) {
+    optionByValue.set(option.value, {
+      ...option,
+      providerId,
+      ...(group
+        ? {
+            groupId: group.id,
+            groupLabel: group.label,
+            ...(group.hint ? { groupHint: group.hint } : {}),
+          }
+        : {}),
+    });
+  }
+
+  const detectedProviders = new Set(
+    [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
+  );
+  const options = Array.from(optionByValue.values())
+    .toSorted(compareOptionLabels)
+    .filter(
+      (option) =>
+        option.assistantVisibility !== "detected-only" ||
+        (option.providerId !== undefined &&
+          detectedProviders.has(normalizeProviderId(option.providerId))),
+    )
+    .filter((option) =>
+      params.assistantVisibleOnly !== false ? option.assistantVisibility !== "manual-only" : true,
+    );
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
   for (const option of options) {

@@ -6,13 +6,14 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import {
   createPlacementTurnClaimFixtureOps,
   seedAttachedPlacementEnvironment,
 } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
 import { waitForPendingWorkerResult } from "./worker-turn-admission.js";
 import {
   createWorkerTurnTunnel,
@@ -273,9 +274,14 @@ describe("worker turn launcher claim admission", () => {
       },
     });
     const claimOps = createPlacementTurnClaimFixtureOps(database);
-    vi.spyOn(placements, "listPendingWorkspaceResultsAsync").mockImplementationOnce(async () => {
-      claimOps.releaseTurn(priorClaim);
-      return [];
+    const claimTurn = placements.claimTurn.bind(placements);
+    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      try {
+        return await claimTurn(...args);
+      } catch (error) {
+        claimOps.releaseTurn(priorClaim);
+        throw error;
+      }
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -310,12 +316,18 @@ describe("worker turn launcher claim admission", () => {
       runId: "remote-result-run",
       owner: placementTurnOwner(active),
     });
-    await placements.markWorkspaceResultPending(priorClaim);
-    const listPendingWorkspaceResultsAsync = vi.spyOn(
-      placements,
-      "listPendingWorkspaceResultsAsync",
-    );
-    listPendingWorkspaceResultsAsync.mockResolvedValueOnce([]);
+    const projectionReads = vi.spyOn(placements, "readProjection");
+    let readsBeforeClaim = 0;
+    const claimTurn = placements.claimTurn.bind(placements);
+    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      readsBeforeClaim = projectionReads.mock.calls.length;
+      try {
+        return await claimTurn(...args);
+      } catch (error) {
+        await placements.markWorkspaceResultPending(priorClaim);
+        throw error;
+      }
+    });
     const waitForRelease = vi.spyOn(placements, "waitForTurnClaimRelease");
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -343,6 +355,8 @@ describe("worker turn launcher claim admission", () => {
     await expect(replacement).rejects.toThrow(
       "Active remote-exec placement does not match its attached environment",
     );
+    // Placement and pending-result preparation must use the same worker request.
+    expect(readsBeforeClaim).toBe(1);
   });
 
   it("redispatches the admitted replacement after pending-result recovery reclaims it", async () => {
@@ -371,7 +385,7 @@ describe("worker turn launcher claim admission", () => {
         manifestRef: MANIFEST_REF,
       });
       await placements.acceptWorkspaceResult(priorClaim);
-      await completeReclaimedWorkspaceTeardown({
+      await completeWorkerWorkspaceTeardown({
         placements,
         turnClaim: priorClaim,
         environmentId: active.environmentId,
@@ -536,6 +550,9 @@ describe("worker turn launcher claim admission", () => {
     { label: "with negotiated node portal support", portalAvailable: true },
   ])("launches one worker loop $label", async ({ portalAvailable }) => {
     await seedActivePlacement();
+    const unexpectedToolCall = () => {
+      throw new Error("Unexpected Gateway tool invocation while preparing the turn");
+    };
     const commandStarted = createDeferred();
     const commandFinished = createDeferred<{
       stdout: string;
@@ -557,6 +574,19 @@ describe("worker turn launcher claim admission", () => {
         sshEndpoint: null,
       })),
       supportsNodePortal: vi.fn(async () => portalAvailable),
+      createGatewayTools: async (params) =>
+        createWorkerGatewayTools({
+          ...params,
+          placements,
+          environments,
+          resolveGatewayContext: unexpectedToolCall,
+          dispatchChild: unexpectedToolCall,
+          portals: {
+            getService: unexpectedToolCall,
+            carrier: { open: unexpectedToolCall },
+            onChanged: unexpectedToolCall,
+          },
+        }),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () =>
@@ -619,9 +649,9 @@ describe("worker turn launcher claim admission", () => {
             permissionMode: "workspace",
             workerContainmentRoot: "/worker/workspace",
           });
-          expect(
-            launchRequest.plan.assignment.toolAuthority.allowedToolNames.includes("portal"),
-          ).toBe(portalAvailable);
+          expect(placements.isWorkerTurnToolAuthorized(launchRequest.turnClaim, "portal")).toBe(
+            portalAvailable,
+          );
           expect(environments.supportsNodePortal).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
           await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: launchRequest.turnClaim,

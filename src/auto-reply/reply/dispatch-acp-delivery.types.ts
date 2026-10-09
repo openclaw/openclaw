@@ -2,6 +2,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
@@ -49,14 +50,14 @@ export type AcpDispatchDeliveryState = {
   deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
-  queuedUntrackedVisibleTextDeliveries: number;
-  settledUntrackedVisibleText: boolean;
+  untrackedVisibleText: "none" | "pending" | "settled";
   routedCounts: Record<ReplyDispatchKind, number>;
   suppressionReason?: NormalizeReplySkipReason;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
 
 export type AcpDispatchDeliveryParams = {
+  preparedTtsPreferences: PreparedTtsPreferences;
   cfg: OpenClawConfig;
   agentId?: string;
   ctx: FinalizedMsgContext;

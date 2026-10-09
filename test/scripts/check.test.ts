@@ -70,6 +70,11 @@ describe("scripts/check", () => {
       usesBase: true,
     });
     expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "first-party mock export ratchet",
+      args: ["check:test-mock-exports"],
+      usesBase: true,
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
       name: "script TypeScript erasability",
       args: ["check:script-erasability"],
     });

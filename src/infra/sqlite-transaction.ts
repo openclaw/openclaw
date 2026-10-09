@@ -20,7 +20,11 @@ import {
   sqlitePrimaryResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
-import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import {
+  captureSqliteReaderOwner,
+  currentSqliteOperationTiming,
+} from "./sqlite-reader-lifecycle.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
@@ -163,6 +167,8 @@ function beginImmediateTransaction(
 export type SqliteTransactionOptions = {
   /** Already-started BEGIN budget, carried between workers in the same process. */
   beginDeadlineNs?: bigint;
+  /** An outer owner handles nonblocking admission failures. */
+  beginLockFailureReporting?: "suppress";
   busyTimeoutMs?: number;
   databaseLabel?: string;
   /** Prepared identifiers and counts only; never transcript or session payloads. */
@@ -219,6 +225,10 @@ function logSlowTransactionHold(params: {
   elapsedMs: number;
   mode: SqliteTransactionMode;
   options?: SqliteTransactionOptions;
+  prepareMs?: number;
+  beginMs: number;
+  hostAdmissionWaitMs: number;
+  commitMs: number;
 }): void {
   if (
     params.elapsedMs < (params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS)
@@ -229,6 +239,13 @@ function logSlowTransactionHold(params: {
     async: false,
     ...transactionDiagnosticLabels(params.db, params.options),
     elapsedMs: params.elapsedMs,
+    phases: {
+      prepareMs: params.prepareMs,
+      beginMs: params.beginMs,
+      sqlMs: Math.max(0, params.elapsedMs - params.hostAdmissionWaitMs - params.commitMs),
+      hostAdmissionWaitMs: params.hostAdmissionWaitMs,
+      commitMs: params.commitMs,
+    },
     isMainThread,
     mode: params.mode,
     pid: process.pid,
@@ -290,7 +307,11 @@ function execTimedTransactionStep(params: {
     return elapsedMs;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
-    if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
+    if (
+      isSqliteLockError(error) &&
+      shouldReportSqliteLockFailure(params.db) &&
+      !(params.step === "begin" && params.options?.beginLockFailureReporting === "suppress")
+    ) {
       const sqliteErrcode = sqliteExtendedResultCode(error);
       const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
       (params.options?.logger ?? transactionLog).warn("SQLite transaction lock wait failed", {
@@ -313,18 +334,6 @@ function execTimedTransactionStep(params: {
     }
     throw error;
   }
-}
-
-function commitImmediateTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: "COMMIT",
-    step: "commit",
-  });
 }
 
 function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
@@ -384,7 +393,7 @@ function runSqliteTransactionSync<T>(
     // nested native/SDK calls correct without module-local depth or counters.
     db.exec("SAVEPOINT openclaw_tx_nested");
     try {
-      const result = operation();
+      const result = runSqliteReadOperationSync(db, operation);
       assertSyncTransactionResult(result);
       assertTransactionUsable(db);
       db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
@@ -406,25 +415,37 @@ function runSqliteTransactionSync<T>(
     }
   }
 
-  execTimedTransactionStep({
+  const timing = currentSqliteOperationTiming();
+  const prepareMs = timing ? Date.now() - timing.preparedAtMs : undefined;
+  const beginMs = execTimedTransactionStep({
     db,
     options,
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
   const transactionStartedAt = Date.now();
+  const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
+  let commitMs = 0;
+  const commit = () => {
+    const startedAt = Date.now();
+    try {
+      execTimedTransactionStep({ db, options, sql: "COMMIT", step: "commit" });
+    } finally {
+      commitMs += Date.now() - startedAt;
+    }
+  };
   let commitStarted = false;
   try {
-    const result = operation();
+    // BEGIN may wait for a foreign writer. Admit its committed schema inside
+    // rollback protection, then share that snapshot's facts with all kernels.
+    const result = runSqliteReadOperationSync(db, operation, "fresh");
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;
     if (options?.withCommit) {
-      assertSyncTransactionResult(
-        options.withCommit(() => commitImmediateTransaction(db, options)),
-      );
+      assertSyncTransactionResult(options.withCommit(commit));
     } else {
-      commitImmediateTransaction(db, options);
+      commit();
     }
     return result;
   } catch (error) {
@@ -434,14 +455,24 @@ function runSqliteTransactionSync<T>(
   } finally {
     // Include COMMIT and failed holders: both keep other writers waiting too.
     try {
+      const elapsedMs = Date.now() - transactionStartedAt;
+      const hostAdmissionWaitMs = (timing?.hostAdmissionWaitMs ?? 0) - admissionWaitBefore;
       logSlowTransactionHold({
         db,
-        elapsedMs: Date.now() - transactionStartedAt,
+        elapsedMs,
         mode,
         options,
+        prepareMs,
+        beginMs,
+        hostAdmissionWaitMs,
+        commitMs,
       });
     } catch {
       // Diagnostics cannot change an already-settled transaction's outcome.
+    } finally {
+      if (timing) {
+        timing.preparedAtMs = Date.now();
+      }
     }
   }
 }
@@ -496,12 +527,14 @@ export async function runSqliteImmediateTransaction<T>(
   if (db.isTransaction) {
     throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
   }
-  const deadline = performance.now() + readSqliteBusyTimeout(db);
   const inheritedDeadlineNs = options?.beginDeadlineNs;
-  const remainingMs =
-    inheritedDeadlineNs === undefined
-      ? () => deadline - performance.now()
-      : () => Number(inheritedDeadlineNs - process.hrtime.bigint()) / 1_000_000;
+  const remainingMs = (() => {
+    if (inheritedDeadlineNs !== undefined) {
+      return () => Number(inheritedDeadlineNs - process.hrtime.bigint()) / 1_000_000;
+    }
+    const deadline = performance.now() + readSqliteBusyTimeout(db);
+    return () => deadline - performance.now();
+  })();
   let entered = false;
   while (true) {
     const operation = await prepare();

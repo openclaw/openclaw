@@ -1,5 +1,5 @@
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
-import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.js";
+import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 
 /** Let an observed deadline commit its partial and outcome before history is read. */
 export async function waitForChatSessionTimeoutPersistence({

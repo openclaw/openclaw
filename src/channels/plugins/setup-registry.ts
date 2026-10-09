@@ -41,9 +41,6 @@ export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
   return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
-/**
- * Returns one setup-capable channel plugin by id.
- */
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

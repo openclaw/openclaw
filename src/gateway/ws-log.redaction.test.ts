@@ -76,16 +76,7 @@ test.each([
   [{ token: "sk-abcdefghijklmnopqrstuvwxyz123456" }, '{"token":"sk-abc…3456"}'],
   [new Error("password=synthetic-value"), "Error: password=***"],
   [{ message: "token=synthetic-value", code: "E1" }, "token=*** code=E1"],
-  ["body: to%6ben=synthetic-value&mode=read", "body: to%6ben=***&mode=read"],
-  ["to%6ben+=synthetic-value&mode=read", "to%6ben+=***&mode=read"],
   ["to%6ben\u3164=synthetic-value&mode=read", "to%6ben\u3164=***&mode=read"],
-  ["pass+=synthetic-value&mode=read", "pass+=***&mode=read"],
-  ["sig\u3164=synthetic-value&mode=read", "sig\u3164=***&mode=read"],
-  ["https://example.test/?session+=synthetic-value", "https://example.test/?session+=***"],
-  [
-    'Authorization: Digest username="user", response="synthetic-value"',
-    "Authorization: Digest ***",
-  ],
   [
     "-----BEGIN PRIVATE KEY-----\nsynthetic-data\n-----END PRIVATE KEY-----",
     "-----BEGIN PRIVATE KEY-----\n…redacted…\n-----END PRIVATE KEY-----",

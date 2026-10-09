@@ -10,6 +10,7 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildEmptyInteractiveReplyPayload,
@@ -130,6 +131,18 @@ describe("buildExternalRunFailureReply", () => {
       });
     },
   );
+
+  it("retains the actual provider rejection when verbose output is off", () => {
+    const message = "The AI service could not accept this request";
+    const error = new FailoverError(message, {
+      reason: "format",
+      rawError: "Invalid service_tier argument",
+    });
+    expect(buildExternalRunFailureReply({ message, error })).toEqual({
+      text: String.raw`LLM request rejected: Invalid service\_tier argument`,
+      isGenericRunnerFailure: false,
+    });
+  });
 
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";
@@ -335,5 +348,65 @@ describe("buildExternalRunFailureReply", () => {
       { isHeartbeat: true },
     );
     expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+  });
+});
+
+describe("buildKnownAgentRunFailureReplyPayload", () => {
+  const promptSizeGuidance =
+    "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+  const sessionCtx = {
+    Provider: "discord",
+    Surface: "discord",
+    ChatType: "direct",
+  } as unknown as TemplateContext;
+
+  it("puts sanitized HTTP 400 prompt-size guidance in the terminal reply payload", () => {
+    const raw = `400 ${JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        message:
+          "This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.",
+      },
+      request_id: "req_prompt_size_canary",
+    })}`;
+    const error = new FailoverError(raw, {
+      reason: "rate_limit",
+      provider: "openai",
+      model: "test-model",
+      status: 400,
+      rawError: raw,
+    });
+
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toBe(promptSizeGuidance);
+    expect(payload?.text).not.toContain("req_prompt_size_canary");
+    expect(payload?.text).not.toContain("add credits");
+  });
+
+  it("keeps HTTP 429 throttle failures on the existing retry guidance", () => {
+    const raw = "429 rate limit: service overloaded, try again in 30 seconds";
+    const error = new FailoverError(raw, {
+      reason: "rate_limit",
+      provider: "anthropic",
+      model: "test-model",
+      status: 429,
+      rawError: raw,
+    });
+
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
   });
 });

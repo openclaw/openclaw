@@ -46,6 +46,20 @@ Channel/group, provider, sandbox, and per-agent allow/deny policies can
 still remove the tool after the profile stage. Use `/tools` from the same
 session to confirm the effective tool list.
 
+Senders restricted by a channel, group, or per-sender tool policy may start only
+hidden helpers of the same agent. `visible: true` and another `agentId` are
+refused, including for ACP spawns. Hidden helpers inherit the restricted tools,
+workspace, and session root; they cannot select another `cwd`, project, or managed
+worktree. ACP additionally refuses a spawn when it cannot enforce the inherited
+tools or filesystem restrictions; use `runtime: "subagent"` in that case.
+Ordinary global, agent, and profile tool policies alone do not impose this rule.
+Owner-authorized automations retain their own scheduling policy and workspace;
+ordinary guests cannot gain that authority through a tool allowlist.
+
+Children created before this rule was introduced lack sender-policy provenance.
+Their existing tool allow/deny snapshots still apply, but start fresh helpers to
+apply the inherited spawn limit.
+
 **Defaults:**
 
 - **Model:** same-agent native sub-agents inherit the caller's active model, including session and one-shot overrides, unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). The inherited model ID is preserved exactly, even when it contains a provider prefix. Cross-agent spawns use the target agent's configured model. ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
@@ -286,11 +300,13 @@ Code Mode, and do not send completion notifications.
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
-When an earlier async tool call in the same model response has results the model
-has not received yet, OpenClaw defers `sessions_yield` and keeps the turn active.
-Finish the model response so the next request can deliver those results, then
-yield only if external work still requires waiting. This applies even when the
-tool has already finished and its result appears in the transcript.
+With Astra async tools, `sessions_yield` stays a synchronous call, so the model
+response pauses at the yield. When an earlier async tool call in that response
+has results the model has not received yet, OpenClaw defers the yield and keeps
+the turn active. The next request delivers those results ahead of the deferred
+yield result; the model yields again only if external work still requires
+waiting. This applies even when the tool has already finished and its result
+appears in the transcript.
 
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive
@@ -314,6 +330,11 @@ a polling loop just to wait for completion.
 A sub-agent can also explicitly set `waitFor: "message"` to wait for an incoming
 continuation about external work, such as a remote job it does not drive itself.
 This does not schedule that message; an operator or integration must send it.
+This applies to both visible and hidden native children, based on the active
+registered task, not the session key format. Root sessions, collectors, stopped
+tasks, and superseded generations cannot claim a child message wait. Separate
+admitted follow-ups in the same child session remain independent tasks. A quiet
+native child can pause without acquiring an announced completion or pause notice.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
@@ -325,7 +346,9 @@ or a default "Paused awaiting continuation." line. The acknowledgment is
 presented as child-provided data using the same escaping as completion results. The
 notice is distinct from a completion and uses the requester's existing message
 queue policy if it is already running. It does not resume the child: send the
-continuation with `sessions_send` to the named child session. Yielding again in
+continuation to the named child session through an authorized caller with
+`sessions_send`. Owning a child does not grant that tool; the child messaging
+restrictions still apply. Yielding again in
 the requester does not repeat an already delivered pause notice. A default
 follow-up already admitted on the child's session while the child was still
 yielding continues it instead, so no notice is sent. A follow-up with its own
@@ -358,7 +381,9 @@ returns `status: "nothing_pending"`: guidance for the model, not a tool failure,
 so the conversation gets no failure warning. Detached `image_generate`,
 `video_generate`, and `music_generate` runs deliver their result as a later
 turn; a turn that ends with such a run in flight and no final reply stays
-pending instead of reporting a missing reply.
+pending instead of reporting a missing reply. Its waiting reply is the standard
+waiting status, or on Telegram and Discord the turn's visible progress card, which
+the result replaces; an undelivered result leaves the card showing the failed run.
 
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its

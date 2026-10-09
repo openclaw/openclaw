@@ -3,7 +3,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
-  getRemoteModelCatalogPricing,
+  getActiveRemoteModelCatalog,
   getRemoteModelCatalogProviderOverlay,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
@@ -58,7 +58,7 @@ describe("Gateway startup catalog", () => {
       expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
         absent ? undefined : bundle.providers.anthropic,
       );
-      expect(getRemoteModelCatalogPricing({})).toEqual(
+      expect(getActiveRemoteModelCatalog({})?.pricing).toEqual(
         absent
           ? undefined
           : {

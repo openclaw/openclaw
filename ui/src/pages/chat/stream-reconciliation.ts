@@ -23,13 +23,9 @@ import {
   resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
-  streamCausalTimestamp,
   type StreamCausalBoundaryState,
 } from "./stream-causal-boundary.ts";
-import {
-  readLiveTerminalAfterBoundaryRunId,
-  readLiveTerminalRunId,
-} from "./terminal-message-identity.ts";
+import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 import {
   extractToolMessageRefs,
@@ -56,8 +52,6 @@ type VisibleAssistantStreamPart = {
   segmentIndex?: number;
   itemId?: string;
   runId?: string;
-  afterBoundaryRunId?: string;
-  boundaryRunId?: string;
   toolCallId?: string;
 };
 
@@ -104,36 +98,11 @@ function streamFallbackMetadata(message: unknown): Record<string, unknown> | nul
   return asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
 }
 
-function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {
-  const metadata = streamFallbackMetadata(message);
-  return metadata && !normalizeOptionalString(metadata.itemId) ? metadata : null;
-}
-
-export function appendTerminalAssistantMessage(
-  messages: unknown[],
-  message: unknown,
-  opts?: { preserveKeyedCommentary?: boolean },
-): unknown[] {
+export function appendTerminalAssistantMessage(messages: unknown[], message: unknown): unknown[] {
   const identity = readSessionMessageIdentity(message);
   const terminalRunId =
     (identity?.role === "assistant" ? identity.runId : null) ?? readLiveTerminalRunId(message);
-  let afterBoundaryRunId = readLiveTerminalAfterBoundaryRunId(message) ?? undefined;
-  if (terminalRunId) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const existing = messages[index];
-      const fallback = unkeyedStreamFallbackMetadata(existing);
-      if (!fallback || normalizeOptionalString(fallback.runId) !== terminalRunId) {
-        continue;
-      }
-      afterBoundaryRunId =
-        normalizeOptionalString(fallback.afterBoundaryRunId) ?? afterBoundaryRunId;
-      break;
-    }
-  }
-  const interval = streamCausalInterval(messages, {
-    ...(terminalRunId ? { runId: terminalRunId } : {}),
-    ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
-  });
+  const interval = streamCausalInterval(messages, terminalRunId ? { runId: terminalRunId } : {});
   const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim() ?? "";
   const removedIndexes = new Set<number>();
   const currentFallbackIndexes: number[] = [];
@@ -144,17 +113,10 @@ export function appendTerminalAssistantMessage(
     if (!fallback) {
       continue;
     }
-    const visibleText = extractText(existing)?.trim();
     if (normalizeOptionalString(fallback.itemId)) {
-      // Keyed stream segments normally represent commentary and must remain
-      // beside the final answer. When a keyed segment is the exact final
-      // answer, though, retaining both renders the streamed and persisted
-      // copies as duplicate assistant messages.
-      if (!opts?.preserveKeyedCommentary && visibleText && visibleText === terminalText) {
-        removedIndexes.add(index);
-      }
       continue;
     }
+    const visibleText = extractText(existing)?.trim();
     if (fallback.source === "current") {
       currentFallbackIndexes.push(index);
     }
@@ -177,23 +139,11 @@ export function appendTerminalAssistantMessage(
   ) {
     removedIndexes.add(onlyCurrentFallbackIndex);
   }
-  const retainedInterval: unknown[] = [];
-  let insertIndex: number | null = null;
-  for (let index = interval.start; index < interval.end; index += 1) {
-    if (removedIndexes.has(index)) {
-      insertIndex ??= retainedInterval.length;
-    } else {
-      retainedInterval.push(messages[index]);
-    }
-  }
-  const targetIndex = insertIndex ?? retainedInterval.length;
-  return [
-    ...messages.slice(0, interval.start),
-    ...retainedInterval.slice(0, targetIndex),
-    message,
-    ...retainedInterval.slice(targetIndex),
-    ...messages.slice(interval.end),
-  ];
+  // Removals were recorded in transcript order, so none precede the insertion point.
+  const insertIndex = removedIndexes.values().next().value ?? interval.end;
+  const retained = Array.from(messages).filter((_, index) => !removedIndexes.has(index));
+  retained.splice(insertIndex, 0, message);
+  return retained;
 }
 
 function visibleAssistantStreamText(
@@ -215,7 +165,6 @@ export function visibleAssistantStreamParts(
   let previousText: string | null = null;
   const segments = Array.isArray(state.chatStreamSegments) ? state.chatStreamSegments : [];
   let toolIndexedSegmentIndex = 0;
-  let latestBoundaryRunId: string | undefined;
   for (const [segmentIndex, segment] of segments.entries()) {
     if (!segment || typeof segment.text !== "string") {
       continue;
@@ -229,10 +178,7 @@ export function visibleAssistantStreamParts(
       usesItemId && typeof segment.itemId === "string" ? segment.itemId.trim() : undefined;
     const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
     const segmentRunId = normalizeOptionalString(segment.runId) ?? indexedToolRef?.runId;
-    const afterBoundaryRunId =
-      normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
-    const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    if (!usesItemId && segment.boundaryMarker !== true && segment.persisted !== true) {
+    if (!usesItemId && segment.persisted !== true) {
       toolIndexedSegmentIndex += 1;
     }
     const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
@@ -250,16 +196,11 @@ export function visibleAssistantStreamParts(
           typeof segment.ts === "number" && Number.isFinite(segment.ts) ? segment.ts : Date.now(),
         ...(itemId ? { itemId } : {}),
         ...(segmentRunId ? { runId: segmentRunId } : {}),
-        ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
-        ...(boundaryRunId ? { boundaryRunId } : {}),
         toolCallId: explicitToolCallId ?? indexedToolRef?.id,
       });
     }
     if (usesAccumulatedText) {
       previousText = advanceAccumulatedStreamText(previousText, segment.text);
-    }
-    if (boundaryRunId) {
-      latestBoundaryRunId = boundaryRunId;
     }
   }
   if (opts.includeCurrent !== false && typeof state.chatStream === "string") {
@@ -274,7 +215,6 @@ export function visibleAssistantStreamParts(
         source: "current",
         timestamp: state.chatStreamStartedAt ?? Date.now(),
         ...(state.chatRunId ? { runId: state.chatRunId } : {}),
-        ...(latestBoundaryRunId ? { afterBoundaryRunId: latestBoundaryRunId } : {}),
       });
     }
   }
@@ -384,7 +324,7 @@ export function hasVisibleStreamParts(
 export function terminalMessageReplacesVisibleStream(
   message: unknown,
   state: StreamReconciliationState,
-  opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText" | "persistCommentary">,
+  opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText">,
 ): boolean {
   const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim();
   if (!terminalText) {
@@ -393,7 +333,7 @@ export function terminalMessageReplacesVisibleStream(
   const parts = visibleAssistantStreamParts(state, {
     includeCurrent: true,
     isHiddenStreamText: opts.isHiddenStreamText,
-  }).filter((part) => opts.persistCommentary === true || !part.itemId);
+  }).filter((part) => !part.itemId);
   if (parts.length === 0) {
     return false;
   }
@@ -417,27 +357,22 @@ function currentToolStreamMessageIndex(
   state: StreamReconciliationState,
   startIndex: number,
   endIndex: number,
-  toolCallId?: string,
+  toolCallId: string,
   runId?: string,
 ): number {
   const liveToolRefs = resolveLiveToolStreamRefs(state);
-  const selectedToolIdentity = toolCallId
-    ? resolveMatchingLiveToolIdentity({ id: toolCallId, ...(runId ? { runId } : {}) }, liveToolRefs)
-    : undefined;
-  const liveToolIds = selectedToolIdentity
-    ? new Set([selectedToolIdentity])
-    : toolCallId
-      ? new Set<string>()
-      : new Set(liveToolRefs.map((ref) => ref.identity));
-  if (liveToolIds.size === 0) {
+  const selectedToolIdentity = resolveMatchingLiveToolIdentity(
+    { id: toolCallId, ...(runId ? { runId } : {}) },
+    liveToolRefs,
+  );
+  if (!selectedToolIdentity) {
     return -1;
   }
   for (let index = startIndex; index < endIndex; index++) {
     if (
-      extractToolMessageRefs(messages[index]).some((ref) => {
-        const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
-        return identity !== undefined && liveToolIds.has(identity);
-      })
+      extractToolMessageRefs(messages[index]).some(
+        (ref) => resolveMatchingLiveToolIdentity(ref, liveToolRefs) === selectedToolIdentity,
+      )
     ) {
       return index;
     }
@@ -517,18 +452,13 @@ export function materializeVisibleStreamState(
     const streamMessage = {
       role: "assistant",
       content: [{ type: "text", text: part.text }],
-      timestamp: streamCausalTimestamp(
-        nextMessages,
-        insertIndex,
-        part.timestamp,
-        messageTimestampMs,
-      ),
+      // User intervals own placement; retiming the saved stream would reorder live tools.
+      timestamp: part.timestamp,
       openclawStreamFallback: {
         replacementText: part.replacementText,
         source: part.source,
         ...(part.itemId ? { itemId: part.itemId } : {}),
         ...(part.runId ? { runId: part.runId } : {}),
-        ...(part.afterBoundaryRunId ? { afterBoundaryRunId: part.afterBoundaryRunId } : {}),
         ...(afterSequence === undefined ? {} : { afterSequence }),
       },
     };

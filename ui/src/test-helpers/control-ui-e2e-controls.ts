@@ -59,13 +59,13 @@ export function createMockGatewayControls(
     },
     deliverLatest,
     async deferNext(method, match) {
-      await page.evaluate(
+      return await page.evaluate(
         ({ targetMethod, requestMatch }) => {
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
           if (!gateway) {
             throw new Error("Mock Gateway is not installed");
           }
-          gateway.deferNext(targetMethod, requestMatch);
+          return gateway.deferNext(targetMethod, requestMatch);
         },
         { targetMethod: method, requestMatch: match },
       );

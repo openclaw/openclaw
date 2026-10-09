@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
@@ -22,6 +23,7 @@ import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencla
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   getOpenClawAgentDatabaseValidation,
+  markOpenClawAgentCanonicalValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -54,10 +56,12 @@ import {
 } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
 import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonical-validation.js";
-import type {
-  SessionColdWorkerData,
-  SessionColdMutationResult,
-} from "./session-cold-storage-worker.js";
+import {
+  prepareSessionColdSourceGuard,
+  SessionColdSourceRefusedError,
+} from "./session-cold-storage-source-guard.worker.js";
+import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
 const WORKER_CLOSE_MAX_ATTEMPTS = 3;
 
@@ -73,9 +77,7 @@ async function settleReclamationDatabase(
       break;
     }
     if (attempt + 1 < WORKER_CLOSE_MAX_ATTEMPTS) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25 * 2 ** attempt);
-      });
+      await sleepWithAbort(25 * 2 ** attempt);
     }
   }
   return { cleanupWarnings: [...warnings], settled: outcome.settled };
@@ -130,6 +132,11 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
     data.plan.kind === "cold-restore"
       ? await prepareSessionColdRestoreInWorker(data.plan)
       : undefined;
+  using sourceGuard = prepareSessionColdSourceGuard(
+    data.plan.databaseOptions,
+    data.plan.kind === "cold-restore" ? data.plan.guard?.sources : undefined,
+    data.sourceMatches,
+  );
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
@@ -141,12 +148,41 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       async (openedDatabase) => {
         let transactionDatabase: DatabaseSync | undefined;
         try {
-          return mutateSessionColdTranscriptInWorker(data.plan, coldRecords, (database) => {
-            transactionDatabase = database.db;
-            waitForSqliteReclamationCommit(commitGate, () =>
-              port.postMessage({ type: "commit-request", operationId: 0 }),
-            );
-          });
+          return mutateSessionColdTranscriptInWorker(
+            data.plan,
+            coldRecords,
+            (database, sourceValidation) => {
+              transactionDatabase = database.db;
+              // Native admission can service the grant before its message arrives.
+              for (const { index, matches } of data.sourceMatches ?? []) {
+                const match = sourceValidation?.conversationMatches.find(
+                  (value) => value.index === index,
+                );
+                if (!match) {
+                  throw new Error("Cold restoration omitted its source alternatives");
+                }
+                for (const alternative of match.alternatives) {
+                  Atomics.store(matches, alternative + 1, 1);
+                }
+                Atomics.store(matches, 0, 1);
+              }
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request", operationId: 0 }),
+              );
+            },
+            sourceGuard,
+          );
+        } catch (error) {
+          // The native transaction has rolled back before a post-grant refusal is returned.
+          if (error instanceof SessionColdSourceRefusedError) {
+            return {
+              archivedTranscripts: 0,
+              externalizedTranscripts: 0,
+              restored: false,
+              refusedSource: error.refusal,
+            };
+          }
+          throw error;
         } finally {
           validation = getOpenClawAgentDatabaseValidation(openedDatabase);
           if (
@@ -390,6 +426,9 @@ export async function runReclamationWorkerPort(
                             authorizeCommit();
                             if (!hasMore) {
                               recordOpenClawAgentCanonicalValidation(transactionDatabase);
+                              if (!markOpenClawAgentCanonicalValidation(transactionDatabase)) {
+                                throw new Error("Canonical validation lost its admitted owner");
+                              }
                             }
                             return {
                               validatedRows: counts.validatedRows,

@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { isTranscriptMessageAppendCurrentTail } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
 import { prepareTranscriptMessageAppendForWorker } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
 import {
   assertSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
@@ -32,7 +33,6 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
-import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
 
 const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionManagerMetadata);
 
@@ -103,10 +103,7 @@ export async function appendSessionTranscriptMessage(
     | undefined;
   let committed:
     | {
-        messageId: string;
-        message: TranscriptAppendMessage;
-        appended: boolean;
-        currentTail: boolean;
+        result: SessionTranscriptAppendResult<TranscriptAppendMessage>;
         version: SessionTranscriptContextVersion;
         lifecycleRevision?: string;
       }
@@ -139,10 +136,12 @@ export async function appendSessionTranscriptMessage(
         throw new Error("Session transcript message was not persisted");
       }
       committed = {
-        messageId: snapshot.value.result.messageId,
-        message: snapshot.value.result.message ?? prepared.persistedMessage,
-        appended: snapshot.value.result.appended,
-        currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
+        result: {
+          messageId: snapshot.value.result.messageId,
+          message: snapshot.value.result.message ?? prepared.persistedMessage,
+          appended: snapshot.value.result.appended,
+          currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
+        },
         version: snapshot.value.after,
         lifecycleRevision: snapshot.value.lifecycleRevision,
       };
@@ -158,15 +157,12 @@ export async function appendSessionTranscriptMessage(
   } catch (error) {
     failures.push(error);
   } finally {
-    try {
-      await worker?.close();
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      await execution.release();
-    } catch (error) {
-      failures.push(error);
+    for (const release of [() => worker?.close(), () => execution.release()]) {
+      try {
+        await release();
+      } catch (error) {
+        failures.push(error);
+      }
     }
   }
   try {
@@ -184,7 +180,7 @@ export async function appendSessionTranscriptMessage(
   } catch (error) {
     if (committed) {
       throw new SessionTranscriptMessageCommittedError(
-        committed.messageId,
+        committed.result.messageId,
         error,
         input.target,
         committed.version,
@@ -204,10 +200,5 @@ export async function appendSessionTranscriptMessage(
   if (!committed) {
     throw new Error("Session transcript message was not persisted");
   }
-  return {
-    messageId: committed.messageId,
-    message: committed.message,
-    appended: committed.appended,
-    currentTail: committed.currentTail,
-  };
+  return committed.result;
 }

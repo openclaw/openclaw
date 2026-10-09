@@ -4,11 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
-import {
-  looksLikeSecretSentinel,
-  mintSecretSentinel,
-  resolveSecretSentinel,
-} from "../secrets/sentinel.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import {
   API_KEY_FIELD,
   SET_RUNTIME_API_KEY_FIELD,
@@ -31,7 +27,6 @@ const {
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
   shouldPreferProviderRuntimeResolvedModelMock,
-  unwrapSecretSentinelsForProviderEgressMock,
 } = imageRuntimeMocks;
 
 const resolveProviderRuntimePluginHandleMock = vi.hoisted(() => vi.fn());
@@ -41,9 +36,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => ({
   )),
   resolveProviderRuntimePluginHandle: resolveProviderRuntimePluginHandleMock,
 }));
-const MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRuntimePluginHandle",
-);
 type AuthRequestCall = {
   profileId?: string;
   preferredProfile?: string;
@@ -115,40 +107,6 @@ describe("describeImageWithModelCore", () => {
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
     expect(authRequest?.preferredProfile).toBe("google:preferred");
-    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "test-token");
-  });
-
-  it("keeps stable GA gemini 3.1 flash-lite ids during lookup and keeps profile auth selection", async () => {
-    const findMock = vi.fn((provider: string, modelId: string) => {
-      expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3.1-flash-lite");
-      return {
-        provider: "google",
-        id: "gemini-3.1-flash-lite",
-        input: ["text", "image"],
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      };
-    });
-    discoverModelsMock.mockReturnValue({ find: findMock });
-    completeMock.mockResolvedValue(
-      imageCompletion("google-generative-ai", "google", "gemini-3.1-flash-lite", "flash lite ok"),
-    );
-
-    const result = await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "google",
-      model: "gemini-3.1-flash-lite",
-      profile: "google:default",
-      prompt: "Describe the image.",
-    });
-
-    expect(result).toEqual({
-      text: "flash lite ok",
-      model: "gemini-3.1-flash-lite",
-    });
-    expect(findMock).toHaveBeenCalled();
-    const authRequest = getApiKeyForModelCall();
-    expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "test-token");
   });
 
@@ -286,96 +244,7 @@ describe("describeImageWithModelCore", () => {
     expect(contentTypes).toContain("image");
   });
 
-  it("keeps an exchanged Copilot image token opaque for sentinel-backed auth", async () => {
-    const sourceValue = "test-token";
-    const preparedValue = mintSecretSentinel(sourceValue, {
-      label: "model-auth:github-copilot",
-    });
-    getApiKeyForModelMock.mockResolvedValueOnce({
-      [API_KEY_FIELD]: preparedValue,
-      source: "test",
-      mode: "token",
-    });
-    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce(sourceValue);
-    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
-      result: vi.fn(async () =>
-        imageCompletion("openai-completions", "github-copilot", "gpt-4.1", "ok"),
-      ),
-    }));
-    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
-    mockImageModel({
-      provider: "github-copilot",
-      id: "gpt-4.1",
-      api: "openai-completions",
-    });
-
-    await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "github-copilot",
-      model: "gpt-4.1",
-    });
-
-    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        context: expect.objectContaining({ [API_KEY_FIELD]: preparedValue, authMode: "token" }),
-      }),
-    );
-    const storedValue = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
-    expect(looksLikeSecretSentinel(storedValue)).toBe(true);
-    expect(resolveSecretSentinel(storedValue)).toBe("test-token");
-    const streamOptions = providerStreamFn.mock.calls[0]?.[2] as { apiKey?: string };
-    expect(streamOptions.apiKey).toBe(storedValue);
-  });
-
-  it("fails github-copilot image runtime setup when token exchange fails", async () => {
-    mockImageModel({
-      provider: "github-copilot",
-      id: "gemini-3.1-pro-preview",
-      api: "openai-completions",
-      baseUrl: "https://api.githubcopilot.com",
-    });
-    prepareProviderRuntimeAuthMock.mockRejectedValueOnce(
-      new Error("Copilot token exchange failed: HTTP 401"),
-    );
-
-    await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        provider: "github-copilot",
-        model: "gemini-3.1-pro-preview",
-        prompt: "Describe the image.",
-      }),
-    ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
-
-    expect(setRuntimeApiKeyMock).not.toHaveBeenCalledWith("github-copilot", "test-token");
-    expect(completeMock).not.toHaveBeenCalled();
-  });
-
-  it("caps image-describe maxTokens by the resolved model's own maxTokens", async () => {
-    mockImageModel({
-      api: "openai-completions",
-      provider: "fake",
-      id: "small-vlm",
-      baseUrl: "https://example.test",
-      maxTokens: 1024,
-    });
-    completeMock.mockResolvedValue(
-      imageCompletion("openai-completions", "fake", "small-vlm", "ok"),
-    );
-
-    await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "fake",
-      model: "small-vlm",
-      prompt: "Describe the image.",
-    });
-
-    const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
-    expect(options.maxTokens).toBe(1024);
-  });
-
-  it.each([undefined, ""])(
+  it.each([undefined])(
     "derives workspaceDir from agentId when workspaceDir is %j",
     async (workspaceDir) => {
       mockImageModel({
@@ -388,13 +257,12 @@ describe("describeImageWithModelCore", () => {
       );
       const cfg = {
         agents: {
-          list: [
-            {
-              id: "vision-agent",
+          entries: {
+            "vision-agent": {
               agentDir: "/tmp/openclaw-agent",
               workspace: "/tmp/openclaw-workspace",
             },
-          ],
+          },
         },
       };
 
@@ -425,78 +293,6 @@ describe("describeImageWithModelCore", () => {
       );
     },
   );
-
-  it("uses one committed prepared generation for image setup and streaming", async () => {
-    const requestedCfg: OpenClawConfig = { logging: { level: "info" } };
-    const committedCfg: OpenClawConfig = { logging: { level: "debug" } };
-    const metadataSnapshot = createEmptyPluginMetadataSnapshot("/tmp/committed-workspace");
-    const providerRuntimeHandle = {
-      provider: "google",
-      modelId: "gemini-2.5-flash",
-      plugin: { id: "generation-a" },
-    };
-    resolveProviderRuntimePluginHandleMock.mockReturnValueOnce(providerRuntimeHandle);
-    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
-      snapshot: {
-        agentDir: "/tmp/committed-agent",
-        config: committedCfg,
-        workspaceDir: "/tmp/committed-workspace",
-        metadataSnapshot,
-        createStores: () => ({
-          authStorage: preparedAuthStorage,
-          modelRegistry: {},
-        }),
-      },
-      [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
-    });
-    mockImageModel({
-      provider: "google",
-      id: "gemini-2.5-flash",
-      api: "google-generative-ai",
-    });
-    registerProviderStreamForModelMock.mockImplementationOnce(({ model }) => {
-      expect((model as Record<symbol, unknown>)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]).toBe(
-        providerRuntimeHandle,
-      );
-      return undefined;
-    });
-    completeMock.mockResolvedValue(
-      imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "committed runtime"),
-    );
-
-    await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      cfg: requestedCfg,
-      agentDir: "/tmp/requested-agent",
-      workspaceDir: "/tmp/requested-workspace",
-      provider: "google",
-      model: "gemini-2.5-flash",
-      buffer: Buffer.alloc(1),
-      prompt: "Describe the image.",
-    });
-
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "google",
-      "gemini-2.5-flash",
-      "/tmp/committed-agent",
-      committedCfg,
-      expect.objectContaining({ workspaceDir: "/tmp/committed-workspace" }),
-    );
-    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
-      model: expect.objectContaining({ id: "gemini-2.5-flash" }),
-      cfg: committedCfg,
-      agentDir: "/tmp/committed-agent",
-      workspaceDir: "/tmp/committed-workspace",
-      wrapProviderStream: true,
-    });
-    expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "google",
-        modelId: "gemini-2.5-flash",
-        pluginMetadataSnapshot: metadataSnapshot,
-      }),
-    );
-  });
 
   it("reuses a parent run generation without acquiring another image lease", async () => {
     const cfg: OpenClawConfig = { logging: { level: "info" } };

@@ -8,13 +8,11 @@ import {
 import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
+import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
-import {
-  resolveConversationBindingChannelFromMessage,
-  resolveConversationBindingThreadIdFromMessage,
-} from "../conversation-binding-input.js";
+import { resolveConversationBindingChannelFromMessage } from "../conversation-binding-input.js";
 
 export const COMMAND = "/acp";
 const ACP_SPAWN_USAGE =
@@ -55,11 +53,6 @@ type ParsedSteerInput = {
   instruction: string;
 };
 
-type ParsedSingleValueCommandInput = {
-  value: string;
-  sessionToken?: string;
-};
-
 type ParsedSetCommandInput = {
   key: string;
   value: string;
@@ -69,21 +62,17 @@ type ParsedSetCommandInput = {
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
 
-function readOptionValue(params: { tokens: string[]; index: number; flags: readonly string[] }):
-  | {
-      matched: true;
-      flag: string;
-      value?: string;
-      nextIndex: number;
-      error?: string;
-    }
-  | { matched: false } {
+function readOptionValue(params: {
+  tokens: string[];
+  index: number;
+  flags: readonly string[];
+}): Result<{ flag: string; value: string; nextIndex: number }, string> | null {
   const token = params.tokens[params.index] ?? "";
   const flag = params.flags.find(
     (candidate) => token === candidate || token.startsWith(`${candidate}=`),
   );
   if (!flag) {
-    return { matched: false };
+    return null;
   }
   let value: string;
   let nextIndex = params.index + 1;
@@ -97,35 +86,13 @@ function readOptionValue(params: { tokens: string[]; index: number; flags: reado
     value = token.slice(flag.length + 1).trim();
   }
   if (!value) {
-    return {
-      matched: true,
-      flag,
-      nextIndex,
-      error: `${flag} requires a value`,
-    };
+    return { ok: false, error: `${flag} requires a value` };
   }
-  return { matched: true, flag, value, nextIndex };
+  return { ok: true, value: { flag, value, nextIndex } };
 }
 
 function normalizeAcpOptionToken(raw: string): string {
-  const token = raw.trim();
-  if (!token || token.startsWith("--")) {
-    return token;
-  }
-  const dashPrefix = token.match(ACP_UNICODE_DASH_PREFIX_RE)?.[0];
-  if (!dashPrefix) {
-    return token;
-  }
-  return `--${token.slice(dashPrefix.length)}`;
-}
-
-function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
-  const channel = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
-  if (!supportsAutomaticThreadBindingSpawn(channel)) {
-    return "off";
-  }
-  const currentThreadId = resolveConversationBindingThreadIdFromMessage(params.ctx);
-  return currentThreadId ? "here" : "auto";
+  return raw.trim().replace(ACP_UNICODE_DASH_PREFIX_RE, "--");
 }
 
 export function parseSpawnInput(
@@ -134,7 +101,11 @@ export function parseSpawnInput(
 ): Result<ParsedSpawnInput, string> {
   const normalizedTokens = tokens.map(normalizeAcpOptionToken);
   let mode: AcpRuntimeSessionMode = "persistent";
-  let thread = resolveDefaultSpawnThreadMode(params);
+  const channel = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
+  let thread: AcpSpawnThreadMode = "off";
+  if (supportsAutomaticThreadBindingSpawn(channel)) {
+    thread = stringifyRouteThreadId(params.ctx.MessageThreadId) ? "here" : "auto";
+  }
   let sawThreadOption = false;
   let bind: AcpSpawnBindMode = "off";
   let cwd: string | undefined;
@@ -149,17 +120,18 @@ export function parseSpawnInput(
       index: i,
       flags: ["--mode", "--bind", "--thread", "--cwd", "--label"],
     });
-    if (option.matched) {
-      if (option.error) {
+    if (option) {
+      if (!option.ok) {
         return { ok: false, error: `${option.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalLowercaseString(option.value);
-      switch (option.flag) {
+      const { flag, value, nextIndex } = option.value;
+      const raw = normalizeOptionalLowercaseString(value);
+      switch (flag) {
         case "--mode":
           if (raw !== "persistent" && raw !== "oneshot") {
             return {
               ok: false,
-              error: `Invalid --mode value "${option.value}". Use persistent or oneshot.`,
+              error: `Invalid --mode value "${value}". Use persistent or oneshot.`,
             };
           }
           mode = raw;
@@ -168,7 +140,7 @@ export function parseSpawnInput(
           if (raw !== "here" && raw !== "off") {
             return {
               ok: false,
-              error: `Invalid --bind value "${option.value}". Use here or off.`,
+              error: `Invalid --bind value "${value}". Use here or off.`,
             };
           }
           bind = raw;
@@ -177,20 +149,20 @@ export function parseSpawnInput(
           if (raw !== "auto" && raw !== "here" && raw !== "off") {
             return {
               ok: false,
-              error: `Invalid --thread value "${option.value}". Use auto, here, or off.`,
+              error: `Invalid --thread value "${value}". Use auto, here, or off.`,
             };
           }
           thread = raw;
           sawThreadOption = true;
           break;
         case "--cwd":
-          cwd = normalizeOptionalString(option.value);
+          cwd = normalizeOptionalString(value);
           break;
         case "--label":
-          label = normalizeOptionalString(option.value);
+          label = normalizeOptionalString(value);
           break;
       }
-      i = option.nextIndex;
+      i = nextIndex;
       continue;
     }
 
@@ -256,15 +228,15 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
       index: i,
       flags: ["--session"],
     });
-    if (sessionOption.matched) {
-      if (sessionOption.error) {
+    if (sessionOption) {
+      if (!sessionOption.ok) {
         return {
           ok: false,
           error: `${sessionOption.error}. ${ACP_STEER_USAGE}`,
         };
       }
-      sessionToken = normalizeOptionalString(sessionOption.value);
-      i = sessionOption.nextIndex;
+      sessionToken = normalizeOptionalString(sessionOption.value.value);
+      i = sessionOption.value.nextIndex;
       continue;
     }
 
@@ -285,24 +257,6 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
     value: {
       sessionToken,
       instruction,
-    },
-  };
-}
-
-export function parseSingleValueCommandInput(
-  tokens: string[],
-  usage: string,
-): Result<ParsedSingleValueCommandInput, string> {
-  const value = normalizeOptionalString(tokens[0]) ?? "";
-  if (!value || tokens.length > 2) {
-    return { ok: false, error: usage };
-  }
-  const sessionToken = normalizeOptionalString(tokens[1]);
-  return {
-    ok: true,
-    value: {
-      value,
-      sessionToken,
     },
   };
 }
@@ -362,7 +316,7 @@ export function resolveAcpHelpText(): string {
     "/acp sessions",
     "",
     "Notes:",
-    "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
+    "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.entries id.",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
     "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
@@ -385,17 +339,11 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
     extras ? `extras={${extras}}` : null,
   ].filter(Boolean);
-  if (parts.length === 0) {
-    return "(none)";
-  }
-  return parts.join(", ");
+  return parts.join(", ") || "(none)";
 }
 
 export function formatAcpCapabilitiesText(controls: string[]): string {
-  if (controls.length === 0) {
-    return "(none)";
-  }
-  return controls.toSorted().join(", ");
+  return controls.length === 0 ? "(none)" : controls.toSorted().join(", ");
 }
 
 export function resolveCommandRequestId(params: HandleCommandsParams): string {
@@ -404,11 +352,9 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
     params.ctx.MessageSid ??
     params.ctx.MessageSidFirst ??
     params.ctx.MessageSidLast;
-  if (typeof value === "string") {
-    const normalizedValue = normalizeOptionalString(value);
-    if (normalizedValue) {
-      return normalizedValue;
-    }
+  const normalizedValue = normalizeOptionalString(value);
+  if (normalizedValue) {
+    return normalizedValue;
   }
   if (typeof value === "number" || typeof value === "bigint") {
     return String(value);

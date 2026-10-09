@@ -169,6 +169,14 @@ owning its prepared environment. Direct providers use
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 
+When provider readiness fails, the wrapper reports the failed or missing doctor
+check names with bounded, sanitized messages and classification hints. Successful
+checks and other provider details are omitted; a count identifies additional
+failures beyond the summary limit. Errors retain the doctor exit status and
+recovery instructions, including login guidance for broker authentication failures.
+Use `crabbox doctor --provider <provider> --json` to inspect the full report locally
+before sharing it.
+
 The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
 native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
 `--provider blacksmith-testbox` prevents automatic Azure routing but does not
@@ -189,7 +197,7 @@ candidate. A dirty or occupied sibling is not a reason to stop and ask.
 
 Mantis uses the same plugin-owned discovery and managed installation. Relative
 executable overrides and `PATH` entries resolve from its requested `--repo-root`,
-and version probes run there with the same environment as lease commands. Its workflows
+and version checks run there with the same environment as lease commands. Its workflows
 prepare the executable with `node scripts/crabbox-setup.mjs`; the command prints
 the selected binary and verified version as JSON and, in GitHub Actions, adds its
 directory to `GITHUB_PATH`. Later QA and media commands reuse that executable.
@@ -219,8 +227,9 @@ use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
-  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
-  while another command owns the lease.
+  After a temporary-source run, the wrapper restores retained Blacksmith and
+  AWS lease claims to the invoking checkout. A claim transferred elsewhere is
+  left untouched. Do not sync or reclaim while another command owns the lease.
 - Wrapper reuse requires the local SSH key created by Crabbox. A missing key
   requires a fresh warmup. Leases created directly by Blacksmith remain usable
   through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
@@ -380,16 +389,61 @@ missing or unconnected objects.
 Recovery does not create backup repositories, archives, or permanent refs. A stage's
 own Git objects or bundle do not count as another copy. Live or uncertain owners,
 unrecorded writer settlement, interrupted recovery ownership, substituted metadata,
-other boot/process namespaces, and historical unmarked directories remain protected.
-Recovery is limited to the same boot and a known PID namespace; even a reboot of
-the same computer leaves earlier copies protected. Full worktrees also remain
+other hosts or PID namespaces, and historical unmarked directories remain protected.
+New receipts record platform, stable host identity, boot ID, and PID namespace.
+A different boot on the same host and PID namespace proves the old producer is
+absent; recovery does not probe its potentially recycled PID. Same-boot recovery
+still checks PID absence. Missing host provenance and legacy domain mismatches
+remain protected unless explicitly qualified below.
+Idle mirrors retain their separate exclusive-lock recovery contract. Directory
+ownership records include the canonical path, inode, birthtime, and macOS volume
+UUID, so APFS device-number changes across reboots do not invalidate that identity.
+Legacy device/inode records accept a macOS device-only change only when the
+directory predates its receipt and the existing path and ownership checks pass.
+Inspection never rewrites receipts; successful owner updates persist the stronger
+identity and retain the original timestamp bound for remaining legacy evidence.
+Changed identities, unknown siblings, and incomplete metadata remain protected.
+If a recorded volume UUID cannot currently be verified, recovery also remains
+protected until the OS volume lookup succeeds.
+Full worktrees also remain
 protected because hooks, filters, and raw source require separate proof. Their
 ordinary cleanup retains the remaining staging if exact Git registration removal
 fails, including its receipt when registration was eligible. Repo-local copies
-remain unmarked. There is no global worktree prune or force-recovery option.
+remain unmarked. There is no global worktree prune or blanket force-recovery option.
+
+For one legacy capsule from an earlier boot of this host, inspect eligibility first:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging inspect <id> --same-host-prior-boot
+```
+
+This is read-only: it does not create locks, update receipts, preserve outputs, or
+delete staging. It returns `eligible`, the exact `receiptSha256`, and any refusal.
+Only after reviewing that specific copy, confirm the same host and prior boot:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging recover <id> \
+  --confirm-same-host-prior-boot --receipt-sha256 <digest-from-inspection>
+```
+
+Confirmation requires a pre-boot receipt mtime, a different legacy domain when
+recorded, current host/boot evidence, and matching UUID-backed sync-root and
+directory identities. UUID-unavailable filesystems cannot use this legacy path.
+The original timestamp is retained across confirmed retries; each retry still
+requires a new explicit confirmation bound to the current receipt bytes.
+The confirmation is recorded in the receipt and command result, never reused as
+automatic authorization. It does not replace metadata completeness, settlement,
+native-claim, independent-source, or diagnostic-preservation checks.
+
+Recovery checks local users with bounded `lsof` scans and refuses live users,
+incomplete output, or unavailable inspection. Only the recovery process's exact
+held mirror-lock file is exempt. Recovery reacquires its exclusive locks and
+revalidates receipt, identities, and producer-absence evidence after awaited work.
+Per-ID `staging inspect <id>` also previews ordinary recovery; idle mirrors and
+completed disposal records retain their separate slot-locked workflow.
 
 Source-transfer commands inspect at most 64 bounded headers with a 250-ms soft
-discovery budget. This scan does not hash payloads, search Git history, or query a
+discovery budget after the initial volume lookup. This scan does not hash payloads, search Git history, or query a
 provider. A temporary cursor advances subsequent scans past protected entries;
 `staging inspect --after <nextCursor>` also pages the local report. After successful
 normal completion the wrapper attempts at most one discovered candidate. Help,

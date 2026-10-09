@@ -12,6 +12,7 @@ import {
   legacyAuditSourceGenerationKey,
   type LegacyAuditRawCheckpoint,
 } from "./state-migrations.audit-checkpoints.js";
+import { legacyAuditMoveCandidates } from "./state-migrations.audit-moves.js";
 import {
   prepareLegacyAuditRecords,
   serializePreparedAuditRecords,
@@ -21,6 +22,7 @@ import {
   readLegacyAuditRecoverySourceForBackup,
   readLegacyAuditSourcePrefixSnapshotForBackup,
 } from "./state-migrations.audit-recovery.js";
+import { inspectLegacyMigrationLinkedMove } from "./state-migrations.no-replace-move.js";
 
 type LegacyAuditBackupCheckpoint = {
   key: string;
@@ -128,10 +130,33 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
   const filesystemWitness = createHash("sha256");
   for (const [index, source] of detected.sources.entries()) {
     const sourceRelativePath = path.relative(path.resolve(params.stateDir), source.sourcePath);
+    let linkedMove: { retained: string; removed: string } | undefined;
+    for (const candidate of await legacyAuditMoveCandidates(root, source)) {
+      if (
+        (candidate.retained === sourceRelativePath || candidate.removed === sourceRelativePath) &&
+        (await inspectLegacyMigrationLinkedMove(root, candidate.retained, candidate.removed))
+      ) {
+        linkedMove = candidate;
+        break;
+      }
+    }
+    // Interrupted moves have one logical source. Capture its destination once
+    // without unlinking either live name; quarantined destinations stay excluded.
+    if (linkedMove && linkedMove.retained !== sourceRelativePath) {
+      continue;
+    }
     const snapshot =
       source.storage === "raw-archive"
-        ? await readLegacyAuditRecoverySourceForBackup(root, sourceRelativePath)
-        : await readLegacyAuditSourcePrefixSnapshotForBackup(root, sourceRelativePath);
+        ? await readLegacyAuditRecoverySourceForBackup(
+            root,
+            sourceRelativePath,
+            linkedMove?.removed,
+          )
+        : await readLegacyAuditSourcePrefixSnapshotForBackup(
+            root,
+            sourceRelativePath,
+            linkedMove?.removed,
+          );
     const sourceGeneration = legacyAuditSourceGenerationKey(sourceRelativePath);
     const previousCheckpoint =
       source.storage === "raw-archive"
@@ -179,6 +204,7 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
       ...(checkpoint ? { checkpoint } : {}),
       skippedSourcePaths: new Set([
         path.resolve(source.sourcePath),
+        ...(linkedMove ? [path.resolve(params.stateDir, linkedMove.removed)] : []),
         path.resolve(`${source.sourcePath}.doctor-scrub-progress`),
         path.resolve(`${source.sourcePath}.doctor-scrub-restore`),
         path.resolve(`${source.sourcePath}.doctor-scrub-staging`),

@@ -194,7 +194,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       check.detect({
         mode: "lint",
         runtime,
-        cfg: { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } },
+        cfg: { agents: { entries: { alpha: {}, beta: {} } } },
       }),
     ).resolves.toEqual([]);
     expect(detectUnavailableSkills).not.toHaveBeenCalled();

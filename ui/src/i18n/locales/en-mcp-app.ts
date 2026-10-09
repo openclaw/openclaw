@@ -42,8 +42,11 @@ const enMcpApp = {
     sessionEnded: "This app session ended. Relaunch to interact",
     reconstructed: "Send a message to interact again",
     newConversation: "Start a new conversation",
-    confirmMessage: "Send this app message?",
-    sendMessage: "Send message",
+    confirmMessage: "Send this message to the assistant?",
+    sendMessage: "Send",
+    cancel: "Cancel",
+    confirmFile: "Open this file?",
+    openFile: "Open",
     unavailable: "MCP App unavailable: {error}",
     errors: {
       sessionUnavailable: "The App conversation could not be opened",

@@ -11,8 +11,6 @@ import type {
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
 import {
-  NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   NODE_WORKSPACE_DRAIN_COMMAND,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -363,25 +361,16 @@ export class NodeWorkerWorkspaceRuntime {
             continue;
           }
           const generation = parseGenerationName(entry.name);
-          const artifactGeneration = parseTransferArtifactGeneration(entry.name);
-          if (generation !== undefined) {
-            const key = workspaceGenerationKey({ ...session, generation });
-            if (!currentSnapshot.retainedGenerations.has(key) && !localProtection.has(key)) {
-              candidates.push({
-                path: path.join(session.sessionRoot, entry.name),
-                generationKey: key,
-              });
-            }
+          const targetGeneration = generation ?? parseTransferArtifactGeneration(entry.name);
+          if (targetGeneration === undefined) {
             continue;
           }
-          if (artifactGeneration === undefined) {
-            continue;
-          }
-          const key = workspaceGenerationKey({ ...session, generation: artifactGeneration });
-          const retainedTargetMissing =
+          const key = workspaceGenerationKey({ ...session, generation: targetGeneration });
+          // Transfer artifacts stay recoverable only while their retained target is missing.
+          const retained =
             currentSnapshot.retainedGenerations.has(key) &&
-            !existingGenerations.has(artifactGeneration);
-          if (!localProtection.has(key) && !retainedTargetMissing) {
+            (generation !== undefined || !existingGenerations.has(targetGeneration));
+          if (!localProtection.has(key) && !retained) {
             candidates.push({
               path: path.join(session.sessionRoot, entry.name),
               generationKey: key,
@@ -521,6 +510,7 @@ export class NodeWorkerWorkspaceRuntime {
     signal?: AbortSignal,
     gateway?: NodeWorkerTransferGateway,
   ): Promise<NodeWorkerWorkspaceExecResult> {
+    const assertProcessCurrent = this.processes.captureAdmission(input, input.generation);
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
     const registered = await this.prepared.store?.find(input.environmentId);
@@ -616,7 +606,6 @@ export class NodeWorkerWorkspaceRuntime {
           if (!gateway?.url) {
             throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
           }
-          const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
             seedsRoot: this.seedsRoot,
             gatewayNamespace: input.gatewayNamespace,
@@ -630,7 +619,7 @@ export class NodeWorkerWorkspaceRuntime {
               ? { prepared: { row: prepared, store: this.prepared.store } }
               : {}),
             transfer: input.transfer,
-            hashMemo,
+            hashMemo: takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey),
             signal,
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest
@@ -658,6 +647,9 @@ export class NodeWorkerWorkspaceRuntime {
           return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
         if (input.resetWorkspace) {
+          if (input.nativeProcessOwner || input.process) {
+            assertProcessCurrent();
+          }
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
           fs.rmSync(workspacePath, { recursive: true, force: true });
         }
@@ -698,26 +690,21 @@ export class NodeWorkerWorkspaceRuntime {
           });
           return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
-        if (input.process) {
-          return await this.processes.execute({
-            input,
-            workspaceDir,
-            env: commandEnv,
-            signal,
-            retainWorkspace: () =>
-              this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
-          });
-        }
-        const result = await this.processes.executeForeground({
+        const processContext = {
           input,
+          assertCurrent: assertProcessCurrent,
           workspaceDir,
           env: commandEnv,
           signal,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          stdoutLimit: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-          stderrLimit: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
           retainWorkspace: () =>
             this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
+        };
+        if (input.process) {
+          return await this.processes.execute(processContext);
+        }
+        const result = await this.processes.executeForeground({
+          ...processContext,
+          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         });
         return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });

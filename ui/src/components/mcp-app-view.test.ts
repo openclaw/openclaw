@@ -123,6 +123,15 @@ describe("mcp-app-view localization", () => {
     payload: Record<string, unknown> = {},
   ) {
     vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
+    const frameReady = deferred<HTMLIFrameElement>();
+    const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
+      this: HTMLIFrameElement,
+      value,
+    ) {
+      frameSource.set!.call(this, value);
+      frameReady.resolve(this);
+    });
     const messageListeners: EventListenerOrEventListenerObject[] = [];
     const addEventListener = window.addEventListener.bind(window);
     vi.spyOn(window, "addEventListener").mockImplementation((type, listener, options) => {
@@ -152,7 +161,7 @@ describe("mcp-app-view localization", () => {
     const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
     Reflect.set(view, "context", {
       gateway: {
-        snapshot: { client: { request } },
+        snapshot: { client: { request }, phase: "connected" },
         connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
         subscribeEvents(listener: (event: GatewayEventFrame) => void) {
           gatewayListeners.add(listener);
@@ -177,11 +186,11 @@ describe("mcp-app-view localization", () => {
     });
     view.sessionKey = "agent:main:main";
     view.viewId = viewId;
+    view.title = "Parts library";
     document.body.append(view);
 
-    await expect.poll(() => view.shadowRoot?.querySelector("iframe")).not.toBeNull();
-    const frame = view.shadowRoot!.querySelector("iframe")!;
-    await expect.poll(() => frame.getAttribute("src")).toContain("/mcp-app-sandbox?ticket=test");
+    const frame = await frameReady.promise;
+    expect(frame.getAttribute("src")).toContain("/mcp-app-sandbox?ticket=test");
     const readyEvent = {
       data: { method: "ui/notifications/sandbox-proxy-ready" },
       source: frame.contentWindow,
@@ -195,7 +204,8 @@ describe("mcp-app-view localization", () => {
         readyListener.handleEvent(readyEvent);
       }
     }
-    await expect.poll(() => bridgeMocks.instances.length).toBe(1);
+    await gatewayEventsReady.promise;
+    expect(bridgeMocks.instances).toHaveLength(1);
     return {
       bridge: bridgeMocks.instances[0] as {
         capabilities: Record<string, unknown>;
@@ -295,21 +305,48 @@ describe("mcp-app-view localization", () => {
       bridge.messageHandler!({ role: "user", content });
     expect(await send([{ type: "text", text: "Background" }])).toEqual({ isError: true });
     frame.checkVisibility = () => false;
-    Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
+    frame.focus();
     expect(await send([{ type: "text", text: "Hidden" }])).toEqual({ isError: true });
     frame.checkVisibility = () => true;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    expect(await send([{ type: "text", text: "Needs approval" }])).toEqual({ isError: true });
-    confirm.mockReturnValue(true);
-    expect(
-      await send([
-        { type: "text", text: "one" },
-        { type: "text", text: "two" },
-      ]),
-    ).toEqual({});
-    expect(received[0]).toMatchObject({
+    const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const preview = "Please compare the selected parts. ".repeat(8);
+    const cancelled = send([{ type: "text", text: preview }]);
+    await view.updateComplete;
+    const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.textContent).toContain("Parts library");
+    expect(dialog!.textContent).toContain("Send this message to the assistant?");
+    const previewElement = [...dialog!.querySelectorAll<HTMLElement>("[title]")].find(
+      (element) => element.title === preview,
+    )!;
+    expect(previewElement.title).toBe(preview);
+    expect(previewElement.textContent).toContain(preview.slice(0, 200));
+    expect(previewElement.textContent).not.toContain(preview);
+    expect(view.shadowRoot!.activeElement).toBe(dialog);
+    [...dialog!.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Cancel")!
+      .click();
+    expect(await cancelled).toEqual({ isError: true });
+    await view.updateComplete;
+    expect(received).toHaveLength(0);
+    expect(view.shadowRoot!.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(view.shadowRoot!.activeElement).toBe(frame);
+
+    const accepted = send([
+      { type: "text", text: "one" },
+      { type: "text", text: "two" },
+    ]);
+    await view.updateComplete;
+    [...view.shadowRoot!.querySelectorAll('[role="alertdialog"] button')]
+      .find((button) => button.textContent?.trim() === "Send")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(await accepted).toEqual({});
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    expect(received[0]).toEqual({
       sessionKey: "agent:main:main",
+      viewId: view.viewId,
       target: "active",
+      respond: expect.any(Function),
       content: [
         { type: "text", text: "one" },
         { type: "text", text: "two" },
@@ -325,6 +362,100 @@ describe("mcp-app-view localization", () => {
     }
     expect(received).toHaveLength(1);
   });
+
+  it("cancels with Escape and rejects a second pending message without replacing its preview", async () => {
+    const { bridge, frame, view } = await mountBridge("view-pending-" + crypto.randomUUID());
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    frame.checkVisibility = () => true;
+    frame.focus();
+    const received = vi.fn();
+    view.addEventListener(MCP_APP_MESSAGE_EVENT, received);
+    const first = bridge.messageHandler!({
+      role: "user",
+      content: [{ type: "text", text: "First request" }],
+    });
+    await view.updateComplete;
+    const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(dialog).not.toBeNull();
+    // A second app click can refocus its frame while the first prompt is pending.
+    frame.focus();
+    expect(
+      await bridge.messageHandler!({
+        role: "user",
+        content: [{ type: "text", text: "Second request" }],
+      }),
+    ).toEqual({ isError: true });
+    await view.updateComplete;
+    expect(view.shadowRoot!.querySelectorAll('[role="alertdialog"]')).toHaveLength(1);
+    expect(dialog!.textContent).toContain("First request");
+    expect(dialog!.textContent).not.toContain("Second request");
+    dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(await first).toEqual({ isError: true });
+    await view.updateComplete;
+    expect(received).not.toHaveBeenCalled();
+    expect(view.shadowRoot!.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(view.shadowRoot!.activeElement).toBe(frame);
+  });
+
+  it("sends with Enter on the focused strip and restores frame focus", async () => {
+    const { bridge, frame, view } = await mountBridge("view-keyboard-" + crypto.randomUUID());
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    frame.checkVisibility = () => true;
+    frame.focus();
+    const received: McpAppMessageEventDetail[] = [];
+    view.addEventListener(MCP_APP_MESSAGE_EVENT, (event: Event) => {
+      event.preventDefault();
+      const detail = (event as CustomEvent<McpAppMessageEventDetail>).detail;
+      received.push(detail);
+      detail.respond(true);
+    });
+    const pending = bridge.messageHandler!({
+      role: "user",
+      content: [{ type: "text", text: "Keyboard request" }],
+    });
+    await view.updateComplete;
+    const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(dialog).not.toBeNull();
+    expect(view.shadowRoot!.activeElement).toBe(dialog);
+    dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(await pending).toEqual({});
+    await view.updateComplete;
+    expect(received).toHaveLength(1);
+    expect(received[0]!.content).toEqual([{ type: "text", text: "Keyboard request" }]);
+    expect(view.shadowRoot!.activeElement).toBe(frame);
+    expect(view.shadowRoot!.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it.each(["disconnect", "rebind"] as const)(
+    "cancels pending confirmation on %s before a stale Send can dispatch",
+    async (change) => {
+      const { bridge, frame, view } = await mountBridge("view-retired-" + crypto.randomUUID());
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+      frame.checkVisibility = () => true;
+      frame.focus();
+      const received = vi.fn();
+      view.addEventListener(MCP_APP_MESSAGE_EVENT, received);
+      const pending = bridge.messageHandler!({
+        role: "user",
+        content: [{ type: "text", text: "Retired request" }],
+      });
+      await view.updateComplete;
+      const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+      expect(dialog).not.toBeNull();
+      const send = [...dialog!.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Send",
+      )!;
+      if (change === "disconnect") {
+        view.remove();
+      } else {
+        view.viewId = "replacement-view";
+        await view.updateComplete;
+      }
+      send.click();
+      expect(await pending).toEqual({ isError: true });
+      expect(received).not.toHaveBeenCalled();
+    },
+  );
 
   it("delegates expired-view recovery to its board owner", async () => {
     const request = vi.fn(async () => {

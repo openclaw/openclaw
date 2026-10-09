@@ -144,7 +144,6 @@ async function setupNativeRequester(state: OpenClawTestState) {
   const entry = {
     sessionId: "physical-one",
     lifecycleRevision: "revision-one",
-    status: "running" as const,
     updatedAt: Date.now(),
   };
   await replaceSessionEntry(target, entry);

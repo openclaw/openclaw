@@ -111,6 +111,16 @@ export function createChannelNativeApprovalRuntime<
     },
   });
 
+  const finalize =
+    <TParams extends { request: TRequest }>(run: (params: TParams) => Promise<void> | undefined) =>
+    async (params: TParams): Promise<void> => {
+      try {
+        await run(params);
+      } finally {
+        routeReporter.completeRequest(params.request.id);
+      }
+    };
+
   const runtime = createExecApprovalChannelRuntime<TPendingEntry, TRequest, TResolved>({
     label: adapter.label,
     clientDisplayName: adapter.clientDisplayName,
@@ -142,21 +152,9 @@ export function createChannelNativeApprovalRuntime<
       });
       return false;
     },
-    finalizeResolved: async (params) => {
-      try {
-        await adapter.finalizeResolved(params);
-      } finally {
-        routeReporter.completeRequest(params.request.id);
-      }
-    },
+    finalizeResolved: finalize((params) => adapter.finalizeResolved(params)),
     finalizeExpired: adapter.finalizeExpired
-      ? async (params) => {
-          try {
-            await adapter.finalizeExpired?.(params);
-          } finally {
-            routeReporter.completeRequest(params.request.id);
-          }
-        }
+      ? finalize((params) => adapter.finalizeExpired?.(params))
       : undefined,
     onStopped: adapter.onStopped,
     beforeGatewayClientStart: () => {

@@ -199,7 +199,12 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }
       }
       if (repairDeadline) {
-        const output = JSON.parse(result.stdout);
+        let output: unknown;
+        try {
+          output = JSON.parse(result.stdout);
+        } catch (cause) {
+          throw new Error(failure, { cause });
+        }
         expect(output, failure).toMatchObject({ status: "failed", stuckPhase: "plugins" });
         expect(await fs.readFile(path.join(state, "managed-service-state"), "utf8"), failure).toBe(
           "running",
@@ -231,7 +236,15 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             "Gateway restarted and verified after Doctor repair.",
           );
           if (scenario === repairDeadlineScenarios.starting) {
-            expect(result.stderr, failure).toContain("Gateway is still starting");
+            expect(result.stderr, failure).toContain(
+              "Gateway started but readiness was not verified",
+            );
+            expect(result.stderr, failure).toContain("openclaw gateway status --deep");
+            expect(result.stderr, failure).toContain("openclaw gateway diagnostics export");
+          } else {
+            expect(result.stderr, failure).not.toContain(
+              "Gateway started but readiness was not verified",
+            );
           }
         }
         return;
@@ -257,7 +270,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           (entry: { phase: string }) => entry.phase === "doctor",
         );
         expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
-        expect(timing.durationMs, failure).toBeLessThan(3_000);
+        // Exact deadline/nonrenewal timing lives in update-finalization-lifecycle.test.ts;
+        // this duration also includes service custody, diagnostics, and joined cleanup.
+        expect(timing.outcome, failure).toBe("failed");
+        expect(readRun(), failure).toMatchObject({ reason: "finalization-timeout" });
         if (scenario === "doctor-progress") {
           expect(output.doctorOutput.stderr.excerpt, failure).toContain(
             "PROGRESS fixture-validation",

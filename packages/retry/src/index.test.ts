@@ -1,10 +1,13 @@
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   computeBackoff,
   computeBackoffSchedule,
   createRetryRunner,
   type RetryOptions,
   RetrySupervisor,
+  raceWithTimeout,
   retryAsync,
   sleepWithAbort,
 } from "./index.js";
@@ -23,6 +26,167 @@ function createRetryOperation() {
     .mockRejectedValueOnce(new Error("retryable"))
     .mockResolvedValueOnce("ok");
 }
+
+describe("raceWithTimeout", () => {
+  it("observes an existing abort when the operation factory throws synchronously", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("failed to start");
+    const signal = AbortSignal.abort("stopped");
+    await expect(
+      raceWithTimeout(
+        () => {
+          throw failure;
+        },
+        1_000,
+        () => "expired",
+        { signal },
+      ),
+    ).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+  });
+
+  it.each(["operation", "timeout", "abort"] as const)(
+    "releases both cancellation and deadline observation when %s wins",
+    async (winner) => {
+      vi.useFakeTimers();
+      const source = createDeferred<string>();
+      const controller = new AbortController();
+      const failure = new Error("cancelled");
+      const pending = raceWithTimeout(source.promise, 10, () => "expired", {
+        signal: controller.signal,
+        onAbort: (signal) => {
+          throw signal.reason;
+        },
+      });
+      const outcome = pending.catch((error: unknown) => error);
+      if (winner === "operation") {
+        source.resolve("done");
+      } else if (winner === "timeout") {
+        await vi.advanceTimersByTimeAsync(10);
+      } else {
+        controller.abort(failure);
+      }
+      expect(await outcome).toBe(
+        winner === "operation" ? "done" : winner === "timeout" ? "expired" : failure,
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      source.reject(new Error("late operation rejection"));
+    },
+  );
+
+  it("keeps source-first race order while arming cancellation before work", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const pending = raceWithTimeout(
+      () => {
+        controller.abort();
+        return Promise.resolve("done");
+      },
+      10,
+      () => "expired",
+      { signal: controller.signal },
+    );
+    await expect(pending).resolves.toBe("done");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("observes an existing abort without skipping an already-started operation", async () => {
+    vi.useFakeTimers();
+    const source = createDeferred<string>();
+    const signal = AbortSignal.abort("stopped");
+    await expect(
+      raceWithTimeout(source.promise, 10, () => "expired", {
+        signal,
+        onAbort: () => "cancelled",
+      }),
+    ).resolves.toBe("cancelled");
+    source.reject(new Error("late operation rejection"));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+  });
+
+  it("arms the deadline before starting work and clears it on a synchronous throw", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("failed to start");
+    const controller = new AbortController();
+    const onAbort = vi.fn(() => "cancelled");
+    const pending = raceWithTimeout(
+      () => {
+        expect(vi.getTimerCount()).toBe(1);
+        throw failure;
+      },
+      1_000,
+      () => "expired",
+      { signal: controller.signal, onAbort },
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    controller.abort();
+    expect(onAbort).not.toHaveBeenCalled();
+    await expect(pending).rejects.toBe(failure);
+  });
+
+  it.each(["fulfilled", "rejected"] as const)(
+    "preserves a %s operation and releases its deadline",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const value = new Error("operation result");
+      const onTimeout = vi.fn(() => "expired");
+      const pending = raceWithTimeout(
+        outcome === "fulfilled" ? Promise.resolve(value) : Promise.reject(value),
+        1_000,
+        onTimeout,
+      );
+      if (outcome === "fulfilled") {
+        await expect(pending).resolves.toBe(value);
+      } else {
+        await expect(pending).rejects.toBe(value);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      expect(onTimeout).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, 25])("returns the timeout result after %i ms without cancelling work", async (ms) => {
+    vi.useFakeTimers();
+    const source = createDeferred<string>();
+    const onTimeout = vi.fn(() => "expired");
+    const pending = raceWithTimeout(source.promise, ms, onTimeout);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(ms);
+    await expect(pending).resolves.toBe("expired");
+    expect(onTimeout).toHaveBeenCalledOnce();
+    source.resolve("late result");
+    await expect(source.promise).resolves.toBe("late result");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves a timeout error and observes a late source rejection", async () => {
+    vi.useFakeTimers();
+    const source = createDeferred<never>();
+    const timeoutError = new Error("expired");
+    const pending = raceWithTimeout(source.promise, 10, () => {
+      throw timeoutError;
+    });
+    const assertion = expect(pending).rejects.toBe(timeoutError);
+    await vi.advanceTimersByTimeAsync(10);
+    await assertion;
+    source.reject(new Error("late failure"));
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([true, false])("preserves timer ref=%s", async (ref) => {
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const pending = raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref });
+    expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(ref);
+    await expect(pending).resolves.toBe("done");
+  });
+});
 
 describe("RetrySupervisor", () => {
   it("owns attempt counting, overrides, rebasing, and exhaustion", () => {

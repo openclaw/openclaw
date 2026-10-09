@@ -448,7 +448,6 @@ describe("authenticated request mutation custody", () => {
     "policy changed",
     "selection mismatch",
     "copied generation reader",
-    "reminted generation reader",
   ] as const)("retains the admitted authority for %s", async (scenario) => {
     const generation = new SharedGatewaySessionGenerationState({
       current: "generation-a",
@@ -472,21 +471,8 @@ describe("authenticated request mutation custody", () => {
     const release = createDeferredCore();
     const persisted = vi.fn();
     const grantProfileReads = vi.fn();
-    const compatibilityReader =
-      scenario === "copied generation reader" || scenario === "reminted generation reader";
+    const compatibilityReader = scenario === "copied generation reader";
     const generationReader = generation.reader;
-    const unboundReader = () => generation.current;
-    if (scenario === "reminted generation reader") {
-      for (const key of Object.getOwnPropertySymbols(generationReader)) {
-        const value = Object.getOwnPropertyDescriptor(generationReader, key)?.value;
-        const Issuer = value.constructor;
-        if (typeof Issuer === "function") {
-          Object.defineProperty(unboundReader, key, {
-            value: new Issuer(unboundReader, generation),
-          });
-        }
-      }
-    }
     let inGrant = false;
     let grantError: unknown;
     vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profile) => {
@@ -503,9 +489,7 @@ describe("authenticated request mutation custody", () => {
               () => generation.current,
               Object.getOwnPropertyDescriptors(generationReader),
             )
-          : compatibilityReader
-            ? unboundReader
-            : generationReader,
+          : generationReader,
       buildRequestContext: () => createDirectChatContext(),
       extraHandlers: {
         "test.mutation-custody": async (options) => {

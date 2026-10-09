@@ -326,139 +326,6 @@ async function cleanupReceiptSources(params: {
   return { changes, warnings, notices };
 }
 
-async function migrateWithExclusiveStateOwnership(params: {
-  detected: LegacyDeviceIdentityDetection;
-  stateRoot: Root;
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  beforeClaim?: (sourcePath: string) => void;
-  beforeCleanup?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<MigrationMessages> {
-  const receipt = readLegacyMigrationReceipt(
-    resolveLegacyMigrationSourceKey("device-identity-json", params.detected.sourcePath),
-    params.env,
-  );
-  if (receipt) {
-    return await cleanupReceiptSources({ ...params, receipt });
-  }
-
-  if (
-    await params.stateRoot.exists(
-      relativeLegacyPath(params.stateDir, params.detected.nativeClaimPath),
-    )
-  ) {
-    return {
-      changes: [],
-      warnings: [
-        "Native device identity import is pending; restart the native app before running Doctor.",
-      ],
-    };
-  }
-
-  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
-    stateRoot: params.stateRoot,
-    stateDir: params.stateDir,
-    sourcePath: params.detected.sourcePath,
-    label: "device identity",
-    includeFilePath: false,
-    readSnapshot: (candidate) =>
-      readLegacySourceSnapshot({
-        stateRoot: params.stateRoot,
-        stateDir: params.stateDir,
-        sourcePath: candidate,
-      }),
-  });
-
-  await source.recoverLinkedMove();
-
-  const hasSource = await source.exists();
-  const hasClaim = await source.exists(true);
-  if (hasSource && hasClaim) {
-    return {
-      changes: [],
-      warnings: [
-        "Failed migrating legacy device identity: source and interrupted claim both exist.",
-      ],
-    };
-  }
-  const activePath = hasSource
-    ? params.detected.sourcePath
-    : hasClaim
-      ? params.detected.claimPath
-      : null;
-  if (!activePath) {
-    return { changes: [], warnings: [] };
-  }
-
-  let snapshot: LegacySourceSnapshot;
-  try {
-    snapshot = await source.read(activePath === params.detected.claimPath);
-  } catch (error) {
-    return {
-      changes: [],
-      warnings: [`Failed reading legacy device identity: ${String(error)}`],
-    };
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
-    if (activePath === params.detected.sourcePath) {
-      snapshot = await source.claim({
-        snapshot,
-        mismatchMessage: "legacy device identity changed before Doctor could claim it",
-        beforeClaim: () => params.beforeClaim?.(params.detected.sourcePath),
-      });
-    }
-    result = importAndRecordReceipt({
-      env: params.env,
-      sourcePath: params.detected.sourcePath,
-      snapshot,
-    });
-  } catch (error) {
-    const restoreError = await source.restore();
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy device identity: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
-    };
-  }
-
-  try {
-    params.beforeCleanup?.();
-    if (await source.exists()) {
-      throw new Error("legacy device identity source reappeared during import");
-    }
-    const finalSnapshot = await source.read(true);
-    if (!snapshotsMatch(snapshot, finalSnapshot)) {
-      throw new Error("legacy device identity claim changed after SQLite import");
-    }
-    verifyCanonicalIdentity(finalSnapshot.identity, params.env);
-    await source.remove({
-      removeSource: params.removeSource,
-      sourceReappearedMessage: "legacy device identity source reappeared during import",
-      claimRemainingMessage: "legacy device identity Doctor claim remains after cleanup",
-    });
-    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
-  } catch (error) {
-    return {
-      changes: [],
-      warnings: [`Device identity is in SQLite, but legacy cleanup failed: ${String(error)}`],
-    };
-  }
-
-  return {
-    changes: [
-      result.imported
-        ? "Migrated primary device identity to SQLite."
-        : "Preserved identical primary device identity already in SQLite.",
-    ],
-    warnings: [],
-    notices: ["Removed retired device identity JSON after verified SQLite import."],
-  };
-}
-
 /** Import a verified retired primary identity under explicit Doctor authority. */
 export async function migrateLegacyDeviceIdentity(params: {
   detected: LegacyDeviceIdentityDetection;
@@ -482,17 +349,131 @@ export async function migrateLegacyDeviceIdentity(params: {
     releaseLabel: "Device identity",
     errorLabel: "Failed reading legacy device identity state",
     run: async (env) => {
-      if (hasLegacyDeviceIdentityPath(params.detected)) {
-        const stateRoot = await root(params.stateDir, {
-          hardlinks: "reject",
-          maxBytes: MAX_LEGACY_IDENTITY_BYTES,
-          symlinks: "reject",
-        });
-        return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+      if (!hasLegacyDeviceIdentityPath(params.detected)) {
+        return params.detected.hasInvalidCanonical
+          ? repairInvalidCanonicalIdentity(env)
+          : { changes: [], warnings: [] };
       }
-      return params.detected.hasInvalidCanonical
-        ? repairInvalidCanonicalIdentity(env)
-        : { changes: [], warnings: [] };
+      const stateRoot = await root(params.stateDir, {
+        hardlinks: "reject",
+        maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+        symlinks: "reject",
+      });
+      const receipt = readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey("device-identity-json", params.detected.sourcePath),
+        env,
+      );
+      if (receipt) {
+        return await cleanupReceiptSources({ ...params, env, stateRoot, receipt });
+      }
+
+      if (
+        await stateRoot.exists(relativeLegacyPath(params.stateDir, params.detected.nativeClaimPath))
+      ) {
+        return {
+          changes: [],
+          warnings: [
+            "Native device identity import is pending; restart the native app before running Doctor.",
+          ],
+        };
+      }
+
+      const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+        stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: params.detected.sourcePath,
+        label: "device identity",
+        includeFilePath: false,
+        readSnapshot: (candidate) =>
+          readLegacySourceSnapshot({
+            stateRoot,
+            stateDir: params.stateDir,
+            sourcePath: candidate,
+          }),
+      });
+
+      await source.recoverLinkedMove();
+
+      const hasSource = await source.exists();
+      const hasClaim = await source.exists(true);
+      if (hasSource && hasClaim) {
+        return {
+          changes: [],
+          warnings: [
+            "Failed migrating legacy device identity: source and interrupted claim both exist.",
+          ],
+        };
+      }
+      if (!hasSource && !hasClaim) {
+        return { changes: [], warnings: [] };
+      }
+
+      let snapshot: LegacySourceSnapshot;
+      try {
+        snapshot = await source.read(!hasSource);
+      } catch (error) {
+        return {
+          changes: [],
+          warnings: [`Failed reading legacy device identity: ${String(error)}`],
+        };
+      }
+
+      let result: ReturnType<typeof importAndRecordReceipt>;
+      try {
+        if (hasSource) {
+          snapshot = await source.claim({
+            snapshot,
+            mismatchMessage: "legacy device identity changed before Doctor could claim it",
+            beforeClaim: () => params.beforeClaim?.(params.detected.sourcePath),
+          });
+        }
+        result = importAndRecordReceipt({
+          env,
+          sourcePath: params.detected.sourcePath,
+          snapshot,
+        });
+      } catch (error) {
+        const restoreError = await source.restore();
+        return {
+          changes: [],
+          warnings: [
+            `Failed migrating legacy device identity: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+          ],
+        };
+      }
+
+      try {
+        params.beforeCleanup?.();
+        if (await source.exists()) {
+          throw new Error("legacy device identity source reappeared during import");
+        }
+        const finalSnapshot = await source.read(true);
+        if (!snapshotsMatch(snapshot, finalSnapshot)) {
+          throw new Error("legacy device identity claim changed after SQLite import");
+        }
+        verifyCanonicalIdentity(finalSnapshot.identity, env);
+        await source.remove({
+          removeSource: params.removeSource,
+          sourceReappearedMessage: "legacy device identity source reappeared during import",
+          claimRemainingMessage: "legacy device identity Doctor claim remains after cleanup",
+        });
+        markLegacyMigrationSourceRemoved(result.sourceKey, env);
+      } catch (error) {
+        return {
+          changes: [],
+          warnings: [`Device identity is in SQLite, but legacy cleanup failed: ${String(error)}`],
+        };
+      }
+
+      return {
+        changes: [
+          result.imported
+            ? "Migrated primary device identity to SQLite."
+            : "Preserved identical primary device identity already in SQLite.",
+        ],
+        warnings: [],
+        notices: ["Removed retired device identity JSON after verified SQLite import."],
+      };
     },
   });
 }

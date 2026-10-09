@@ -50,8 +50,8 @@ export function registerEmbeddedSessionReaderTests<
   } = params;
 
   it("publishes the current runtime after startup maintenance and before the first local turn", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    const nextConfig = { agents: { list: [{ id: "main" }], defaults: { model: "openai/next" } } };
+    const initialConfig = { agents: { entries: { main: {} } } };
+    const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
     const migrating = deferred();
     const migration = deferred();

@@ -5,7 +5,6 @@ import type { ReactiveController, ReactiveControllerHost, TemplateResult } from 
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
-import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
@@ -70,16 +69,6 @@ export type ChatTranscriptSession = {
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
-};
-
-/** Presentation contract produced by the chat-item projection. */
-export type ChatTranscriptProjection = {
-  positionIndex: ChatPositionIndex;
-  isDirectThread: boolean;
-  isEmpty: boolean;
-  showLoadingSkeleton: boolean;
-  searchOpen: boolean;
-  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
 };
 
 /** Rows and lookup identities that must be promoted as one rendered projection. */
@@ -183,13 +172,12 @@ export class TranscriptPresentation implements ReactiveController {
   }
 
   hostDisconnected(): void {
-    if (this.overscanFrame !== null) {
-      cancelAnimationFrame(this.overscanFrame);
-      this.overscanFrame = null;
-    }
-    if (this.measureFrame !== null) {
-      cancelAnimationFrame(this.measureFrame);
-      this.measureFrame = null;
+    for (const field of ["overscanFrame", "measureFrame"] as const) {
+      const frame = this[field];
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        this[field] = null;
+      }
     }
     this.presented = false;
     this.renderedRows = false;

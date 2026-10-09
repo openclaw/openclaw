@@ -6,6 +6,7 @@ import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
+import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
@@ -30,6 +31,8 @@ vi.mock("./package-dist-inventory.js", () => ({
   collectPackageDistContentInventoryErrors: vi.fn(),
 }));
 vi.mock("./package-json.js", () => ({ readPackageVersion: vi.fn() }));
+// mock-isolation: Exercise triage decisions without opening package journals or lease databases.
+vi.mock("./package-update-activation.js", () => ({ assertNoPendingPackageActivation: vi.fn() }));
 vi.mock("./deferred-plugin-migrations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./deferred-plugin-migrations.js")>()),
   readDeferredPluginMigrations: vi.fn(),
@@ -224,6 +227,36 @@ beforeEach(() => {
 });
 
 describe("saved update failure resolution", () => {
+  it.each(["before verification", "during Doctor", "during verification"])(
+    "prescribes repair when package admission is blocked %s despite a successful last run",
+    async (when) => {
+      const blockAdmission = () => {
+        vi.mocked(assertNoPendingPackageActivation).mockImplementation(() => {
+          throw new Error("managed handoff lease database identity changed");
+        });
+      };
+      if (when === "before verification") {
+        blockAdmission();
+      } else if (when === "during Doctor") {
+        validateDoctor.mockImplementationOnce(async () => {
+          blockAdmission();
+          return { ok: true, score: 0, summary: "Doctor passed." };
+        });
+      } else {
+        vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
+          blockAdmission();
+          return true;
+        });
+      }
+      const result = await validate();
+      expect(result.ok).toBe(false);
+      expect(result.summary).toContain("managed handoff lease database identity changed");
+      expect(result.summary).toContain("`openclaw update repair`");
+      expect(result.summary).not.toContain("retry `openclaw update`");
+      expect(result.stopReason).toBe(result.summary);
+    },
+  );
+
   it("does not treat a later preview as completion of a Doctor failure", async () => {
     failedRun.reason = "post-update-failed";
     failedRun.steps = [{ step: "finalize:doctor", status: "failed" }];
@@ -350,6 +383,8 @@ describe("saved update failure resolution", () => {
     "database-schema-preflight",
     "finalize:doctor",
     "restart-unhealthy",
+    "managed-service-handoff-failed",
+    "update-recovery-pending",
   ])("requires a later verified updater outcome for %s", async (reason) => {
     failedRun.reason = reason;
     const savedFailure = failure(reason);
@@ -423,7 +458,10 @@ describe("saved update failure resolution", () => {
     failedRun.reason = reason;
     expect(await validate(failure(reason))).toMatchObject({
       ok: false,
-      summary: expect.stringContaining("Next step:"),
+      summary: expect.stringContaining("`openclaw update repair`"),
+      stopReason: expect.stringContaining(
+        "No resolution predicate for update failure requester-revoked",
+      ),
     });
   });
 

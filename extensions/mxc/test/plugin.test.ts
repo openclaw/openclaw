@@ -56,6 +56,11 @@ vi.mock("../src/readiness.js", () => ({
   warnMxcHostPrepIfNeeded: warnMxcHostPrepIfNeededMock,
 }));
 
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFileSync: readinessProbeExecMock,
+}));
+
 import { registerMxcPlugin } from "../src/plugin.js";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -204,15 +209,8 @@ describe("registerMxcPlugin", () => {
       }
       throw new Error(`unexpected probe: ${command}`);
     });
-    const fakeProbeExec =
-      readinessProbeExecMock as unknown as typeof import("node:child_process").execFileSync;
     assertMxcReadinessMock.mockImplementation(({ executablePath }) =>
-      runMxcReadiness({
-        executablePath,
-        platform: "win32",
-        deps: { execFileSync: fakeProbeExec },
-        warn: vi.fn(),
-      }),
+      runMxcReadiness({ executablePath }),
     );
 
     expect(() => registerMxcPlugin(legacy.api)).toThrow(

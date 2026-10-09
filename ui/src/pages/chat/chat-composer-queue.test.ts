@@ -444,7 +444,7 @@ describe("chat composer queue reordering", () => {
     expect(onQueueEditSubmit).toHaveBeenCalledOnce();
   });
 
-  it("leaves queue editor shortcuts to an active IME composition", () => {
+  it("leaves queue editor shortcuts to IME confirmation until keyup", () => {
     const onQueueEditSubmit = vi.fn();
     const onQueueEditCancel = vi.fn();
     const container = renderQueue({
@@ -472,11 +472,27 @@ describe("chat composer queue reordering", () => {
 
     editor.dispatchEvent(composingEnter);
     editor.dispatchEvent(legacyImeEscape);
+    const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+    editor.dispatchEvent(compositionEnd);
+    const confirmingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(confirmingEnter, "timeStamp", {
+      value: compositionEnd.timeStamp - 1,
+    });
+    editor.dispatchEvent(confirmingEnter);
 
     expect(composingEnter.defaultPrevented).toBe(false);
     expect(legacyImeEscape.defaultPrevented).toBe(false);
+    expect(confirmingEnter.defaultPrevented).toBe(false);
     expect(onQueueEditSubmit).not.toHaveBeenCalled();
     expect(onQueueEditCancel).not.toHaveBeenCalled();
+    editor.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onQueueEditSubmit).toHaveBeenCalledOnce();
   });
 
   it("edits and explicitly removes queued recipients without reassigning identical labels", () => {

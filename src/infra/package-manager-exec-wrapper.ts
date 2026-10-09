@@ -146,7 +146,6 @@ type PackageManagerOptions = {
 
 type PackageManagerContextOptions = PackageManagerOptions & {
   contextOptionsWithValue: ReadonlySet<string>;
-  contextCaseSensitiveOptionsWithValue?: ReadonlySet<string>;
   contextFlagOptions?: ReadonlySet<string>;
 };
 
@@ -159,7 +158,6 @@ const NPM_EXEC_OPTIONS: PackageManagerContextOptions = {
   ...NPM_DIRECT_EXEC_OPTIONS,
   caseSensitiveOptionsWithValue: new Set(["-C"]),
   contextOptionsWithValue: NPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
-  contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
   contextFlagOptions: new Set(["--ws", "--workspaces"]),
 };
 
@@ -168,7 +166,6 @@ const PNPM_EXEC_OPTIONS: PackageManagerContextOptions = {
   caseSensitiveOptionsWithValue: PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE,
   flagOptions: PNPM_FLAG_OPTIONS,
   contextOptionsWithValue: PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
-  contextCaseSensitiveOptionsWithValue: PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE,
   contextFlagOptions: new Set(["--recursive", "--workspace-root", "-r", "-w"]),
 };
 
@@ -217,13 +214,12 @@ function findFirstNonOptionIndex(
       return idx;
     }
     const parsedOption = parseInlineOptionToken(token);
-    if (params.caseSensitiveOptionsWithValue?.has(parsedOption.name)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (params.optionsWithValue.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
+    if (
+      params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
+      params.optionsWithValue.has(flag)
+    ) {
+      idx += parsedOption.hasInlineValue ? 1 : 2;
       continue;
     }
     if (params.flagOptions.has(flag)) {
@@ -265,18 +261,14 @@ function hasContextOption(
     const parsedOption = parseInlineOptionToken(token);
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (
-      params.contextCaseSensitiveOptionsWithValue?.has(parsedOption.name) ||
+      params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
       params.contextOptionsWithValue.has(flag) ||
       params.contextFlagOptions?.has(flag)
     ) {
       return true;
     }
-    if (params.caseSensitiveOptionsWithValue?.has(parsedOption.name)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
     if (params.optionsWithValue.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
+      idx += parsedOption.hasInlineValue ? 1 : 2;
       continue;
     }
     if (params.flagOptions.has(flag)) {
@@ -293,38 +285,31 @@ function hasContextOption(
 
 export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolean {
   const executable = normalizePackageManagerExecToken(argv[0] ?? "");
-  switch (executable) {
-    case "npm": {
-      if (hasContextOption(argv, 1, NPM_EXEC_OPTIONS)) {
-        return true;
-      }
-      const subcommandIdx = findFirstNonOptionIndex(argv, 1, NPM_EXEC_OPTIONS);
-      // npm also consumes context options after the command, up to the first `--`.
-      return subcommandIdx !== null && NPM_EXEC_SUBCOMMANDS.has(argv[subcommandIdx] ?? "")
-        ? hasContextOption(argv, subcommandIdx + 1, NPM_EXEC_OPTIONS, "before-terminator")
-        : false;
-    }
-    case "npx":
-    case "bunx":
-      return hasContextOption(argv, 1, NPM_EXEC_OPTIONS);
-    case "pnpm":
-    case "yarn": {
-      const options = executable === "pnpm" ? PNPM_EXEC_OPTIONS : YARN_EXEC_OPTIONS;
-      if (hasContextOption(argv, 1, options)) {
-        return true;
-      }
-      const subcommandIdx = findFirstNonOptionIndex(argv, 1, options);
-      return argv[subcommandIdx ?? -1] === "dlx"
-        ? hasContextOption(
-            argv,
-            (subcommandIdx ?? 0) + 1,
-            executable === "pnpm" ? PNPM_EXEC_OPTIONS : YARN_DLX_OPTIONS,
-          )
-        : false;
-    }
-    default:
-      return false;
+  if (executable === "npx" || executable === "bunx") {
+    return hasContextOption(argv, 1, NPM_EXEC_OPTIONS);
   }
+  if (executable !== "npm" && executable !== "pnpm" && executable !== "yarn") {
+    return false;
+  }
+  const [options] = PACKAGE_EXEC_MANAGERS[executable];
+  if (hasContextOption(argv, 1, options)) {
+    return true;
+  }
+  const subcommandIdx = findFirstNonOptionIndex(argv, 1, options);
+  if (subcommandIdx === null) {
+    return false;
+  }
+  // npm also consumes context options after the command, up to the first `--`.
+  if (executable === "npm") {
+    return (
+      NPM_EXEC_SUBCOMMANDS.has(argv[subcommandIdx] ?? "") &&
+      hasContextOption(argv, subcommandIdx + 1, options, "before-terminator")
+    );
+  }
+  return (
+    argv[subcommandIdx] === "dlx" &&
+    hasContextOption(argv, subcommandIdx + 1, executable === "pnpm" ? options : YARN_DLX_OPTIONS)
+  );
 }
 
 export function normalizePackageManagerExecToken(token: string): string {
@@ -336,11 +321,6 @@ type PackageManagerExecInvocation =
   | { kind: "not-exec" }
   | { kind: "unsafe-exec" }
   | { kind: "unwrapped"; argv: string[] };
-
-function firstSubcommandAfterOptions(argv: string[], params: PackageManagerOptions): string | null {
-  const idx = findFirstNonOptionIndex(argv, 1, params);
-  return idx === null ? null : normalizeLowercaseStringOrEmpty(argv[idx] ?? "");
-}
 
 function unwrapPackageExecArguments(
   argv: string[],
@@ -433,7 +413,9 @@ export function resolveKnownPackageManagerExecInvocation(
   if (unwrapped) {
     return { kind: "unwrapped", argv: unwrapped };
   }
-  const firstSubcommand = firstSubcommandAfterOptions(argv, options);
+  const subcommandIndex = findFirstNonOptionIndex(argv, 1, options);
+  const firstSubcommand =
+    subcommandIndex === null ? null : normalizeLowercaseStringOrEmpty(argv[subcommandIndex] ?? "");
   const knownExec =
     firstSubcommand === null
       ? argv.slice(1).some((token) => execSubcommands.has(normalizeLowercaseStringOrEmpty(token)))

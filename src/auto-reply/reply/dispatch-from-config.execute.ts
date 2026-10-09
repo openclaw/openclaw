@@ -8,6 +8,7 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
@@ -19,7 +20,6 @@ import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import { createDispatchBlockReplyHandler } from "./dispatch-from-config.block-reply.js";
-import { flushDispatchDeferredFinalText } from "./dispatch-from-config.deferred-final.js";
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
@@ -87,9 +87,31 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     flush: flushBlockTtsText,
   } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
-    const delivered = await flushDispatchDeferredFinalText(state);
-    didDeliverVisiblePartialReply ||= delivered;
-    return delivered;
+    try {
+      if (!state.deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
+        return;
+      }
+      const deferredVisibleText = state.cleanBlockTtsDirectiveText
+        ? cleanDeferredFinalText(state.progressState.accumulatedBlockTtsText)
+        : state.progressState.accumulatedBlockText;
+      if (!deferredVisibleText.trim()) {
+        return;
+      }
+      const fallback = await state.sendFinalPayload(
+        { text: deferredVisibleText },
+        { abortSignal: isDispatchOperationAborted() ? false : undefined, skipTts: true },
+      );
+      if (fallback.queuedFinal || fallback.routedFinalCount !== 0) {
+        state.progressState.accumulatedBlockText = "";
+        state.progressState.accumulatedBlockTtsText = "";
+        didDeliverVisiblePartialReply = true;
+      }
+    } catch (error) {
+      // Recovery must not replace the original resolver or cancellation outcome.
+      logVerbose(
+        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(error)}`,
+      );
+    }
   };
   const forwardToolProgress = async (forward: () => unknown) => {
     if (isDispatchOperationAborted()) {
@@ -102,11 +124,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     }
     markInboundDedupeReplayUnsafe();
     if (
-      shouldForwardProgressCallback({
+      (await shouldForwardProgressCallback({
         forwardWhenSourceDeliverySuppressed: true,
         requiresToolSummaryVisibility: true,
-      })
+      })) &&
+      !isDispatchOperationAborted()
     ) {
+      state.assertProgressCurrent();
       await forward();
     }
   };
@@ -129,6 +153,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             ctx,
             {
               ...state.getReplyOptions(),
+              preparedTtsPreferences: state.preparedTtsPreferences,
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
               sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
@@ -245,34 +270,38 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   const shouldDeliverFastModeAutoProgress =
                     isFastModeAutoProgress &&
                     ((!state.suppressAutomaticSourceDelivery &&
-                      (forceToolResultProgress || state.shouldSendToolSummaries())) ||
+                      (forceToolResultProgress || (await state.shouldSendToolSummariesAsync()))) ||
                       isForcedToolProgress ||
-                      state.shouldDeliverVerboseProgressDespiteSourceSuppression());
+                      (await state.shouldDeliverVerboseProgressDespiteSourceSuppression()));
                   if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
                     return;
                   }
                   const shouldForwardToolResultProgress = forceToolResultProgress
                     ? !requiresDurableToolResult &&
-                      (isFastModeAutoProgress || !state.shouldEmitVerboseProgress()) &&
-                      shouldForwardProgressCallback({
+                      (isFastModeAutoProgress || !(await state.shouldEmitVerboseProgressAsync())) &&
+                      (await shouldForwardProgressCallback({
                         forwardWhenSourceDeliverySuppressed:
                           allowProgressCallbacksWhenSourceDeliverySuppressed,
-                      })
-                    : (state.shouldSendToolSummaries() ||
+                      }))
+                    : ((await state.shouldSendToolSummariesAsync()) ||
                         (isFastModeAutoProgress &&
                           params.replyOptions?.allowToolLifecycleWhenProgressHidden === true)) &&
-                      shouldForwardProgressCallback(
+                      (await shouldForwardProgressCallback(
                         isFastModeAutoProgress
                           ? {
                               forwardWhenSourceDeliverySuppressed:
                                 allowProgressCallbacksWhenSourceDeliverySuppressed,
                             }
                           : undefined,
-                      );
+                      ));
                   const toolResultProgressCallback = shouldForwardToolResultProgress
                     ? onToolResultFromReplyOptions
                     : undefined;
                   let toolResultProgressVisible = false;
+                  if (isDispatchOperationAborted()) {
+                    return;
+                  }
+                  state.assertProgressCurrent();
                   if (toolResultProgressCallback) {
                     toolResultProgressVisible = (
                       await settleProgressVisibilityCallbackResult(
@@ -285,15 +314,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   if (
                     toolResultProgressCallback &&
-                    forceToolResultProgress &&
-                    !isFastModeAutoProgress
-                  ) {
-                    return;
-                  }
-                  if (
-                    toolResultProgressCallback &&
-                    isFastModeAutoProgress &&
-                    (toolResultProgressVisible || !shouldDeliverFastModeAutoProgress)
+                    (isFastModeAutoProgress
+                      ? toolResultProgressVisible || !shouldDeliverFastModeAutoProgress
+                      : forceToolResultProgress)
                   ) {
                     return;
                   }
@@ -303,7 +326,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   const bypassToolSummarySuppression =
                     isForcedToolProgress || shouldDeliverFastModeAutoProgress;
                   if (
-                    state.shouldSuppressProgressDelivery() &&
+                    (await state.shouldSuppressProgressDelivery()) &&
                     !bypassToolSummarySuppression &&
                     !hasAskUserPayload(payload)
                   ) {
@@ -312,7 +335,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   const visibleToolPayload = preparePayload(
                     dispatcher,
                     "tool",
-                    bypassToolSummarySuppression ? payload : resolveToolDeliveryPayload(payload),
+                    bypassToolSummarySuppression
+                      ? payload
+                      : await resolveToolDeliveryPayload(payload),
                     state.progressState,
                   );
                   if (!visibleToolPayload) {
@@ -330,11 +355,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                   const deliveryPayload = bypassToolSummarySuppression
                     ? normalizedPayload
-                    : resolveToolDeliveryPayload(normalizedPayload);
-                  if (!deliveryPayload) {
-                    return;
-                  }
-                  if (isDispatchOperationAborted()) {
+                    : await resolveToolDeliveryPayload(normalizedPayload);
+                  if (!deliveryPayload || isDispatchOperationAborted()) {
                     return;
                   }
                   if (
@@ -343,11 +365,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ) {
                     return;
                   }
-                  if (state.shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                  if (await state.shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
                     return;
                   }
                   if (
-                    !state.shouldSendToolSummaries() &&
+                    !(await state.shouldSendToolSummariesAsync()) &&
                     !bypassToolSummarySuppression &&
                     !requiresDurableToolResultDelivery(deliveryPayload)
                   ) {
@@ -363,8 +385,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   if (isDispatchOperationAborted()) {
                     return;
                   }
+                  state.assertProgressCurrent();
                   if (shouldRouteToOriginating) {
-                    await sendPayloadAsync(deliveryPayload, undefined, false);
+                    await sendPayloadAsync(deliveryPayload);
                   } else {
                     const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
                     if (hasAskUserPayload(deliveryPayload)) {
@@ -397,7 +420,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 if (isDispatchOperationAborted()) {
                   return;
                 }
-                if (payload.phase !== "update" || !state.shouldSendToolSummaries()) {
+                if (payload.phase !== "update" || !(await state.shouldSendToolSummariesAsync())) {
                   return;
                 }
                 await state.sendPlanUpdate({

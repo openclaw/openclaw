@@ -5,13 +5,13 @@ import { captureSessionEntryCurrentRead } from "../../config/sessions/session-en
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { isCurrentActiveWorkerEnvironment } from "./placement-dispatch-failure.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
@@ -41,8 +41,8 @@ export function createRepositoryWorkspaceMutationService(options: {
         mutate: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>;
       },
     ): Promise<T> {
+      const placement = await placements.getAsync(params.sessionId);
       params.assertCurrent();
-      const placement = placements.get(params.sessionId);
       if (placement?.state !== "active") {
         throw new Error("Repository workspace editing requires an active cloud placement");
       }

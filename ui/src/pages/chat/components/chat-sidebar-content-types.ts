@@ -12,6 +12,7 @@ import type {
 type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
+  sessionId?: string;
   messageId: string;
   maxChars?: number;
 };
@@ -102,8 +103,8 @@ type SessionDiffSidebarContent = {
 };
 
 type FileSaveOutcome =
-  | { ok: true; hash: string; updatedAtMs?: number }
-  | { ok: false; code: "conflict"; currentHash?: string }
+  | { ok: true; hash: string }
+  | { ok: false; code: "conflict" }
   | { ok: false; code: "error"; message: string };
 
 type FileSidebarEdit = {

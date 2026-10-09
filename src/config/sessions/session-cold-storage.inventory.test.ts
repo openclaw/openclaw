@@ -27,7 +27,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -75,7 +75,11 @@ it.each(["sqlite", "file"] as const)(
     try {
       const config = maintenanceConfig(fixture.scope.storePath);
       if (storage === "sqlite") {
-        config.agents = { list: [{ id: "main" }, { id: "other" }] };
+        config.agents = {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, other: {} },
+        };
       }
       const result = await getSessionColdStorageStatus(config);
       expect(result).toEqual([
@@ -124,7 +128,11 @@ it.each(["sqlite", "file"] as const)(
 it("counts a configured incognito store through its existing native owner without creating a file", async () => {
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
   const config = maintenanceConfig(storePath);
-  config.agents = { list: [{ id: "main" }, { id: "other" }] };
+  config.agents = {
+    ownership: "explicit",
+    defaults: { sessionStore: { agentId: "main" } },
+    entries: { main: {}, other: {} },
+  };
   const empty = {
     agentId: "main",
     storePath,
@@ -173,8 +181,8 @@ it("refuses a replaced source while its worker inventory is delayed", async () =
   await fs.mkdir(path.dirname(missing), { recursive: true });
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const run = historyLane.pool.run.bind(historyLane.pool);
-  vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+  const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+  vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
     const reply = await run(...args);
     if (
       reply.ok &&

@@ -2,6 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 
@@ -26,6 +31,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   completeSandboxRegistryReservation,
   readBrowserRegistry,
@@ -36,6 +42,8 @@ import {
   removeBrowserRegistryEntry,
   removeRegistryEntry,
   removeSandboxRegistryGeneration,
+  removeSandboxRegistryRuntime,
+  reserveSandboxRegistryEntry,
   updateBrowserRegistry,
   updateRegistry,
 } from "./registry.js";
@@ -98,6 +106,87 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
+  it("keeps reservation and removal intent SQL off the caller thread", async () => {
+    await updateRegistry(containerEntry({ containerName: "admission-fixture" }));
+    const calls = observeMainThreadSql();
+    calls.calibrate();
+    const removeRuntime = vi.fn(async () => {});
+    try {
+      const reserved = await reserveSandboxRegistryEntry(
+        containerEntry({
+          containerName: "reserved-boundary",
+          backendId: "boundary",
+          sessionKey: "agent:boundary",
+          workspaceDir: "/synthetic/workspace",
+        }),
+      );
+      expect(reserved).toMatchObject({
+        containerName: "reserved-boundary",
+        runtimeState: "pending",
+      });
+      await removeSandboxRegistryRuntime(reserved, removeRuntime);
+      expect(removeRuntime).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          containerName: "reserved-boundary",
+          runtimeState: "removing-pending",
+        }),
+      );
+      await expect(readRegistryEntry(reserved.containerName)).resolves.toBeNull();
+      calls.expectIdle();
+    } finally {
+      calls.restore();
+    }
+  });
+
+  it("preserves a runtime whose activity advanced after the prune scan", async () => {
+    const entry = await reserveSandboxRegistryEntry(
+      containerEntry({ backendId: "prune-boundary", workspaceDir: "/synthetic/workspace" }),
+    );
+    const now = 2 * 60 * 60 * 1000;
+    await updateRegistry({ ...entry, lastUsedAtMs: now });
+    const removeRuntime = vi.fn(async () => {});
+    await removeSandboxRegistryRuntime(entry, removeRuntime, {
+      prune: { now, idleHours: 1, maxAgeDays: 0 },
+    });
+    expect(removeRuntime).not.toHaveBeenCalled();
+    await expect(readRegistryEntry(entry.containerName)).resolves.toMatchObject({
+      lastUsedAtMs: now,
+      runtimeState: "pending",
+    });
+  });
+
+  it("settles accepted removal across direct database close", async ({ signal }) => {
+    const entry = await reserveSandboxRegistryEntry(
+      containerEntry({ backendId: "close-boundary", workspaceDir: "/synthetic/workspace" }),
+    );
+    const providerEntered = createDeferred();
+    const releaseProvider = createDeferred();
+    const removeRuntime = vi.fn(async () => {
+      providerEntered.resolve();
+      await releaseProvider.promise;
+    });
+    const removing = removeSandboxRegistryRuntime(entry, removeRuntime);
+    let closing: Promise<void> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          providerEntered.promise,
+          removing,
+          "Removal settled before its provider accepted cleanup",
+        ),
+        signal,
+      );
+      closing = closeOpenClawStateDatabaseAsync();
+      releaseProvider.resolve();
+      await withinTest(Promise.all([removing, closing]), signal);
+      expect(removeRuntime).toHaveBeenCalledOnce();
+      await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+    } finally {
+      releaseProvider.resolve();
+      await Promise.allSettled([removing, closing]);
+    }
+  });
+
   it("refuses queued browser publication after hosted custody is released", async () => {
     const owner = acquireGatewayStateOwner({
       databasePath: resolveOpenClawStateSqlitePath(),
@@ -263,6 +352,31 @@ describe("registry race safety", () => {
       await expect(readRegistryEntry(entry.containerName)).resolves.toEqual(before);
       await removeRegistryEntry(entry.containerName);
       await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+    }
+  });
+
+  it("refuses completion and retirement of a replaced reservation in the worker", async () => {
+    const original = await reserveSandboxRegistryEntry(
+      containerEntry({ backendId: "generation-boundary", workspaceDir: "/original/workspace" }),
+    );
+    await removeRegistryEntry(original.containerName);
+    const replacement = await reserveSandboxRegistryEntry({
+      ...original,
+      createdAtMs: original.createdAtMs + 1,
+      workspaceDir: "/replacement/workspace",
+    });
+    const calls = observeMainThreadSql();
+    calls.calibrate();
+    try {
+      for (const retired of [false, true]) {
+        await expect(completeSandboxRegistryReservation(original, retired)).rejects.toThrow(
+          "Sandbox runtime generation changed",
+        );
+      }
+      await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject(replacement);
+      calls.expectIdle();
+    } finally {
+      calls.restore();
     }
   });
 

@@ -69,8 +69,10 @@ it("refuses immutable activation before manager delegation, history, campaign, o
     undefined,
     expect.objectContaining({
       code: "UNAVAILABLE",
-      details: { reason: "immutable-activation-unavailable" },
-      message: expect.stringContaining("prepare a sealed generation"),
+      details: { reason: "immutable-native-updater-required" },
+      message: expect.stringContaining(
+        "root installation owner outside the Gateway service cgroup",
+      ),
     }),
   );
   expect(resolveManager).not.toHaveBeenCalled();
@@ -94,7 +96,7 @@ it("refuses an immutable surface discovered after initial admission before campa
 
   expect(payload).toMatchObject({
     ok: false,
-    result: { status: "skipped", reason: "immutable-activation-unavailable" },
+    result: { status: "skipped", reason: "immutable-native-updater-required" },
     restart: null,
   });
   expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();

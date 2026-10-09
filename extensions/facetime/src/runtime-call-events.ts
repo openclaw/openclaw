@@ -21,22 +21,16 @@ import {
   retainFaceTimeDialCallUUID,
   type PendingFaceTimeDial,
 } from "./outbound-call.js";
+import type { createFaceTimeCallControl } from "./runtime-call-control.js";
 import { retainHelperResultPeers } from "./runtime-helper-results.js";
 import { ActiveFaceTimeCall, updateCallStatus } from "./runtime-state.js";
-
-type CallControl = {
-  activateCallTalk(call: ActiveFaceTimeCall, options: { unmute: boolean }): Promise<void>;
-  attemptCarrierHangup(call: ActiveFaceTimeCall, reason: string): Promise<boolean>;
-  closeCall(call: ActiveFaceTimeCall, reason: string): Promise<void>;
-  startCallTalk(call: ActiveFaceTimeCall): Promise<void>;
-};
 
 export function createFaceTimeCallEventHandler(params: {
   calls: FaceTimeCallRegistry<ActiveFaceTimeCall>;
   helper: FaceTimeHelperSocketServer;
   config: FaceTimeConfig;
   logger: RuntimeLogger;
-  callControl: CallControl;
+  callControl: ReturnType<typeof createFaceTimeCallControl>;
   isStopping: () => boolean;
   isDriverInstallPending: () => boolean;
   getPendingDial: () => PendingFaceTimeDial | undefined;
@@ -172,7 +166,7 @@ export function createFaceTimeCallEventHandler(params: {
       });
       projectFaceTimeNativeAction("answer", answerResult);
       retainHelperResultPeers(call, answerResult);
-      await params.callControl.activateCallTalk(call, { unmute: true });
+      await params.callControl.activateCallTalk(call);
       params.logger.info("[facetime] answered authorized FaceTime call");
     } catch (error) {
       params.logger.warn(`[facetime] failed to answer FaceTime call: ${formatErrorMessage(error)}`);
@@ -230,7 +224,7 @@ export function createFaceTimeCallEventHandler(params: {
     updateCallStatus(call, event);
     try {
       await params.callControl.startCallTalk(call);
-      await params.callControl.activateCallTalk(call, { unmute: true });
+      await params.callControl.activateCallTalk(call);
       params.logger.info("[facetime] realtime talk session active");
     } catch (error) {
       if (call.lifecycleAbort.signal.aborted || params.calls.active !== call) {

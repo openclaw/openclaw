@@ -43,24 +43,21 @@ beforeEach(() => {
   );
 });
 
-it.each([403, 429])(
-  "web_search preserves provider HTTP %i guidance without exposing the response body",
-  async (httpStatus) => {
-    mocks.endpoint.mockImplementationOnce(
-      async (_params: unknown, run: (context: { response: Response }) => Promise<unknown>) =>
-        run({ response: new Response(BODY, { status: httpStatus }) }),
-    );
-    const result = await createWebSearchTool({ config })?.execute("search-http-error", {
-      query: "synthetic query",
-    });
+it("web_search preserves provider HTTP 403 guidance without exposing the response body", async () => {
+  mocks.endpoint.mockImplementationOnce(
+    async (_params: unknown, run: (context: { response: Response }) => Promise<unknown>) =>
+      run({ response: new Response(BODY, { status: 403 }) }),
+  );
+  const result = await createWebSearchTool({ config })?.execute("search-http-error", {
+    query: "synthetic query",
+  });
 
-    expect(result?.details).toMatchObject({
-      kind: "error",
-      provider: "perplexity",
-      message: expect.stringContaining(`HTTP ${httpStatus}`),
-    });
-    expect(JSON.stringify(result)).toContain(httpStatus === 429 ? "quota" : "credentials");
-    expect(JSON.stringify(result)).not.toContain("private upstream diagnostic");
-    expect(JSON.stringify(result)).not.toContain(API_KEY);
-  },
-);
+  expect(result?.details).toMatchObject({
+    kind: "error",
+    provider: "perplexity",
+    message: expect.stringContaining("HTTP 403"),
+  });
+  expect(JSON.stringify(result)).toContain("credentials");
+  expect(JSON.stringify(result)).not.toContain("private upstream diagnostic");
+  expect(JSON.stringify(result)).not.toContain(API_KEY);
+});

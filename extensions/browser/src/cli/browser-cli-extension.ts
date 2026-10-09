@@ -36,28 +36,8 @@ import {
 } from "../browser/extension-setup.js";
 import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shared.js";
 
-async function buildPairingString(options: { gatewayUrl?: string; localGateway: boolean }) {
-  const cfg = getRuntimeConfig();
-  if (options.localGateway && options.gatewayUrl !== undefined) {
-    throw new Error("--local-gateway cannot be combined with --gateway-url");
-  }
-  if (options.localGateway && cfg.gateway?.mode === "remote") {
-    throw new Error("--local-gateway requires a local Gateway configuration");
-  }
-  const result = await buildBrowserExtensionPairing({
-    cfg,
-    gatewayUrl: options.gatewayUrl,
-    localTransport: options.localGateway ? "gateway" : undefined,
-  });
-  return {
-    pairing: result.pairingString,
-    relayPort: result.relayPort,
-    remote: result.topology === "direct-remote",
-  };
-}
-
 /** Resolve safe v2 metadata, with an explicit gated legacy credential escape hatch. */
-async function buildCdpEndpoint(options: { legacyBearer: boolean }) {
+async function buildCdpEndpoint(legacyBearer: boolean) {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const token = await ensureExtensionRelayToken();
@@ -81,14 +61,14 @@ async function buildCdpEndpoint(options: { legacyBearer: boolean }) {
       flow: "cdp" as const,
     },
   };
-  if (options.legacyBearer && !resolved.extensionRelay.allowLegacyAuth) {
+  if (legacyBearer && !resolved.extensionRelay.allowLegacyAuth) {
     throw new Error(
       "Legacy browser relay auth is disabled; remove --legacy-bearer and use Browser Relay Authentication v2.",
     );
   }
   return {
     ...metadata,
-    ...(options.legacyBearer ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    ...(legacyBearer ? { headers: { Authorization: `Bearer ${token}` } } : {}),
   };
 }
 
@@ -377,19 +357,29 @@ export function registerBrowserExtensionCommands(
     .action(async (opts, command) => {
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
-        const result = await buildPairingString({
+        const cfg = getRuntimeConfig();
+        const localGateway = opts.localGateway === true;
+        if (localGateway && opts.gatewayUrl !== undefined) {
+          throw new Error("--local-gateway cannot be combined with --gateway-url");
+        }
+        if (localGateway && cfg.gateway?.mode === "remote") {
+          throw new Error("--local-gateway requires a local Gateway configuration");
+        }
+        const result = await buildBrowserExtensionPairing({
+          cfg,
           gatewayUrl: opts.gatewayUrl,
-          localGateway: opts.localGateway === true,
+          localTransport: localGateway ? "gateway" : undefined,
         });
+        const remote = result.topology === "direct-remote";
         if (json) {
           defaultRuntime.writeJson({
-            pairingString: result.pairing,
+            pairingString: result.pairingString,
             relayPort: result.relayPort,
-            remote: result.remote,
+            remote,
           });
           return;
         }
-        const setupLine = result.remote
+        const setupLine = remote
           ? info(
               "Remote pairing: load and pair the extension on the machine running Chrome; it connects to this gateway over wss://.",
             )
@@ -401,7 +391,7 @@ export function registerBrowserExtensionCommands(
             `   ${bundledDir}`,
             info("2. Open the OpenClaw popup and paste this pairing string:"),
             "",
-            theme.heading(result.pairing),
+            theme.heading(result.pairingString),
             "",
             info("The relay key is a host-local secret; keep it private."),
           ].join("\n"),
@@ -421,7 +411,7 @@ export function registerBrowserExtensionCommands(
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
         const legacyBearer = opts.legacyBearer === true;
-        const endpoint = await buildCdpEndpoint({ legacyBearer });
+        const endpoint = await buildCdpEndpoint(legacyBearer);
         if (legacyBearer) {
           defaultRuntime.error(
             theme.warn(

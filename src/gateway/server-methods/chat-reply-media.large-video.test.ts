@@ -25,7 +25,10 @@ import {
 } from "../managed-image-attachments.test-support.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { buildAssistantReplyContent } from "./chat-assistant-content.js";
-import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import {
+  captureWebchatReplyMediaScope,
+  normalizeWebchatReplyMediaPathsForDisplay,
+} from "./chat-reply-media.js";
 
 const { getRuntimeConfig, readMessages, runFfprobe, runFfmpeg } = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(() => ({})),
@@ -66,7 +69,7 @@ beforeAll(async () => {
   cfg = {
     session: { store: await prepareManagedSessionStore(stateDir) },
     tools: { allow: ["read"] },
-    agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace") }] },
+    agents: { entries: { main: { workspace: path.join(stateDir, "workspace") } } },
   };
   getRuntimeConfig.mockReturnValue(cfg);
 });
@@ -103,6 +106,12 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
       }),
     ).rejects.toThrow(/Managed video attachment.*could not be prepared/u);
 
+    const scope = captureWebchatReplyMediaScope({
+      cfg,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      sessionLoadOptions: { agentId: "main" },
+    });
     let largestAllocation = 0;
     const allocateSafe = Buffer.alloc.bind(Buffer);
     const allocate = Buffer.allocUnsafe.bind(Buffer);
@@ -131,10 +140,7 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
     });
     try {
       const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
-        cfg,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        sessionEntry: undefined,
+        ...scope,
         payloads: [directive],
       });
       expect(payloads[0]).toMatchObject({

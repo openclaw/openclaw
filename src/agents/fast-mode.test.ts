@@ -17,7 +17,7 @@ describe("resolveFastModeState", () => {
       cfg: {
         agents: {
           defaults: { fastModeDefault: "auto" },
-          list: [{ id: "main", fastModeDefault: false }],
+          entries: { main: { fastModeDefault: false } },
         },
       } as OpenClawConfig,
       provider: "openai",
@@ -86,7 +86,7 @@ describe("resolveFastModeState", () => {
             "openai/gpt-4o": { params: { fastMode: true } },
           },
         },
-        list: [{ id: "main", fastModeDefault: false }],
+        entries: { main: { fastModeDefault: false } },
       },
     } as OpenClawConfig;
 

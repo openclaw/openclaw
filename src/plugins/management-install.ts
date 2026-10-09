@@ -7,7 +7,7 @@ import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/insta
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { VERSION } from "../version.js";
+import { resolveCompatibilityHostVersion, VERSION } from "../version.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
@@ -23,6 +23,7 @@ import {
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
+  installWithChannelFallback,
   installWithSourceFallback,
   NpmChannelResolutionError,
   type PluginInstallSource,
@@ -105,10 +106,6 @@ export type ManagedPluginSourceInstallRequest =
       spec: string;
       installSources: PluginInstallSource[];
       expectedPluginId?: string;
-      /** Spec recorded for the install; keeps user intent when `spec` is channel-resolved. */
-      recordSpec?: string;
-      pluginId: string;
-      expectedIntegrity?: string;
       mode: "install" | "update";
       pin?: boolean;
     }
@@ -149,29 +146,18 @@ type SourceInstallerResult =
   | InstallPluginResult
   | Extract<ManagedPluginSourceInstallResult, { ok: false }>;
 
-/**
- * Official plugin installs target the release stream the gateway is running,
- * the same target `openclaw doctor --fix` and `openclaw plugins update`
- * already resolve. Resolving here keeps every managed install path — CLI,
- * chat command, and any future caller — on one answer instead of letting the
- * registry default land a plugin the gateway then reports as drifted.
- *
- * Beta and extended-stable resolve here. Version-bound stable tracks key off a
- * per-plugin `versionBoundToOpenClaw` descriptor that a managed install request
- * does not carry, and answering for them from this boundary would pin plugins
- * the policy never opted in.
- */
+/** Apply the shared release-channel policy while preserving operator pins. */
 async function resolveOfficialManagedInstallSpec(params: {
   request: Extract<ManagedPluginSourceInstallRequest, { source: "npm" | "clawhub" }>;
   config: OpenClawConfig;
-}): Promise<string | null> {
+}): Promise<ReturnType<typeof resolveClawHubInstallSpecsForUpdateChannel> | null> {
   const { request } = params;
   const trustedSourceLinkedOfficialInstall = request.trustedSourceLinkedOfficialInstall === true;
   if (request.source === "npm" && !trustedSourceLinkedOfficialInstall) {
     return null;
   }
-  // An integrity pin identifies one exact artifact, so it outranks the channel.
-  if (request.expectedIntegrity) {
+  // Operator pins outrank the channel; recordSpec carries a catalog default’s original intent.
+  if (request.expectedIntegrity && !(request.source === "clawhub" && request.recordSpec)) {
     return null;
   }
   const packageName =
@@ -189,16 +175,17 @@ async function resolveOfficialManagedInstallSpec(params: {
     configChannel: normalizeUpdateChannel(params.config.update?.channel),
     currentVersion: VERSION,
   });
-  if (updateChannel !== "beta" && updateChannel !== "extended-stable") {
+  if (request.source === "npm" && updateChannel !== "beta" && updateChannel !== "extended-stable") {
     return null;
   }
   const specs =
     request.source === "clawhub"
       ? resolveClawHubInstallSpecsForUpdateChannel({
-          spec: request.spec,
+          spec: request.recordSpec ?? request.spec,
           updateChannel,
           officialPackageName: packageName,
-          coreVersion: VERSION,
+          coreVersion: resolveCompatibilityHostVersion(),
+          preferCoreVersion: true,
         })
       : await resolveNpmInstallSpecsForUpdateChannel({
           spec: request.spec,
@@ -206,7 +193,12 @@ async function resolveOfficialManagedInstallSpec(params: {
           officialPackageName: packageName,
           coreVersion: VERSION,
         });
-  return specs.installSpec === request.spec ? null : specs.installSpec;
+  return specs.installSpec === request.spec || specs.installSpec === request.recordSpec
+    ? null
+    : {
+        ...specs,
+        fallbackSpec: updateChannel === "stable" && specs.fallbackSpec ? request.spec : undefined,
+      };
 }
 
 type ManagedPluginSourceInstallParams = {
@@ -238,14 +230,6 @@ export type ManagedPluginInstallOptions = Omit<
   confirmInstall?: () => Promise<boolean>;
 };
 
-/**
- * Installs official plugins from the release stream the gateway runs. When that
- * stream has no published artifact the install reports it instead of widening
- * back to the registry default: widening would resolve `latest` and land exactly
- * the cross-release plugin this boundary exists to prevent, and a fresh install
- * has nothing to preserve, so failing with the reason costs the operator only a
- * retry with an explicit version.
- */
 export async function installManagedPluginSource(
   input: ManagedPluginSourceInstallParams,
 ): Promise<ManagedPluginSourceInstallResult> {
@@ -264,19 +248,22 @@ export async function installManagedPluginSource(
         sources: request.pin
           ? request.installSources.filter((source) => source.source === "npm")
           : request.installSources,
-        install: async (source) =>
-          await installManagedPluginSource({
+        install: async (source) => {
+          const clawhub = source.source === "clawhub" ? parseClawHubPluginSpec(source.spec) : null;
+          return await installManagedPluginSource({
             ...params,
             request: {
               source: source.source,
               spec: source.spec,
+              ...(clawhub ? { recordSpec: `clawhub:${clawhub.name}` } : {}),
               mode: request.mode,
               expectedPluginId: request.expectedPluginId,
               trustedSourceLinkedOfficialInstall: true,
               ...(source.expectedIntegrity ? { expectedIntegrity: source.expectedIntegrity } : {}),
               ...(source.source === "npm" && request.pin ? { pin: true } : {}),
             },
-          }),
+          });
+        },
         result: (attempt) => attempt,
         onFallback: (message) => params.logger?.warn?.(message),
       });
@@ -287,9 +274,9 @@ export async function installManagedPluginSource(
     if (request.source !== "npm" && request.source !== "clawhub") {
       return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
     }
-    let installSpec: string | null;
+    let specs: Awaited<ReturnType<typeof resolveOfficialManagedInstallSpec>>;
     try {
-      installSpec = await resolveOfficialManagedInstallSpec({
+      specs = await resolveOfficialManagedInstallSpec({
         request,
         config: params.snapshot.config,
       });
@@ -299,30 +286,36 @@ export async function installManagedPluginSource(
       }
       return { ok: false, error: error.message, code: error.code };
     }
-    if (!installSpec) {
+    if (!specs) {
       return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
     }
-    const result = await installResolvedManagedPluginSource(
-      {
-        ...params,
-        request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
-      },
-      assertOwned,
-    );
-    if (result.ok) {
-      return result;
-    }
     const isUnavailableTarget =
-      request.source === "clawhub"
-        ? isUnavailableClawHubTarget(result)
-        : isUnavailableNpmTarget(result);
-    if (!isUnavailableTarget) {
+      request.source === "clawhub" ? isUnavailableClawHubTarget : isUnavailableNpmTarget;
+    const result = await installWithChannelFallback({
+      ...specs,
+      install: (spec) =>
+        installResolvedManagedPluginSource(
+          {
+            ...params,
+            request: {
+              ...request,
+              spec,
+              recordSpec: request.recordSpec ?? request.spec,
+              expectedIntegrity: spec === request.spec ? request.expectedIntegrity : undefined,
+            },
+          },
+          assertOwned,
+        ),
+      isRetryable: (attempt) => !attempt.ok && isUnavailableTarget(attempt),
+      onFallback: (message) => params.logger?.warn?.(message),
+    });
+    if (result.ok || !isUnavailableTarget(result)) {
       return result;
     }
     return {
       ...result,
       code: PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE,
-      error: `No ${installSpec} release is published for this gateway. Installing ${request.spec} would resolve a build from another release; pass an explicit version to install one anyway.`,
+      error: `No ${specs.installSpec} release is published for this gateway. Installing ${request.spec} would resolve a build from another release; pass an explicit version to install one anyway.`,
     };
   });
 }

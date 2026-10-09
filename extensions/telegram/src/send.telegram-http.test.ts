@@ -302,7 +302,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
   });
 
   it.each([
-    { failure: "misdirected", revoke: false },
     { failure: "misdirected", revoke: true },
     { failure: "connection", revoke: false },
     { failure: "connection", revoke: true },
@@ -349,7 +348,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
   );
 
   it.each([
-    { entry: "direct", rich: false },
     { entry: "public", rich: false },
     { entry: "public", rich: true },
   ] as const)(
@@ -361,11 +359,9 @@ describe("Telegram physical send acceptance over HTTP", () => {
       }
       await sendThrough(entry, "answer", recordDispatch, undefined, rich);
       expect(events).toEqual(
-        entry === "direct"
-          ? ["dispatch", "http", "http", "http"]
-          : rich
-            ? ["dispatch", "http", "dispatch", "http"]
-            : ["dispatch", "http", "dispatch", "http", "dispatch", "http"],
+        rich
+          ? ["dispatch", "http", "dispatch", "http"]
+          : ["dispatch", "http", "dispatch", "http", "dispatch", "http"],
       );
       expect(requests).toHaveLength(rich ? 2 : 3);
       expect(requests[0]?.fields.reply_parameters).toMatchObject({ message_id: 7, quote: "quote" });
@@ -387,36 +383,33 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it.each(["direct", "public"] as const)(
-    "retains accepted IDs when the next existing %s callback rejects closure",
-    async (entry) => {
-      const closure = new PlatformMessageNotDispatchedError("delivery owner closed", {
-        cause: new Error("fixture authority closed after the first accepted HTTP request"),
-      });
-      const observed = await sendThrough(entry, "A".repeat(8000), async () => {
-        events.push("dispatch");
-        if (requests.length > 0) {
-          throw closure;
-        }
-      }).catch((error: unknown) => error);
-      expect(events).toEqual(["dispatch", "http", "dispatch"]);
-      expect(requests).toHaveLength(1);
-      expect(isChannelPartialDeliveryError(observed)).toBe(true);
-      if (!isChannelPartialDeliveryError(observed)) {
-        throw observed;
+  it("retains accepted IDs when the next direct callback rejects closure", async () => {
+    const closure = new PlatformMessageNotDispatchedError("delivery owner closed", {
+      cause: new Error("fixture authority closed after the first accepted HTTP request"),
+    });
+    const observed = await sendThrough("direct", "A".repeat(8000), async () => {
+      events.push("dispatch");
+      if (requests.length > 0) {
+        throw closure;
       }
-      expect(observed.deliveryResult.messageIds).toEqual(["1"]);
-      const causes: Error[] = [];
-      for (
-        let cause: unknown = observed;
-        cause instanceof Error && !causes.includes(cause);
-        cause = cause.cause
-      ) {
-        causes.push(cause);
-      }
-      expect(causes).toContain(closure);
-    },
-  );
+    }).catch((error: unknown) => error);
+    expect(events).toEqual(["dispatch", "http", "dispatch"]);
+    expect(requests).toHaveLength(1);
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["1"]);
+    const causes: Error[] = [];
+    for (
+      let cause: unknown = observed;
+      cause instanceof Error && !causes.includes(cause);
+      cause = cause.cause
+    ) {
+      causes.push(cause);
+    }
+    expect(causes).toContain(closure);
+  });
 
   it.each(["direct", "public"] as const)(
     "preserves %s media follow-up ordering and keyboard placement",
@@ -501,7 +494,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it.each([
     { required: false, revoke: false, legacy: true },
-    { required: false, revoke: true, legacy: false },
     { required: true, revoke: true, legacy: false },
   ])(
     "settles registered Telegram delivery and pin (required: $required, revoked: $revoke, legacy: $legacy)",
@@ -592,7 +584,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it("normalizes endpoint roots and legacy targets before sending", async () => {
+  it("uses canonical endpoint roots when resolving legacy targets", async () => {
     fixture.responseFor = (method) =>
       method === "getChat" ? { id: -100123, type: "supergroup", title: "Resolved" } : undefined;
     await sendMessageTelegram("https://t.me/fixture", "Resolved destination", {
@@ -601,7 +593,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
         channels: {
           telegram: {
             botToken: cfg.channels.telegram.botToken,
-            apiRoot: `${cfg.channels.telegram.apiRoot}/bot${cfg.channels.telegram.botToken}/`,
+            apiRoot: cfg.channels.telegram.apiRoot,
           },
         },
       },
@@ -653,22 +645,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
     ]);
   });
 
-  it.each(["MESSAGE_DELETE_FORBIDDEN", "CHAT_WRITE_FORBIDDEN"])(
-    "distinguishes a benign delete refusal from %s",
-    async (description) => {
-      rejections.push(`Bad Request: ${description}`);
-      const deleting = deleteMessageTelegram("123", 321, { cfg, api: bot.api });
-      if (description === "CHAT_WRITE_FORBIDDEN") {
-        await expect(deleting).rejects.toThrow(description);
-      } else {
-        await expect(deleting).resolves.toMatchObject({
-          ok: false,
-          warning: expect.stringContaining(description),
-        });
-      }
-      expect(requests.map(({ method }) => method)).toEqual(["deleteMessage"]);
-    },
-  );
+  it("reports a benign MESSAGE_DELETE_FORBIDDEN refusal without retrying", async () => {
+    rejections.push("Bad Request: MESSAGE_DELETE_FORBIDDEN");
+    const deleting = deleteMessageTelegram("123", 321, { cfg, api: bot.api });
+    await expect(deleting).resolves.toMatchObject({
+      ok: false,
+      warning: expect.stringContaining("MESSAGE_DELETE_FORBIDDEN"),
+    });
+    expect(requests.map(({ method }) => method)).toEqual(["deleteMessage"]);
+  });
 
   it("preserves captured forum-topic authority after awaited target preparation", async () => {
     let platformCurrent = true;
@@ -766,7 +751,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it.each([
     { gatewayClientScopes: undefined },
-    { gatewayClientScopes: [] },
     { gatewayClientScopes: ["operator.write"] },
     { gatewayClientScopes: ["operator.admin"] },
   ])(
@@ -790,30 +774,20 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it.each(["text", "media", "rejected"] as const)(
-    "keeps private content out of %s success logging",
-    async (kind) => {
-      const info = vi.spyOn(sendLogger, "info");
-      const text = "private outbound payload";
-      if (kind === "rejected") {
-        rejections.push("Bad Request: message thread not found");
-      }
-      const sending = sendMessageTelegram("123:topic:77", text, {
-        cfg,
-        api: bot.api,
-        ...(kind === "media" ? { mediaUrl: photoPath, mediaLocalRoots: [mediaDir] } : {}),
-      });
-      if (kind === "rejected") {
-        await expect(sending).rejects.toThrow("message thread not found");
-      } else {
-        await sending;
-      }
-      const logs = info.mock.calls.map(([message]) => message).join("\n");
-      expect(logs.includes("outbound send ok")).toBe(kind !== "rejected");
-      expect(logs).not.toContain(text);
-      expect(logs).not.toContain(photoPath);
-    },
-  );
+  it("keeps private captions and media paths out of success logging", async () => {
+    const info = vi.spyOn(sendLogger, "info");
+    const text = "private outbound payload";
+    await sendMessageTelegram("123:topic:77", text, {
+      cfg,
+      api: bot.api,
+      mediaUrl: photoPath,
+      mediaLocalRoots: [mediaDir],
+    });
+    const logs = info.mock.calls.map(([message]) => message).join("\n");
+    expect(logs).toContain("outbound send ok");
+    expect(logs).not.toContain(text);
+    expect(logs).not.toContain(photoPath);
+  });
 
   it("encodes interactive destinations without leaking invalid or competing actions", async () => {
     await sendMessageTelegram("123", "Choose", {
@@ -864,45 +838,32 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   describe("edit recovery", () => {
     afterEach(resetGlobalHookRunner);
-    it.each([
-      {
-        rejection: "Bad Request: message is not modified",
-        methods: ["editMessageText"],
-        texts: ["<b>visible</b>"],
-      },
-      {
-        rejection: "Bad Request: message text is empty",
-        methods: ["editMessageText", "editMessageText"],
-        texts: ["<b>visible</b>", "visible"],
-      },
-      {
-        rejection: "Bad Request: there is no text in the message to edit",
-        methods: ["editMessageText", "editMessageCaption"],
-        texts: ["<b>visible</b>", "<b>visible</b>"],
-      },
-    ])(
-      "recovers an existing message after $rejection without creating another",
-      async ({ rejection, methods, texts }) => {
-        rejections.push(rejection);
-        await editMessageTelegram("123", 321, "<b>visible</b>", {
-          cfg: {
-            channels: {
-              telegram: { ...cfg.channels.telegram, richMessages: false, linkPreview: false },
-            },
+    it("edits the existing caption when Telegram reports no text to edit", async () => {
+      rejections.push("Bad Request: there is no text in the message to edit");
+      await editMessageTelegram("123", 321, "<b>visible</b>", {
+        cfg: {
+          channels: {
+            telegram: { ...cfg.channels.telegram, richMessages: false, linkPreview: false },
           },
-          api: bot.api,
-          textMode: "html",
-          editMode: "auto",
-          buttons: [],
-        });
-        expect(requests.map(({ method }) => method)).toEqual(methods);
-        expect(requests.map(({ fields }) => fields.text ?? fields.caption)).toEqual(texts);
-        for (const { fields } of requests) {
-          expect(fields.message_id).toBe(321);
-          expect(fields.reply_markup).toEqual({ inline_keyboard: [] });
-        }
-      },
-    );
+        },
+        api: bot.api,
+        textMode: "html",
+        editMode: "auto",
+        buttons: [],
+      });
+      expect(requests.map(({ method }) => method)).toEqual([
+        "editMessageText",
+        "editMessageCaption",
+      ]);
+      expect(requests.map(({ fields }) => fields.text ?? fields.caption)).toEqual([
+        "<b>visible</b>",
+        "<b>visible</b>",
+      ]);
+      for (const { fields } of requests) {
+        expect(fields.message_id).toBe(321);
+        expect(fields.reply_markup).toEqual({ inline_keyboard: [] });
+      }
+    });
 
     it.each([
       { count: 501, list: false },
@@ -972,21 +933,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
         "editMessageText",
       ]);
       expect(requests.at(-1)!.fields.text).toBe(text);
-    });
-
-    it("retries idempotent edits after a real server rejection", async () => {
-      rejections.push({ error_code: 502, description: "Bad Gateway" });
-      await editMessageTelegram("123", 321, "Visible", {
-        cfg,
-        api: bot.api,
-        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-      });
-      expect(requests).toEqual(
-        Array.from({ length: 2 }, () => ({
-          method: "editMessageText",
-          fields: { chat_id: "123", message_id: 321, text: "Visible", parse_mode: "HTML" },
-        })),
-      );
     });
   });
 

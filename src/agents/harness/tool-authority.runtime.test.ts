@@ -196,13 +196,13 @@ describe("host-prepared embedded tool authority", () => {
           clientCaps: ["ui-commands"],
           gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
         };
-        let pending: ReturnType<typeof beginReplyMessageInjectionTarget> | undefined;
+        let pending: Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>> | undefined;
         try {
           const restricted = { ...handle, supportsCrossProfileSteering: false };
           setActiveEmbeddedRun(sessionId, restricted, sessionKey, attempt.sessionFile);
           const restrictedTarget =
             replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
-          pending = beginReplyMessageInjectionTarget(restrictedTarget, "Change my view", {
+          pending = await beginReplyMessageInjectionTarget(restrictedTarget, "Change my view", {
             isInboundUserMessage: true,
             toolAuthorityOverlay: incoming,
           });
@@ -221,7 +221,7 @@ describe("host-prepared embedded tool authority", () => {
           if (!target) {
             throw new Error("Expected the direct admitted owner to be injectable");
           }
-          pending = beginReplyMessageInjectionTarget(target, "Change my view", {
+          pending = await beginReplyMessageInjectionTarget(target, "Change my view", {
             isInboundUserMessage: true,
             toolAuthorityOverlay: incoming,
           });
@@ -300,17 +300,16 @@ describe("host-prepared embedded tool authority", () => {
       if (!target) {
         throw new Error("Expected the direct admitted owner to be injectable");
       }
-      await expect(
-        beginReplyMessageInjectionTarget(target, "Apply the correction", {
-          isInboundUserMessage: true,
-          inboundAudio: change === "audio",
-          toolAuthorityOverlay: {
-            ...own,
-            traceAuthorized: true,
-            disableTools: change === "permissions",
-          },
-        }).outcome,
-      ).resolves.toMatchObject(outcome);
+      const injection = await beginReplyMessageInjectionTarget(target, "Apply the correction", {
+        isInboundUserMessage: true,
+        inboundAudio: change === "audio",
+        toolAuthorityOverlay: {
+          ...own,
+          traceAuthorized: true,
+          disableTools: change === "permissions",
+        },
+      });
+      await expect(injection.outcome).resolves.toMatchObject(outcome);
       expect(queue).toHaveBeenCalledTimes(change === "trace-only" ? 1 : 0);
     });
   });
@@ -337,7 +336,7 @@ describe("host-prepared embedded tool authority", () => {
         if (!target) {
           throw new Error("Expected the direct admitted owner to be injectable");
         }
-        const pending = beginReplyMessageInjectionTarget(target, "Apply the correction", {
+        const pending = await beginReplyMessageInjectionTarget(target, "Apply the correction", {
           isInboundUserMessage: true,
           toolAuthorityOverlay: own,
           assertCurrent: () => {},
@@ -371,7 +370,7 @@ describe("host-prepared embedded tool authority", () => {
         defaultAgentId: "main",
       });
     const admission = prepareAgentRunAdmission({
-      cfg: { agents: { list: [{ id: "main", default: true }, { id: "ops" }] } },
+      cfg: { agents: { entries: { main: {}, ops: {} } } },
       operationalRunInstance: createOperationalRunInstanceRef(params.runId),
       facts: {
         agentId: params.agentId,
@@ -925,6 +924,12 @@ describe("host-prepared embedded tool authority", () => {
               throw new Error("projection failed");
             }
             return snapshot.project(overlay, selectedRoute);
+          },
+          projectAsync: async (overlay, selectedRoute) => {
+            if (failProjection) {
+              throw new Error("projection failed");
+            }
+            return snapshot.projectAsync(overlay, selectedRoute);
           },
         });
         const initialRoute =

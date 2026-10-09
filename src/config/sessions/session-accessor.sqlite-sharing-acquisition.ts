@@ -3,6 +3,15 @@ import type {
   SessionEntryPlaceholder,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntry } from "./types.js";
+
+export type PreparedSessionEntryPredicate = {
+  entry: SessionEntry | undefined;
+  matches: (entry: SessionEntry | undefined) => boolean;
+  state: "current" | "unknown" | "changed";
+  revision: number;
+  pending: Set<object>;
+};
 
 export type CommittedSessionSharingFacts = {
   entry: SessionSharingEntry | undefined;
@@ -18,22 +27,97 @@ export type SessionSharingAcquisition = {
 };
 
 export type PreparedSessionSharingRead = {
+  predicate?: PreparedSessionEntryPredicate;
   pending: Set<object>;
   facts: CommittedSessionSharingFacts | undefined;
   acquisition?: SessionSharingAcquisition;
   generation?: {
     initiallyAbsent?: true;
-    current: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | null | undefined;
+    current:
+      | Pick<
+          SessionSharingEntry,
+          "sessionId" | "lifecycleRevision" | "permissionMode" | "toolOverrides"
+        >
+      | null
+      | undefined;
   };
 };
 
 export type SessionSharingRetentionRequest = {
   databaseIdentity: string;
   sessionKey: string;
+  predicate?: PreparedSessionEntryPredicate;
 } & (
   | { acquiring: true }
   | (CommittedSessionSharingFacts & { generation?: PreparedSessionSharingRead["generation"] })
 );
+
+/** Unknown postimages require a fresh read; observed mismatches cannot be restored. */
+export function publishRetainedSessionEntryPredicate(
+  read: PreparedSessionSharingRead,
+  entry: SessionEntry | undefined,
+  known: boolean,
+): void {
+  const predicate = read.predicate;
+  if (!predicate) {
+    return;
+  }
+  if (predicate.state === "changed") {
+    return;
+  }
+  let matches: boolean | undefined;
+  try {
+    matches = known ? predicate.matches(entry) : undefined;
+  } catch {
+    // A failed comparison fences this claim without stranding the committed batch.
+  }
+  if (matches === undefined) {
+    predicate.revision += 1;
+    predicate.state = "unknown";
+  } else if (!matches) {
+    predicate.revision += 1;
+    predicate.state = "changed";
+  } else {
+    predicate.entry = entry;
+  }
+}
+
+export function revokePreparedSessionEntryPredicate(read: PreparedSessionSharingRead): void {
+  if (read.predicate) {
+    read.predicate.state = "changed";
+    read.predicate.revision += 1;
+  }
+}
+
+/** Partial publications change only their named fields, independently of row-cache warmth. */
+export function projectSessionEntryPredicateChange(
+  predicate: PreparedSessionEntryPredicate,
+  change: SessionRowFacts,
+): SessionEntry | undefined {
+  const entry = predicate.entry;
+  if (!entry) {
+    return undefined;
+  }
+  switch (change.kind) {
+    case "owner":
+      return entry.sessionId === change.sessionId &&
+        (entry.lifecycleRevision ?? null) === change.lifecycleRevision
+        ? { ...entry, owner: change.owner }
+        : undefined;
+    case "participants":
+      return change.projection
+        ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
+        : undefined;
+    case "category":
+      return entry.sessionId === change.sessionId
+        ? { ...entry, category: change.category ?? undefined }
+        : undefined;
+    case "member":
+      return entry.sessionId === change.sessionId ? entry : undefined;
+    default:
+      return undefined;
+  }
+}
 
 export function publishRetainedSessionGeneration(
   read: PreparedSessionSharingRead,
@@ -59,6 +143,9 @@ export function publishRetainedSessionGeneration(
     generation.current.lifecycleRevision !== entry.lifecycleRevision
   ) {
     generation.current = null;
+  } else {
+    // Same-generation policy changes must narrow retained execution before its next effect.
+    generation.current = entry;
   }
 }
 

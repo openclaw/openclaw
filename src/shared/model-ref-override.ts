@@ -1,8 +1,5 @@
 /** Preserve model-only overrides and whitespace inside provider/model segments. */
-export function resolveModelRefOverride(raw: string | undefined): {
-  provider?: string;
-  model?: string;
-} {
+export function resolveModelRefOverride(raw: string | undefined) {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return {};

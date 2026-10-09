@@ -6,18 +6,18 @@ registerModelControlsEnglish();
 
 // Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
 // which cannot be imported here (it drags terminal sanitizers into the bundle).
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  "claude-cli": "Claude CLI",
-  codex: "Codex",
-  "codex-cli": "Codex",
-  "google-gemini-cli": "Gemini CLI",
-  openclaw: "OpenClaw",
-};
+const AGENT_RUNTIME_LABELS = new Map([
+  ["claude-cli", "Claude CLI"],
+  ["codex", "Codex"],
+  ["codex-cli", "Codex"],
+  ["google-gemini-cli", "Gemini CLI"],
+  ["openclaw", "OpenClaw"],
+]);
 
 function formatAgentRuntimeLabel(id: string): string {
   const normalized = id.trim().toLowerCase();
   return (
-    AGENT_RUNTIME_LABELS[normalized] ??
+    AGENT_RUNTIME_LABELS.get(normalized) ??
     `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
   );
 }

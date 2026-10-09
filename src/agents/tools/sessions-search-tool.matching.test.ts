@@ -29,7 +29,7 @@ function createSearchFixture(
   const tool = createSessionsSearchTool({
     agentSessionKey: "agent:main:requester",
     config: {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       tools: { sessions: { visibility: "all" } },
     },
     callGateway: async <T>(request: GatewayRequest): Promise<T> => {

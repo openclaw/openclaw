@@ -2,7 +2,6 @@
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getImageGenerationProvider,
@@ -11,8 +10,6 @@ import {
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
-  buildNoCapabilityModelConfiguredMessage,
-  resolveCapabilityModelCandidates,
   resolveMediaProviderRequestTimeoutMs,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
@@ -70,36 +67,13 @@ async function runImageGeneration(
   const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
-  const candidates = resolveCapabilityModelCandidates({
-    cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseImageGenerationModelRef,
-    agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
-  });
-  if (candidates.length === 0) {
-    throw new Error(
-      buildNoCapabilityModelConfiguredMessage({
-        capabilityLabel: "image-generation",
-        modelConfigKey: "mediaModels.image",
-        providers: listProviders(params.cfg),
-        getProviderEnvVars: deps.getProviderEnvVars,
-      }),
-    );
-  }
 
   return runMediaGenerationCandidates({
-    candidates,
+    request: params,
+    listProviders,
+    getProviderEnvVars: deps.getProviderEnvVars,
     capability: "image",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
-    includeSkipFailureDetails: true,
-    onMissingProvider: (attempt) => {
-      logger.warn(
-        `image-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
-      );
-    },
     onFailure: (attempt) => {
       logger.warn(
         `image-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,

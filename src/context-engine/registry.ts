@@ -12,6 +12,7 @@ import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { contextEngineAbortSignal, isContextEngineAbortRejection } from "./context-engine-abort.js";
 import { pluginIdFromContextEngineOwner } from "./registry-adoption.js";
 import {
@@ -35,6 +36,7 @@ import {
   type ContextEngineFactoryResources,
   type ContextEngineFactoryPreparation,
 } from "./registry.resources.js";
+import { resolveMaxActiveTranscriptBytes } from "./transcript-byte-limit.js";
 import type {
   BootstrapResult,
   ContextEngine,
@@ -65,25 +67,28 @@ type ResolvedContextEngineMetadata = {
   sourceEngine?: ContextEngine;
   source?: ContextEngineFactoryResources;
   ownsSource?: boolean;
+  maxActiveTranscriptBytes?: number;
 };
 
-const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
+// Built SDK artifacts and the host must read the same admitted engine facts.
+const resolvedEngineMetadata = resolveGlobalSingleton(
+  Symbol.for("openclaw.contextEngine.resolvedMetadata"),
+  () => new WeakMap<ContextEngine, ResolvedContextEngineMetadata>(),
+);
 
 function wrapResolvedContextEngine(
   rawEngine: ContextEngine,
   metadata: ResolvedContextEngineMetadata & {
     factory: ContextEngineFactory;
     defaultEngineId?: string;
-    factoryCtx?: ContextEngineFactoryContext;
+    factoryCtx: ContextEngineFactoryContext;
   },
 ): ContextEngine {
   let disposal: Promise<void> | undefined;
   const source = metadata.source;
   const engine = source?.wrap(rawEngine) ?? rawEngine;
   const fallback =
-    metadata.defaultEngineId &&
-    metadata.factoryCtx &&
-    metadata.engineId !== metadata.defaultEngineId
+    metadata.defaultEngineId && metadata.engineId !== metadata.defaultEngineId
       ? { defaultEngineId: metadata.defaultEngineId, factoryCtx: metadata.factoryCtx }
       : undefined;
   let fallbackEnginePromise: Promise<ContextEngine> | undefined;
@@ -206,11 +211,21 @@ function wrapResolvedContextEngine(
           beforeFactory?: Promise<unknown>,
         ) => {
           contextEngineAbortSignal(methodParams);
-          return await invokeFallbackContextEngineMethod({
-            getFallbackEngine: () => getFallbackEngine(beforeFactory),
-            methodName,
-            methodParams,
-          });
+          const fallbackEngine = await getFallbackEngine(beforeFactory);
+          const fallbackMethod = fallbackEngine[methodName] as
+            | ((params: unknown) => unknown)
+            | undefined;
+          if (typeof fallbackMethod === "function") {
+            return await fallbackMethod.call(fallbackEngine, methodParams);
+          }
+          if (methodName === "assemble" || methodName === "compact") {
+            throw new Error(`No legacy fallback result for ${methodName}`);
+          }
+          const result =
+            CONTEXT_ENGINE_FALLBACK_RESULTS[
+              methodName as keyof typeof CONTEXT_ENGINE_FALLBACK_RESULTS
+            ];
+          return result ? { ...result } : undefined;
         };
         if (getContextEngineQuarantine(metadata.engineId)) {
           return invokeFallback;
@@ -256,24 +271,14 @@ function wrapResolvedContextEngine(
   );
   resolvedEngineMetadata.set(wrapped, {
     ...metadata,
-    sourceEngine:
-      metadata.sourceEngine ?? resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
+    maxActiveTranscriptBytes: resolveMaxActiveTranscriptBytes(metadata.factoryCtx.config),
+    sourceEngine: resolvedEngineMetadata.get(rawEngine)?.sourceEngine ?? rawEngine,
   });
   return wrapped;
 }
 const CORE_CONTEXT_ENGINE_OWNER = "core";
 
 const getContextEngines = () => requireActivePluginRegistry().contextEngines;
-
-function requireContextEngineOwner(owner: string): string {
-  const normalizedOwner = owner.trim();
-  if (!normalizedOwner) {
-    throw new Error(
-      `registerContextEngineForOwner: owner must be a non-empty string, got ${JSON.stringify(owner)}`,
-    );
-  }
-  return normalizedOwner;
-}
 
 /**
  * Register a context engine implementation under an explicit trusted owner.
@@ -310,7 +315,12 @@ export function registerContextEngineInRegistry(
   owner: string,
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
-  const normalizedOwner = requireContextEngineOwner(owner);
+  const normalizedOwner = owner.trim();
+  if (!normalizedOwner) {
+    throw new Error(
+      `registerContextEngineForOwner: owner must be a non-empty string, got ${JSON.stringify(owner)}`,
+    );
+  }
   const lifecycle = opts?.lifecycle ?? "runtime";
   const registry = pluginRegistry.contextEngines;
   const existing = registry.get(id);
@@ -393,6 +403,11 @@ export const hasSameContextEngineInstance = (left: ContextEngine, right: Context
   (resolvedEngineMetadata.get(left)?.sourceEngine ?? left) ===
   (resolvedEngineMetadata.get(right)?.sourceEngine ?? right);
 
+export const resolveContextEngineTranscriptByteLimit = (
+  engine: ContextEngine | undefined,
+): number | undefined =>
+  engine ? resolvedEngineMetadata.get(engine)?.maxActiveTranscriptBytes : undefined;
+
 const CONTEXT_ENGINE_FALLBACK_RESULTS = {
   bootstrap: { bootstrapped: false, reason: "context engine downgraded to legacy" },
   maintain: {
@@ -411,28 +426,6 @@ const CONTEXT_ENGINE_FALLBACK_RESULTS = {
 };
 
 export { isContextEngineAbortRejection };
-
-async function invokeFallbackContextEngineMethod(params: {
-  getFallbackEngine: () => Promise<ContextEngine>;
-  methodName: GuardedContextEngineMethodName;
-  methodParams: unknown;
-}): Promise<unknown> {
-  const fallbackEngine = await params.getFallbackEngine();
-  const fallbackMethod = fallbackEngine[params.methodName] as
-    | ((methodParams: unknown) => unknown)
-    | undefined;
-  if (typeof fallbackMethod === "function") {
-    return await fallbackMethod.call(fallbackEngine, params.methodParams);
-  }
-  if (params.methodName === "assemble" || params.methodName === "compact") {
-    throw new Error(`No legacy fallback result for ${params.methodName}`);
-  }
-  const fallbackResult =
-    CONTEXT_ENGINE_FALLBACK_RESULTS[
-      params.methodName as keyof typeof CONTEXT_ENGINE_FALLBACK_RESULTS
-    ];
-  return fallbackResult ? { ...fallbackResult } : undefined;
-}
 
 export type ResolveContextEngineOptions = {
   agentDir?: string;
@@ -477,7 +470,6 @@ async function createOwnedContextEngine(
       throw new Error(`${options.contractErrorPrefix ?? ""}${contractError}`);
     }
     return wrapResolvedContextEngine(engine, {
-      sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
       source: options.source,
       ownsSource: options.ownsSource,
       engineId,
@@ -563,30 +555,26 @@ export async function resolveLogicalTurnContextEngines(
         abandon(sources.configured);
         throw error;
       }
+      const resolution: LogicalTurnContextEngineResolution = {
+        configured: fallback,
+        configuredId: configuredEngineId,
+        fallback,
+        sourceResources,
+      };
       if (configuredEngineId === defaultEngineId) {
-        return {
-          configured: fallback,
-          configuredId: configuredEngineId,
-          fallback,
-          sourceResources,
-        };
+        return resolution;
       }
       if (!configuredEntry || configuredEntry.lifecycle === "readOnlyDiscovery") {
-        return {
-          configured: fallback,
-          configuredId: configuredEngineId,
-          configuredFailure: !configuredEntry
-            ? `context engine "${configuredEngineId}" is not registered`
-            : `context engine "${configuredEngineId}" is available for discovery only`,
-          fallback,
-          sourceResources,
-        };
+        resolution.configuredFailure = !configuredEntry
+          ? `context engine "${configuredEngineId}" is not registered`
+          : `context engine "${configuredEngineId}" is available for discovery only`;
+        return resolution;
       }
       try {
         if (sources.configuredFailure) {
           throw sources.configuredFailure.error;
         }
-        const configured = await resolveContextEngineFactory(
+        resolution.configured = await resolveContextEngineFactory(
           sources.configured,
           sourceResources,
           () =>
@@ -597,17 +585,11 @@ export async function resolveLogicalTurnContextEngines(
               sources.configured,
             ),
         );
-        return { configured, configuredId: configuredEngineId, fallback, sourceResources };
       } catch (error) {
         abandon(sources.configured);
-        return {
-          configured: fallback,
-          configuredId: configuredEngineId,
-          configuredFailure: error instanceof Error ? error.message : String(error),
-          fallback,
-          sourceResources,
-        };
+        resolution.configuredFailure = error instanceof Error ? error.message : String(error);
       }
+      return resolution;
     }, options?.onCleanupFailure);
   } finally {
     await initialization;
@@ -620,11 +602,6 @@ export async function resolveLogicalTurnContextEngines(
  * Resolution order:
  *   1. `config.plugins.slots.contextEngine` when its plugin policy permits it
  *   2. Default slot value ("legacy")
- *
- * When `config` is provided it is forwarded to the factory as part of a
- * {@link ContextEngineFactoryContext}. Additional runtime paths can be
- * supplied via `options`. Existing no-arg factories continue to work
- * because JavaScript permits extra arguments at call sites.
  *
  * Non-default engines that fail (unregistered, factory throw, or contract
  * violation) are logged and silently replaced by the default engine.

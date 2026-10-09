@@ -27,54 +27,54 @@ function expectClosed() {
 }
 
 describe("pinned Control UI file reads", () => {
-  it.each([0, 512 * 1024 + 19])("reads and closes a file of %i bytes", (size) => {
-    const body = "x".repeat(size);
+  it.each([
+    { name: "empty", body: "", change: "none", expected: "" },
+    {
+      name: "large",
+      body: "x".repeat(512 * 1024 + 19),
+      change: "none",
+      expected: "x".repeat(512 * 1024 + 19),
+    },
+    {
+      name: "short reads of a growing file",
+      body: "a small static response",
+      change: "grow",
+      expected: "a small static response",
+    },
+    { name: "truncated", body: "original longer content", change: "truncate", expected: "short" },
+  ])("reads and closes a $name file within its pinned size", ({ body, change, expected }) => {
     const file = createFile(body);
+    if (change !== "none") {
+      const read = fs.readSync;
+      const readSpy = vi.spyOn(fs, "readSync");
+      const readChanged: Parameters<typeof readSpy.mockImplementation>[0] = (
+        fd,
+        buffer,
+        offset?: number | fs.ReadOptions,
+        length?: number,
+        position?: fs.ReadPosition | null,
+      ) => {
+        if (change === "grow") {
+          fs.appendFileSync(file.filePath, "extra");
+        } else {
+          fs.writeFileSync(file.filePath, "short");
+        }
+        const options = typeof offset === "number" ? { offset, length, position } : offset;
+        return read(
+          fd,
+          buffer,
+          change === "grow" ? { ...options, length: Math.min(options?.length ?? 0, 3) } : options,
+        );
+      };
+      if (change === "grow") {
+        readSpy.mockImplementation(readChanged);
+      } else {
+        readSpy.mockImplementationOnce(readChanged);
+      }
+    }
     const result = readControlUiFile(file);
     expect(result?.body).toBeInstanceOf(Uint8Array);
-    expect(result && new TextDecoder().decode(result.body)).toBe(body);
-    expectClosed();
-  });
-
-  it("fills short reads without adding bytes beyond the pinned size", () => {
-    const body = "a small static response";
-    const file = createFile(body);
-    const read = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementation(
-      (
-        fd,
-        buffer,
-        offset?: number | fs.ReadOptions,
-        length?: number,
-        position?: fs.ReadPosition | null,
-      ) => {
-        fs.appendFileSync(file.filePath, "extra");
-        const options = typeof offset === "number" ? { offset, length, position } : offset;
-        return read(fd, buffer, { ...options, length: Math.min(options?.length ?? 0, 3) });
-      },
-    );
-    const result = readControlUiFile(file);
-    expect(result && new TextDecoder().decode(result.body)).toBe(body);
-    expectClosed();
-  });
-
-  it("returns only bytes read when the pinned file is truncated", () => {
-    const file = createFile("original longer content");
-    const read = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementationOnce(
-      (
-        fd,
-        buffer,
-        offset?: number | fs.ReadOptions,
-        length?: number,
-        position?: fs.ReadPosition | null,
-      ) => {
-        fs.writeFileSync(file.filePath, "short");
-        return read(fd, buffer, typeof offset === "number" ? { offset, length, position } : offset);
-      },
-    );
-    const result = readControlUiFile(file);
-    expect(result && new TextDecoder().decode(result.body)).toBe("short");
+    expect(result && new TextDecoder().decode(result.body)).toBe(expected);
     expectClosed();
   });
 

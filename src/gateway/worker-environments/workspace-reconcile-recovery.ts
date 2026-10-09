@@ -33,8 +33,7 @@ import {
   reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
-  directoryContainsOnlyJournalPaths,
+  directoryContainsOnlyWorkspaceEntries,
   entryMatches,
   localPath,
   removeEmptyWorkspaceDirectory,
@@ -226,7 +225,6 @@ export async function createWorkspacePatch(params: {
 export async function applyWorkspacePatch(params: {
   root: string;
   patch: Uint8Array;
-  reverse?: boolean;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.patch.byteLength === 0) {
@@ -241,15 +239,7 @@ export async function applyWorkspacePatch(params: {
   try {
     await requireGit(
       params.root,
-      [
-        "-c",
-        "core.autocrlf=false",
-        "apply",
-        "--no-index",
-        "--binary",
-        "--whitespace=nowarn",
-        ...(params.reverse ? ["--reverse"] : []),
-      ],
+      ["-c", "core.autocrlf=false", "apply", "--no-index", "--binary", "--whitespace=nowarn"],
       params.patch,
       { GIT_DIR: path.join(temporary, ".git") },
       params.assertCurrent,
@@ -315,14 +305,13 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
       const isJournalDirectory =
         actual.type === "directory" &&
         ((directories.has(entryPath) &&
-          (await directoryContainsOnlyJournalPaths(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
-            paths,
-            directories,
             params.isRetainedInput,
+            { paths, directories },
           ))) ||
-          (await directoryContainsOnlyDerivedWorkspaceEntries(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
             params.isRetainedInput,
@@ -381,12 +370,11 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyJournalPaths(
+      (await directoryContainsOnlyWorkspaceEntries(
         params.root,
         entry.path,
-        basePaths,
-        baseDirectories,
         params.isRetainedInput,
+        { paths: basePaths, directories: baseDirectories },
       ))
     ) {
       continue;
@@ -404,7 +392,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       node &&
       !(
         node.type === "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
+        (await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
           params.isRetainedInput,
@@ -431,12 +419,11 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
       if (
         baseEntries.has(entryPath) &&
         appliedDirectories.has(entryPath) &&
-        !(await directoryContainsOnlyJournalPaths(
+        !(await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
-          appliedEntryPaths,
-          appliedDirectories,
           params.isRetainedInput,
+          { paths: appliedEntryPaths, directories: appliedDirectories },
         ))
       ) {
         throw workspaceRecoveryConflict(entryPath);
@@ -486,14 +473,10 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
 export async function recoverWorkerWorkspaceReconciliation(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
-  preservePaths?: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
-  }
-  if (params.preservePaths?.size) {
-    throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);

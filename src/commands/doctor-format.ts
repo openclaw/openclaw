@@ -19,14 +19,9 @@ import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.
 import { isWSLEnv } from "../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
-type RuntimeHintOptions = {
-  platform?: NodeJS.Platform;
-  env?: Record<string, string | undefined>;
-};
-
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
-  options: RuntimeHintOptions = {},
+  options: { platform?: NodeJS.Platform; env?: Record<string, string | undefined> } = {},
 ): string[] {
   const hints: string[] = [];
   if (!runtime) {
@@ -41,6 +36,7 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
+  const fileLogHints = fileLog ? [`File logs: ${fileLog}`] : [];
   const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
   if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
     hints.push(
@@ -50,9 +46,7 @@ export function buildGatewayRuntimeHints(
         env,
       }),
     );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
+    hints.push(...fileLogHints);
     return hints;
   }
   if (runtime.cachedLabel && platform === "darwin") {
@@ -64,13 +58,12 @@ export function buildGatewayRuntimeHints(
   }
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
+    hints.push(...fileLogHints);
     return hints;
   }
   const missingGuiSession = runtime.missingGuiSession && platform === "darwin";
-  if (missingGuiSession || runtime.status === "stopped") {
+  const disabledTask = platform === "win32" && runtime.state === "Disabled";
+  if (missingGuiSession || disabledTask || runtime.status === "stopped") {
     if (!missingGuiSession && platform === "linux" && isSystemdStartLimitHit(runtime)) {
       // start-limit-hit means systemd gave up restarting after repeated crashes;
       // a plain "exited immediately" hint would hide that recovery needs a restart.
@@ -78,12 +71,12 @@ export function buildGatewayRuntimeHints(
         "systemd stopped restarting the gateway after repeated crashes.",
         `Recover with: ${formatCliCommand("openclaw gateway restart", env)}, then inspect logs if it keeps crashing.`,
       );
-    } else if (!missingGuiSession) {
+    } else if (!missingGuiSession && !disabledTask) {
       hints.push("Service is loaded but not running (likely exited immediately).");
     }
     hints.push(
       ...buildGatewayRuntimeRecoveryHints({
-        kind: missingGuiSession ? "gui-session" : "stopped",
+        kind: missingGuiSession ? "gui-session" : disabledTask ? "disabled-task" : "stopped",
         restartCommand: formatCliCommand("openclaw gateway restart", env),
         logFile: fileLog,
         platform,

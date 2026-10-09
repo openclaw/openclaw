@@ -1,7 +1,7 @@
 ---
 doc-schema-version: 1
 title: "Team immutable update design"
-summary: "Immutable update design: implemented installation and preparation slice, with activation contracts for later work"
+summary: "Immutable update design: installation, preparation, native activation, and retained recovery contracts"
 read_when:
   - Designing native updates for an installation with sealed release directories
   - Reviewing the Team deployment controller cutover
@@ -9,7 +9,7 @@ read_when:
 
 # Team immutable update design
 
-**Implementation design; slice 1 covers installation and preparation only. No deployment authorization.** Add an
+**Implementation design; slices 1 and 2 cover preparation and explicitly enabled native activation. No deployment authorization.** Add an
 immutable installation adapter to `openclaw update`. Keep update orchestration,
 activation recovery, Doctor migrations, and service lifecycle with their existing
 owners. Do not port the private deployment controller into core.
@@ -21,9 +21,9 @@ are supplied campaign evidence, not measurements or private-controller source
 verification performed in this lane. Production was not accessed. Everything
 under “Proposed contract” describes the complete design; the implemented subset is identified below.
 
-## Slice 1 implementation status
+## Implementation status
 
-This document is the design implemented by the first review slice: **Detect and
+The first review slice (#163799) implemented **Detect and
 adopt an immutable installation** and **Prepare everything possible while the
 previous Gateway serves**. The maintainer accepted the durable descriptor
 extension, retention of current plus previous and journal-referenced generations,
@@ -33,8 +33,77 @@ Slice 1 records adoption and prepared generations, packages the stable launcher,
 and reports immutable installations through status and dry run. It does not
 publish `current`, change a service definition, restart a Gateway, migrate live
 state, collect generations, import private controller history, or retire that
-controller. The broader proposed contracts below remain the boundaries for later
-slices; their inclusion is not evidence that activation or recovery is shipped.
+controller.
+
+Slice 2 adds a versioned, explicitly enabled adoption record and a native
+activation/recovery owner. It reuses the suspension drain, native systemd
+lifecycle, restart health, and config audit owners. Activation journals pointer
+intent before publication, verifies the selected physical generation and stable
+service definition, and accepts only candidate-authored additive config writes
+with matching audit evidence and unchanged policy. Startup inspection remains a
+bounded pending outcome. Successful verification retires the record; safe
+rollback preserves it. `openclaw update recover --root <installation-root>`
+reconciles uncertain effects and verifies an already healthy candidate or
+predecessor without restarting it.
+
+The startup-only canary runs before drain and again on a fresh private state
+copy after live readiness, while the selected Gateway serves. Accepted startup
+config migration protection is persisted before that second canary. A final
+check must observe the same live PID and boot before the owner retires the
+operation. These receipts prove the existing canary contract, not a native model
+marker turn. Ordinary `update.status` requests refresh verified immutable
+installation facts through the existing refresh owner and bypass private
+manager status, keeping the activation record authoritative.
+
+Before drain, the independent activation owner prepares and seals a full copy of
+the invoking runtime under its installation-sibling control directory as
+`recovery-<sha>`, reusing a verified copy for the same source SHA. The recorded
+external Node runs `.control/recovery.mjs`, which dispatches to that retained
+product owner without borrowing the candidate or a Manager checkout. No runtime
+copy, dependency install, or build occurs during cutover. Pending and rollback
+outcomes print the exact independent recovery command.
+
+Activation remains disabled for slice-1 adoptions until the operator repeats
+adoption with `--enable-activation`. Gateway `update.run` still directs operators
+to the root CLI outside the Gateway service cgroup. The serving Gateway must
+support committed suspension handoff: the existing deployment owner must first
+activate one bridge release containing this capability. A candidate-side CLI
+cannot retrofit it into an older running Gateway. After that bridge is healthy,
+enable adoption and prove a native cutover to a different reviewed generation
+before retiring the old controller. The immutable
+`--drain-timeout` flag independently selects the drain budget, such as 30 seconds,
+while `--timeout` retains canary/readiness phase budgets. Healthy recovery never
+uses the drain budget. Gateway RPC privilege handoff is
+not part of this slice. Activation requires cgroup v2 and matching schema
+contracts; incompatible schema requirements refuse before drain. Startup-only
+canary rehearsal uses private copies before cutover, without Doctor pre-repair,
+so the candidate must handle its own additive startup migration. No live Doctor
+or optional NOCOW rewrite runs during activation. General incompatible database migration/rewind,
+generation collection, deployment adoption/proof, and private-controller
+retirement remain separate work. The broader proposed contracts below describe
+those remaining boundaries, not completed production deployment.
+
+At final native stop preparation, the suspension owner validates the original
+lease and all write custody, then the live host commits one-way shutdown before
+acknowledging the handoff. Resume and expiry cannot reopen admission after that
+transfer. The old arm-only contract remains available to existing callers, but
+the immutable updater never falls back to it. An unknown reply retains recovery;
+the host may already be stopping. If host shutdown wins the race with native
+dispatch, only an inactive service with no pending job and an empty cgroup counts
+as stopped; a replacement process is preserved for explicit recovery.
+Before host commitment, the existing control record durably enters its stop
+phase. The stable launcher reads that record without replaying journals and
+blocks a supervisor replacement from entering Gateway code during stop or
+pointer publication. Startup resumes only in an owner-authorized phase; no
+temporary systemd policy override is needed.
+
+Explicit v1-to-v2 enablement can reconcile a bridge selected by the existing
+deployment owner. Adoption preserves stable root, releases, runtime, and service
+bindings, verifies the sealed predecessor and serving bridge, and retains the
+predecessor without inventing an activation-success receipt. It also upgrades
+only the exact packaged v1 launcher, backing up its bytes before atomic
+replacement. Custom launchers and external pointer drift after enablement remain
+refused.
 
 ## Problem and performance boundary
 
@@ -447,7 +516,8 @@ Gateway and do not prove updater-owned restart.
 Keep focused regressions deterministic and cheap. Real multi-GB work, real
 service boots, btrfs and crash-recovery compositions belong in release/performance
 proof. Record before/after outage and phase durations from the same fixture and
-storage class. This design-only lane ran no such behavior proof.
+storage class. The original design-only lane ran no such behavior proof; each
+implementation PR must state its own executed cells and remaining gaps.
 
 ### Three proposed PRs
 
@@ -490,12 +560,11 @@ options, schema policy changes, and multi-Gateway state sharing.
 
 ## Review decisions and evidence gaps
 
-The recommendation is actionable as three implementation slices, but adoption
-must wait for independent-journal migration recovery, service-launcher identity,
-and the real systemd/btrfs matrix. The lead also needs to accept the durable
-descriptor extension, proposed generation retention policy, and installer/adoption
-interface. The private controller's actual artifact schema, ownership/permissions,
-runtime path, and current recovery state were not inspected in this lane.
+The implemented same-schema slice does not establish the broader independent
+journal migration/restore contract or the real systemd/btrfs matrix. Production
+owner transfer still requires the approved deployment window and slice-3 proof.
+The private controller's actual artifact schema, ownership/permissions, runtime
+path, and current recovery state were not inspected in this lane.
 
 **Original design-lane evidence:** No runtime change, production restart, performance benchmark, published-driver
 cell, or immutable update was executed. Docs sanity and review results belong in

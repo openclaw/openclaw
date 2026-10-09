@@ -121,18 +121,8 @@ function buildProfileHealth(params: {
   cfg?: OpenClawConfig;
   now: number;
   warnAfterMs?: number;
-  allowKeychainPrompt?: boolean;
 }): AuthProfileHealth {
-  const {
-    profileId,
-    credential,
-    runtimeCredential,
-    store,
-    cfg,
-    now,
-    warnAfterMs,
-    allowKeychainPrompt,
-  } = params;
+  const { profileId, credential, runtimeCredential, store, cfg, now, warnAfterMs } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const healthCredential = runtimeCredential ?? credential;
   const profile = {
@@ -199,10 +189,8 @@ function buildProfileHealth(params: {
   }
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
-    store,
     profileId,
     credential: healthCredential,
-    allowKeychainPrompt,
   });
   const eligibility = evaluateStoredCredentialEligibility({
     credential: effectiveCredential,
@@ -241,7 +229,6 @@ export function buildAuthHealthSummary(params: {
   warnAfterMs?: number;
   providers?: string[];
   runtimeCredentialsByProvider?: ReadonlyMap<string, AuthProfileCredential>;
-  allowKeychainPrompt?: boolean;
   /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
 }): AuthHealthSummary {
@@ -266,7 +253,6 @@ export function buildAuthHealthSummary(params: {
         cfg: params.cfg,
         now,
         warnAfterMs: params.warnAfterMs,
-        allowKeychainPrompt: params.allowKeychainPrompt,
       }),
     )
     .toSorted((a, b) => {

@@ -211,7 +211,6 @@ async function fixture(
       transcriptPrompt: assembly.effectivePrompt,
       systemPrompt: session.agent.state.systemPrompt,
       runtimeOnly: false,
-      sessionPromptState: state,
       toolResultPromptProjectionState: state.toolResults,
       toolResultMaxChars: 4000,
       toolResultAggregateMaxChars: 8000,

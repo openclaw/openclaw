@@ -29,6 +29,7 @@ import {
   type DraftCloudProfile,
   type DraftEnvironment,
 } from "./discovery.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 
@@ -169,7 +170,6 @@ function renderEnvironmentHeading(
 }
 
 export function renderWhereChip(params: {
-  idPrefix?: string;
   autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
@@ -278,7 +278,7 @@ export function renderWhereChip(params: {
   return html`
     <span class="new-session-page__select new-session-page__select--where">
       <button
-        id=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+        id="new-session-where-trigger"
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -305,30 +305,19 @@ export function renderWhereChip(params: {
     <wa-popover
       ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-      for=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+      for="new-session-where-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.target !== event.currentTarget) {
-          return;
-        }
+      @wa-show=${onOwnPopoverEvent((event) => {
         if (event.currentTarget instanceof WaPopover) {
           // Let the positioning owner recompute the scroll budget on open and resize.
           event.currentTarget.popup.autoSize = "vertical";
           event.currentTarget.popup.autoSizePadding = 8;
         }
         params.onPopoverShow();
-      }}
-      @wa-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverHide();
-        }
-      }}
-      @wa-after-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverAfterHide();
-        }
-      }}
+      })}
+      @wa-hide=${onOwnPopoverEvent(() => params.onPopoverHide())}
+      @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >
       <div class="new-session-page__environment-layout">
         <div class="new-session-page__picker-root new-session-page__environment-picker">

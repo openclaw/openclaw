@@ -35,8 +35,9 @@ vi.mock("./directive-handling.impl.js", () => ({
   handleDirectiveOnly: (params: HandleDirectiveOnlyParams) => mocks.handleDirective(params),
 }));
 
-vi.mock("./directive-handling.persist.runtime.js", () => ({
-  applySessionModelSelection: (...args: unknown[]) => mocks.applyModelSelection(...args),
+vi.mock("../../model-picker/apply-session-model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-picker/apply-session-model-selection.js")>()),
+  applySessionModelSelectionInternal: (...args: unknown[]) => mocks.applyModelSelection(...args),
 }));
 
 beforeEach(() => {

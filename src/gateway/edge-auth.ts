@@ -53,13 +53,7 @@ export async function resolveEdgeAuthHeaders(params: {
   if (!params.value) {
     return undefined;
   }
-  let protocol: string;
-  try {
-    protocol = new URL(params.targetUrl).protocol;
-  } catch {
-    throw new Error("gateway.remote.edgeAuth requires a wss:// connection target");
-  }
-  if (protocol !== "wss:") {
+  if (URL.parse(params.targetUrl)?.protocol !== "wss:") {
     throw new Error("gateway.remote.edgeAuth requires a wss:// connection target");
   }
   const resolvedEntries = await Promise.all(

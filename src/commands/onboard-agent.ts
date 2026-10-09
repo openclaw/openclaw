@@ -41,11 +41,10 @@ function mergeOnboardingCandidate(params: {
   // Keep this runtime-shaped. The canonical config writer projects only this
   // patch onto snapshot.parsed, preserving include ownership and env refs.
   const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
-  const { list: _legacyList, ...agents } = merged.agents ?? {};
   return {
     ...merged,
     agents: {
-      ...agents,
+      ...merged.agents,
       entries: toAgentEntriesRecord(listAgentEntries(params.currentRuntime)),
     },
   };

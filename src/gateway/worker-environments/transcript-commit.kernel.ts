@@ -25,7 +25,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
 export type CommittedAgentMessage = Extract<
   AgentMessage,
-  { role: "assistant" | "toolResult" | "user" }
+  { role: "assistant" | "toolResult" | "user" | "custom" }
 > & { idempotencyKey: string };
 type AppliedTranscriptMessage = {
   appended: boolean;
@@ -68,7 +68,12 @@ export function isCommittedAgentMessage(message: unknown): message is CommittedA
   }
   const role = message.role;
   return (
-    (role === "user" || role === "assistant" || role === "toolResult") &&
+    (role === "user" ||
+      role === "assistant" ||
+      role === "toolResult" ||
+      (role === "custom" &&
+        (message.customType === "openclaw.runtime-context" ||
+          message.customType === "openclaw.system-update"))) &&
     readMessageIdempotencyKey(message) !== undefined
   );
 }
@@ -202,12 +207,30 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
   const plan = (
     result: ApplyTranscriptCommitResult,
     nextMessageSeq = 0,
-  ): PreparedTranscriptCommit => ({
-    result,
-    version: snapshot.version,
-    nextMessageSeq,
-    parentId: manager.getAppendParentId(),
-  });
+  ): PreparedTranscriptCommit => {
+    let applied = result;
+    if (result.ok && result.messages.length > 0) {
+      const activeSequences = new Map(
+        manager
+          .getBranch()
+          .filter((event) => event.type === "message" || event.type === "compaction")
+          .map((event, index) => [event.id, index + 1]),
+      );
+      applied = {
+        ...result,
+        messages: result.messages.map((message) => {
+          const messageSeq = activeSequences.get(message.messageId);
+          return messageSeq === undefined ? message : { ...message, messageSeq };
+        }),
+      };
+    }
+    return {
+      result: applied,
+      version: snapshot.version,
+      nextMessageSeq,
+      parentId: manager.getAppendParentId(),
+    };
+  };
   if (input.recoverPersistedBatch) {
     const recovered = resolvePersistedCommitAcrossDag({
       baseLeafId: input.requestedBaseLeafId,

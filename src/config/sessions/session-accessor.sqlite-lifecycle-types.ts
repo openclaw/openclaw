@@ -3,7 +3,10 @@ import type {
   SubagentRunsDurableBasis,
 } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
-import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
+import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -35,7 +38,7 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -118,9 +121,11 @@ export type ProjectedLifecycleCommitResult = {
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
+  progressCardResetKeys?: string[];
+  projectionReconcileSessionIds?: string[];
 };
 
-export type ProjectedLifecycleRemovalCommitInput = {
+export type ProjectedLifecycleCommitInput = {
   projected: ProjectedLifecycleMutation;
   materializationFailed: boolean;
   allowCanonicalRepair?: boolean;
@@ -218,6 +223,8 @@ export type SessionMaintenanceMetadataCommand =
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
       expected?: SessionMaintenanceAgeSnapshot;
+      /** A no-op reader rechecks the same policy instead of borrowing a writer snapshot. */
+      readOnly?: { input: SessionEntryMaintenanceInput; snapshot: SessionMaintenanceAgeSnapshot };
     }
   | {
       kind: "maintenance-plan";
@@ -235,7 +242,18 @@ export type SessionMaintenanceMetadataResult =
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       ageSnapshot: SessionMaintenanceAgeSnapshot;
+      nextAt: number | undefined;
+      readOnlyInput?: SessionEntryMaintenanceInput;
     };
+
+export type SessionMaintenanceReadCommand = Exclude<
+  SessionMaintenanceMetadataCommand,
+  { kind: "maintenance-statistics" }
+> & { expectedIdentity: DatabasePathIdentity };
+
+export type SessionMaintenanceReadResult =
+  | { kind: "maintenance-write-required" }
+  | Exclude<SessionMaintenanceMetadataResult, { kind: "maintenance-statistics" }>;
 
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
@@ -245,9 +263,8 @@ export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       agentId: string;
       kind: "lifecycle-projection-commit";
-      input: ProjectedLifecycleRemovalCommitInput;
+      input: ProjectedLifecycleCommitInput;
     })
-  | (SessionReclamationPlanBase & { kind: "lifecycle-projection-count" })
   | (SessionReclamationPlanBase & {
       kind: "deletion-plan";
       planning: SessionDeletionPlanningOperation;
@@ -301,7 +318,6 @@ export type SqliteArchiveReclamationPlan = Exclude<
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
-  | { kind: "lifecycle-projection-count"; value: number }
   | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
@@ -350,8 +366,7 @@ type SessionEntryMaintenanceCounts = {
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
   /** Exact rows written by planning; parent publication must not rescan the store. */
-  archivedSessionKeys: string[];
-  archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
+  archivedEntries: Array<{ sessionKey: string; sessionId?: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
 };

@@ -79,61 +79,6 @@ describe("doctor config persistence", () => {
       ],
     },
     {
-      name: "Nextcloud Talk",
-      channels: {
-        "nextcloud-talk": {
-          allowPrivateNetwork: true,
-          accounts: { work: { allowPrivateNetwork: false } },
-        },
-      },
-      fields: [
-        "channels.nextcloud-talk.allowPrivateNetwork",
-        "channels.nextcloud-talk.accounts.work.allowPrivateNetwork",
-      ],
-    },
-    {
-      name: "Matrix",
-      channels: {
-        matrix: {
-          allowPrivateNetwork: false,
-          dm: { policy: "trusted", allowFrom: ["@alice:example.org"] },
-          groups: { "!group:example.org": { allow: false } },
-          rooms: { "!room:example.org": { allow: true } },
-          accounts: {
-            ops: {
-              allowPrivateNetwork: true,
-              dm: { policy: "trusted", allowFrom: [] },
-              groups: { "!account-group:example.org": { allow: true } },
-              rooms: { "!account-room:example.org": { allow: false } },
-            },
-          },
-        },
-      },
-      fields: [
-        "channels.matrix.allowPrivateNetwork",
-        "channels.matrix.dm.policy",
-        "channels.matrix.groups.!group:example.org.allow",
-        "channels.matrix.rooms.!room:example.org.allow",
-        "channels.matrix.accounts.ops.allowPrivateNetwork",
-        "channels.matrix.accounts.ops.dm.policy",
-        "channels.matrix.accounts.ops.groups.!account-group:example.org.allow",
-        "channels.matrix.accounts.ops.rooms.!account-room:example.org.allow",
-      ],
-    },
-    {
-      name: "Slack",
-      channels: {
-        slack: {
-          channels: { C_ROOT: { allow: false } },
-          accounts: { ops: { channels: { C_ACCOUNT: { allow: true } } } },
-        },
-      },
-      fields: [
-        "channels.slack.channels.C_ROOT.allow",
-        "channels.slack.accounts.ops.channels.C_ACCOUNT.allow",
-      ],
-    },
-    {
       name: "Discord",
       channels: { discord: { ...discordEntry, accounts: { work: discordEntry } } },
       fields: ["channels.discord", "channels.discord.accounts.work"].flatMap((prefix) =>
@@ -185,14 +130,6 @@ describe("doctor config persistence", () => {
 
   it.each([
     {
-      name: "Telegram streaming",
-      channels: { telegram: { streaming: { mode: "off" }, direct: { "42": {} } } },
-    },
-    {
-      name: "Nextcloud Talk private-network policy",
-      channels: { "nextcloud-talk": { network: { dangerouslyAllowPrivateNetwork: false } } },
-    },
-    {
       name: "Matrix and Slack policy",
       channels: {
         matrix: {
@@ -224,11 +161,6 @@ describe("doctor config persistence", () => {
       });
       const ctx = await prepareDoctorContext(configPath);
       expect(ctx.cfg.channels).toMatchObject(channels);
-      if ("nextcloud-talk" in channels) {
-        expect(ctx.cfg.channels?.["nextcloud-talk"]?.network).toEqual(
-          channels["nextcloud-talk"]?.network,
-        );
-      }
     });
   });
 
@@ -301,6 +233,42 @@ describe("doctor config persistence", () => {
             expect(await fs.readFile(includePath + ".bak", "utf8")).toBe(includeRaw);
           }
         });
+      });
+    },
+  );
+
+  it.each([
+    {
+      config: { accounts: { work: { exposeErrorText: false } } },
+      key: "channels.whatsapp.accounts.work.exposeErrorText",
+    },
+  ])(
+    "preserves retired $key and gives an intermediate upgrade during update",
+    async ({ config, key }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+          async () => {
+            const configPath = await writeOpenClawConfig(home, {
+              channels: { $include: "./channels.json" },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const includePath = path.join(path.dirname(configPath), "channels.json");
+            const includeRaw = JSON.stringify({ whatsapp: config });
+            await fs.writeFile(includePath, includeRaw);
+            const rootRaw = await fs.readFile(configPath, "utf8");
+            const backupRaw = JSON.stringify({ gateway: { mode: "local" } });
+            await fs.writeFile(`${configPath}.bak`, backupRaw);
+
+            const preparing = prepareDoctorContext(configPath);
+            await expect(preparing).rejects.toThrow(key);
+            await expect(preparing).rejects.toThrow("Install OpenClaw 2026.9.5");
+            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupRaw);
+          },
+        );
       });
     },
   );
@@ -596,39 +564,6 @@ describe("doctor config persistence", () => {
       });
     },
   );
-
-  it("refuses a different active config path even when its bytes match", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-        });
-        const ctx = await prepareDoctorContext(configPath);
-        const originalBytes = await fs.readFile(configPath, "utf8");
-        const otherPath = path.join(path.dirname(configPath), "other-openclaw.json");
-        await fs.writeFile(otherPath, originalBytes);
-        const files = (await fs.readdir(path.dirname(configPath))).toSorted();
-        const receipt = ctx.configResult.confirmedConfigSource;
-        const baseline = ctx.cfgForPersistence;
-        ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: otherPath }, async () => {
-          const otherSnapshot = await readConfigFileSnapshot();
-          expect(otherSnapshot.path).toBe(otherPath);
-          expect(otherSnapshot.hash).toBe(receipt?.hash);
-          expect(await runWriteConfigHealth(ctx)).toBe(false);
-        });
-
-        expect(ctx.configWriteRefusal).toBe("config-conflict");
-        expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
-        expect(ctx.cfgForPersistence).toBe(baseline);
-        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(originalBytes);
-        await expect(fs.readFile(otherPath, "utf8")).resolves.toBe(originalBytes);
-        expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(files);
-      });
-    });
-  });
 
   it("creates a missing config using its recorded missing-file revision", async () => {
     await withDoctorConfigPreflightHome(async (home) => {

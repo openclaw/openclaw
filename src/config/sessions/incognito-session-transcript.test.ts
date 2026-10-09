@@ -125,6 +125,7 @@ describe("session creation scope", () => {
       ).resolves.toMatchObject({ ok: true, sessionFile: key });
       expect(loadSessionEntry(scope)).toMatchObject(updated);
 
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(loadSessionEntry(scope)).toBeUndefined();
       await expect(loadTranscriptEvents(transcriptScope)).resolves.toEqual([]);
@@ -365,6 +366,7 @@ describe("incognito transcript access", () => {
       ]);
       expect(fs.readdirSync(stateDir, { recursive: true })).toEqual([]);
 
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(listSessionEntriesCore({ agentId: "main", env, storePath })).toEqual([]);
       await expect(

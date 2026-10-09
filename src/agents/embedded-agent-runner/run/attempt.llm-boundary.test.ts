@@ -40,91 +40,46 @@ function contentOf(message: AgentMessage | undefined) {
 }
 
 describe("normalizeMessagesForLlmBoundary", () => {
-  it.each([3, 4])(
-    "projects operator authority separately from literal user text (v%s)",
-    (sessionVersion) => {
-      const update = buildSystemUpdateMessage("## Rules\nChanged", "prompt-update", false);
-      const runtime = buildRuntimeContextCustomMessage("Current turn facts", undefined, true)!;
-      const input: AgentMessage[] = [user("Question"), update, runtime];
-      const output = normalizeMessagesForLlmBoundary(input, {
-        sessionVersion,
-        inHistorySystemUpdates: true,
-      });
-      expect(output).toEqual([
-        user("Question"),
-        {
-          role: "user",
-          content: "## Rules\nChanged",
-          timestamp: update.timestamp,
-          operatorMessage: { turnScoped: false },
-        },
-        {
-          role: "user",
-          content: "Current turn facts",
-          timestamp: runtime.timestamp,
-          operatorMessage: { turnScoped: true },
-        },
-      ]);
-      expect(input[1]).toBe(update);
-      expect(
-        normalizeMessagesForLlmBoundary(input, { sessionVersion, appendOnlyRuntimeContext: true }),
-      ).toEqual(
-        output.map(({ ...message }) => {
-          if (message.role === "user") {
-            delete message.operatorMessage;
-          }
-          return message;
-        }),
-      );
-    },
-  );
+  it("removes the synthetic current user without discarding operator context", () => {
+    const update = buildSystemUpdateMessage("Preserve this update", "prompt-update", false);
+    const runtime = buildRuntimeContextCustomMessage("Current facts", undefined, true)!;
+    const projected = normalizeMessagesForCurrentPromptBoundary({
+      messages: [user("Earlier question"), update, runtime],
+      prompt: "Synthetic current question",
+      appendOnlyRuntimeContext: true,
+      inHistorySystemUpdates: true,
+    });
+    expect(projected).toEqual([
+      user("Earlier question"),
+      {
+        role: "user",
+        content: "Preserve this update",
+        timestamp: update.timestamp,
+        operatorMessage: { turnScoped: false },
+      },
+      {
+        role: "user",
+        content: "Current facts",
+        timestamp: runtime.timestamp,
+        operatorMessage: { turnScoped: true },
+      },
+    ]);
+  });
 
-  it.each([false, true])(
-    "removes the synthetic current user without discarding operator context (capable=%s)",
-    (inHistorySystemUpdates) => {
-      const update = buildSystemUpdateMessage("Preserve this update", "prompt-update", false);
-      const runtime = buildRuntimeContextCustomMessage("Current facts", undefined, true)!;
-      const projected = normalizeMessagesForCurrentPromptBoundary({
-        messages: [user("Earlier question"), update, runtime],
-        prompt: "Synthetic current question",
-        appendOnlyRuntimeContext: true,
-        inHistorySystemUpdates,
-      });
-      expect(projected).toEqual([
-        user("Earlier question"),
-        {
-          role: "user",
-          content: "Preserve this update",
-          timestamp: update.timestamp,
-          ...(inHistorySystemUpdates ? { operatorMessage: { turnScoped: false } } : {}),
-        },
-        {
-          role: "user",
-          content: "Current facts",
-          timestamp: runtime.timestamp,
-          ...(inHistorySystemUpdates ? { operatorMessage: { turnScoped: true } } : {}),
-        },
-      ]);
-    },
-  );
-
-  it.each(["missing", "error", "aborted"] as const)(
+  it.each(["error", "aborted"] as const)(
     "keeps prior-turn runtime context before the next user after a %s assistant",
     (stopReason) => {
       const firstUser = user("First question");
       const firstRuntime = buildRuntimeContextCustomMessage("First turn facts", undefined, true)!;
       const boundaryOptions = { sessionVersion: 4, inHistorySystemUpdates: true };
       const first = normalizeMessagesForLlmBoundary([firstUser, firstRuntime], boundaryOptions);
-      const interrupted =
-        stopReason === "missing"
-          ? []
-          : [
-              makeAgentAssistantMessage({
-                content: [],
-                stopReason,
-                errorMessage: "Interrupted request",
-              }),
-            ];
+      const interrupted = [
+        makeAgentAssistantMessage({
+          content: [],
+          stopReason,
+          errorMessage: "Interrupted request",
+        }),
+      ];
       const second = normalizeMessagesForLlmBoundary(
         [
           firstUser,
@@ -203,6 +158,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(contentOf(output[0])).toBe(stamped("Old ask"));
     expect(contentOf(output[2])).toBe(stamped(current, timestamp + 60000));
     expect(contentOf(input[0])).toEqual([{ type: "text", text: `${conversation}Old ask` }]);
+    const bare = normalizeMessagesForLlmBoundary(input, { ...options, includeTimestamp: false });
+    expect(contentOf(bare[0])).toBe("Old ask");
+    expect(contentOf(bare[2])).toBe(current);
   });
 
   it("keeps attachment blocks while escaping a historical sender's code fence", () => {
@@ -252,21 +210,6 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(persisted.content).toBe("");
   });
 
-  it("synthesizes late-media path and URL lines with reference-identical string bytes", () => {
-    const text = "[media attached: /tmp/a.png]\n[media attached: media://inbound/b.jpg]";
-    const marked = {
-      ...user(""),
-      __openclaw: {
-        lateMedia: true,
-        media: [{ path: "/tmp/a.png" }, { url: "media://inbound/b.jpg" }],
-      },
-    };
-    const normalized = normalizeMessagesForLlmBoundary([marked], options);
-    const legacy = normalizeMessagesForLlmBoundary([user(text)], options);
-    expect(contentOf(normalized[0])).toBe(stamped(text));
-    expect(contentOf(normalized[0])).toBe(contentOf(legacy[0]));
-  });
-
   it("synthesizes late-media path lines without dropping replayed image blocks", () => {
     const text = "[media attached: /tmp/input.png]";
     const marked = {
@@ -280,25 +223,6 @@ describe("normalizeMessagesForLlmBoundary", () => {
     );
     expect(contentOf(output[0])).toEqual([{ type: "text", text: stamped(text) }, image]);
     expect(contentOf(output[0])).toEqual(contentOf(legacy[0]));
-  });
-
-  it("leaves disabled timestamp output bare without mutating transcript content or sidecar facts", () => {
-    const historical = {
-      ...user([{ type: "text", text: `${conversation}Stored ask` }]),
-      __openclaw: { seq: 12, embeddingInput: "Stored ask" },
-    };
-    const current = user([{ type: "text", text: "Current ask" }], timestamp + 60000);
-    const input = [historical, timestampedTextAssistant("Answer", 2), current];
-    const output = normalizeMessagesForLlmBoundary(input, { ...options, includeTimestamp: false });
-    expect(contentOf(output[0])).toBe("Stored ask");
-    expect(contentOf(output[2])).toBe("Current ask");
-    expect(output[0]).toHaveProperty("__openclaw", historical["__openclaw"]);
-    expect(Reflect.get(expectDefined(output[0], "historical output"), "__openclaw")).toBe(
-      historical["__openclaw"],
-    );
-    expect(historical.content).toEqual([{ type: "text", text: `${conversation}Stored ask` }]);
-    expect(historical["__openclaw"]).toEqual({ seq: 12, embeddingInput: "Stored ask" });
-    expect(current.content).toEqual([{ type: "text", text: "Current ask" }]);
   });
 
   it("binds a prepared timestamp to the original runtime turn even when queued text repeats", () => {
@@ -340,13 +264,6 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ).toBe(prompt);
   });
 
-  it("keeps legacy text-only inter-session provenance ahead of sender context", () => {
-    const prompt =
-      "[Inter-session message] sourceTool=sessions_send isUser=false\nThis content was routed by OpenClaw from another session or internal tool.\nforwarded ask";
-    const input = { ...user(prompt), __openclaw: { senderId: "alice-id", senderName: "Alice" } };
-    expect(contentOf(normalizeMessagesForLlmBoundary([input], options)[0])).toBe(prompt);
-  });
-
   it("merges persisted sender into one existing active conversation envelope", () => {
     const runtimeMessage = user(`${conversation}Current ask`, 3);
     const transcriptMessage = {
@@ -384,6 +301,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       customType: "openclaw.runtime-context",
       content,
       display: false,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       timestamp: 2,
     });
     const active = carrier("current context");

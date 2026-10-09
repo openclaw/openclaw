@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -162,20 +163,6 @@ it("keeps native reads between earlier and later worker mutations", async () => 
   });
 });
 
-it("leaves the default approval clock to the worker when dispatching a public read", async () => {
-  const databaseOptions = options();
-  const input = approval("worker-clock");
-  await store.insertOperatorApproval({ approval: input, databaseOptions });
-  // Only the requesting thread sees this pre-expiry clock; the real worker must
-  // expire the historical fixture using its own transaction-time clock.
-  using _ = vi.spyOn(Date, "now").mockReturnValue(input.createdAtMs);
-
-  expect(await store.getOperatorApprovalDetailed({ id: input.id, databaseOptions })).toMatchObject({
-    outcome: "found",
-    record: { status: "expired", terminalReason: "timeout" },
-  });
-});
-
 it("revalidates live authority after dispatch and rolls back refused decisions", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("guarded"), databaseOptions });
@@ -208,16 +195,12 @@ it.each(["worker", "native-compatibility"] as const)(
     let refuse = true;
     let current = true;
     if (family === "worker") {
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && refuse) {
-              current = false;
-            }
-            return admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit" && refuse) {
+          current = false;
+        }
+        return admit(request, grant);
+      });
     }
     const input = {
       id: "receipt-rollback",

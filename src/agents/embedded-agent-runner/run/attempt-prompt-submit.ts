@@ -16,12 +16,7 @@ import {
   recordAggregateTruncation,
 } from "../prompt-cache-observability.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
-import {
-  type getEmbeddedSessionPromptState,
-  type ToolResultPromptProjectionState,
-  hasSessionUserTurnBeenSent,
-  markSessionUserTurnsSent,
-} from "../session-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
@@ -64,7 +59,7 @@ type SteeringLease = {
   isCurrent: () => boolean;
 };
 
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
@@ -101,7 +96,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
-  sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
   systemPrompt: string;
   toolResultAggregateMaxChars: number;
   toolResultMaxChars: number;
@@ -171,23 +165,22 @@ export async function submitEmbeddedAttemptPrompt(input: {
     };
     activeSession.agent.prepareNextTurnWithContext = prepareNextTurn;
     const persistThenStream: StreamFn = async (model, context, options) => {
+      const assertRequestCurrent = () => {
+        options?.signal?.throwIfAborted();
+        assertSteeringCurrent();
+        input.assertHostActive?.();
+      };
       // Runtime admission queues behind the user append; join it outside that write lane.
       await userTurnRecorder?.waitForRuntimePersistence();
-      options?.signal?.throwIfAborted();
-      assertSteeringCurrent();
-      input.assertHostActive?.();
+      assertRequestCurrent();
       await input.persistToolResultProjections();
-      options?.signal?.throwIfAborted();
-      assertSteeringCurrent();
-      input.assertHostActive?.();
+      assertRequestCurrent();
       let requestContext = context;
       const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
       const preparation = foregroundRequest ? input.preparePrimaryModelRequest?.() : undefined;
       if (preparation) {
         const readRestoredContext = await preparation;
-        options?.signal?.throwIfAborted();
-        assertSteeringCurrent();
-        input.assertHostActive?.();
+        assertRequestCurrent();
         // Read the live permitted surface only after all awaited preparation.
         // Do not reuse the tools snapshot captured before the restoration.
         const projection = readRestoredContext().promptUpdate;
@@ -208,15 +201,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
             ],
           };
         }
-        options?.signal?.throwIfAborted();
-        assertSteeringCurrent();
-        input.assertHostActive?.();
+        assertRequestCurrent();
         if (projection) {
           projection.commit();
           await input.persistToolResultProjections();
-          options?.signal?.throwIfAborted();
-          assertSteeringCurrent();
-          input.assertHostActive?.();
+          assertRequestCurrent();
         }
         const { tools, systemPrompt } = readRestoredContext();
         requestContext = { ...requestContext, tools, systemPrompt };
@@ -251,11 +240,17 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
         // Mark the current turn sent at provider dispatch so late media appends
         // instead of rewriting its prompt-cache slot (#99495).
-        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
         const recorder = attempt.userTurnTranscriptRecorder;
+        const idempotencyKey = recorder?.message?.idempotencyKey;
         if (
           recorder &&
-          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+          (!idempotencyKey ||
+            providerMessages.some(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === idempotencyKey,
+            ))
         ) {
           recorder.markSentToProvider?.();
         }
@@ -296,9 +291,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     shouldCapturePrompt: () => captureCurrentPromptForModel,
   });
   const armModelPromptTransform = (submitted: boolean) => {
-    if (submitted) {
-      captureCurrentPromptForModel = true;
-    }
+    captureCurrentPromptForModel ||= submitted;
   };
   const promptOptions = {
     ...(!input.runtimeOnly && input.images.length > 0 ? { images: input.images } : {}),

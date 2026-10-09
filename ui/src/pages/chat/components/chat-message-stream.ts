@@ -10,8 +10,9 @@ import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
@@ -35,7 +36,6 @@ export type StreamGroupPart = Extract<
 
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
-  | "onResolveReply"
   | "onOpenReply"
   | "replyNavigationId"
   | "sessionKey"
@@ -74,6 +74,10 @@ export type StreamGroupOptions = StreamMessageOptions & {
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  waitingSubagents?: ChatSubagentWait;
+  runningSubagents?: number;
+  onOpenSubagent?: (key: string) => void;
+  onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
@@ -90,6 +94,25 @@ export function renderStreamGroupParts(
   );
 }
 
+/** A wait no loaded handoff can place: the standard working row, after the transcript. */
+export function renderUnplacedSubagentWait(
+  sessionKey: string,
+  wait: ChatSubagentWait,
+  opts: StreamGroupOptions,
+) {
+  return renderStreamGroup(
+    [
+      {
+        kind: "reading-indicator",
+        key: `waiting-subagents:${sessionKey}`,
+        startedAt: wait.startedAt ?? 0,
+        waitingOn: "subagents",
+      },
+    ],
+    opts,
+  );
+}
+
 export function renderStreamGroupPart(
   part: StreamGroupPart,
   opts: StreamGroupOptions,
@@ -100,6 +123,10 @@ export function renderStreamGroupPart(
       mascot: opts.branding?.mascot,
       workingPhrases: opts.branding?.workingPhrases,
       waitingApproval: opts.waitingApproval === true,
+      waitingSubagents: part.waitingOn === "subagents" ? opts.waitingSubagents : undefined,
+      runningSubagents: opts.runningSubagents,
+      onOpenSubagent: opts.onOpenSubagent,
+      onOpenSubagents: opts.onOpenSubagents,
       startupLabel: opts.startupLabel,
       outputTokens: opts.runOutputTokens,
       presentation,
@@ -138,7 +165,6 @@ export function renderStreamGroupPart(
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
   const { assistant } = opts;
-  const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
@@ -149,12 +175,12 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part unless the presentation opts out.
-  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const sourcePart = parts.find((part) => part.kind === "stream");
+  const workingOnly = !sourcePart;
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
       : renderChatAvatar("assistant", assistant);
-  const sourcePart = parts.find((part) => part.kind === "stream");
   const replyLine = resolveGroupReplyLine(
     {
       role: "assistant",
@@ -182,7 +208,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
             : html`
                 <div class="chat-group-footer">
                   <div class="chat-group-footer__meta">
-                    <span class="chat-sender-name">${name}</span>
+                    <span class="chat-sender-name">${assistant?.name ?? "Assistant"}</span>
                     ${renderChatTimestamp(footerStartedAt)}
                   </div>
                 </div>
@@ -205,7 +231,7 @@ export function renderWorkGroupSummary(
     browserTabPreviews?: unknown;
   },
 ) {
-  const duration = formatDurationCompact(item.durationMs);
+  const duration = formatDurationLong(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),
@@ -267,14 +293,14 @@ export function renderWorkGroupSummary(
           <span class="chat-activity-group__label">${label}</span>
         </span>
         ${
-          total > 0
+          opts.expanded && total > 0
             ? html`<span class="chat-work-group__total"
                 >·
                 ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span
               >`
             : nothing
         }
-        ${outcomes.map((outcome) => html`<span class="muted">· ${outcome.label}</span>`)}
+        ${outcomes.map((outcome) => html`<span class="chat-activity-group__outcome muted">· ${outcome.label}</span>`)}
         ${
           toolOutcomes === nothing
             ? nothing

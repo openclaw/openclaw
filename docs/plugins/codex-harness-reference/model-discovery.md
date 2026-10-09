@@ -57,8 +57,10 @@ cases rather than offering a disabled option. Discovery support describes
 availability, not a guarantee that an upstream request will receive that tier.
 
 The embedded OpenClaw runtime uses the available API-key OpenAI Responses route
-to offer Ultrafast without catalog metadata, subject to observed provider
-downgrades; see [Fast mode](/providers/openai/advanced#fast-mode).
+to offer Ultrafast without catalog metadata, whether the key comes from an auth
+profile, environment, or provider config (including SecretRefs). This remains
+subject to observed provider downgrades for the selected credential and route;
+see [Fast mode](/providers/openai/advanced#fast-mode).
 Codex-runtime Ultrafast with API-key authentication still requires the native
 catalog, including a pinned `model_catalog_json`, to list the tier for that model.
 
@@ -100,7 +102,7 @@ response remains authoritative even if it contains no visible models; HTTP
 
 <Note>
 The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
-probe against that app-server in an isolated, unauthenticated Codex home returned
+check against that app-server in an isolated, unauthenticated Codex home returned
 these visible bundled catalog entries on October 2, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
@@ -152,7 +154,7 @@ fallback and leave native models unavailable until discovery succeeds.
 }
 ```
 
-Disable discovery when you want startup to avoid probing Codex and use only
+Disable discovery when you want startup to avoid checking Codex and use only
 the fallback catalog:
 
 ```json5

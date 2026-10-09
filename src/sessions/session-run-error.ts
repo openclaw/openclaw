@@ -6,12 +6,13 @@ import {
 } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
+import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
 import { redactTranscriptText } from "../agents/transcript-redact-text.js";
 import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
-import { appendSessionTranscriptReportNative } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -26,20 +27,19 @@ function sanitizeSessionRunError(error: unknown): string {
   return redactSensitiveText(text, { mode: "tools" });
 }
 
-/** Shared failure receipt; optional settlement joins the receipt's synchronous transaction. */
+type GatewaySessionRunFailure = {
+  target: SessionTranscriptWriteScope & { sessionId: string };
+  runId: string;
+  error: unknown;
+  errorKind?: "state_contention";
+  status?: "failed" | "timeout";
+  timeoutPartialText?: string;
+  assertCommitAllowed?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
+
 export async function recordGatewaySessionRunFailure(
-  params: {
-    target: SessionTranscriptWriteScope & { sessionId: string };
-    runId: string;
-    error: unknown;
-    errorKind?: "state_contention";
-    status?: "failed" | "timeout";
-    timeoutPartialText?: string;
-    assertCommitAllowed?: () => void;
-  } & (
-    | { settleStartupSession: () => undefined; sessionEntryCurrent?: never }
-    | { settleStartupSession?: undefined; sessionEntryCurrent?: SessionEntryCurrentCheck }
-  ),
+  params: GatewaySessionRunFailure,
 ): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
@@ -61,14 +61,23 @@ export async function recordGatewaySessionRunFailure(
     (timeoutPartialText
       ? `\n\nUnfinished assistant output (recorded text, not a completion claim):\n${JSON.stringify(timeoutPartialText)}`
       : "");
-  const append = params.settleStartupSession
-    ? appendSessionTranscriptReportNative
-    : appendSessionTranscriptReport;
+  const report: CustomMessageReportAppend = {
+    customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+    content:
+      params.status === "timeout"
+        ? timeoutContent
+        : params.errorKind === "state_contention"
+          ? STATE_CONTENTION_SUMMARY
+          : (renderCodexAppServerFailureCopy(error) ??
+            `Your request couldn't be completed: ${error}`),
+    display: true,
+    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+  };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,
     () => params.assertCommitAllowed?.(),
     () =>
-      append(
+      appendSessionTranscriptReport(
         params.target,
         {
           kind: "custom",
@@ -77,26 +86,7 @@ export async function recordGatewaySessionRunFailure(
           suppressWhenAssistantRun: params.status === "timeout" ? undefined : runId,
           selectReport: (latest) => {
             params.assertCommitAllowed?.();
-            params.settleStartupSession?.();
-            params.assertCommitAllowed?.();
-            if (isRecord(latest?.details) && latest.details.runId === runId) {
-              return undefined;
-            }
-            return {
-              customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-              content:
-                params.status === "timeout"
-                  ? timeoutContent
-                  : params.errorKind === "state_contention"
-                    ? STATE_CONTENTION_SUMMARY
-                    : `Your request couldn't be completed: ${error}`,
-              display: true,
-              details: {
-                runId,
-                error,
-                ...(params.errorKind ? { errorKind: params.errorKind } : {}),
-              },
-            };
+            return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;
           },
         },
         { sessionEntryCurrent: params.sessionEntryCurrent },

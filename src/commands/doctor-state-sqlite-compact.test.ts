@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
@@ -13,11 +13,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import * as compactOwner from "./doctor-sqlite-compact.js";
+import * as maintenanceLock from "./doctor-sqlite-maintenance-lock.js";
 import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     closeOpenClawStateDatabase();
+    vi.restoreAllMocks();
     cleanup();
   });
 });
@@ -325,16 +328,10 @@ describe("runDoctorStateSqliteCompact", () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
 
-    await expect(
-      runDoctorStateSqliteCompact(
-        { env },
-        {
-          withMaintenanceLock: async () => {
-            throw new Error("Gateway owns this OpenClaw state directory");
-          },
-        },
-      ),
-    ).rejects.toThrow(/Gateway owns/);
+    vi.spyOn(maintenanceLock, "withDoctorSqliteMaintenanceLock").mockRejectedValue(
+      new Error("Gateway owns this OpenClaw state directory"),
+    );
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/Gateway owns/);
 
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
@@ -365,7 +362,11 @@ describe("runDoctorStateSqliteCompact", () => {
       writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
 
       // Exercise the real busy checkpoint result without waiting the production lock timeout.
-      await expect(runDoctorStateSqliteCompact({ env }, { busyTimeoutMs: 0 })).rejects.toThrow(
+      const compact = compactOwner.compactDoctorSqliteFile;
+      vi.spyOn(compactOwner, "compactDoctorSqliteFile").mockImplementation((options) =>
+        compact({ ...options, busyTimeoutMs: 0 }),
+      );
+      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
         /checkpoint remained busy/,
       );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);

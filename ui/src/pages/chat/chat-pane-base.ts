@@ -38,6 +38,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
   resolveUiConversationIdentity,
+  scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -172,6 +173,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) agentId?: string;
   @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) onBackToSubagents?: () => void;
   @property({ attribute: false }) workContext?: ChatWorkContext;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
@@ -251,7 +253,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!this.state?.connected || this.state.client !== this.context?.gateway.snapshot.client) {
       return false;
     }
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
+    const phase = getChatHistoryLoadState(this.state).phase;
     return phase === "committed" || phase === "failed";
   }
   protected readonly synchronizeForegroundTranscript = () => {
@@ -410,6 +412,22 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       : undefined;
   }
 
+  protected projectChildRoster(
+    target: ReturnType<typeof resolveUiConversationIdentity> | undefined,
+  ) {
+    const sessions = target ? this.swarmHydrator?.rows : undefined;
+    return {
+      swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
+      subagentSessions: sessions,
+      subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
+      subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
+      // Carry the admitted owner forward; route aliases do not identify child ancestry.
+      subagentParentKey: target
+        ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
+        : undefined,
+    };
+  }
+
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
       state.selectedChatSessionArchived ||
@@ -432,7 +450,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
 
-  @litState() protected headerEditing = false;
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
@@ -467,9 +484,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  @litState() protected resetConfirmationOpen = false;
-  protected deferredSessionHydrationRequestVersion = 0;
-  protected resetConfirmation:
+  @litState() protected resetConfirmation:
     | {
         scopeKey: string;
         promise: Promise<boolean>;
@@ -484,6 +499,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     pendingRoute?: boolean;
   };
   protected swarmHydrator: SwarmRosterHydrator | null = null;
+  protected swarmEnabled = true;
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly pendingPanelToggleRequests = new Map<
@@ -500,6 +516,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
   >();
   protected headerRenameInitialValue = "";
+  @litState({ hasChanged: (next, previous) => Boolean(next) !== Boolean(previous) })
   protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
     null;
   protected headerCopiedTimer: number | null = null;
@@ -510,7 +527,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
    * so reused session keys can never inherit another checkout's path. */
   protected readonly headerWorktreePaths = new Map<
     string,
-    { loaded?: boolean; loading?: boolean; path?: string | null }
+    { loading?: boolean; path?: string | null }
   >();
   /** HEAD keyed by the resolved root directory it was read from — a branch is
    * a fact about a checkout, so root transitions miss instead of going stale. */
@@ -549,12 +566,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverRoot: HTMLElement | null = null;
   protected historyObserverSentinel: HTMLElement | null = null;
   protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
-  protected historyIntentConsumed = false;
   protected historyIntentTimer: number | null = null;
   protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;

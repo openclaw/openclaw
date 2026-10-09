@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -358,7 +359,10 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.postHostState();
       },
       onRendered: () => this.postHostState(),
-      onError: (error) => this.fail(error),
+      onError: (error) => {
+        this.clearSandbox();
+        this.error = formatUiError(error);
+      },
       onReadyTimeout: () => {
         this.pending = true;
       },
@@ -366,11 +370,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = true;
       },
     });
-  }
-
-  private fail(error: unknown): void {
-    this.clearSandbox();
-    this.error = formatUiError(error);
   }
 
   private postHostState(): void {
@@ -430,7 +429,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         return;
       }
       const report = {
-        message: data.message.slice(0, 500),
+        message: truncateUtf16Safe(data.message, 500).toWellFormed(),
         line: typeof data.line === "number" && Number.isInteger(data.line) ? data.line : undefined,
         column:
           typeof data.column === "number" && Number.isInteger(data.column)
@@ -456,7 +455,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         report.line === undefined
           ? ""
           : `, line ${report.line}${report.column === undefined ? "" : `, column ${report.column}`}`;
-      const text = `Inline widget "${this.title.slice(0, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
+      const text = `Inline widget "${truncateUtf16Safe(this.title, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
       void binding.client
         .request("wake", { mode: "now", sessionKey: this.sessionKey, text })
         .catch((error: unknown) => console.warn("Widget runtime error wake failed", error));
@@ -494,7 +493,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
-        dispatchWidgetPrompt(
+        void dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
           `${this.sessionKey}\0${this.docId}\0${this.validated!.generation}`,

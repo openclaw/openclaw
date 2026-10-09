@@ -1,4 +1,3 @@
-/** Linux systemd unit paths and environment-file parsing. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,9 +10,11 @@ import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import {
   ServiceDefinitionInspectionError,
+  ServiceStartRefusalError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
 } from "./service-inspection-error.js";
+import { resolveSystemdServiceStartRefusal } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -23,6 +24,7 @@ import type {
   GatewayServiceReadOptions,
   SystemdServiceReadTarget,
 } from "./service-types.js";
+import { systemdUnitCallArgs } from "./systemd-bus-query.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
 import {
   resolveSystemdEnvironmentFiles,
@@ -79,8 +81,6 @@ export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
-// Unit file parsing/rendering: see systemd-unit.ts
-
 const UNKNOWN_SYSTEMD_OVERRIDES = {
   launcher: "command",
   environment: true,
@@ -136,36 +136,30 @@ async function readSystemdManagerCommand(
   try {
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
-      if (localDefinition) {
-        throw unavailable();
-      }
       const fileState = await query(
-        [
-          "call",
-          destination,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnitFileState",
-          "s",
-          unitName,
-        ],
+        systemdUnitCallArgs(destination, unitName, "GetUnitFileState"),
         ["s"],
       );
-      if (fileState !== null) {
+      const value = fileState?.[0];
+      const refusal = resolveSystemdServiceStartRefusal({
+        unit: unitName,
+        scope: target?.scope,
+        unitFileState: Array.isArray(value) && typeof value[0] === "string" ? value[0] : undefined,
+      });
+      if (refusal) {
+        throw new ServiceStartRefusalError(refusal);
+      }
+      if (fileState !== null || localDefinition) {
         throw unavailable();
       }
       return null;
     };
     const loaded = await query(
-      [
-        "call",
+      systemdUnitCallArgs(
         destination,
-        "/org/freedesktop/systemd1",
-        `${manager}.Manager`,
-        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
-        "s",
         unitName,
-      ],
+        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
+      ),
       ["o"],
     );
     if (!loaded) {
@@ -187,10 +181,40 @@ async function readSystemdManagerCommand(
       Array.isArray(value) && value.every((entry) => typeof entry === "string");
     const unitProperties = await readProperties(
       "Unit",
-      ["FragmentPath", "DropInPaths", "NeedDaemonReload", "LoadState"],
-      ["s", "as", "b", "s"],
+      [
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "LoadState",
+        "UnitFileState",
+        "ActiveState",
+        "CanStart",
+        "RefuseManualStart",
+      ],
+      ["s", "as", "b", "s", "s", "s", "b", "b"],
     );
-    const [sourcePath, dropInPaths, reloadPending, loadState] = unitProperties ?? [];
+    const [
+      sourcePath,
+      dropInPaths,
+      reloadPending,
+      loadState,
+      unitFileState,
+      activeState,
+      canStart,
+      refuseManualStart,
+    ] = unitProperties ?? [];
+    const startRefusal = resolveSystemdServiceStartRefusal({
+      unit: unitName,
+      scope: target?.scope,
+      loadState: typeof loadState === "string" ? loadState : undefined,
+      unitFileState: typeof unitFileState === "string" ? unitFileState : undefined,
+      activeState: typeof activeState === "string" ? activeState : undefined,
+      canStart: typeof canStart === "boolean" ? canStart : undefined,
+      refuseManualStart: refuseManualStart === true,
+    });
+    if (startRefusal && loadState === "masked") {
+      throw new ServiceStartRefusalError(startRefusal);
+    }
     // LoadUnit also returns objects for missing units; only LoadState proves absence.
     if (loadState === "not-found") {
       return opts?.requireLoaded ? await assertAbsentWithoutLoading() : null;
@@ -203,6 +227,9 @@ async function readSystemdManagerCommand(
       dropInPaths.some((pathname) => !pathname) ||
       typeof reloadPending !== "boolean"
     ) {
+      if (startRefusal) {
+        throw new ServiceStartRefusalError(startRefusal);
+      }
       throw unavailable();
     }
     const properties = await readProperties(
@@ -247,6 +274,10 @@ async function readSystemdManagerCommand(
       !isStringArray(unset) ||
       unset.some((assignment) => !assignment || assignment.startsWith("="))
     ) {
+      // Invalid ExecStart must not hide a known hold before update preflight reads runtime.
+      if (startRefusal) {
+        throw new ServiceStartRefusalError(startRefusal);
+      }
       throw unavailable();
     }
     const inlineEnvironment: Record<string, string> = {};
@@ -444,6 +475,7 @@ export async function readSystemdServiceExecStartAsRoot(
   env: GatewayServiceEnv,
   target: SystemdServiceReadTarget,
   expectedServiceAccount: string,
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"],
 ): Promise<GatewayServiceCommandConfig | null> {
   if (
     process.geteuid?.() !== 0 ||
@@ -456,7 +488,7 @@ export async function readSystemdServiceExecStartAsRoot(
   }
   const command = await readSystemdServiceCommand(
     env,
-    { systemdReadTarget: target, requireEffective: true, requireLoaded: true },
+    { systemdReadTarget: target, requireEffective: true, requireLoaded: true, loadForInspection },
     false,
     expectedServiceAccount,
   );

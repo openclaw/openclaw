@@ -847,13 +847,32 @@ describe("active-memory plugin", () => {
     },
   );
 
-  it("still recalls for external-user provenance", async () => {
+  it("runs bounded external-user recall on an isolated lane and auth policy", async () => {
     const result = await runPromptBuild(
       { prompt: "what wings should i order?" },
       { inputProvenance: { kind: "external_user" } },
     );
-
     expectPrependContextContains(result, "lemon pepper wings");
+    const params = lastEmbeddedRunParams();
+    expect(params).toMatchObject({
+      timeoutMs: 15_000,
+      authProfileFailurePolicy: "local",
+      cliBackendDispatch: "subscription-auth",
+      lane: "active-memory",
+      toolsAllow: ["memory_search", "memory_get"],
+      allowGatewaySubagentBinding: true,
+    });
+    expect(params.toolsAllow).toEqual(["memory_search", "memory_get"]);
+    for (const text of [
+      "Another model is preparing the final user-facing answer.",
+      "Do not answer the user directly.",
+      "Use the bounded search query with the configured memory tools.",
+      "Mutable operational facts",
+      "source timestamp",
+      "verify live",
+    ]) {
+      expect(params.prompt).toContain(text);
+    }
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
@@ -891,22 +910,6 @@ describe("active-memory plugin", () => {
     releaseRecall();
 
     await expect(result).resolves.toBeUndefined();
-  });
-
-  it("runs recall without recording shared auth-profile failures", async () => {
-    await runPromptBuild({ prompt: "what wings should i order?" });
-
-    expect(lastEmbeddedRunParams().timeoutMs).toBe(15_000);
-    expect(lastEmbeddedRunParams().authProfileFailurePolicy).toBe("local");
-    // Subscription-only claude-cli setups route recall through the CLI
-    // backend instead of the direct-API passthrough.
-    expect(lastEmbeddedRunParams().cliBackendDispatch).toBe("subscription-auth");
-  });
-
-  it("runs recall on a dedicated active-memory lane", async () => {
-    await runPromptBuild({ prompt: "what wings should i order?" });
-
-    expect(lastEmbeddedRunParams().lane).toBe("active-memory");
   });
 
   it("creates and removes the exact SQLite recall session around the embedded run", async () => {
@@ -1230,12 +1233,11 @@ describe("active-memory plugin", () => {
         defaults: {
           model: { primary: "github-copilot/gpt-5.4-mini" },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             memory: { search: { rememberAcrossConversations: true } },
           },
-        ],
+        },
       },
     };
     const context = {
@@ -1327,7 +1329,7 @@ describe("active-memory plugin", () => {
     configFile = {
       ...configFile,
       agents: {
-        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
+        entries: { personal: { memory: { search: { rememberAcrossConversations: true } } } },
       },
     };
     hoisted.sessionStore[testCase.sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
@@ -1352,14 +1354,13 @@ describe("active-memory plugin", () => {
   it("runs product recall by default for a personal install without Active Memory config", async () => {
     configFile = {
       agents: {
-        list: [
-          {
-            id: "personal",
+        entries: {
+          personal: {
             model: { primary: "openai/gpt-5.5" },
             workspace: "/tmp/live-personal-workspace",
             agentDir: "/tmp/live-personal-agent",
           },
-        ],
+        },
       },
       plugins: { entries: {} },
     };
@@ -1395,13 +1396,12 @@ describe("active-memory plugin", () => {
     configFile = {
       ...configFile,
       agents: {
-        list: [
-          {
-            id: "personal",
+        entries: {
+          personal: {
             model: { primary: "github-copilot/gpt-5.4-mini" },
             memory: { search: { rememberAcrossConversations: true } },
           },
-        ],
+        },
       },
     };
     const directSessionKey = "agent:personal:telegram:direct:owner";
@@ -1504,9 +1504,15 @@ describe("active-memory plugin", () => {
     expect(statusResult.text).toBe("Active Memory: off for this session.");
   });
 
-  it("supports an explicit global active-memory config toggle", async () => {
+  it.each([
+    { name: "owner", authority: { senderIsOwner: true } },
+    {
+      name: "gateway admin",
+      authority: { channel: "gateway", gatewayClientScopes: ["operator.admin"] },
+    },
+  ])("supports global active-memory toggles for $name", async ({ authority }) => {
     const offResult = await runActiveMemoryCommand({
-      senderIsOwner: true,
+      ...authority,
       args: "off --global",
     });
 
@@ -1541,7 +1547,7 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
 
     const onResult = await runActiveMemoryCommand({
-      senderIsOwner: true,
+      ...authority,
       args: "on --global",
     });
 
@@ -1567,92 +1573,39 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks external non-owner callers from changing global active-memory config", async () => {
-    for (const args of ["off --global", "on --global"]) {
-      const result = await runActiveMemoryCommand({
-        channel: "telegram",
-        senderIsOwner: false,
-        args,
-      });
-
+  it("blocks global config mutations without owner or admin authority", async () => {
+    const callers = [
+      { channel: "telegram", senderIsOwner: false, args: "off --global" },
+      { channel: "telegram", senderIsOwner: false, args: "on --global" },
+      { channel: "gateway", gatewayClientScopes: ["operator.write"], args: "off --global" },
+      { channel: "gateway", gatewayClientScopes: [], args: "on --global" },
+    ];
+    for (const caller of callers) {
+      const result = await runActiveMemoryCommand(caller);
       expect(result.text).toContain(
         "global enable/disable changes require owner or operator.admin",
       );
     }
-
     expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 
-  it("blocks gateway callers without admin scope from changing global active-memory config", async () => {
-    for (const { args, gatewayClientScopes } of [
-      { args: "off --global", gatewayClientScopes: ["operator.write"] },
-      { args: "on --global", gatewayClientScopes: [] },
-    ]) {
-      const result = await runActiveMemoryCommand({
-        channel: "gateway",
-        gatewayClientScopes,
-        args,
-      });
-
-      expect(result.text).toContain(
-        "global enable/disable changes require owner or operator.admin",
-      );
+  it.each([
+    {
+      name: "disabled",
+      entries: { "active-memory": { enabled: true, config: { enabled: false, agents: ["main"] } } },
+    },
+    { name: "removed", entries: {} },
+  ])("honors a $name live plugin entry", async ({ name, entries }) => {
+    configFile = { plugins: { entries } };
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order?" },
+      { sessionKey: "agent:main:live-config" },
+    );
+    if (name === "disabled") {
+      expect(result).toBeUndefined();
+    } else {
+      expectPrependContextContains(result, skippedRecallContext);
     }
-
-    expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("allows admin-scoped gateway callers to change global active-memory config", async () => {
-    const result = await runActiveMemoryCommand({
-      channel: "gateway",
-      gatewayClientScopes: ["operator.admin"],
-      args: "off --global",
-    });
-
-    expect(result.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(
-      requireRecord(
-        requireRecord(requireRecord(configFile.plugins, "plugins").entries, "entries")[
-          "active-memory"
-        ],
-        "active-memory entry",
-      ).enabled,
-    ).toBe(true);
-    expect(currentActiveMemoryConfig().enabled).toBe(false);
-    expect(currentActiveMemoryConfig().agents).toEqual(["main"]);
-  });
-
-  it("uses live runtime config for before_prompt_build enablement", async () => {
-    configFile = {
-      plugins: {
-        entries: {
-          "active-memory": {
-            enabled: true,
-            config: { enabled: false, agents: ["main"] },
-          },
-        },
-      },
-    };
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order after a live config disable?" },
-      { sessionKey: "agent:main:live-config-disable" },
-    );
-
-    expect(result).toBeUndefined();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
-
-  it("does not run deep recall when the live active-memory plugin entry is removed", async () => {
-    configFile = { plugins: { entries: {} } };
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order after active memory is removed?" },
-      { sessionKey: "agent:main:live-config-removed" },
-    );
-
-    expectPrependContextContains(result, skippedRecallContext);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -1988,22 +1941,9 @@ describe("active-memory plugin", () => {
     ).toBe(false);
   });
 
-  it("frames recall as bounded memory search for another model", async () => {
-    await runPromptBuild({ prompt: "What is my favorite food?" });
-    const { prompt, toolsAllow, allowGatewaySubagentBinding } = lastEmbeddedRunParams();
-    expect(toolsAllow).toEqual(["memory_search", "memory_get"]);
-    expect(allowGatewaySubagentBinding).toBe(true);
-    expect(prompt).toContain("Another model is preparing the final user-facing answer.");
-    expect(prompt).toContain("Do not answer the user directly.");
-    expect(prompt).toContain("Use the bounded search query with the configured memory tools.");
-    expect(prompt).toContain("Mutable operational facts");
-    expect(prompt).toContain("source timestamp");
-    expect(prompt).toContain("verify live");
-  });
-
-  it("normalizes custom memory tools without admitting reserved tools or slot defaults", async () => {
-    setMemorySlot("memory-lancedb");
-    registerPluginConfig({
+  it.each([
+    {
+      name: "custom tools",
       toolsAllow: [
         "*",
         "group:plugins",
@@ -2016,120 +1956,258 @@ describe("active-memory plugin", () => {
         "lcm_grep",
         "lcm_describe",
       ],
-    });
-    await runPromptBuild({ prompt: "What did we decide about active memory?" });
-    const params = lastEmbeddedRunParams();
-    expect(params.toolsAllow).toEqual(["memory_search", "lcm_grep", "lcm_describe"]);
-    expect(params.prompt).toContain(
-      "Configured memory tools: memory_search, lcm_grep, lcm_describe.",
-    );
-  });
-
-  it("falls back to LanceDB compat tools when custom memory tools only contain reserved entries", async () => {
-    setMemorySlot("memory-lancedb");
-    api.pluginConfig = {
-      agents: ["main"],
+      expected: ["memory_search", "lcm_grep", "lcm_describe"],
+    },
+    {
+      name: "reserved-only fallback",
       toolsAllow: ["*", "group:plugins", "read", "exec", "message", "web_search"],
-    };
-
-    await runPromptBuild({
-      prompt: "What did we decide about active memory?",
-    });
-
-    const runParams = lastEmbeddedRunParams();
-    expect(runParams.toolsAllow).toEqual(["memory_recall"]);
-    expect(runParams.prompt).toContain("Configured memory tools: memory_recall.");
+      expected: ["memory_recall"],
+    },
+  ])("normalizes the LanceDB allowlist: $name", async ({ toolsAllow, expected }) => {
+    setMemorySlot("memory-lancedb");
+    registerPluginConfig({ toolsAllow });
+    await runPromptBuild({ prompt: "What did we decide about active memory?" });
+    expect(lastEmbeddedRunParams().toolsAllow).toEqual(expected);
+    expect(lastEmbeddedPrompt()).toContain(`Configured memory tools: ${expected.join(", ")}.`);
   });
 
-  it("honors an explicit promptStyle override", async () => {
-    registerPluginConfig({ queryMode: "message", promptStyle: "preference-only" });
-
-    await runPromptBuild({
-      prompt: "What is my favorite food?",
-    });
-
-    const runParams = lastEmbeddedRunParams();
-    expect(runParams.prompt).toContain("Prompt style: preference-only.");
-    expect(runParams.prompt).toContain(
-      "Optimize for favorites, preferences, habits, routines, taste, and recurring personal facts.",
-    );
-  });
-
-  it("keeps thinking off and fast mode inherited by default but allows explicit overrides", async () => {
-    await runPromptBuild({
-      prompt: "What is my favorite food? default-thinking-check",
-    });
-
-    expect(lastEmbeddedRunParams().thinkLevel).toBe("off");
-    expect(lastEmbeddedRunParams().fastMode).toBeUndefined();
-    expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
-
-    registerPluginConfig({ thinking: "medium", fastMode: true, logging: true });
-
-    await runPromptBuild({
-      prompt: "What is my favorite food? thinking-override-check",
-    });
-
-    expect(lastEmbeddedRunParams().thinkLevel).toBe("medium");
-    expect(lastEmbeddedRunParams().fastMode).toBe(true);
-    expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
-
-    const infoLines = getInfoLines();
-    expectLinesToContain(infoLines, "thinking=medium fast=on start");
-  });
-
-  it("inherits parent session fast mode before the agent default", async () => {
-    api.config = {
-      agents: {
-        defaults: {
-          model: { primary: "github-copilot/gpt-5.4-mini" },
-        },
-        list: [{ id: "main", fastModeDefault: true }],
+  it.each<{
+    name: string;
+    config: Record<string, unknown>;
+    event: Record<string, unknown>;
+    contains: string[];
+    excludes?: string[];
+    query?: string;
+    wellFormed?: boolean;
+  }>([
+    {
+      name: "explicit preference style",
+      config: { queryMode: "message", promptStyle: "preference-only" },
+      event: { prompt: "What is my favorite food?" },
+      contains: [
+        "Prompt style: preference-only.",
+        "Optimize for favorites, preferences, habits, routines, taste, and recurring personal facts.",
+      ],
+    },
+    {
+      name: "operator override and append",
+      config: {
+        promptOverride: "Custom memory prompt. Return NONE or one user fact.",
+        promptAppend: "Extra custom instruction.",
       },
-    };
-    hoisted.sessionStore["agent:main:main"] = {
-      sessionId: "s-main",
-      updatedAt: 0,
-      fastMode: false,
-    };
-    registerPluginConfig({ agents: ["main"], logging: true });
+      event: { prompt: "What is my favorite food? prompt-override-check" },
+      contains: [
+        "Custom memory prompt. Return NONE or one user fact.",
+        "Additional operator instructions:",
+        "Extra custom instruction.",
+        "Conversation context:",
+        "What is my favorite food? prompt-override-check",
+      ],
+      excludes: ["You are a memory search agent."],
+    },
+    {
+      name: "message mode",
+      config: { queryMode: "message" },
+      event: {
+        prompt: `${"a".repeat(479)}😀tail`,
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      contains: ["Prompt style: strict.", `Conversation context:\n${"a".repeat(479)}😀tail`],
+      excludes: ["Recent conversation tail:"],
+      query: "a".repeat(479),
+    },
+    {
+      name: "recent UTF-16 bounds",
+      config: {
+        queryMode: "recent",
+        recentUserTurns: 1,
+        recentAssistantTurns: 1,
+        recentUserChars: 40,
+        recentAssistantChars: 40,
+      },
+      event: {
+        prompt: "what now?",
+        messages: [
+          { role: "user", content: `${"u".repeat(39)}🚀 user tail` },
+          { role: "assistant", content: `${"a".repeat(39)}🚀 assistant tail` },
+        ],
+      },
+      contains: [
+        [
+          "Conversation context:",
+          "Recent conversation tail:",
+          `user: ${"u".repeat(39)}`,
+          `assistant: ${"a".repeat(39)}`,
+          "",
+          "Latest user message:",
+          "what now?",
+        ].join("\n"),
+      ],
+      wellFormed: true,
+    },
+    {
+      name: "bounded query excludes channel metadata",
+      config: { queryMode: "recent" },
+      event: {
+        prompt: [
+          "Conversation info:",
+          "Sender: discord:user-123",
+          "Untrusted Discord message body",
+          "---",
+          "do you remember my flight preferences?",
+        ].join("\n"),
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      contains: [
+        "Bounded memory search query:\ndo you remember my flight preferences?",
+        "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
+        "Conversation context:",
+        "Conversation info:",
+      ],
+      excludes: [
+        "Bounded memory search query:\nConversation info:",
+        "Bounded memory search query:\nSender:",
+        "Bounded memory search query:\nUntrusted Discord message body",
+      ],
+    },
+    {
+      name: "full conversation",
+      config: { queryMode: "full" },
+      event: {
+        prompt: "what should i grab on the way?",
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          { role: "assistant", content: "got it" },
+          { role: "user", content: "packing is annoying" },
+        ],
+      },
+      contains: [
+        "Full conversation context:",
+        "user: i have a flight tomorrow",
+        "assistant: got it",
+        "user: packing is annoying",
+      ],
+    },
+    {
+      name: "assistant debug noise",
+      config: { queryMode: "recent" },
+      event: {
+        prompt: "what should i grab on the way?",
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          {
+            role: "assistant",
+            content:
+              "🧠 Memory Search: favorite food comfort food tacos sushi ramen\n🧩 Active Memory: status=ok elapsed=842ms query=recent summary=2 mem\n🔎 Active Memory Debug: spicy ramen; tacos\nSounds like you want something easy before the airport.",
+          },
+        ],
+      },
+      contains: ["assistant: Sounds like you want something easy before the airport."],
+      excludes: ["Memory Search:", "Active Memory:", "Active Memory Debug:", "spicy ramen; tacos"],
+    },
+    {
+      name: "prior user memory prefix",
+      config: { queryMode: "recent" },
+      event: {
+        prompt: "what should i grab on the way?",
+        messages: [
+          {
+            role: "user",
+            content: [
+              "Context:",
+              "<active_memory_plugin>",
+              "User prefers aisle seats and extra buffer on connections.",
+              "</active_memory_plugin>",
+              "",
+              "i have a flight tomorrow",
+            ].join("\n"),
+          },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      contains: ["user: i have a flight tomorrow"],
+      excludes: [
+        "Context:",
+        "<active_memory_plugin>",
+        "User prefers aisle seats and extra buffer on connections.",
+      ],
+    },
+  ])(
+    "builds recall prompts with $name",
+    async ({ config, event, contains, excludes, query, wellFormed }) => {
+      registerPluginConfig(config);
+      await runPromptBuild(event);
+      const prompt = lastEmbeddedPrompt();
+      for (const text of contains) {
+        expect(prompt).toContain(text);
+      }
+      for (const text of excludes ?? []) {
+        expect(prompt).not.toContain(text);
+      }
+      if (query !== undefined) {
+        expect(prompt.match(/Bounded memory search query:\n([^\n]*)/u)?.[1]).toBe(query);
+      }
+      if (wellFormed) {
+        expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
+      }
+    },
+  );
 
-    await runPromptBuild({
-      prompt: "What is my favorite food? session-fast-mode-check",
-    });
-
-    expect(lastEmbeddedRunParams().fastMode).toBe(false);
-    let infoLines = getInfoLines();
-    expectLinesToContain(infoLines, "fast=off start");
-
-    delete hoisted.sessionStore["agent:main:main"].fastMode;
-    await runPromptBuild({
-      prompt: "What is my favorite food? agent-fast-mode-check",
-    });
-
-    expect(lastEmbeddedRunParams().fastMode).toBe(true);
-    infoLines = getInfoLines();
-    expectLinesToContain(infoLines, "fast=on start");
-  });
-
-  it("allows replacing the base prompt while still appending conversation context", async () => {
-    registerPluginConfig({
-      promptOverride: "Custom memory prompt. Return NONE or one user fact.",
-      promptAppend: "Extra custom instruction.",
-    });
-
-    await runPromptBuild({
-      prompt: "What is my favorite food? prompt-override-check",
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain("Custom memory prompt. Return NONE or one user fact.");
-    expect(prompt).not.toContain("You are a memory search agent.");
-    expect(prompt).toContain("Additional operator instructions:");
-    expect(prompt).toContain("Extra custom instruction.");
-    expect(prompt).toContain("Conversation context:");
-    expect(prompt).toContain("What is my favorite food? prompt-override-check");
-  });
+  it.each([
+    {
+      name: "explicit plugin override",
+      sessionDefault: false,
+      initialFast: undefined,
+      thinking: "medium",
+    },
+    {
+      name: "session before agent default",
+      sessionDefault: true,
+      initialFast: false,
+      thinking: "off",
+    },
+  ])(
+    "resolves thinking and fast mode: $name",
+    async ({ sessionDefault, initialFast, thinking }) => {
+      if (sessionDefault) {
+        api.config = {
+          agents: {
+            defaults: { model: { primary: "github-copilot/gpt-5.4-mini" } },
+            entries: { main: { fastModeDefault: true } },
+          },
+        };
+        expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode = false;
+      }
+      await runPromptBuild({ prompt: "What is my favorite food? initial mode" });
+      expect(lastEmbeddedRunParams().fastMode).toBe(initialFast);
+      if (sessionDefault) {
+        expectLinesToContain(getInfoLines(), "fast=off start");
+      } else {
+        expect(lastEmbeddedRunParams().thinkLevel).toBe("off");
+        expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
+      }
+      if (sessionDefault) {
+        delete expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode;
+      } else {
+        registerPluginConfig({ thinking, fastMode: true, logging: true });
+      }
+      await runPromptBuild({ prompt: "What is my favorite food? changed mode" });
+      expect(lastEmbeddedRunParams().fastMode).toBe(true);
+      if (sessionDefault) {
+        expectLinesToContain(getInfoLines(), "fast=on start");
+      } else {
+        expect(lastEmbeddedRunParams().thinkLevel).toBe(thinking);
+        expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
+        expectLinesToContain(getInfoLines(), "thinking=medium fast=on start");
+      }
+    },
+  );
 
   it("infers the configured provider for bare active-memory default models", async () => {
     api.config = {
@@ -2165,48 +2243,33 @@ describe("active-memory plugin", () => {
     expect(lastEmbeddedRunParams().model).toBe("gpt-5.5");
   });
 
-  it("uses config.modelFallback when no session or agent model resolves", async () => {
-    api.config = {};
-    registerPluginConfig({
-      modelFallback: "google/gemini-3-flash",
-      modelFallbackPolicy: "default-remote",
-    });
-
-    await runPromptBuild(
-      { prompt: "what wings should i order? custom fallback" },
-      {
-        sessionKey: "agent:main:custom-fallback",
-      },
-    );
-
-    expect(lastEmbeddedRunParams().provider).toBe("google");
-    expect(lastEmbeddedRunParams().model).toBe("gemini-3-flash-preview");
-    expect(hasWarnLine("config.modelFallbackPolicy is deprecated")).toBe(true);
-    // #74587: distinguish chain resolution from runtime failover.
-    const warnCalls = (api.logger.warn as ReturnType<typeof vi.fn>).mock.calls;
-    const deprecationMessage = warnCalls
-      .map(([first]) => (typeof first === "string" ? first : ""))
-      .find((message) => message.includes("config.modelFallbackPolicy is deprecated"));
-    const message = requireNonEmptyString(deprecationMessage, "deprecation warning missing");
-    expect(message).toContain("chain-resolution");
-    expect(message).toContain("last-resort");
-    expect(message).toMatch(/NOT a runtime failover/i);
-  });
-
-  it("does not use a built-in fallback model even when default-remote is configured", async () => {
-    api.config = {};
-    registerPluginConfig({ modelFallbackPolicy: "default-remote" });
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order? built-in fallback" },
-      {
-        sessionKey: "agent:main:built-in-fallback",
-      },
-    );
-
-    expect(result).toBeUndefined();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
+  it.each(["google/gemini-3-flash", undefined])(
+    "only uses an explicitly configured model fallback (%s)",
+    async (modelFallback) => {
+      api.config = {};
+      registerPluginConfig({ modelFallback, modelFallbackPolicy: "default-remote" });
+      const result = await runPromptBuild(
+        { prompt: "what wings should i order? fallback" },
+        { sessionKey: "agent:main:fallback" },
+      );
+      if (modelFallback) {
+        expect(lastEmbeddedRunParams().provider).toBe("google");
+        expect(lastEmbeddedRunParams().model).toBe("gemini-3-flash-preview");
+        expect(hasWarnLine("config.modelFallbackPolicy is deprecated")).toBe(true);
+        const warning = vi
+          .mocked(api.logger.warn)
+          .mock.calls.map(([first]: unknown[]) => (typeof first === "string" ? first : ""))
+          .find((message: string) => message.includes("config.modelFallbackPolicy is deprecated"));
+        const message = requireNonEmptyString(warning, "deprecation warning missing");
+        expect(message).toContain("chain-resolution");
+        expect(message).toContain("last-resort");
+        expect(message).toMatch(/NOT a runtime failover/i);
+      } else {
+        expect(result).toBeUndefined();
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("persists a readable debug summary while ignoring native CLI transcript identity", async () => {
     const nativeSessionId = "native-cli-session";
@@ -2665,7 +2728,8 @@ describe("active-memory plugin", () => {
   });
 
   it("returns partial transcript text after temporary SQLite recall rows are cleaned up", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    // Worker transcript timestamps and cleanup share the real wall clock.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     setTimeoutPartialDataGraceMsForTests(50);
@@ -2725,68 +2789,70 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("rejects a timeout partial without usable memory evidence", async () => {
-    setMinimumTimeoutMsForTests(1);
-    setSetupGraceTimeoutMsForTests(0);
-    setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({ timeoutMs: 100, logging: true });
-    const sessionKey = "agent:main:timeout-partial-no-evidence";
-    seedSession(sessionKey, "s-timeout-partial-no-evidence", 0);
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeTranscriptJsonl(params.sessionFile, [
-          assistantRecord("User prefers aisle seats and extra legroom."),
-        ]);
-        return await waitForAbort(params.abortSignal);
-      },
-    );
-
-    const result = await runPromptBuild(
-      { prompt: "what seat do i prefer? timeout without evidence" },
-      { sessionKey },
-    );
-
-    expect(result).toBeUndefined();
-    const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "Active Memory: status=timeout");
-    expectLinesNotToContain(lines, "timeout_partial");
-    expectLinesNotToContain(lines, "aisle seats");
-  });
-
-  it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
-    configureRecallTimeout(100);
-    const sessionKey = "agent:main:timeout-boilerplate-transcript";
-    seedSession(sessionKey, "s-timeout-boilerplate-transcript", 0);
-    const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeTranscriptJsonl(params.sessionFile, [
-          usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
-          {
-            type: "message",
-            message: {
-              role: "assistant",
-              content: "LLM request timed out after 15000 ms.",
-            },
-          },
-        ]);
-        await waitForAbort(params.abortSignal);
-      },
-    );
-
-    // Join the recall owner before shared mocks and session state can be reset.
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order? timeout boilerplate" },
-      { sessionKey },
-    ).finally(() => Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value)));
-
-    expect(result).toBeUndefined();
-    const lines = getActiveMemoryLines(sessionKey);
-    expect(lines).toHaveLength(1);
-    expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
-    expectLinesNotToContain(lines, "timeout_partial");
-    expectLinesNotToContain(lines, "LLM request timed out");
-  });
+  it.each([
+    {
+      name: "no evidence",
+      graceMs: 50,
+      records: [assistantRecord("User prefers aisle seats and extra legroom.")],
+      excluded: "aisle seats",
+      singleStatus: false,
+    },
+    {
+      name: "timeout boilerplate",
+      graceMs: 5,
+      records: [
+        usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
+        assistantRecord("LLM request timed out after 15000 ms."),
+      ],
+      excluded: "LLM request timed out",
+      singleStatus: true,
+    },
+    {
+      name: "later unavailable search",
+      graceMs: 50,
+      records: [
+        assistantRecord("I will inspect memory before answering."),
+        memoryToolRecord("memory_search", {
+          results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
+        }),
+        memoryToolRecord("memory_search", {
+          disabled: true,
+          warning: "Memory search is disabled for this session.",
+        }),
+      ],
+      excluded: undefined,
+      singleStatus: false,
+    },
+  ])(
+    "rejects timeout partials with $name",
+    async ({ records, graceMs, excluded, singleStatus }) => {
+      configureRecallTimeout(100);
+      setTimeoutPartialDataGraceMsForTests(graceMs);
+      const sessionKey = "agent:main:rejected-timeout-partial";
+      seedSession(sessionKey, "s-rejected-timeout-partial");
+      const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
+      runEmbeddedAgent.mockImplementationOnce(
+        async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+          await writeTranscriptJsonl(params.sessionFile, records);
+          return await waitForAbort(params.abortSignal);
+        },
+      );
+      const result = await runPromptBuild(
+        { prompt: "what food do i usually order?" },
+        { sessionKey },
+      ).finally(() => Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value)));
+      expect(result).toBeUndefined();
+      const lines = getActiveMemoryLines(sessionKey);
+      expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
+      expectLinesNotToContain(lines, "timeout_partial");
+      if (singleStatus) {
+        expect(lines).toHaveLength(1);
+      }
+      if (excluded) {
+        expectLinesNotToContain(lines, excluded);
+      }
+    },
+  );
 
   it.each([
     { name: "partial abort", failed: false, cleanupFails: false },
@@ -2944,106 +3010,78 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("bounds partial assistant transcript reads by character cap", async () => {
-    const source = await writeRuntimeTranscript([assistantRecord(`${"a".repeat(38)}🎉TAILWORD`)]);
-    const result = await readPartialAssistantText(source, {
-      maxChars: 39,
+  it.each([
+    {
+      name: "one message",
+      texts: [`${"a".repeat(38)}🎉TAILWORD`],
+      expected: "a".repeat(38),
       maxLines: 2_000,
       maxBytes: 10 * 1024 * 1024,
-    });
-    const partialText = requireNonEmptyString(result, "partial assistant text missing");
-    expect(partialText).toBe("a".repeat(38));
-    expect(hoisted.rawDeltaReads).toContainEqual({
-      sessionId: source.sessionId,
-      maxEvents: 2_000,
-      maxBytes: 10 * 1024 * 1024,
-    });
-  });
-
-  it("keeps joined partial assistant transcript caps UTF-16 safe", async () => {
-    const source = await writeRuntimeTranscript([
-      {
-        type: "message",
-        message: { role: "assistant", content: "a".repeat(37) },
-      },
-      {
-        type: "message",
-        message: { role: "assistant", content: "🎉TAILWORD" },
-      },
-    ]);
-
-    const result = await readPartialAssistantText(source, {
-      maxChars: 39,
+    },
+    {
+      name: "joined messages",
+      texts: ["a".repeat(37), "🎉TAILWORD"],
+      expected: "a".repeat(37),
       maxLines: 10,
-    });
+      maxBytes: undefined,
+    },
+  ])(
+    "bounds partial transcript reads without splitting UTF-16: $name",
+    async ({ texts, expected, maxLines, maxBytes }) => {
+      const source = await writeRuntimeTranscript(texts.map(assistantRecord));
+      const result = await readPartialAssistantText(source, { maxChars: 39, maxLines, maxBytes });
+      expect(result).toBe(expected);
+      if (maxBytes !== undefined) {
+        expect(hoisted.rawDeltaReads).toContainEqual({
+          sessionId: source.sessionId,
+          maxEvents: maxLines,
+          maxBytes,
+        });
+      }
+    },
+  );
 
-    expect(result).toBe("a".repeat(37));
-  });
-
-  it("schedules timeout cleanup before slow status persistence", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    configureRecallTimeout(1);
-    const embeddedStarted = createDeferred<void>();
-    const persistenceStarted = createDeferred<void>();
-    const releasePersistence = createDeferred<void>();
-    let persistence: Promise<void> | undefined;
-    runEmbeddedAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
-      embeddedStarted.resolve();
-      return await waitForAbort(params.abortSignal);
-    });
-    hoisted.updateSessionStore.mockImplementationOnce(() => {
-      persistenceStarted.resolve();
-      return (persistence = releasePersistence.promise);
-    });
-
-    const resultPromise = runPromptBuild(
-      { prompt: "what wings should i order? slow timeout persistence" },
-      {
-        sessionKey: "agent:main:slow-timeout-persistence",
-      },
-    );
-    try {
-      await embeddedStarted.promise;
-      await vi.advanceTimersByTimeAsync(1);
-      await persistenceStarted.promise;
-      await vi.advanceTimersByTimeAsync(1_500);
-
-      await expect(resultPromise).resolves.toBeUndefined();
-      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
-    } finally {
-      releasePersistence.resolve();
-      await persistence;
-    }
-  });
-
-  it("does not clean up memory managers when only successful status persistence stalls", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    configureRecallTimeout(25);
-    const persistenceStarted = createDeferred<void>();
-    const releasePersistence = createDeferred<void>();
-    let persistence: Promise<void> | undefined;
-    hoisted.updateSessionStore.mockImplementationOnce(() => {
-      persistenceStarted.resolve();
-      return (persistence = releasePersistence.promise);
-    });
-
-    const resultPromise = runPromptBuild(
-      { prompt: "what wings should i order? slow successful persistence" },
-      {
-        sessionKey: "agent:main:slow-success-persistence",
-      },
-    );
-    try {
-      await persistenceStarted.promise;
-      await vi.advanceTimersByTimeAsync(1_525);
-
-      await expect(resultPromise).resolves.toBeUndefined();
-      expect(hoisted.closeActiveMemorySearchManager).not.toHaveBeenCalled();
-    } finally {
-      releasePersistence.resolve();
-      await persistence;
-    }
-  });
+  it.each([
+    { outcome: "timeout", timeoutMs: 1, cleanupCalls: 1 },
+    { outcome: "success", timeoutMs: 25, cleanupCalls: 0 },
+  ])(
+    "settles $outcome recall while status persistence stalls",
+    async ({ outcome, timeoutMs, cleanupCalls }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      configureRecallTimeout(timeoutMs);
+      const embeddedStarted = createDeferred<void>();
+      const persistenceStarted = createDeferred<void>();
+      const releasePersistence = createDeferred<void>();
+      let persistence: Promise<void> | undefined;
+      if (outcome === "timeout") {
+        runEmbeddedAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+          embeddedStarted.resolve();
+          return await waitForAbort(params.abortSignal);
+        });
+      }
+      hoisted.updateSessionStore.mockImplementationOnce(() => {
+        persistenceStarted.resolve();
+        return (persistence = releasePersistence.promise);
+      });
+      const result = runPromptBuild(
+        { prompt: "what wings should i order? slow persistence" },
+        { sessionKey: "agent:main:slow-persistence" },
+      );
+      try {
+        if (outcome === "timeout") {
+          await embeddedStarted.promise;
+          await vi.advanceTimersByTimeAsync(timeoutMs);
+        }
+        await persistenceStarted.promise;
+        await vi.advanceTimersByTimeAsync(outcome === "timeout" ? 1_500 : 1_525);
+        await expect(result).resolves.toBeUndefined();
+        expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(cleanupCalls);
+      } finally {
+        releasePersistence.resolve();
+        await persistence;
+      }
+    },
+  );
 
   it("does not share cached recall results across session-id-only contexts", async () => {
     registerPluginConfig({ logging: true });
@@ -3319,122 +3357,56 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "Active Memory: status=ok");
   });
 
-  it("does not recover transcript partials after a later unavailable search times out", async () => {
-    setMinimumTimeoutMsForTests(1);
-    setSetupGraceTimeoutMsForTests(0);
-    setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({ timeoutMs: 100, logging: true });
-    const sessionKey = "agent:main:grounded-terminal-timeout-partial";
-    seedSession(sessionKey, "s-grounded-terminal-timeout-partial", 0);
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeTranscriptJsonl(params.sessionFile, [
-          assistantRecord("I will inspect memory before answering."),
-          memoryToolRecord("memory_search", {
-            results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
-          }),
-          memoryToolRecord("memory_search", {
-            disabled: true,
-            warning: "Memory search is disabled for this session.",
-          }),
-        ]);
-        return await waitForAbort(params.abortSignal);
-      },
-    );
-
-    const result = await runPromptBuild(
-      { prompt: "what food do i usually order? grounded timeout" },
-      { sessionKey },
-    );
-
-    expect(result).toBeUndefined();
-    const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "Active Memory: status=timeout");
-    expectLinesNotToContain(lines, "timeout_partial");
-  });
-
-  it("waits for configured custom-tool evidence after memory_search fails", async () => {
-    setMinimumTimeoutMsForTests(1);
-    setSetupGraceTimeoutMsForTests(0);
-    registerPluginConfig({
-      timeoutMs: 1_000,
+  it.each([
+    {
+      name: "failed memory search",
       toolsAllow: ["memory_lookup_custom", "memory_search"],
-      logging: true,
-    });
-    const sessionKey = "agent:main:custom-tool-evidence";
-    seedSession(sessionKey, "s-custom-tool-evidence", 0);
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeTranscriptJsonl(params.sessionFile, [
-        memoryToolRecord("memory_search", { disabled: true, error: "embedding request failed" }),
-      ]);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 75);
-      });
-      await writeTranscriptJsonl(params.sessionFile, [
-        memoryToolRecord("memory_search", { disabled: true, error: "embedding request failed" }),
-        memoryToolRecord(
-          "memory_lookup_custom",
-          {
-            persistedDetailsTruncated: true,
-            success: true,
-            originalDetailKeys: ["success", "results"],
-          },
-          [
-            {
-              type: "text",
-              text: "User usually orders ramen.",
-            },
-          ],
-        ),
-      ]);
-      return { payloads: [{ text: "User usually orders ramen." }] };
-    });
-
-    const result = await runPromptBuild(
-      { prompt: "what food do i usually order? custom evidence" },
-      { sessionKey },
-    );
-
-    expectPrependContextContains(result, "User usually orders ramen.");
-    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
-  });
-
-  it("allows a configured custom tool to succeed after a failed attempt", async () => {
+      failed: memoryToolRecord("memory_search", {
+        disabled: true,
+        error: "embedding request failed",
+      }),
+      success: {
+        persistedDetailsTruncated: true,
+        success: true,
+        originalDetailKeys: ["success", "results"],
+      },
+    },
+    {
+      name: "failed custom attempt",
+      toolsAllow: ["memory_lookup_custom"],
+      failed: memoryToolRecord("memory_lookup_custom", {
+        status: "failed",
+        error: "query was too broad",
+      }),
+      success: { status: "success", results: [{ text: "User usually orders ramen." }] },
+    },
+  ])("waits for custom-tool evidence after $name", async ({ toolsAllow, failed, success }) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    configureRecallTimeout(1_000, { toolsAllow: ["memory_lookup_custom"] });
-    const sessionKey = "agent:main:custom-tool-retry";
-    seedSession(sessionKey, "s-custom-tool-retry", 0);
+    configureRecallTimeout(1_000, { toolsAllow });
+    const sessionKey = "agent:main:custom-tool-evidence";
+    seedSession(sessionKey, "s-custom-tool-evidence");
     const transcriptWritten = createDeferred<void>();
-    const failedResult = memoryToolRecord("memory_lookup_custom", {
-      status: "failed",
-      error: "query was too broad",
-    });
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeTranscriptJsonl(params.sessionFile, [failedResult]);
+      await writeTranscriptJsonl(params.sessionFile, [failed]);
       transcriptWritten.resolve();
       await new Promise((resolve) => {
         setTimeout(resolve, 75);
       });
       await writeTranscriptJsonl(params.sessionFile, [
-        failedResult,
-        memoryToolRecord(
-          "memory_lookup_custom",
-          { status: "success", results: [{ text: "User usually orders ramen." }] },
-          [{ type: "text", text: "User usually orders ramen." }],
-        ),
+        failed,
+        memoryToolRecord("memory_lookup_custom", success, [
+          { type: "text", text: "User usually orders ramen." },
+        ]),
       ]);
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
-
-    const resultPromise = runPromptBuild(
-      { prompt: "what food do i usually order? custom retry" },
+    const result = runPromptBuild(
+      { prompt: "what food do i usually order? custom evidence" },
       { sessionKey },
     );
     await transcriptWritten.promise;
     await vi.advanceTimersByTimeAsync(75);
-    const result = await resultPromise;
-
-    expectPrependContextContains(result, "User usually orders ramen.");
+    expectPrependContextContains(await result, "User usually orders ramen.");
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
@@ -3929,18 +3901,29 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines("agent:main:memory-get-miss"), "status=unavailable");
   });
 
-  it("clamps timeoutMs above the 120 000 ms ceiling to the ceiling", async () => {
-    registerPluginConfig({ timeoutMs: 200_000, logging: true });
-
+  it.each([
+    { name: "configured ceiling", config: { timeoutMs: 200_000 }, cli: false, expected: 120_000 },
+    { name: "CLI dispatch default", config: {}, cli: true, expected: 45_000 },
+  ])("applies the $name recall budget", async ({ config, cli, expected }) => {
+    registerPluginConfig({ ...config, logging: true });
+    if (cli) {
+      resolveCliBackendDispatchEligibility.mockReturnValueOnce({ provider: "claude-cli" });
+      runEmbeddedAgent.mockImplementationOnce(async () => ({
+        payloads: [{ text: "- lemon pepper wings" }],
+      }));
+    }
     await runPromptBuild(
-      { prompt: "what wings should i order? capped timeout" },
-      {
-        sessionKey: "agent:main:capped-timeout",
-      },
+      { prompt: "what wings should i order?" },
+      cli
+        ? { modelProviderId: "claude-cli", modelId: "claude-opus-4-8" }
+        : { sessionKey: "agent:main:capped-timeout" },
     );
-
-    const passedTimeoutMs = lastEmbeddedRunParams().timeoutMs;
-    expect(passedTimeoutMs).toBe(120_000);
+    expect(lastEmbeddedRunParams().timeoutMs).toBe(expected);
+    if (cli) {
+      expect(resolveCliBackendDispatchEligibility).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
+      );
+    }
   });
 
   it("caps active-memory log field lengths without splitting surrogate pairs", async () => {
@@ -3999,76 +3982,49 @@ describe("active-memory plugin", () => {
     expectLinesToContain(entries?.[0]?.lines ?? [], "🧩 Active Memory: status=ok");
   });
 
-  it("skips colon-containing session-store channels for embedded recall (#77396)", async () => {
-    hoisted.sessionStore["agent:main:qqbot:direct:12345"] = {
-      sessionId: "session-a",
-      updatedAt: 25,
-      delivery: {
-        kind: "external",
-        route: { channel: "qqbot" },
-        context: { channel: "c2c:10D4F7C2" },
-        origin: { provider: "qqbot" },
-      },
-    };
-
-    await runPromptBuild(
-      { prompt: "what wings should i order? scoped stored channel" },
-      {
-        sessionKey: "agent:main:qqbot:direct:12345",
-        messageProvider: "qqbot",
-        channelId: "qqbot",
-      },
-    );
-
-    expectEmbeddedChannel("qqbot");
-  });
-
-  it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
-    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
-      sessionId: "session-a",
-      updatedAt: 25,
-      delivery: {
-        kind: "external",
-        route: { channel: "webchat" },
-        context: {},
-        origin: { provider: "webchat" },
-      },
-    };
-
-    await runPromptBuild(
-      { prompt: "what wings should i order? explicit channel hint" },
-      {
-        sessionKey: "agent:main:telegram:direct:12345",
-        channelId: "telegram",
-      },
-    );
-
-    expectEmbeddedChannel("telegram");
-  });
-
-  it("preserves a direct explicit channel when weak legacy fallback disagrees", async () => {
-    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
-      sessionId: "session-a",
-      updatedAt: 25,
-      delivery: {
-        kind: "external",
-        route: { channel: "webchat" },
-        context: {},
-        origin: { provider: "webchat" },
-      },
-    };
-
-    await runPromptBuild(
-      { prompt: "what wings should i order? direct explicit channel" },
-      {
-        sessionKey: "agent:main:telegram:direct:12345",
-        messageProvider: "telegram",
-        channelId: "telegram",
-      },
-    );
-
-    expectEmbeddedChannel("telegram");
-  });
+  it.each([
+    {
+      name: "scoped stored channel (#77396)",
+      channel: "qqbot",
+      storedChannel: "qqbot",
+      storedContext: "c2c:10D4F7C2",
+      provider: "qqbot",
+    },
+    {
+      name: "explicit channel over wrapper",
+      channel: "telegram",
+      storedChannel: "webchat",
+      storedContext: undefined,
+      provider: "webchat",
+    },
+    {
+      name: "explicit provider over legacy fallback",
+      channel: "telegram",
+      storedChannel: "webchat",
+      storedContext: undefined,
+      provider: "telegram",
+    },
+  ])(
+    "resolves the recall channel: $name",
+    async ({ channel, storedChannel, storedContext, provider }) => {
+      const sessionKey = `agent:main:${channel}:direct:12345`;
+      hoisted.sessionStore[sessionKey] = {
+        sessionId: "session-a",
+        updatedAt: 25,
+        delivery: {
+          kind: "external",
+          route: { channel: storedChannel },
+          context: storedContext ? { channel: storedContext } : {},
+          origin: { provider: storedChannel },
+        },
+      };
+      await runPromptBuild(
+        { prompt: "what wings should i order?" },
+        { sessionKey, messageProvider: provider, channelId: channel },
+      );
+      expectEmbeddedChannel(channel);
+    },
+  );
 
   it("clears stale status on skipped non-interactive turns", async () => {
     const sessionKey = "noncanonical-session";
@@ -4091,159 +4047,6 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
 
     expect(hoisted.sessionStore[sessionKey]?.pluginDebugEntries).toBeUndefined();
-  });
-
-  it("supports message mode by sending only the latest user message", async () => {
-    registerPluginConfig({ queryMode: "message" });
-
-    const prefix = "a".repeat(479);
-    const latest = `${prefix}😀tail`;
-    await runPromptBuild({
-      prompt: latest,
-      messages: [
-        { role: "user", content: "i have a flight tomorrow" },
-        { role: "assistant", content: "got it" },
-      ],
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain("Prompt style: strict.");
-    expect(prompt.match(/Bounded memory search query:\n([^\n]*)/u)?.[1]).toBe(prefix);
-    expect(prompt).toContain(`Conversation context:\n${latest}`);
-    expect(prompt).not.toContain("Recent conversation tail:");
-  });
-
-  it("keeps recent conversation context UTF-16 well-formed", async () => {
-    registerPluginConfig({
-      queryMode: "recent",
-      recentUserTurns: 1,
-      recentAssistantTurns: 1,
-      recentUserChars: 40,
-      recentAssistantChars: 40,
-    });
-
-    await runPromptBuild({
-      prompt: "what now?",
-      messages: [
-        { role: "user", content: `${"u".repeat(39)}🚀 user tail` },
-        { role: "assistant", content: `${"a".repeat(39)}🚀 assistant tail` },
-      ],
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain(
-      [
-        "Conversation context:",
-        "Recent conversation tail:",
-        `user: ${"u".repeat(39)}`,
-        `assistant: ${"a".repeat(39)}`,
-        "",
-        "Latest user message:",
-        "what now?",
-      ].join("\n"),
-    );
-    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
-  });
-
-  it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {
-    registerPluginConfig({ queryMode: "recent" });
-
-    await runPromptBuild({
-      prompt: [
-        "Conversation info:",
-        "Sender: discord:user-123",
-        "Untrusted Discord message body",
-        "---",
-        "do you remember my flight preferences?",
-      ].join("\n"),
-      messages: [
-        { role: "user", content: "i have a flight tomorrow" },
-        { role: "assistant", content: "got it" },
-      ],
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain(
-      "Bounded memory search query:\ndo you remember my flight preferences?",
-    );
-    expect(prompt).toContain(
-      "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
-    );
-    expect(prompt).toContain("Conversation context:");
-    expect(prompt).toContain("Conversation info:");
-    expect(prompt).not.toContain("Bounded memory search query:\nConversation info:");
-    expect(prompt).not.toContain("Bounded memory search query:\nSender:");
-    expect(prompt).not.toContain("Bounded memory search query:\nUntrusted Discord message body");
-  });
-
-  it("supports full mode by sending the whole conversation", async () => {
-    registerPluginConfig({ queryMode: "full" });
-
-    await runPromptBuild({
-      prompt: "what should i grab on the way?",
-      messages: [
-        { role: "user", content: "i have a flight tomorrow" },
-        { role: "assistant", content: "got it" },
-        { role: "user", content: "packing is annoying" },
-      ],
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain("Full conversation context:");
-    expect(prompt).toContain("user: i have a flight tomorrow");
-    expect(prompt).toContain("assistant: got it");
-    expect(prompt).toContain("user: packing is annoying");
-  });
-
-  it("strips prior memory/debug traces from assistant context before retrieval", async () => {
-    registerPluginConfig({ queryMode: "recent" });
-
-    await runPromptBuild({
-      prompt: "what should i grab on the way?",
-      messages: [
-        { role: "user", content: "i have a flight tomorrow" },
-        {
-          role: "assistant",
-          content:
-            "🧠 Memory Search: favorite food comfort food tacos sushi ramen\n🧩 Active Memory: status=ok elapsed=842ms query=recent summary=2 mem\n🔎 Active Memory Debug: spicy ramen; tacos\nSounds like you want something easy before the airport.",
-        },
-      ],
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain("assistant: Sounds like you want something easy before the airport.");
-    expect(prompt).not.toContain("Memory Search:");
-    expect(prompt).not.toContain("Active Memory:");
-    expect(prompt).not.toContain("Active Memory Debug:");
-    expect(prompt).not.toContain("spicy ramen; tacos");
-  });
-
-  it("strips prior active-memory prompt prefixes from user context before retrieval", async () => {
-    registerPluginConfig({ queryMode: "recent" });
-
-    await runPromptBuild({
-      prompt: "what should i grab on the way?",
-      messages: [
-        {
-          role: "user",
-          content: [
-            "Context:",
-            "<active_memory_plugin>",
-            "User prefers aisle seats and extra buffer on connections.",
-            "</active_memory_plugin>",
-            "",
-            "i have a flight tomorrow",
-          ].join("\n"),
-        },
-        { role: "assistant", content: "got it" },
-      ],
-    });
-
-    const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain("user: i have a flight tomorrow");
-    expect(prompt).not.toContain("Context:");
-    expect(prompt).not.toContain("<active_memory_plugin>");
-    expect(prompt).not.toContain("User prefers aisle seats and extra buffer on connections.");
   });
 
   it.each([
@@ -4270,76 +4073,72 @@ describe("active-memory plugin", () => {
     expect(prependContext).not.toContain("TAILWORD");
   });
 
-  it("persists subagent transcripts in a separate directory when enabled", async () => {
-    registerPluginConfig({
-      agents: ["support/agent"],
-      persistTranscripts: true,
+  it.each([
+    {
+      name: "custom directory",
+      agentId: "support/agent",
       transcriptDir: "active-memory-subagents",
-      logging: true,
-    });
-    const mkdirSpy = vi.spyOn(fs, "mkdir");
-    const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
-    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
-
-    const sessionKey = "agent:support/agent:persist-transcript";
-    await runPromptBuild(
-      { prompt: "what wings should i order? persist transcript" },
-      { sessionKey, agentId: "support/agent" },
-    );
-
-    const expectedDir = path.join(
-      stateDir,
-      "plugins",
-      "active-memory",
-      "transcripts",
-      "agents",
-      "support%2Fagent",
-      "active-memory-subagents",
-    );
-    expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
-    expect(mkdtempSpy).not.toHaveBeenCalled();
-    const transcriptPath = await expectSingleTranscriptArtifact(expectedDir);
-    expect(await fs.readFile(transcriptPath, "utf8")).toContain("lemon pepper wings");
-    const infoLines = getInfoLines();
-    expectLinesToContain(infoLines, `transcript=${expectedDir}${path.sep}`);
-    expect(rmSpy.mock.calls.filter(([target]) => String(target).startsWith(expectedDir))).toEqual(
-      [],
-    );
-  });
-
-  it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {
-    registerPluginConfig({
-      persistTranscripts: true,
-      transcriptDir: "C:/temp/escape",
-      logging: true,
-    });
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-
-    await runPromptBuild(
-      { prompt: "what wings should i order? unsafe transcript dir" },
-      {
-        sessionKey: "agent:main:unsafe-transcript",
-      },
-    );
-
-    const expectedDir = path.join(
-      stateDir,
-      "plugins",
-      "active-memory",
-      "transcripts",
-      "agents",
-      "main",
-      "active-memory",
-    );
-    expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
-    const runtimeSessionFile = requireNonEmptyString(
-      lastRuntimeEmbeddedRunParams().sessionFile,
-      "expected runtime session file",
-    );
-    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toMatchObject({
+      expectedAgent: "support%2Fagent",
+      expectedSubdir: "active-memory-subagents",
+      unsafe: false,
+    },
+    {
+      name: "unsafe directory fallback",
       agentId: "main",
-    });
-  });
+      transcriptDir: "C:/temp/escape",
+      expectedAgent: "main",
+      expectedSubdir: "active-memory",
+      unsafe: true,
+    },
+  ])(
+    "contains persisted transcripts in the plugin directory: $name",
+    async ({ agentId, transcriptDir, expectedAgent, expectedSubdir, unsafe }) => {
+      registerPluginConfig({
+        agents: [agentId],
+        persistTranscripts: true,
+        transcriptDir,
+        logging: true,
+      });
+      const mkdir = vi.spyOn(fs, "mkdir");
+      if (unsafe) {
+        mkdir.mockResolvedValue(undefined);
+      }
+      const mkdtemp = vi.spyOn(fs, "mkdtemp");
+      const rm = vi.spyOn(fs, "rm");
+      if (!unsafe) {
+        rm.mockResolvedValue(undefined);
+      }
+      await runPromptBuild(
+        { prompt: "what wings should i order? persist transcript" },
+        { sessionKey: `agent:${agentId}:persist-transcript`, agentId },
+      );
+      const expectedDir = path.join(
+        stateDir,
+        "plugins",
+        "active-memory",
+        "transcripts",
+        "agents",
+        expectedAgent,
+        expectedSubdir,
+      );
+      expect(mkdir).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
+      if (unsafe) {
+        const sessionFile = requireNonEmptyString(
+          lastRuntimeEmbeddedRunParams().sessionFile,
+          "expected runtime session file",
+        );
+        expect(parseSqliteSessionFileMarker(sessionFile)).toMatchObject({ agentId: "main" });
+      } else {
+        expect(mkdtemp).not.toHaveBeenCalled();
+        const transcriptPath = await expectSingleTranscriptArtifact(expectedDir);
+        expect(await fs.readFile(transcriptPath, "utf8")).toContain("lemon pepper wings");
+        expectLinesToContain(getInfoLines(), `transcript=${expectedDir}${path.sep}`);
+        expect(rm.mock.calls.filter(([target]) => String(target).startsWith(expectedDir))).toEqual(
+          [],
+        );
+      }
+    },
+  );
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
     const sessionKey = "agent:main:cache-cap";
@@ -4414,51 +4213,28 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("drops cached active-memory results when the current clock is not a valid date timestamp", () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  it.each([
+    { name: "invalid read clock", writeTime: 1_700_000_000_000, readTime: Number.NaN },
+    {
+      name: "overflowing expiry",
+      writeTime: 8_640_000_000_000_000,
+      readTime: 8_640_000_000_000_000,
+    },
+  ])("rejects cached recall with $name", ({ writeTime, readTime }) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(writeTime);
     const cacheKey = buildCacheKey({
       agentId: "main",
       sessionKey: "agent:main:invalid-clock-cache",
-      query: "cache invalid clock prompt",
+      query: "cache clock prompt",
       authorityFingerprint: "cache-authority",
       recallToolNames: ["memory_search"],
     });
     setCachedResult(
       cacheKey,
-      {
-        status: "ok",
-        elapsedMs: 1,
-        rawReply: "memory",
-        summary: "memory",
-      },
+      { status: "ok", elapsedMs: 1, rawReply: "memory", summary: "memory" },
       15_000,
     );
-
-    nowSpy.mockReturnValue(Number.NaN);
-
-    expect(getCachedResult(cacheKey)).toBeUndefined();
-  });
-
-  it("does not cache active-memory results when the expiry timestamp would exceed the valid date range", () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const cacheKey = buildCacheKey({
-      agentId: "main",
-      sessionKey: "agent:main:overflow-cache",
-      query: "cache overflow prompt",
-      authorityFingerprint: "cache-authority",
-      recallToolNames: ["memory_search"],
-    });
-    setCachedResult(
-      cacheKey,
-      {
-        status: "ok",
-        elapsedMs: 1,
-        rawReply: "memory",
-        summary: "memory",
-      },
-      15_000,
-    );
-
+    now.mockReturnValue(readTime);
     expect(getCachedResult(cacheKey)).toBeUndefined();
   });
 
@@ -4530,27 +4306,6 @@ describe("active-memory plugin", () => {
       }
     },
   );
-
-  it("applies the CLI dispatch recall budget to the embedded run", async () => {
-    registerPluginConfig({ agents: ["main"], logging: true });
-    resolveCliBackendDispatchEligibility.mockReturnValueOnce({ provider: "claude-cli" });
-    runEmbeddedAgent.mockImplementationOnce(async () => ({
-      payloads: [{ text: "- lemon pepper wings" }],
-    }));
-    await runPromptBuild(
-      { prompt: "what wings should i order?" },
-      {
-        modelProviderId: "claude-cli",
-        modelId: "claude-opus-4-8",
-      },
-    );
-    // 45s CLI-dispatch default + 0ms setup grace.
-    expect(lastEmbeddedRunParams().timeoutMs).toBe(45_000);
-    // Budgeting consults the runner's own eligibility decision.
-    expect(resolveCliBackendDispatchEligibility).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
-    );
-  });
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

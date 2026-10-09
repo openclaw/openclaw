@@ -40,15 +40,12 @@ import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 // Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
-
-const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -61,6 +58,7 @@ export async function runDoctorHealthFlow(
     writeAuthority?.assertCurrent,
     writeAuthority?.commandAuthority,
   );
+  let requestedExit: (() => void) | undefined;
   const run = () =>
     withDeferredDebugProxyCapture(async (resumeCapture) => {
       let preparedPreflight = databasePreflight;
@@ -92,6 +90,9 @@ export async function runDoctorHealthFlow(
       return withPluginLoadDiagnostics((diagnostics) => {
         const runDoctor = (capture?: DoctorConfigCapture) =>
           runDoctorHealthFlowWithResult(
+            (selectedRuntime, code) => {
+              requestedExit = () => selectedRuntime.exit(code);
+            },
             runtime,
             options,
             preparedPreflight,
@@ -106,10 +107,16 @@ export async function runDoctorHealthFlow(
           : runDoctor();
       });
     });
-  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
+  const { withPluginGenerationSourceCustody } =
+    await import("../plugins/plugin-generation-source-lookup.js");
+  await withPluginGenerationSourceCustody(() =>
+    custody ? withCommandProcessScope(run, undefined, custody) : run(),
+  );
+  requestedExit?.();
 }
 
 async function runDoctorHealthFlowWithResult(
+  requestExit: (runtime: RuntimeEnv, code: number) => void,
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
   databasePreflight: DoctorDatabasePreflight | undefined,
@@ -234,19 +241,6 @@ async function runDoctorHealthFlowWithResult(
           : await measureGatewayBootstrapStep("doctor.database-preflight", () =>
               prepareDoctorDatabasePreflight(),
             );
-      const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
-      const { resolveOpenClawStateSqlitePath } =
-        await import("../state/openclaw-state-db.paths.js");
-      const nocow = inspectDoctorSqliteNoCow([
-        resolveOpenClawStateSqlitePath(),
-        ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
-          (target) => target.path,
-        ) ?? []),
-      ]);
-      sqliteNoCowPaths = nocow.paths;
-      for (const message of nocow.notes) {
-        doctorRuntime.log(message);
-      }
       const { recordAgentDatabaseAdmissions } =
         await import("../state/agent-database-admission.js");
       // Repair owns fresh file decisions until its migration graph finishes.
@@ -296,33 +290,29 @@ async function runDoctorHealthFlowWithResult(
         const { normalizeAgentId } = await import("../routing/session-key.js");
         const samePath = createOpenClawAgentDatabasePathMatcher();
         const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
-        const databasePaths = discovery?.targets
-          .filter(
-            (database) =>
-              !schemas.agentRefusals?.some(
-                (refusal) =>
-                  normalizeAgentId(refusal.agentId) === normalizeAgentId(database.agentId) &&
-                  refusal.paths.some((pathname) => samePath(pathname, database.path)),
-              ) &&
-              !schemas.indeterminate.some(
-                (failure) =>
-                  failure.kind === "agent" &&
-                  (failure.path === database.path ||
-                    discovery.sourceIdentities.get(failure.path)?.realPath === database.realPath),
-              ),
-          )
-          .map((database) => database.path);
+        const databaseTargets = discovery?.targets.filter(
+          (database) =>
+            !schemas.agentRefusals?.some(
+              (refusal) =>
+                normalizeAgentId(refusal.agentId) === normalizeAgentId(database.agentId) &&
+                refusal.paths.some((pathname) => samePath(pathname, database.path)),
+            ) &&
+            !schemas.indeterminate.some(
+              (failure) =>
+                failure.kind === "agent" &&
+                (failure.path === database.path ||
+                  discovery.sourceIdentities.get(failure.path)?.realPath === database.realPath),
+            ),
+        );
         const backups = await backupDoctorMigrationDatabases({
           env: process.env,
-          databasePaths: databasePaths ?? [],
+          databasePaths: databaseTargets?.map((database) => database.path) ?? [],
+          agentDatabaseTargets: databaseTargets,
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
           verifiedSnapshots,
         });
-        for (const change of backups.changes) {
-          effectiveRuntime.log(change);
-        }
-        for (const warning of backups.warnings) {
-          effectiveRuntime.log(warning);
+        for (const message of [...backups.changes, ...backups.warnings]) {
+          effectiveRuntime.log(message);
         }
       }
 
@@ -333,25 +323,26 @@ async function runDoctorHealthFlowWithResult(
         shouldRepair: prompter.shouldRepair,
         env: process.env,
       });
-      for (const message of deletionJournal.changes) {
+      for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
         effectiveRuntime.log(message);
       }
-      for (const message of deletionJournal.warnings) {
-        effectiveRuntime.log(message);
+      if (deletionJournal.changes.length > 0) {
+        // Quarantine can turn previously active targets into held stores.
+        schemas = await prepareDoctorDatabasePreflight();
       }
-      if (prompter.shouldRepair && deletionJournal.warnings.length > 0) {
-        const failure = createUpdateFailureFact({
-          check: "agent-deletion-journal",
-          code: "unverified-agent-databases",
-          message: deletionJournal.warnings.join("\n"),
-        });
-        throw new DoctorMaintenanceRefusalError(
-          formatUpdateFailureFact(failure),
-          { kind: "data-at-risk", reason: "incomplete-migration" },
-          { failureFacts: [failure] },
-        );
+      const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../state/openclaw-state-db.paths.js");
+      const nocow = inspectDoctorSqliteNoCow([
+        resolveOpenClawStateSqlitePath(),
+        ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
+          (target) => target.path,
+        ) ?? []),
+      ]);
+      sqliteNoCowPaths = nocow.paths;
+      for (const message of nocow.notes) {
+        doctorRuntime.log(message);
       }
-
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
       const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
       const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
@@ -402,7 +393,7 @@ async function runDoctorHealthFlowWithResult(
           ),
       );
       recordAgentDatabaseAdmissions(agentDatabaseRefusals);
-      const { CONFIG_PATH } = await loadConfigModule();
+      const { CONFIG_PATH } = await import("../config/config.js");
       const ctx: DoctorHealthFlowContext = {
         runtime: doctorRuntime,
         options,
@@ -702,7 +693,7 @@ async function runDoctorHealthFlowWithResult(
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.
     if (exitCode !== undefined) {
-      effectiveRuntime.exit(exitCode);
+      requestExit(effectiveRuntime, exitCode);
     }
   }
 

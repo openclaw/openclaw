@@ -2,7 +2,6 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   decodeMemoryEmbedding,
   encodeMemoryEmbedding,
-  type MemoryChunk,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   compileSqliteQueryBindings,
@@ -39,11 +38,10 @@ export function isValidMemoryEmbedding(embedding: number[], dimensions?: number)
 
 export function loadMemoryEmbeddingCache(params: {
   db: DatabaseSync;
-  enabled: boolean;
   providerIdentities: MemoryIndexProviderIdentity[];
   hashes: string[];
 }): Map<string, number[]> {
-  if (!params.enabled || params.providerIdentities.length === 0 || params.hashes.length === 0) {
+  if (params.providerIdentities.length === 0 || params.hashes.length === 0) {
     return new Map();
   }
   const unresolved = new Set(params.hashes.filter(Boolean));
@@ -176,18 +174,14 @@ function prepareMemoryEmbeddingCacheUpsert(db: DatabaseSync) {
 
 export function upsertMemoryEmbeddingCache(params: {
   db: DatabaseSync;
-  enabled: boolean;
-  provider: { id: string; model: string } | null;
-  providerKey: string | null;
+  provider: { id: string; model: string };
+  providerKey: string;
   /** Stable replayable rows let staged writes retain hashes without a second vector batch. */
   entries: () => Iterable<{ hash: string; embedding: number[] }>;
   maxEntries?: number;
   now?: number;
 }): void {
   const provider = params.provider;
-  if (!params.enabled || !provider || !params.providerKey) {
-    return;
-  }
   const lastRows = new Map<string, number>();
   let row = 0;
   for (const entry of params.entries()) {
@@ -221,7 +215,7 @@ export function upsertMemoryEmbeddingCache(params: {
     if (!retained.has(row++)) {
       continue;
     }
-    const embedding = entry.embedding ?? [];
+    const embedding = entry.embedding;
     upsert({
       provider: provider.id,
       model: provider.model,
@@ -262,25 +256,18 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
   }
 }
 
-export function collectMemoryCachedEmbeddings<T extends Pick<MemoryChunk, "hash">>(params: {
-  chunks: T[];
+export function collectMemoryCachedEmbeddings(params: {
+  hashes: string[];
   cached: Map<string, number[]>;
-}): {
-  embeddings: number[][];
-  missing: Array<{ index: number; chunk: T }>;
-} {
-  const embeddings: number[][] = Array.from({ length: params.chunks.length }, () => []);
-  const missing: Array<{ index: number; chunk: T }> = [];
-
-  for (let index = 0; index < params.chunks.length; index += 1) {
-    const chunk = params.chunks[index];
-    const hit = chunk?.hash ? params.cached.get(chunk.hash) : undefined;
+}): { embeddings: number[][]; missing: number[] } {
+  const missing: number[] = [];
+  const embeddings = params.hashes.map((hash, index) => {
+    const hit = hash ? params.cached.get(hash) : undefined;
     if (hit && hit.length > 0) {
-      embeddings[index] = hit;
-    } else if (chunk) {
-      missing.push({ index, chunk });
+      return hit;
     }
-  }
-
+    missing.push(index);
+    return [];
+  });
   return { embeddings, missing };
 }

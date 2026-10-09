@@ -15,6 +15,7 @@ import type {
   RespondFn,
 } from "../../gateway/server-methods/types.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
+import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { rolePolicyConfig } from "../../gateway/session-sharing.test-utils.js";
@@ -43,17 +44,17 @@ import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
+import { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 import {
   addSessionMember,
-  listSessionMembersInWorker,
+  readSessionMembersInWorker,
   removeSessionMember,
 } from "./session-sharing-store.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-it("reads current member rows off the caller while transcript reads wait", async () => {
+it("lists current membership evidence while transcript reads wait", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
     const entry = { sessionId: "worker-members", updatedAt: 1 };
@@ -71,6 +72,9 @@ it("reads current member rows off the caller while transcript reads wait", async
       addedBy: "actor-evidence:unattributed",
       addedAt: 3,
     });
+    const requestContext = context(vi.fn());
+    await initializeSessionReadContext(requestContext);
+    await getSessionRowProjection(requestContext)!.ensureMaterialized();
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const historyEntered = createDeferredCore();
     const historyContended = createDeferredCore();
@@ -98,21 +102,25 @@ it("reads current member rows off the caller while transcript reads wait", async
       vi.spyOn(prototype, "run"),
       vi.spyOn(databasePrototype, "exec"),
     ];
-    let membersRead: ReturnType<typeof listSessionMembersInWorker> | undefined;
+    let membersRead: ReturnType<typeof call> | undefined;
     try {
       await Promise.race([historyEntered.promise, historyRead]);
       expect(historyRequests).toBe(1);
-      membersRead = listSessionMembersInWorker(scope);
+      membersRead = call(
+        "session.members.listEvidence",
+        { sessionKey: scope.sessionKey },
+        requestContext,
+      );
       // A queued dependency signals contention directly; no timing threshold decides success.
       expect(
         await Promise.race([
-          membersRead.then((members) => ({ members })),
+          membersRead.then((responses) => responses[0]?.[1]),
           historyContended.promise.then(() => ({ blockedByTranscript: true })),
         ]),
-      ).toEqual({
+      ).toMatchObject({
         members: [
-          { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
-          { identityId: "zoe", addedBy: "actor-evidence:unknown", addedAt: 2 },
+          { identityId: "alice", addedAt: 3 },
+          { identityId: "zoe", addedByState: "unknown", addedAt: 2 },
         ],
       });
       for (const method of methods) {
@@ -128,13 +136,13 @@ it("reads current member rows off the caller while transcript reads wait", async
     }
     expect(await historyRead).toBe(true);
     await addSessionMember(scope, { identityId: "bob", addedBy: "owner", addedAt: 4 });
-    expect(await listSessionMembersInWorker(scope)).toEqual([
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([
       { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
       { identityId: "bob", addedBy: "owner", addedAt: 4 },
       { identityId: "zoe", addedBy: "actor-evidence:unknown", addedAt: 2 },
     ]);
     const missing = { agentId: "missing", sessionKey: "agent:missing:main" };
-    expect(await listSessionMembersInWorker(missing)).toEqual([]);
+    expect((await readSessionMembersInWorker(missing)).members).toEqual([]);
     expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "missing" }))).toBe(false);
   });
 });
@@ -159,7 +167,7 @@ it("retains the physical owner and logical partition of a shared member store", 
       addedBy: "main-owner",
       addedAt: 3,
     });
-    expect(await listSessionMembersInWorker(scope)).toEqual([
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([
       { identityId: "other-guest", addedBy: "other-owner", addedAt: 2 },
     ]);
     expect(database.agentId).toBe("main");
@@ -169,14 +177,14 @@ it("retains the physical owner and logical partition of a shared member store", 
 it("keeps process-local incognito membership with its native owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:dashboard:incognito-members" };
-    expect(await listSessionMembersInWorker(scope)).toEqual([]);
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
     await upsertSessionEntryCore(scope, {
       sessionId: "incognito-members",
       updatedAt: 1,
       incognito: true,
     });
     await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
-    expect(await listSessionMembersInWorker(scope)).toEqual([
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([
       { identityId: "guest", addedBy: "owner", addedAt: 2 },
     ]);
   });
@@ -378,7 +386,7 @@ it("commits aliased worker membership and participant facts before publishing, a
         method.mockRestore();
       }
     }
-    expect(await listSessionMembersInWorker(scope)).toEqual([]);
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
   });
 });
 
@@ -596,7 +604,7 @@ it.each([
           await projection.prepare();
         }
         assertNewerFacts();
-        expect(await listSessionMembersInWorker(scope)).toEqual([]);
+        expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
       } finally {
         releaseReply.resolve();
         await pending.catch(() => undefined);
@@ -741,7 +749,7 @@ it.each(["membership", "category"] as const)(
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(members);
         expect(projection.needsPreparation).toBe(false);
         expect(
-          (await listSessionMembersInWorker(scope)).map((member) => member.identityId),
+          (await readSessionMembersInWorker(scope)).members.map((member) => member.identityId),
         ).toEqual(members);
         expect(
           readSessionEntryCache(database, { cache: true }).entries.get(scope.sessionKey)?.category,

@@ -228,6 +228,7 @@ describe("full release validation evidence", () => {
     "context",
     "tooling",
     "missing-publication",
+    "new-publish-without-admission",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
     const selection: PublicationSelection = {
       route: "normal",
@@ -292,6 +293,9 @@ describe("full release validation evidence", () => {
         manifest,
         getWorkflowSource: () =>
           'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n' +
+          (scenario === "new-publish-without-admission"
+            ? '  FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\n'
+            : "") +
           (scenario === "missing-publication"
             ? '  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n'
             : ""),

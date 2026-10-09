@@ -17,7 +17,7 @@ import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-tra
 
 const source = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
 const previousPnpmSpec =
-  "pnpm@12.5.0+sha512.9cdbaa34ffacae1768635ac0d23e94db6201c7d59bf3da236b23d67c8f6b794d1dab323bcd5bcc51b55c8cafbf6f19a24e4aa61d6ab7772aa3b5cc85e325dc4d";
+  "pnpm@12.5.1+sha512.e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f";
 const historicalPnpmSpec =
   "pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037";
 const roots: string[] = [];
@@ -84,8 +84,8 @@ esac
   const native = join(stage, "native");
   mkdirSync(wrapper);
   mkdirSync(native);
-  writeFileSync(join(wrapper, "package.json"), '{"version":"12.5.1"}');
-  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.5.1\n");
+  writeFileSync(join(wrapper, "package.json"), '{"version":"12.7.0"}');
+  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.7.0\n");
   function archive(directory: string, name: string, algorithm: string) {
     const output = join(origin, name);
     execFileSync("tar", [name.endsWith(".xz") ? "-cJf" : "-czf", output, "-C", stage, directory]);
@@ -95,8 +95,8 @@ esac
   }
   const hashes = {
     node: archive("node", "node-v24.21.0-linux-x64.tar.xz", "sha256"),
-    wrapper: archive("wrapper", "pnpm-12.5.1.tgz", "sha512"),
-    native: archive("native", "exe.linux-x64-12.5.1.tgz", "sha512"),
+    wrapper: archive("wrapper", "pnpm-12.7.0.tgz", "sha512"),
+    native: archive("native", "exe.linux-x64-12.7.0.tgz", "sha512"),
   };
   const productionSpec = scriptSource.match(/^pnpm_spec="([^"]+)"$/mu)?.[1] ?? "";
   const spec = `${productionSpec.split("+")[0]}+sha512.${hashes.wrapper}`;
@@ -148,7 +148,7 @@ fi
     .replace(productionSpec, spec)
     .replaceAll("fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6", hashes.node)
     .replaceAll(
-      "dcf914058a39cf8760b659d3348163ed01a9703500baa5f3f561958a03c309e71c127846891916980e75d364e66091edc093f72df984f9917d3c6796867f29f5",
+      "8065bb349166af7dc827a299bbed70f74281b45c4c55fffe0141bc68a269cb8bfa7519d4779bfce0f707d9e8d4bb1a7f7e6df3334218ea1f4bc1c60fbbd77176",
       hashes.native,
     );
   const scriptPath = join(root, "bootstrap.sh");
@@ -229,8 +229,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     for (let run = 0; run < 2; run++) {
       mkdirSync(join(f.install, "bin"), { recursive: true });
       executable(join(f.install, "bin", "node"), "#!/bin/sh\nexit 91\n");
-      mkdirSync(join(f.corepack, "v1", "pnpm", "12.5.1"), { recursive: true });
-      writeFileSync(join(f.corepack, "v1", "pnpm", "12.5.1", ".corepack"), '{"bin":"bad"}');
+      mkdirSync(join(f.corepack, "v1", "pnpm", "12.7.0"), { recursive: true });
+      writeFileSync(join(f.corepack, "v1", "pnpm", "12.7.0", ".corepack"), '{"bin":"bad"}');
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
     }
@@ -263,11 +263,11 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
         kind === "node" || kind === "wrong-arch"
           ? "node-v24.21.0-linux-x64.tar.xz"
           : kind === "wrapper"
-            ? "pnpm-12.5.1.tgz"
-            : "exe.linux-x64-12.5.1.tgz";
+            ? "pnpm-12.7.0.tgz"
+            : "exe.linux-x64-12.7.0.tgz";
       const bytes =
         kind === "wrong-arch"
-          ? readFileSync(join(f.origin, "exe.linux-x64-12.5.1.tgz"))
+          ? readFileSync(join(f.origin, "exe.linux-x64-12.7.0.tgz"))
           : Buffer.from("substituted archive");
       writeFileSync(join(f.image, archive), bytes);
       writeFileSync(
@@ -330,11 +330,11 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it.each([false, true])(
     "falls back after a trusted pin advance (renamed stale archives: %s)",
     (renamed) => {
-      const f = fixture(source.replace("pnpm@12.5.1+", "pnpm@12.5.2+"));
+      const f = fixture(source.replace("pnpm@12.7.0+", "pnpm@12.7.1+"));
       if (renamed) {
-        for (const name of ["pnpm-12.5.1.tgz", "exe.linux-x64-12.5.1.tgz"]) {
+        for (const name of ["pnpm-12.7.0.tgz", "exe.linux-x64-12.7.0.tgz"]) {
           writeFileSync(
-            join(f.image, name.replace("12.5.1", "12.5.2")),
+            join(f.image, name.replace("12.7.0", "12.7.1")),
             readFileSync(join(f.image, name)),
           );
         }

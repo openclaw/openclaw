@@ -125,6 +125,9 @@ try {
             if (process.argv[2] === "sandbox") {
               const { registerSandboxCli } = await import("./sandbox-cli.js");
               registerSandboxCli(program);
+            } else if (process.argv[2] === "exec-policy") {
+              const { registerExecPolicyCli } = await import("./exec-policy-cli.js");
+              registerExecPolicyCli(program);
             }
             await program.parseAsync(process.argv.slice(2), { from: "user" });
           },

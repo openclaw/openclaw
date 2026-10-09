@@ -410,6 +410,7 @@ describe("agents helpers", () => {
           work: { workspace: "/work-ws" },
           home: {
             subagents: { allowAgents: ["WORK", "home"] },
+            tools: { profile: "coding", agentToAgent: { send: ["WORK"] } },
           },
         },
       },
@@ -462,6 +463,11 @@ describe("agents helpers", () => {
     expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
     expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.entries?.home?.tools).toEqual({
+      profile: "coding",
+      agentToAgent: { send: [] },
+    });
+    expect(cfg.agents?.entries?.home?.tools?.agentToAgent?.send).toEqual(["WORK"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
     expect(result.clearedOwnerRefs).toEqual([

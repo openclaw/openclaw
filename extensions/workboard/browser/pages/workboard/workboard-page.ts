@@ -23,9 +23,12 @@ import {
   type WorkboardUiState,
   WORKBOARD_CHANGED_EVENT,
 } from "../../lib/workboard/index.ts";
+import { invalidateWorkboardLoads } from "../../lib/workboard/runtime.ts";
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
+import type { WorkboardBoardMetadata } from "../../lib/workboard/types.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { workboardPageTarget } from "./page-target.ts";
 import { createSessionsBoardController } from "./sessions-board-controller.ts";
 import { loadBoardAutomation, renderBoardAutomationHeading } from "./view-automation.ts";
 import {
@@ -43,13 +46,6 @@ import {
 import { renderSessionsBoard } from "./view-sessions-board.ts";
 import { renderWorkboard } from "./view.ts";
 
-export function workboardPageTarget(boardId?: string) {
-  return {
-    id: "workboard",
-    path: boardId && boardId !== WORKBOARD_ALL_BOARDS_FILTER ? [boardId] : [],
-  };
-}
-
 function reconcileCardOverlays(state: WorkboardUiState, visible: (card: WorkboardCard) => boolean) {
   const remainsVisible = (id: string) =>
     state.cards.some((card) => card.id === id && visible(card));
@@ -63,7 +59,10 @@ function reconcileCardOverlays(state: WorkboardUiState, visible: (card: Workboar
   }
 }
 
-export function createWorkboardPage(workboard: WorkboardCapability): ControlUiView {
+export function createWorkboardPage(
+  workboard: WorkboardCapability,
+  registerBoardNavigation: (board: WorkboardBoardMetadata) => void,
+): ControlUiView {
   return (container, initialContext) => {
     const host = initialContext.host;
     let context = initialContext;
@@ -147,6 +146,10 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       if (connected) {
         void refreshMetadata();
       } else {
+        sessionsBoard.sync(
+          state.boards.find((board) => board.id === state.boardFilter),
+          false,
+        );
         stop();
       }
     };
@@ -176,6 +179,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         reconcileCardOverlays(state, (card) => matchesBoardFilter(card, boardId));
       }
       if (
+        context.presented &&
         boardId !== WORKBOARD_ALL_BOARDS_FILTER &&
         workboard.boardsReady &&
         !state.boards.some((board) => board.id === boardId)
@@ -412,9 +416,17 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                     boardDraft = null;
                     requestUpdate();
                   },
-                  onSaved: (savedId) => {
+                  onSaved: (board) => {
+                    if (disposed) {
+                      return;
+                    }
                     const creating = boardDraft?.create;
                     boardDraft = null;
+                    if (creating) {
+                      invalidateWorkboardLoads(workboard);
+                      registerBoardNavigation(board);
+                      host.ui.pinNavigation(`board-${board.id}`);
+                    }
                     void refreshWorkboard({
                       host: workboard,
                       client,
@@ -425,7 +437,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                         return;
                       }
                       if (creating) {
-                        onBoardChange(savedId);
+                        onBoardChange(board.id);
                       } else if (selectedBoard?.kind === "sessions") {
                         void sessionsBoard.read();
                       }
@@ -453,7 +465,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     });
     const unsubscribeState = workboard.subscribe(requestUpdate);
     const unsubscribeEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) => {
-      if (!disposed && connected && context.presented) {
+      if (!disposed && connected && context.presented && !sessionsBoard.hasCurrent(payload)) {
         handleWorkboardChanged(workboard, payload);
       }
     });

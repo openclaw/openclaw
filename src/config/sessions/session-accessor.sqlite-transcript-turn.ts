@@ -1,9 +1,14 @@
+import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
+  applySessionGoalOperation,
   readSessionGoalOperationInDatabase,
   readSessionGoalOperationReceipt,
 } from "./goals-operations.js";
@@ -15,12 +20,18 @@ import type {
 import { runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction } from "./session-accessor.sqlite-deletion.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { resolveSessionPendingInputAppend } from "./session-accessor.sqlite-pending-inputs.js";
 import {
+  captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import {
   prepareSessionTurnPredicates,
@@ -29,6 +40,7 @@ import {
 import { appendSessionTurnInWorker } from "./session-turn.js";
 import {
   createSessionTranscriptTurnKernel,
+  prepareSessionTurnGoalMessage,
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
 import type {
@@ -41,11 +53,26 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   options: SqliteSessionTurnOptions,
+  nativeReservation?: true,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
-  const resolved = resolveSqliteTranscriptScope({
-    ...scope,
-    sessionId: options.expectedSessionId,
-  });
+  if (
+    options.messages.some(
+      (message) => message.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
+    ) &&
+    (options.messages.length !== 1 ||
+      options.messages.some((message) => message.predicate || message.shouldAppendInTransaction))
+  ) {
+    // Compound callbacks depend on earlier transaction writes for their replay decisions.
+    throw new Error(
+      "Awaited transcript preparation requires one message without transaction predicates",
+    );
+  }
+  const resolved = captureLifecycleDatabaseScope(
+    resolveSqliteTranscriptScope({
+      ...scope,
+      sessionId: options.expectedSessionId,
+    }),
+  );
   const context: SessionTranscriptTurnWriteContext = {
     agentId: resolved.agentId,
     sessionId: options.expectedSessionId,
@@ -65,17 +92,28 @@ export async function appendExpectedSessionTranscriptTurn(
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
   if (
+    !nativeReservation &&
     independentPreparation &&
     isMainThread &&
     supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)) &&
-    options.messages.every(
-      (message) =>
+    options.messages.every((message) => {
+      const guard: SessionSourceAssertion | undefined =
+        message.workerPreparation?.beforeFreshMessageCommit;
+      return (
         !message.shouldAppendInTransaction &&
         !message.prepareMessageAfterIdempotencyCheck &&
-        !message.beforeFreshMessageCommit,
-    )
+        !message.beforeFreshMessageCommit &&
+        !guard?.nativeSource
+      );
+    })
   ) {
-    return appendSessionTurnInWorker(resolved, options, context);
+    return appendSessionTurnInWorker(resolved, options, context, (messages) =>
+      appendExpectedSessionTranscriptTurn(
+        { ...scope, storePath: resolved.path, env: resolved.env },
+        { ...options, messages },
+        true,
+      ),
+    );
   }
   if (options.acceptedResultGuard || options.sessionTurnMutation?.routingPredicate) {
     await prepareSessionTurnPredicates();
@@ -121,7 +159,11 @@ export async function appendExpectedSessionTranscriptTurn(
     }
     return sqliteSessionTranscriptTurnRebound(restoreEntry, options.sessionFile);
   }
-  return await runExclusiveSqliteSessionWrite(
+  // Worker preparation can select the compatibility adapter while retaining its FIFO reservation.
+  const withNativeAdmission: typeof runExclusiveSqliteSessionWrite = nativeReservation
+    ? (_scope, run) => run()
+    : runExclusiveSqliteSessionWrite;
+  return await withNativeAdmission(
     resolved,
     async () => {
       const mutation = options.sessionTurnMutation;
@@ -152,26 +194,128 @@ export async function appendExpectedSessionTranscriptTurn(
           sessionTurnMutationResult: { result: preparedReplay, replayed: true },
         };
       }
-      if (!resolveExpectedEntry(preparedEntry)) {
+      const expectedEntry = resolveExpectedEntry(preparedEntry);
+      if (!expectedEntry) {
         return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
       }
       const messages = await selectAppendableSqliteTranscriptTurnMessages(
         context,
         options.messages,
       );
+      const preparingAsync = messages.some(
+        (append) => append.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
+      );
+      const preparedGoalId =
+        preparingAsync && mutation
+          ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
+          : undefined;
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+      const identity = preparingAsync ? readOpenClawAgentDatabaseIdentity(database) : undefined;
+      const version = preparingAsync
+        ? readTranscriptContextVersionInTransaction(database, resolved.sessionId)
+        : undefined;
+      const preparedMessages = new Set<SessionTranscriptTurnMessageAppend>();
+      const asyncMessages = new Set<SessionTranscriptTurnMessageAppend>();
+      for (const append of messages) {
+        const hooks = append.workerPreparation;
+        const prepare = hooks?.prepareMessageAfterIdempotencyCheckAsync;
+        if (!prepare) {
+          continue;
+        }
+        asyncMessages.add(append);
+        const current = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+        const key = readMessageIdempotencyKey(append.message);
+        const existing =
+          key && append.idempotencyLookup !== "caller-checked"
+            ? readTranscriptMessageByScopedIdempotencyKey(
+                current,
+                resolved,
+                key,
+                append.idempotencyLookup,
+              )
+            : undefined;
+        const pending = resolveSessionPendingInputAppend(current, resolved, append.message);
+        if (!existing && !pending) {
+          preparedMessages.add(append);
+        }
+        const message =
+          existing || pending
+            ? append.message
+            : await prepare(
+                prepareSessionTurnGoalMessage(append.message, mutation, preparedGoalId),
+              );
+        append.workerPreparation = {
+          ...hooks,
+          prepareMessageAfterIdempotencyCheckAsync: undefined,
+          prepareMessageAfterIdempotencyCheck: () => message,
+        };
+      }
       let result: SqliteExpectedSessionTranscriptTurnResult = sqliteSessionTranscriptTurnRebound(
         preparedEntry,
         options.sessionFile,
       );
       const { commit } = createSessionTranscriptTurnKernel(
         resolved,
-        options,
+        { ...options, ...(preparedGoalId ? { preparedGoalId } : {}) },
         prepareSessionTurnRouting(mutation?.routingPredicate, resolved.env),
       );
+      const failures: unknown[] = [];
       const publish = runOpenClawAgentWriteTransaction(
         (transactionDb) => {
+          const currentIdentity = identity
+            ? readOpenClawAgentDatabaseIdentity(transactionDb)
+            : undefined;
+          const transactionVersion = identity
+            ? readTranscriptContextVersionInTransaction(transactionDb, resolved.sessionId)
+            : undefined;
+          for (const append of messages) {
+            if (!asyncMessages.has(append)) {
+              continue;
+            }
+            const beforeFreshMessageCommit =
+              append.workerPreparation?.beforeFreshMessageCommit ?? append.beforeFreshMessageCommit;
+            append.workerPreparation = {
+              ...append.workerPreparation,
+              beforeFreshMessageCommit: () => {
+                if (
+                  !preparedMessages.has(append) ||
+                  identity?.identity !== currentIdentity?.identity ||
+                  identity?.birthtime !== currentIdentity?.birthtime ||
+                  !isDeepStrictEqual(version, transactionVersion)
+                ) {
+                  throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+                }
+                beforeFreshMessageCommit?.();
+              },
+            };
+          }
           const committed = commit(transactionDb, messages);
           result = committed.result;
+          if (options.onCommittedSource && !result.rejectedReason && result.sessionEntry) {
+            const committedIdentity = readOpenClawAgentDatabaseIdentity(transactionDb);
+            const source = {
+              agentId: transactionDb.agentId,
+              path: transactionDb.path,
+              databaseIdentity: committedIdentity.identity,
+              databaseBirthtime: committedIdentity.birthtime,
+            };
+            const entry = result.sessionEntry;
+            if (
+              !stageSqliteTransactionState(transactionDb.db, {
+                stage: () => undefined,
+                commit: () => {
+                  try {
+                    options.onCommittedSource?.(source, entry);
+                  } catch (error) {
+                    failures.push(error);
+                  }
+                },
+                rollback: () => undefined,
+              })
+            ) {
+              throw new Error("Transcript source publication requires managed commit settlement");
+            }
+          }
           return committed.identity
             ? prepareSessionIdentityPublication(
                 transactionDb,
@@ -184,14 +328,19 @@ export async function appendExpectedSessionTranscriptTurn(
         toDatabaseOptions(resolved),
         { operationLabel: "session.transcript.append-turn" },
       );
-      publish?.();
-      const completion = completeSessionTranscriptCommit(
-        result.appendedMessages,
-        options.onMessageCommitted,
-      );
-      if (completion) {
-        await completion;
+      try {
+        publish?.();
+        const completion = completeSessionTranscriptCommit(
+          result.appendedMessages,
+          options.onMessageCommitted,
+        );
+        if (completion) {
+          await completion;
+        }
+      } catch (error) {
+        failures.push(error);
       }
+      throwSqliteLifecycleErrors(failures, "Transcript committed publication failed");
       return result;
     },
     "session.transcript.turn",
@@ -206,7 +355,7 @@ async function selectAppendableSqliteTranscriptTurnMessages(
   for (const append of messages) {
     const shouldAppend = append.shouldAppend ? await append.shouldAppend(context) : true;
     if (shouldAppend) {
-      selected.push(append);
+      selected.push({ ...append });
     }
   }
   return selected;

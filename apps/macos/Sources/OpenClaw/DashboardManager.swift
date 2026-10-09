@@ -315,7 +315,7 @@ final class DashboardManager {
         let configuration: WindowConfiguration
         do {
             configuration = try await dashboardConfiguration(
-                endpoint: endpoint, mode: mode, target: .primary, token: authToken)
+                endpoint: endpoint, mode: mode, target: .primary, token: authToken).configuration
         } catch {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
@@ -370,7 +370,7 @@ final class DashboardManager {
             current,
             configuration: WindowConfiguration(
                 url: Self.failureURL,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                auth: .unauthenticated,
                 tlsParams: nil,
                 mode: .unconfigured,
                 displayName: "OpenClaw"),
@@ -563,7 +563,7 @@ final class DashboardManager {
         let controller = self.controller ?? makeController(
             configuration: WindowConfiguration(
                 url: Self.failureURL,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                auth: .unauthenticated,
                 tlsParams: nil,
                 mode: .unconfigured,
                 displayName: "OpenClaw"),

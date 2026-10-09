@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -8,19 +8,19 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
-import {
-  closeOpenClawAgentDatabases,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { withSqliteCanonicalValidationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { withCanonicalSessionValidationDeferral } from "./session-canonical-validation-deferral.js";
 import { certifySessionCanonicalValidationPending } from "./session-canonical-validation-readiness.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 
@@ -51,6 +51,74 @@ function seedPendingRows(count: number, textBytes = 0, agentId = "main") {
   }
   return { options, database };
 }
+
+it.each(["pending rows", "revoked receipt"] as const)(
+  "certifies captured runtime work without caller-thread SQL (%s)",
+  async (scenario) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { database } = seedPendingRows(1);
+      const deferred = withCanonicalSessionValidationDeferral(() =>
+        assertCanonicalSqliteSessionKeysCurrent(database),
+      );
+      expect(deferred.kind).toBe("pending");
+      if (deferred.kind !== "pending") {
+        throw new Error("Fixture did not discover canonical work");
+      }
+      if (scenario === "revoked receipt") {
+        database.db.exec(`
+          UPDATE session_nodes SET parent_session_key = 'agent:main:changed';
+          DELETE FROM session_canonical_validation_pending;
+        `);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+      }
+      const executed: string[] = [];
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      const statements = (["get", "all", "run", "iterate"] as const).map((method) => {
+        const original = StatementSync.prototype[method];
+        return vi.spyOn(StatementSync.prototype, method).mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              executed.push(receiver.sourceSQL);
+              return Reflect.apply(target, receiver, args);
+            },
+          }),
+        );
+      });
+      try {
+        const certification = certifySessionCanonicalValidationPending(deferred.database);
+        if (scenario === "revoked receipt") {
+          await expect(certification).rejects.toThrow("invalid persisted session row");
+        } else {
+          await certification;
+        }
+        expect(executed).toEqual([]);
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        exec.mockRestore();
+        statements.forEach((statement) => statement.mockRestore());
+      }
+      expect(hasPendingCanonicalSessionValidation(database)).toBe(scenario === "revoked receipt");
+    });
+  },
+);
+
+it("refuses foreign schema drift before reusing a warm canonical readiness receipt", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { options, database } = seedPendingRows(0);
+    expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+    expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
+    await certifySessionCanonicalValidationPending(options);
+    const peer = new DatabaseSync(database.path);
+    try {
+      peer.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+    } finally {
+      peer.close();
+    }
+    await expect(certifySessionCanonicalValidationPending(options)).rejects.toThrow(
+      /canonical validation schema is missing or drifted.*openclaw doctor --fix/u,
+    );
+  });
+});
 
 it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] as const)(
   "admits only changed or revoked populated stores after a process restart (%s)",

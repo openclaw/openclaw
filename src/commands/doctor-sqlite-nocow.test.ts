@@ -38,7 +38,8 @@ let fixture: ReturnType<typeof createDoctorNoCowToolFixture>;
 const nativeStatfs = fs.statfsSync;
 
 beforeEach(() => {
-  root = tempDirs.make("openclaw-nocow-");
+  // The real socket fixture must fit sockaddr_un even with a deeply nested TMPDIR.
+  root = tempDirs.make("openclaw-nocow-", process.platform === "win32" ? undefined : "/tmp");
   directory = path.join(root, "state");
   fs.mkdirSync(directory);
   sqlitePath = path.join(directory, "openclaw.sqlite");
@@ -112,7 +113,7 @@ describe("Doctor btrfs NOCOW", () => {
                 loadPersistedAuthProfileStore(path.dirname(agent.path));
               }
               const preflight = await prepareDoctorDatabasePreflight({
-                cfg: { agents: { list: [{ id: "main" }, { id: "secondary" }] } },
+                cfg: { agents: { entries: { main: {}, secondary: {} } } },
               });
               expect(preflight.agentDatabaseMigrationDiscovery?.discovery.targets).toHaveLength(3);
               return inspectDoctorSqliteNoCow([state.path, ...agents.map((agent) => agent.path)])

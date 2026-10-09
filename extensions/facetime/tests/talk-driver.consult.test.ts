@@ -242,13 +242,13 @@ describe("FaceTime talk driver consult delivery", () => {
     },
   );
 
-  it("routes one normalized FaceTime session to the configured default agent", async () => {
+  it("routes one normalized FaceTime session to the sole configured agent", async () => {
     mocks.consult.mockResolvedValueOnce({ text: "I know my SOUL.md." });
     await startReadyFaceTimeTalkDriver(
       startParams({
         callUUID: "17BC43FD-5800-4B54-86DB-698C49253C42",
         fullConfig: {
-          agents: { list: [{ id: "lobster", default: true }] },
+          agents: { entries: { lobster: {} } },
         },
       }),
     );

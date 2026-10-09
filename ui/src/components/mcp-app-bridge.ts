@@ -8,7 +8,6 @@ import { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import {
   isWidgetFrameInteractable,
   MCP_APP_FILE_OPEN_EVENT,
@@ -74,6 +73,7 @@ export function bindMcpAppResourceHandlers(owner: {
   iframe: HTMLIFrameElement;
   fileResourcesSupported?: boolean;
   openFilesSupported?: boolean;
+  confirmOpenFile: (path: string) => Promise<boolean>;
   isDisposed: () => boolean;
   addCleanup: (cleanup: () => void) => void;
   dispatchEvent: (event: Event) => boolean;
@@ -92,25 +92,22 @@ export function bindMcpAppResourceHandlers(owner: {
         arguments: params.arguments,
       }),
     );
-  bridge.setListToolsHandler(async (params) =>
-    requireMcpResult(
-      specTypeSchemas.ListToolsResult,
-      await request("mcp.app.listTools", params?.cursor ? { cursor: params.cursor } : {}),
-    ),
+  const listHandler =
+    <T>(method: string, schema: StandardSchemaV1Sync<unknown, T>) =>
+    async (params?: { cursor?: string }): Promise<T> =>
+      requireMcpResult(
+        schema,
+        await request(method, params?.cursor !== undefined ? { cursor: params.cursor } : {}),
+      );
+  bridge.setListToolsHandler(listHandler("mcp.app.listTools", specTypeSchemas.ListToolsResult));
+  bridge.onlistresources = listHandler(
+    "mcp.app.listResources",
+    specTypeSchemas.ListResourcesResult,
   );
-  bridge.onlistresources = async (params) =>
-    requireMcpResult(
-      specTypeSchemas.ListResourcesResult,
-      await request("mcp.app.listResources", params?.cursor ? { cursor: params.cursor } : {}),
-    );
-  bridge.onlistresourcetemplates = async (params) =>
-    requireMcpResult(
-      specTypeSchemas.ListResourceTemplatesResult,
-      await request(
-        "mcp.app.listResourceTemplates",
-        params?.cursor ? { cursor: params.cursor } : {},
-      ),
-    );
+  bridge.onlistresourcetemplates = listHandler(
+    "mcp.app.listResourceTemplates",
+    specTypeSchemas.ListResourceTemplatesResult,
+  );
   bridge.onreadresource = async (params, extra) =>
     requireMcpResult(
       specTypeSchemas.ReadResourceResult,
@@ -156,9 +153,12 @@ export function bindMcpAppResourceHandlers(owner: {
   if (owner.openFilesSupported) {
     bridge.setHostRequestHandler("openai/files/open", async (params) => {
       if (
+        owner.isDisposed() ||
         !isWidgetFrameInteractable(iframe) ||
         typeof params.path !== "string" ||
-        !window.confirm(`${t("common.confirm")}:\n\n${params.path}`)
+        !(await owner.confirmOpenFile(params.path)) ||
+        owner.isDisposed() ||
+        !isWidgetFrameInteractable(iframe)
       ) {
         return { isError: true };
       }

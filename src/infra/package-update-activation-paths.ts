@@ -33,10 +33,12 @@ export function resolvePackageActivationAnchor(installKey: string): string {
   return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
 }
 
-export function isPackageActivationControlName(name: string): boolean {
+export function isPackageActivationArtifactName(name: string): boolean {
   return (
     name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
-    /^[a-f0-9]{24}\.control$/u.test(name.slice(PACKAGE_ACTIVATION_PREFIX.length))
+    /^[a-f0-9]{24}(?:\.control|\.superseded-[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?$/u.test(
+      name.slice(PACKAGE_ACTIVATION_PREFIX.length),
+    )
   );
 }
 
@@ -52,27 +54,55 @@ export function resolvePackageActivationHelper(anchor: string): string {
   return path.join(resolvePackageActivationControl(anchor), "recovery.mjs");
 }
 
-export function packageActivationIdentity(file: string, directory: boolean | "launcher"): string {
+export function packageActivationIdentity(
+  file: string,
+  directory: boolean | "launcher" | "parent" | "symlink",
+): string {
   const stat = fs.lstatSync(file, { bigint: true });
-  if (
-    stat.ino === 0n ||
-    !(directory === "launcher"
+  const expectedUid = process.getuid?.();
+  const validType =
+    directory === "launcher"
       ? stat.isSymbolicLink() || stat.isFile()
-      : directory
-        ? stat.isDirectory() && !stat.isSymbolicLink()
-        : stat.isFile()) ||
-    (process.getuid && stat.uid !== BigInt(process.getuid()))
-  ) {
-    throw new Error("Package publication object has an unsafe identity");
+      : directory === "symlink"
+        ? stat.isSymbolicLink()
+        : directory
+          ? stat.isDirectory() && !stat.isSymbolicLink()
+          : stat.isFile();
+  // Prefix parents are observed for replacement, not published as owned objects.
+  const foreignOwner =
+    directory !== "parent" && expectedUid !== undefined && stat.uid !== BigInt(expectedUid);
+  const reason =
+    stat.ino === 0n
+      ? "missing inode"
+      : !validType
+        ? "unexpected type"
+        : foreignOwner
+          ? "owner mismatch"
+          : null;
+  if (reason) {
+    throw new Error(
+      `Package publication object ${JSON.stringify(file)} has an unsafe identity (${reason}; owner UID ${stat.uid}, expected UID ${expectedUid ?? "unavailable"}). Verify this object's ownership and type before retrying openclaw update.`,
+    );
   }
   return `${stat.dev}:${stat.ino}`;
 }
 
-export function privatePackageActivationIdentity(file: string, directory: boolean): string {
+export function privatePackageActivationIdentity(
+  file: string,
+  role: "anchor" | "control" | "journal" | "helper" | "rollback-journal",
+): string {
+  const directory = role === "anchor" || role === "control";
   const value = packageActivationIdentity(file, directory);
   const stat = fs.lstatSync(file);
   if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
-    throw new Error("Package publication recovery permissions are unsafe");
+    const basename = path
+      .basename(file)
+      .replace(/[^A-Za-z0-9_.-]/gu, "_")
+      .slice(0, 64);
+    const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
+    throw new Error(
+      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.`,
+    );
   }
   return value;
 }
@@ -91,24 +121,31 @@ export function assertPackageActivationLayout(anchor: string): void {
 
 /** A receipt is a read-only completion fact, never a grant for another effect. */
 export function isPackageActivationComplete(
-  anchor: string,
+  _anchor: string,
   record: PackageActivationRecord,
 ): boolean {
+  if (record.phase === "superseded") {
+    if (
+      record.intent?.kind !== "superseded-by-manual-install" &&
+      record.intent?.kind !== "recovery-lease-identity-changed" &&
+      record.intent?.kind !== "publication-settled-external-change" &&
+      record.intent?.kind !== "recovery-lease-missing"
+    ) {
+      throw new Error("Package supersession fact is missing.");
+    }
+    // Settlement already relinquished rollback custody. Retained evidence may
+    // be inspected, moved, or removed without reviving the closed operation.
+    // Archival is maintenance, not another recovery obligation.
+    return record.intent.settled;
+  }
   if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
     return false;
   }
   if (record.intent.identity !== record.descriptor.helperIdentity) {
     throw new Error("Final helper unlink identity is invalid.");
   }
-  for (const file of [anchor, resolvePackageActivationHelper(anchor)]) {
-    try {
-      fs.lstatSync(file);
-      return false;
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-        throw error;
-      }
-    }
-  }
+  // The final unlink intent follows verified retirement of rollback custody.
+  // A helper left by an interrupted unlink or a later replacement is cleanup,
+  // not permission to restore an earlier generation or block a new update.
   return true;
 }

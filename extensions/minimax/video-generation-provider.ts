@@ -13,8 +13,6 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
@@ -26,9 +24,8 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import {
   assertMinimaxBaseResp,
-  DEFAULT_MINIMAX_MEDIA_BASE_URL,
   fetchMinimaxResponse,
-  resolveMinimaxMediaBaseUrl,
+  resolveMinimaxMediaRequestConfig,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
 } from "./media-provider-runtime.js";
@@ -235,7 +232,9 @@ async function downloadVideoFromFileId(params: {
   };
 }
 
-function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider {
+export function buildMinimaxVideoGenerationProvider(
+  providerId = "minimax",
+): VideoGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
@@ -292,19 +291,11 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         label: "MiniMax video generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMediaBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: providerId,
+        resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          apiKey: auth.apiKey,
           capability: "video",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg.models?.providers?.[providerId]?.request,
-          ),
         });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_VIDEO_MODEL;
@@ -454,12 +445,4 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
       }
     },
   };
-}
-
-export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
-  return buildMinimaxVideoProvider("minimax");
-}
-
-export function buildMinimaxPortalVideoGenerationProvider(): VideoGenerationProvider {
-  return buildMinimaxVideoProvider("minimax-portal");
 }

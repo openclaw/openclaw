@@ -174,12 +174,171 @@ has connection settings, header references, and tool filters.
 
 ### Self-hosted execution
 
-For commands on your own infrastructure, configure a self-hosted environment
-with an operator-managed executor controller and matching workspace paths.
-`hostExecutorSkillDirectories` can expose skill directories installed on that
-executor. The
-[environment setup reference](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md)
-covers controller prerequisites, attachment staging, and session resets.
+Self-hosted execution keeps the agent harness in OpenAI's cloud and runs commands
+and file operations on infrastructure you manage. The bundled `agentsapi` plugin
+owns the conversation and native session. An optional **executor controller
+plugin** connects that session to a `codex exec-server` process on your host.
+
+#### One executor per session
+
+Each native Agents API session has its own environment ID, connection URL, and
+executor process. Follow-up turns reuse that session and executor. Starting
+another conversation creates another session with its own executor.
+
+**All executors can run in the same persistent environment**, such as one VM,
+remote host, or container, and use the same workspace directory. This is one
+possible deployment, not a requirement. You can instead place executors in
+separate environments according to your isolation and persistence needs.
+
+For example, two conversations can have this layout:
+
+```text
+OpenClaw Gateway                 One persistent remote host
+  Conversation A -> Session A -> Executor A --+--> /srv/agent/workspace
+  Conversation B -> Session B -> Executor B --+
+```
+
+The sessions have separate conversation histories and executor connections, but
+share the files and installed software on that host. Session separation is not
+filesystem or credential isolation. Concurrent sessions can change the same
+files; use separate workspaces, users, or hosts when workloads need isolation.
+Retiring one session's executor must leave other executors and the shared
+workspace intact. Your host's storage and backup policy determine file durability.
+
+#### 1. Prepare the execution host
+
+Complete the API-key and model setup above. On the execution host, prepare an
+absolute workspace path, install the tools and dependencies your agent needs,
+and install a Codex CLI version supporting `codex exec-server`. Follow the
+[official self-hosted setup](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted)
+for the current installation and outbound-network requirements.
+
+Provision a restricted environment key from the platform dashboard for the same
+organization, project, and user or service account as the session owner. Supply
+that key to the executor as `CODEX_API_KEY`; keep the Gateway's application API
+key out of the executor environment. The controller plugin owns secure credential
+delivery, host access, process supervision, and filesystem provisioning.
+
+#### 2. Install and configure a controller plugin
+
+Install an executor controller plugin for your deployment using the
+[plugin installation workflow](/cli/plugins). OpenClaw provides the controller
+contract, not a bundled SSH launcher or a universal host manager. The plugin must
+register `api.registerAgentExecutorController({ workspaceDirectory, ensure, retire })`
+and declare `activation.onAgentHarnesses: ["agentsapi"]` in its manifest. Plugin
+authors can follow the
+[controller SDK reference](/plugins/sdk-agent-harness/registration#executor-controller-plugins).
+
+Configure the plugin's host, credentials, and existing absolute workspace path
+according to that plugin's documentation. Those settings belong to the controller
+plugin; they are not generic `agentsapi` settings. Its `workspaceDirectory` is the
+path on the execution host and can differ from the Gateway workspace.
+
+#### 3. Select the controller
+
+Merge this into your existing configuration. Replace `my-executor` with the
+installed controller plugin's actual ID and keep your model's
+`agentRuntime.id: "agentsapi"` setting from the setup above.
+
+```json5
+{
+  plugins: {
+    entries: {
+      agentsapi: {
+        enabled: true,
+        config: {
+          environment: "self_hosted",
+          executorController: "my-executor",
+        },
+      },
+      "my-executor": { enabled: true },
+    },
+  },
+}
+```
+
+`my-executor` is an example ID, not the name of a bundled plugin. If you use
+`plugins.allow`, include your controller's ID alongside `agentsapi`, `openai`,
+and your other allowed plugins. Keep the bundled Agents API harness enabled;
+the controller adds executor management, not a second harness.
+
+Optionally set `plugins.entries.agentsapi.config.hostExecutorSkillDirectories`
+to absolute skill-directory paths on the execution host. Provision their files
+and dependencies yourself. OpenClaw forwards the paths for native discovery; it
+does not copy Gateway skills to the host.
+
+Apply the configuration and start a fresh conversation with `/new` or `/reset`.
+Changing the environment, workspace, or controller for an existing conversation
+requires a reset. It does not migrate files between hosts.
+
+#### How startup, reconnection, and cleanup work
+
+1. The Agents API harness creates or resumes the native session. When the API
+   requires `environment_connection`, OpenClaw retrieves and validates the
+   session's environment and saves its binding and controller owner.
+2. OpenClaw calls `ensure(binding, context)` on the selected controller. It
+   starts or reconnects only that session's executor, using the exact
+   `environmentId`, unchanged `remoteUrl`, and `workspaceDirectory` in the binding.
+3. OpenClaw waits for API-confirmed connection readiness. The original input
+   request can remain pending while the executor starts; it is not resubmitted.
+   Healthy follow-up turns do not invoke the controller or require a host probe.
+4. Finishing or interrupting a turn leaves the executor available. Gateway
+   disposal also retains its saved binding and executor. A running executor
+   handles native reconnection; an outstanding connection action can ask the
+   controller to ensure the same session again.
+5. Reset, session deletion, or confirmed terminal native-session failure attempts
+   `retire(binding, context)` after native work settles. It stops only that
+   binding's executor. If native work cannot be confirmed settled, reset or
+   deletion fails and retains the binding so you can restore connectivity or
+   API-key authentication and retry. After settlement, executor retirement is
+   best effort: an unreachable host or failed stop is reported without blocking
+   reset or deletion. After a Gateway restart, cleanup reacquires the owning
+   agent's OpenAI API-key authentication before checking the saved native session.
+
+A controller typically launches this command on the execution host, in its
+prepared workspace, with the environment key supplied securely as `CODEX_API_KEY`:
+
+```bash
+codex exec-server \
+  --remote "<binding.remoteUrl>" \
+  --environment-id "<binding.environmentId>"
+```
+
+Use a separate managed process for each native session and make repeated
+`ensure` calls idempotent. Reconnection does not guarantee an interrupted command
+survives. Check the original turn's outcome before repeating work that might
+already have changed files or called a service. Input submission has a 60-second
+HTTP deadline, including connection wait, so prepare hosts to connect promptly.
+
+#### Use an external controller instead
+
+You can omit `executorController` and manage executors outside OpenClaw, for
+example through the
+[Agents API webhook lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
+The external controller owns session-scoped startup, reconnection, and cleanup.
+It must authenticate API reads, handle only its intended sessions, and use each
+session's environment ID and unchanged remote URL. In this mode the workspace
+path sent by OpenClaw must already exist at the same absolute path on the executor.
+Choose one lifecycle owner for each session.
+
+#### Check the setup and file boundaries
+
+Start with the calculation from the hosted setup, then ask the agent to write a
+small file in its workspace and read it in a follow-up. For a shared-host setup,
+start a second conversation and check that it uses a different executor while
+seeing the same file. Reset one conversation and confirm the other still works
+and the shared file remains. Inspect controller process records and Gateway
+logs as well as the chat reply; a model-authentication probe does not test an
+executor connection.
+
+Executor management does not automatically synchronize Gateway files or add
+attachment transfer. Self-hosted input attachments require a registered workspace
+provider with attachment staging. This controller contract does not add automatic
+self-hosted output transfer. Configure the appropriate workspace/file integration
+for your deployment, or use the hosted environment for its built-in transfers.
+Gateway memory and tools retain their own storage and permissions. See the
+[package reference](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md)
+for these boundaries and upgrade notes.
 
 ### Session settings and diagnostics
 

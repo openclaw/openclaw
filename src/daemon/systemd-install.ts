@@ -1,4 +1,3 @@
-/** systemd unit publication, installation, staging, and uninstall. */
 import fs from "node:fs/promises";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -481,7 +480,7 @@ function reportSystemdServicePublication(
   if (backedUp) {
     lines.push({ label: "Previous unit backed up to", value: `${unitPath}.bak` });
   }
-  writeFormattedLines(stdout, lines, { leadingBlankLine: true });
+  writeFormattedLines(stdout, lines);
 }
 
 export async function stageSystemdService({

@@ -18,9 +18,10 @@ import {
   InvalidSummaryOutputError,
   ok,
   SummaryOutputBudgetError,
+  SummaryProviderError,
   type Result,
 } from "../types.js";
-import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
+import { createSummarizationContext } from "./summarization-prompts.js";
 import { extractSummaryText, serializeConversation } from "./utils.js";
 
 export interface SummarizationCompletionParams {
@@ -53,16 +54,7 @@ export async function runSummarizationCompletion(
   if (params.customInstructions) {
     promptText += `\n\nAdditional focus: ${params.customInstructions}`;
   }
-  const context = {
-    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user" as const,
-        content: [{ type: "text" as const, text: promptText }],
-        timestamp: Date.now(),
-      },
-    ],
-  };
+  const context = createSummarizationContext(promptText);
   const { model, thinkingLevel, maxTokens, signal, apiKey, headers } = params;
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
   const fableReasoning =
@@ -83,9 +75,9 @@ export async function runSummarizationCompletion(
   }
   if (response.stopReason === "error") {
     return err(
-      new CompactionError(
-        "summarization_failed",
+      new SummaryProviderError(
         `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+        response,
       ),
     );
   }

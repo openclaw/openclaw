@@ -7,6 +7,7 @@ import {
   sameFileContentsSync,
   sameFileIdentity,
 } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -251,6 +252,15 @@ function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
   }
 }
 
+function syncPrivateSnapshot(snapshotPath: string): void {
+  const descriptor = fs.openSync(snapshotPath, "r+");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function recoverPrivateJournalCopy(snapshotPath: string): void {
   if (rollbackJournalReferencesSuperJournal(`${snapshotPath}-journal`)) {
     throw new Error(
@@ -267,12 +277,7 @@ function recoverPrivateJournalCopy(snapshotPath: string): void {
     snapshot.close();
   }
   fs.rmSync(`${snapshotPath}-journal`, { force: true });
-  const descriptor = fs.openSync(snapshotPath, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  syncPrivateSnapshot(snapshotPath);
 }
 
 function publishPreparedCopy(directory: string): PreparedSqliteReadOnlyLocation {
@@ -378,10 +383,13 @@ function* createStableReadOnlyCopyInTempDirectory(
     }
     return publishPreparedCopy(tempDir);
   } catch (error) {
+    const stagingError = tempDir
+      ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
+      : error;
     if (tempDir && existingTempDir === undefined) {
       removeTempDirectory(tempDir);
     }
-    throw tempDir ? sqliteSnapshotStagingError(tempDir, error) : error;
+    throw stagingError;
   }
 }
 
@@ -413,15 +421,13 @@ async function copyPreparedLocation(
       const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
       const source = openPinnedFile(sourcePath, expectedSourceIdentity);
       try {
-        try {
-          await copySqliteFile(sourcePath, targetPath, source.identity);
-        } catch (error) {
-          assertPinnedIdentityUnchanged(source);
-          throw error;
-        }
-        assertPinnedIdentityUnchanged(source);
+        await copySqliteFile(sourcePath, targetPath, source.identity);
       } finally {
-        fs.closeSync(source.descriptor);
+        try {
+          assertPinnedIdentityUnchanged(source);
+        } finally {
+          fs.closeSync(source.descriptor);
+        }
       }
     } catch (error) {
       step = steps.throw(error);
@@ -430,6 +436,14 @@ async function copyPreparedLocation(
     step = steps.next();
   }
   return step.value;
+}
+
+function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
 }
 
 async function createStableReadOnlyCopy(
@@ -444,7 +458,13 @@ async function createStableReadOnlyCopy(
       createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir),
     );
   } catch (error) {
-    await removeTempDirectoryAsync(tempDir);
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, "SQLite snapshot preparation");
+    }
     throw error;
   }
 }
@@ -483,16 +503,18 @@ export async function createOnlineReadOnlyBackup(
     } finally {
       snapshot.close();
     }
-    const descriptor = fs.openSync(snapshotPath, "r+");
-    try {
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+    syncPrivateSnapshot(snapshotPath);
     return publishPreparedCopy(tempDir);
   } catch (error) {
-    await removeTempDirectoryAsync(tempDir);
-    throw sqliteSnapshotStagingError(tempDir, error);
+    const stagingError = sqliteSnapshotStagingError(tempDir, error, false, pathname);
+    const errors: unknown[] = [stagingError];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, "SQLite online backup");
+    }
+    throw stagingError;
   }
 }
 
@@ -512,39 +534,53 @@ async function prepareReadOnlySourceInProcess(
   signal?.throwIfAborted();
   const canonicalPath = fs.realpathSync.native(pathname);
   const report = createSnapshotAttemptReporter(canonicalPath);
-  let operation: "raw-copy" | "online-backup" = "online-backup";
-  try {
-    const journalMode = readSourceJournalMode(canonicalPath);
-    const sidecars = readSourceSidecars(canonicalPath);
-    let prepared: PreparedSqliteReadOnlyLocation;
-    if (journalMode === "empty" || (journalMode === "wal" && (!sidecars.wal || !sidecars.shm))) {
-      // Incomplete inactive families need one private recovery copy so opening
-      // SQLite cannot create or recover coordination files beside the source.
-      operation = "raw-copy";
-      prepared = await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
-    } else {
-      try {
-        prepared = await createOnlineReadOnlyBackup(canonicalPath, stagingRoot, signal, onProgress);
-      } catch (error) {
-        signal?.throwIfAborted();
-        if (
-          !isSqliteReadOnlyError(error) ||
-          readSourceJournalMode(canonicalPath) !== "rollback" ||
-          !readSourceSidecars(canonicalPath).journal
-        ) {
-          throw error;
-        }
-        // Hot rollback recovery must operate on private files. A native
-        // read-only open refuses before backup starts, so this is the only copy.
+  for (let attempt = 0; ; attempt += 1) {
+    signal?.throwIfAborted();
+    let operation: "raw-copy" | "online-backup" = "online-backup";
+    try {
+      const journalMode = readSourceJournalMode(canonicalPath);
+      const sidecars = readSourceSidecars(canonicalPath);
+      let prepared: PreparedSqliteReadOnlyLocation;
+      if (journalMode === "empty" || (journalMode === "wal" && (!sidecars.wal || !sidecars.shm))) {
+        // Incomplete inactive families need one private recovery copy so opening
+        // SQLite cannot create or recover coordination files beside the source.
         operation = "raw-copy";
-        prepared = await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
+        prepared = await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
+      } else {
+        try {
+          prepared = await createOnlineReadOnlyBackup(
+            canonicalPath,
+            stagingRoot,
+            signal,
+            onProgress,
+          );
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (
+            error instanceof AggregateError ||
+            !isSqliteReadOnlyError(error) ||
+            readSourceJournalMode(canonicalPath) !== "rollback" ||
+            !readSourceSidecars(canonicalPath).journal
+          ) {
+            throw error;
+          }
+          // Hot rollback recovery must operate on private files. A native
+          // read-only open refuses before backup starts, so this is the only copy.
+          operation = "raw-copy";
+          prepared = await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
+        }
       }
+      report(operation, "success", prepared);
+      return prepared;
+    } catch (error) {
+      if (!(error instanceof SqliteSourceChangedError) || attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
+        report(operation, "error", undefined, error);
+        throw error;
+      }
+      // An inactive family can become active while its private copy is prepared.
+      // Cleanup has settled; classify the current family again so a live WAL
+      // writer uses the native backup protocol on the next attempt.
     }
-    report(operation, "success", prepared);
-    return prepared;
-  } catch (error) {
-    report(operation, "error", undefined, error);
-    throw error;
   }
 }
 
@@ -703,11 +739,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
       errors.push(cleanupError),
     );
     if (!removed && cleanupMode === "async") {
-      throw createSqliteLifecycleAggregateError(
-        errors,
-        "Owned SQLite snapshot preparation and cleanup failed",
-        error,
-      );
+      throw preparationCleanupError(errors, "Owned SQLite snapshot preparation");
     }
     throw error;
   }

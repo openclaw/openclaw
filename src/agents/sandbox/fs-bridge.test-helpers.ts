@@ -9,7 +9,6 @@ import { beforeEach, expect, vi, type Mock } from "vitest";
 
 type ExecDockerRawFn = typeof import("./docker.js").execDockerRaw;
 type OpenRootFileFn = typeof import("../../infra/boundary-file-read.js").openRootFile;
-type ExecDockerArgs = Parameters<ExecDockerRawFn>[0];
 type ExecDockerRawMock = Mock<ExecDockerRawFn>;
 type OpenRootFileMock = Mock<OpenRootFileFn>;
 type BeforeAsyncRead = (fd: number) => Promise<void>;
@@ -24,19 +23,6 @@ let beforeAsyncRead: BeforeAsyncRead | undefined;
 const hoisted = vi.hoisted((): FsBridgeHoisted => ({
   execDockerRaw: vi.fn(),
   openRootFile: vi.fn(),
-}));
-
-vi.mock("./docker.js", () => ({
-  DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
-  PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
-  execContainerRaw: (
-    _engine: unknown,
-    args: ExecDockerArgs,
-    opts?: Parameters<ExecDockerRawFn>[1],
-  ) => hoisted.execDockerRaw(args, opts),
-  execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
-    hoisted.execDockerRaw(args, opts),
-  validateSandboxContainerEngineTarget: vi.fn(),
 }));
 
 async function createPathSafetyRuntimeMock() {
@@ -63,6 +49,7 @@ async function createPathSafetyRuntimeMock() {
 
 vi.mock("../../infra/boundary-file-read.js", createPathSafetyRuntimeMock);
 
+import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
@@ -71,18 +58,6 @@ let createSandboxFsBridgeImpl: typeof import("./fs-bridge.js").createSandboxFsBr
 async function loadFreshFsBridgeModuleForTest(beforeRead?: BeforeAsyncRead) {
   beforeAsyncRead = beforeRead;
   vi.resetModules();
-  vi.doMock("./docker.js", () => ({
-    DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
-    PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
-    execContainerRaw: (
-      _engine: unknown,
-      args: ExecDockerArgs,
-      opts?: Parameters<ExecDockerRawFn>[1],
-    ) => hoisted.execDockerRaw(args, opts),
-    execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
-      hoisted.execDockerRaw(args, opts),
-    validateSandboxContainerEngineTarget: vi.fn(),
-  }));
   vi.doMock("../../infra/boundary-file-read.js", createPathSafetyRuntimeMock);
   const descriptor = Object.getOwnPropertyDescriptor(fsSync.readFile, promisify.custom);
   if (beforeRead) {
@@ -112,12 +87,36 @@ async function loadFreshFsBridgeModuleForTest(beforeRead?: BeforeAsyncRead) {
 }
 
 export function createSandboxFsBridge(
-  ...args: Parameters<typeof import("./fs-bridge.js").createSandboxFsBridge>
+  params: Omit<Parameters<typeof createSandboxFsBridgeImpl>[0], "sandbox"> & {
+    sandbox: SandboxFsBridgeContext;
+  },
 ) {
   if (!createSandboxFsBridgeImpl) {
     throw new Error("fs-bridge test harness not initialized");
   }
-  return createSandboxFsBridgeImpl(...args);
+  const sandbox = params.sandbox;
+  return createSandboxFsBridgeImpl({
+    ...params,
+    sandbox: {
+      ...sandbox,
+      backend: sandbox.backend ?? {
+        runShellCommand: ({ script, args, stdin, allowFailure, signal }) =>
+          hoisted.execDockerRaw(
+            [
+              "exec",
+              "-i",
+              sandbox.containerName,
+              "sh",
+              "-c",
+              script,
+              "openclaw-sandbox-fs",
+              ...(args ?? []),
+            ],
+            { input: stdin, allowFailure, signal },
+          ),
+      },
+    },
+  });
 }
 
 export const mockedExecDockerRaw: ExecDockerRawMock = hoisted.execDockerRaw;

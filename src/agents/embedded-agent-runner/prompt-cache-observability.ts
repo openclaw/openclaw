@@ -32,6 +32,25 @@ type PromptCacheToolDescriptor = {
   readonly parameters?: object;
 };
 
+const PROMPT_SECTION_NAMES = [
+  "Skills",
+  "Tooling",
+  "Project Context",
+  "Memory Recall",
+  "Temporal Context",
+  "Runtime",
+  "Runtime Context",
+  "Conversation Context",
+  "Subagent Context",
+  "Model Aliases",
+  "Other",
+] as const;
+type PromptSectionName = (typeof PROMPT_SECTION_NAMES)[number];
+type PromptSectionDigests = Partial<Record<PromptSectionName, string>>;
+const promptSectionHeadings = new Map<string, PromptSectionName>(
+  PROMPT_SECTION_NAMES.map((name) => [`${name === "Project Context" ? "#" : "##"} ${name}`, name]),
+);
+
 type PromptCacheSnapshot = {
   provider: string;
   modelId: string;
@@ -40,11 +59,13 @@ type PromptCacheSnapshot = {
   streamStrategy: string;
   transport?: string;
   systemPromptDigest: string;
+  systemPromptSections?: PromptSectionDigests;
   /** Digest of the volatile suffix below the cache boundary; undefined when the prompt has none. */
   systemPromptSuffixDigest?: string;
+  systemPromptSuffixSections?: PromptSectionDigests;
   toolDigest: string;
   toolCount: number;
-  toolNames: string[];
+  tools: readonly PromptCacheToolSnapshot[];
 };
 
 type PromptCacheTracker = {
@@ -83,11 +104,9 @@ function fingerprintBlock(block: object): string {
   const nested: [string, unknown][] = [];
   for (const entry of Object.entries(block)) {
     const value = entry[1];
-    if (value === null || ["string", "number", "boolean", "undefined"].includes(typeof value)) {
-      primitives.push(entry);
-    } else {
-      nested.push(entry);
-    }
+    const primitive =
+      value === null || ["string", "number", "boolean", "undefined"].includes(typeof value);
+    (primitive ? primitives : nested).push(entry);
   }
   const previous = blockFingerprints.get(block);
   const unchanged =
@@ -143,10 +162,77 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
   return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
-function setTracker(key: string, tracker: PromptCacheTracker): void {
-  trackers.delete(key);
-  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  trackers.set(key, tracker);
+function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSnapshot): string {
+  const before = new Map(previous.tools.map((tool) => [tool.name, tool]));
+  const after = new Map(next.tools.map((tool) => [tool.name, tool]));
+  const changed: Record<"added" | "removed" | "description" | "schema", string[]> = {
+    added: [],
+    removed: [],
+    description: [],
+    schema: [],
+  };
+  for (const tool of next.tools) {
+    const prior = before.get(tool.name);
+    if (!prior) {
+      changed.added.push(tool.name);
+    } else {
+      if (prior.descriptionDigest !== tool.descriptionDigest) {
+        changed.description.push(tool.name);
+      }
+      if (prior.schemaDigest !== tool.schemaDigest) {
+        changed.schema.push(tool.name);
+      }
+    }
+  }
+  for (const tool of previous.tools) {
+    if (!after.has(tool.name)) {
+      changed.removed.push(tool.name);
+    }
+  }
+  const details = [`${previous.toolCount} -> ${next.toolCount} tools`];
+  for (const [kind, names] of Object.entries(changed)) {
+    if (names.length > 0) {
+      const sample = names
+        .slice(0, 5)
+        .map((name) => JSON.stringify(name.slice(0, 80)))
+        .join(", ");
+      details.push(`${kind}: ${sample}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`);
+    }
+  }
+  return details.join("; ");
+}
+
+function fingerprintPromptSections(
+  prompt: string,
+  digest: string,
+  previousDigest?: string,
+  previousSections?: PromptSectionDigests,
+): PromptSectionDigests | undefined {
+  if (digest === previousDigest) {
+    return previousSections;
+  }
+  if (!/^#{1,2} /m.test(prompt)) {
+    return undefined;
+  }
+  const sections: PromptSectionDigests = {};
+  let name: PromptSectionName = "Other";
+  let start = 0;
+  const append = (end: number) => {
+    if (end > start) {
+      sections[name] = sha256Hex(`${sections[name] ?? ""}${prompt.slice(start, end)}`);
+    }
+  };
+  for (const heading of prompt.matchAll(/^#{1,2} [^\n]*(?:\n|$)/gm)) {
+    append(heading.index);
+    start = heading.index;
+    name = promptSectionHeadings.get(heading[0].trimEnd()) ?? "Other";
+    // Injected files own the rest of the stable prefix, including their headings.
+    if (name === "Project Context") {
+      break;
+    }
+  }
+  append(prompt.length);
+  return sections;
 }
 
 function diffSnapshots(
@@ -181,16 +267,22 @@ function diffSnapshots(
     ["systemPromptSuffix", "system prompt suffix digest changed"],
   ] as const) {
     if (previous[`${code}Digest`] !== next[`${code}Digest`]) {
-      changes.push({ code, detail });
+      const before = previous[`${code}Sections`];
+      const after = next[`${code}Sections`];
+      const changed = PROMPT_SECTION_NAMES.filter((name) => before?.[name] !== after?.[name]);
+      changes.push({
+        code,
+        detail:
+          before || after
+            ? `${detail} (sections: ${changed.length ? changed.join(", ") : "Other"})`
+            : detail,
+      });
     }
   }
   if (previous.toolDigest !== next.toolDigest) {
     changes.push({
       code: "tools",
-      detail:
-        previous.toolCount === next.toolCount
-          ? "tool set changed with same count"
-          : `${previous.toolCount} -> ${next.toolCount} tools`,
+      detail: describeToolChanges(previous, next),
     });
   }
   return changes.length > 0 ? changes : null;
@@ -241,8 +333,15 @@ export function beginPromptCacheObservation(
   },
 ) {
   const key = buildTrackerKey(params);
+  const cached = trackers.get(key);
+  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
   const tools = sortPromptCacheToolsByName(params.tools);
   const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
+  const prefix = splitSystemPrompt?.stablePrefix ?? params.systemPrompt;
+  const systemPromptDigest = sha256Hex(prefix);
+  const systemPromptSuffixDigest = splitSystemPrompt
+    ? sha256Hex(splitSystemPrompt.dynamicSuffix)
+    : undefined;
   const snapshot: PromptCacheSnapshot = {
     provider: params.provider,
     modelId: params.modelId,
@@ -250,15 +349,28 @@ export function beginPromptCacheObservation(
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: sha256Hex(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
+    systemPromptDigest,
+    systemPromptSections: fingerprintPromptSections(
+      prefix,
+      systemPromptDigest,
+      previous?.snapshot.systemPromptDigest,
+      previous?.snapshot.systemPromptSections,
+    ),
     ...(splitSystemPrompt
-      ? { systemPromptSuffixDigest: sha256Hex(splitSystemPrompt.dynamicSuffix) }
+      ? {
+          systemPromptSuffixDigest,
+          systemPromptSuffixSections: fingerprintPromptSections(
+            splitSystemPrompt.dynamicSuffix,
+            systemPromptSuffixDigest!,
+            previous?.snapshot.systemPromptSuffixDigest,
+            previous?.snapshot.systemPromptSuffixSections,
+          ),
+        }
       : {}),
     toolDigest: sha256Hex(stableStringify(tools)),
     toolCount: tools.length,
-    toolNames: tools.map((tool) => tool.name),
+    tools,
   };
-  const previous = trackers.get(key);
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );
@@ -273,11 +385,9 @@ export function beginPromptCacheObservation(
   for (const code of previous?.declaredRewrites ?? []) {
     changes.push({ code, detail: `${code} changed provider history` });
   }
-  const restarted =
-    previous?.sessionId !== params.sessionId ||
-    changes.some(
-      ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
-    );
+  const restarted = changes.some(
+    ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
+  );
   const divergence =
     previous && !restarted && !previous.declaredRewrites?.size
       ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
@@ -292,7 +402,7 @@ export function beginPromptCacheObservation(
   if (violation) {
     changes.push(violation);
   }
-  setTracker(key, {
+  const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
     history,
@@ -300,7 +410,10 @@ export function beginPromptCacheObservation(
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     pendingChanges: changes.length > 0 ? changes : null,
-  });
+  };
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
+  trackers.set(key, tracker);
   if (violation) {
     if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
       throw new Error(violation.detail);

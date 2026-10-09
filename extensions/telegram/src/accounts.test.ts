@@ -83,7 +83,7 @@ describe("resolveTelegramAccount", () => {
 
   it("preserves normalized agent-bound accounts and default-agent selection", () => {
     const cfg = {
-      agents: { entries: { primary: { default: true } } },
+      agents: { entries: { primary: {} } },
       channels: {
         telegram: {
           botToken: "tok-default",
@@ -190,7 +190,7 @@ describe("resolveDefaultTelegramAccountId", () => {
   it("uses explicit channel defaults after Doctor repairs a loaded legacy roster", async () => {
     await withTempHome(
       async (home) => {
-        const config: OpenClawConfig = {
+        const config = {
           agents: { entries: { main: { default: true }, research: {} } },
           channels: {
             telegram: {
@@ -206,7 +206,7 @@ describe("resolveDefaultTelegramAccountId", () => {
         const { snapshot } = await readConfigFileSnapshotForWrite();
 
         expect(snapshot.valid).toBe(false);
-        expect(snapshot.sourceConfig.agents?.entries?.main?.default).toBe(true);
+        expect(snapshot.sourceConfig.agents?.entries?.main).toMatchObject({ default: true });
         expect(snapshot.sourceConfig.bindings).toEqual(config.bindings);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
 

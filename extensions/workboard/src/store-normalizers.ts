@@ -67,6 +67,7 @@ import type {
   WorkboardAttachmentInput,
   WorkboardNotificationSubscribeInput,
   WorkboardProofInput,
+  WorkboardWorkerLogInput,
 } from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
@@ -109,38 +110,26 @@ function normalizeNotificationKinds(value: unknown): WorkboardNotificationKind[]
 
 export function normalizeNotificationSubscription(
   input: WorkboardNotificationSubscribeInput,
-  fallback?: WorkboardNotificationSubscription,
-  now = Date.now(),
 ): WorkboardNotificationSubscription {
-  const boardId = normalizeBoardId(input.boardId, fallback?.boardId) ?? "default";
-  const cardId = normalizeBoundedString(input.cardId, fallback?.cardId, 120, "card id");
-  const sessionKey = normalizeBoundedString(
-    input.sessionKey,
-    fallback?.sessionKey,
-    240,
-    "session key",
-  );
-  const runId = normalizeBoundedString(input.runId, fallback?.runId, 160, "run id");
-  const target = normalizeBoundedString(input.target, fallback?.target, 240, "notification target");
+  const now = Date.now();
+  const boardId = normalizeBoardId(input.boardId) ?? "default";
+  const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
+  const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
+  const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+  const target = normalizeBoundedString(input.target, undefined, 240, "notification target");
   if (!cardId && !sessionKey && !runId && !target) {
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
   return {
-    id: fallback?.id ?? randomUUID(),
+    id: randomUUID(),
     boardId,
     ...(cardId ? { cardId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
-    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
-    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
-    ...(fallback?.deliveredEventIds?.length
-      ? { deliveredEventIds: fallback.deliveredEventIds }
-      : {}),
-    createdAt: fallback?.createdAt ?? now,
+    createdAt: now,
     updatedAt: now,
   };
 }
@@ -210,32 +199,6 @@ export function normalizePriority(value: unknown, fallback: WorkboardPriority): 
     return value as WorkboardPriority;
   }
   throw new Error(`priority must be one of: ${WORKBOARD_PRIORITIES.join(", ")}.`);
-}
-
-export function normalizeLabels(value: unknown, fallback: string[] = []): string[] {
-  if (value == null) {
-    return fallback;
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("labels must be an array or comma-separated string.");
-  }
-  const labels: string[] = [];
-  for (const entry of entries) {
-    const label = normalizeOptionalString(entry);
-    if (!label || labels.includes(label)) {
-      continue;
-    }
-    if (label.length > 40) {
-      throw new Error("labels must be 40 characters or fewer.");
-    }
-    labels.push(label);
-    if (labels.length >= 12) {
-      break;
-    }
-  }
-  return labels;
 }
 
 export function normalizeStringList(value: unknown, fieldName: string, maxLength = 80): string[] {
@@ -629,6 +592,15 @@ function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog
   if (!id || !message || !createdAt) {
     return null;
   }
+  return workerLogEntry(record, message, createdAt, id);
+}
+
+export function workerLogEntry(
+  record: WorkboardWorkerLogInput,
+  message: string,
+  createdAt: number,
+  id?: string,
+): WorkboardWorkerLog {
   const level =
     record.level === "warning" || record.level === "error" || record.level === "info"
       ? record.level
@@ -636,7 +608,7 @@ function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
   const runId = normalizeBoundedString(record.runId, undefined, 160, "run id");
   return {
-    id,
+    id: id ?? randomUUID(),
     level,
     message,
     createdAt,

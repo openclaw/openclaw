@@ -51,6 +51,17 @@ export type ConfigSetCurrentExpectation = { kind: "absent" } | { kind: "json"; v
 
 const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
+export function decodeConfigMutationInput(
+  bytes: Uint8Array,
+  sourceLabel: "--batch-file" | "--file" | "--stdin",
+): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(`${sourceLabel} must be valid UTF-8.`, { cause: error });
+  }
+}
+
 export function readConfigMutationFileSync(
   filePath: string,
   sourceLabel: "--batch-file" | "--file",
@@ -78,7 +89,10 @@ export function readConfigMutationFileSync(
       );
     }
     try {
-      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+      return decodeConfigMutationInput(
+        readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES),
+        sourceLabel,
+      );
     } catch (error) {
       if (error instanceof RangeError) {
         throw new RangeError(
@@ -154,8 +168,7 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   if (parsed.length === 0) {
     throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
-  const entries: ConfigSetBatchEntry[] = [];
-  for (const [index, entry] of parsed.entries()) {
+  return parsed.map((entry, index) => {
     if (!isRecord(entry)) {
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
@@ -163,30 +176,25 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.hasOwn(entry, "value");
-    const hasRef = Object.hasOwn(entry, "ref");
-    const hasProvider = Object.hasOwn(entry, "provider");
-    const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
-    if (modeCount !== 1) {
+    const modes = (["value", "ref", "provider"] as const).filter((key) =>
+      Object.hasOwn(entry, key),
+    );
+    const mode = modes.length === 1 ? modes[0] : undefined;
+    if (mode === undefined) {
       throw new Error(
         `${sourceLabel}[${index}] must include exactly one of: value, ref, provider.`,
       );
     }
-    entries.push({
-      path,
-      ...(hasValue ? { value: entry.value } : {}),
-      ...(hasRef ? { ref: entry.ref } : {}),
-      ...(hasProvider ? { provider: entry.provider } : {}),
-    });
-  }
-  return entries;
+    return { path, [mode]: entry[mode] };
+  });
 }
 
 export function parseConfigSetCurrentExpectation(
   opts: ConfigSetOptions,
 ): ConfigSetCurrentExpectation | undefined {
   const expectAbsent = opts.expectCurrentAbsent === true;
-  const hasExpectedJson = opts.expectCurrentJson !== undefined;
+  const expectedJson = opts.expectCurrentJson;
+  const hasExpectedJson = expectedJson !== undefined;
   if (!expectAbsent && !hasExpectedJson) {
     return undefined;
   }
@@ -205,12 +213,8 @@ export function parseConfigSetCurrentExpectation(
       "config set mode error: conditional expectations require one path operation and cannot be combined with batch mode.",
     );
   }
-  if (expectAbsent) {
-    return { kind: "absent" };
-  }
-  const expectedJson = opts.expectCurrentJson;
   if (expectedJson === undefined) {
-    throw new Error("config set mode error: missing conditional expectation.");
+    return { kind: "absent" };
   }
   let value: unknown;
   try {
@@ -227,16 +231,14 @@ export function parseConfigSetCurrentExpectation(
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
   // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
   const batchJson = opts.batchJson;
-  const hasInline = batchJson !== undefined;
-  const hasFile = opts.batchFile !== undefined;
-  if (!hasInline && !hasFile) {
-    return null;
-  }
-  if (hasInline && hasFile) {
-    throw new Error("Use either --batch-json or --batch-file, not both.");
-  }
-  if (hasInline) {
+  if (batchJson !== undefined) {
+    if (opts.batchFile !== undefined) {
+      throw new Error("Use either --batch-json or --batch-file, not both.");
+    }
     return parseBatchEntries(batchJson, "--batch-json");
+  }
+  if (opts.batchFile === undefined) {
+    return null;
   }
   const pathname = readNonBlankString(opts.batchFile);
   if (!pathname) {

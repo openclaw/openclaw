@@ -19,6 +19,7 @@ import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
@@ -84,39 +85,32 @@ function withLoopbackBrowserAuth(
   init: (RequestInit & { timeoutMs?: number }) | undefined,
 ): RequestInit & { timeoutMs?: number } {
   const headers = new Headers(init?.headers ?? {});
-  if (headers.has("authorization") || headers.has("x-openclaw-password")) {
-    return { ...init, headers };
-  }
-  if (!isLoopbackHttpUrl(url)) {
+  if (
+    headers.has("authorization") ||
+    headers.has("x-openclaw-password") ||
+    !isLoopbackHttpUrl(url)
+  ) {
     return { ...init, headers };
   }
 
   // A registered listener owns its credential even when Gateway auth differs.
-  try {
-    const { port } = parseBrowserHttpUrl(url, "browser control URL");
-    const bridgeAuth = getBridgeAuthForPort(port);
-    if (bridgeAuth?.token) {
-      headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
+  for (const resolveAuth of [
+    () => getBridgeAuthForPort(parseBrowserHttpUrl(url, "browser control URL").port),
+    () => resolveBrowserControlAuth(getRuntimeConfig()),
+  ]) {
+    try {
+      const auth = resolveAuth();
+      if (auth?.token) {
+        headers.set("Authorization", `Bearer ${auth.token}`);
+      } else if (auth?.password) {
+        headers.set("x-openclaw-password", auth.password);
+      } else {
+        continue;
+      }
       return { ...init, headers };
+    } catch {
+      // Fall through to the next auth source or continue without implicit auth.
     }
-    if (bridgeAuth?.password) {
-      headers.set("x-openclaw-password", bridgeAuth.password);
-      return { ...init, headers };
-    }
-  } catch {
-    // A non-bridge listener may still use configured browser control auth.
-  }
-
-  try {
-    const cfg = getRuntimeConfig();
-    const auth = resolveBrowserControlAuth(cfg);
-    if (auth.token) {
-      headers.set("Authorization", `Bearer ${auth.token}`);
-    } else if (auth.password) {
-      headers.set("x-openclaw-password", auth.password);
-    }
-  } catch {
-    // Continue without implicit auth when config lookup fails.
   }
 
   return { ...init, headers };
@@ -152,11 +146,9 @@ function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): str
   }
 }
 
-type BrowserControlOwnership = "local-managed" | "external-browser" | "unknown";
-
-function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOwnership {
+function resolveBrowserFetchOperatorHint(url: string): string {
   if (isAbsoluteHttp(url)) {
-    return "unknown";
+    return "If this is a sandboxed session, ensure the sandbox browser is running.";
   }
   try {
     const cfg = getRuntimeConfig();
@@ -164,31 +156,19 @@ function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOw
     const parsed = new URL(url, "http://localhost");
     const requestedProfile = parsed.searchParams.get("profile")?.trim();
     const profile = resolveProfile(resolved, requestedProfile || resolved.defaultProfile);
-    if (!profile) {
-      return "unknown";
+    if (
+      profile &&
+      (profile.driver !== "openclaw" || !profile.cdpIsLoopback || profile.attachOnly)
+    ) {
+      return (
+        "The browser profile is external to OpenClaw; make sure its browser/CDP endpoint " +
+        "is running and reachable. Restarting the OpenClaw gateway will not launch it."
+      );
     }
-    return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly
-      ? "local-managed"
-      : "external-browser";
   } catch {
-    return "unknown";
+    // Unknown profiles and unavailable config use the local diagnostics below.
   }
-}
-
-function resolveBrowserFetchOperatorHint(
-  url: string,
-  opts?: { ownership?: BrowserControlOwnership },
-): string {
-  if (opts?.ownership === "external-browser") {
-    return (
-      "The browser profile is external to OpenClaw; make sure its browser/CDP endpoint " +
-      "is running and reachable. Restarting the OpenClaw gateway will not launch it."
-    );
-  }
-  const isLocal = !isAbsoluteHttp(url);
-  return isLocal
-    ? `Run \`${formatCliCommand("openclaw browser doctor")}\` and check the Gateway logs.`
-    : "If this is a sandboxed session, ensure the sandbox browser is running.";
+  return `Run \`${formatCliCommand("openclaw browser doctor")}\` and check the Gateway logs.`;
 }
 
 function normalizeErrorMessage(err: unknown): string {
@@ -285,8 +265,7 @@ function discardResponseBody(res: Response): void {
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
   const kind = classifyBrowserFetchFailure(err);
-  const ownership = resolveDispatcherBrowserControlOwnership(url);
-  const operatorHint = resolveBrowserFetchOperatorHint(url, { ownership });
+  const operatorHint = resolveBrowserFetchOperatorHint(url);
   const modelHint = resolveBrowserToolModelHint(kind);
   const suffix = modelHint ? `${operatorHint} ${modelHint}` : operatorHint;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
@@ -418,15 +397,6 @@ export async function fetchBrowserJson<T>(
     const abort = createBrowserRequestAbort(timeoutMs, init?.signal);
     const { signal } = abort;
 
-    let abortListener: (() => void) | undefined;
-    const abortPromise: Promise<never> = signal.aborted
-      ? Promise.reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"))
-      : new Promise((_, reject) => {
-          abortListener = () =>
-            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-          signal.addEventListener("abort", abortListener, { once: true });
-        });
-
     const dispatchPromise = dispatchBrowserControlRequest({
       method:
         init?.method?.toUpperCase() === "DELETE"
@@ -441,12 +411,9 @@ export async function fetchBrowserJson<T>(
       ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
     });
 
-    const result = await Promise.race([dispatchPromise, abortPromise]).finally(() => {
-      abort.dispose();
-      if (abortListener) {
-        signal.removeEventListener("abort", abortListener);
-      }
-    });
+    const result = await racePromiseWithAbortSignal(dispatchPromise, signal, ({ reason }) =>
+      toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+    ).finally(abort.dispose);
 
     if (result.status >= 400) {
       if (result.status === 429) {

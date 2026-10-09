@@ -7,12 +7,10 @@ import {
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
-  type SqliteIntegrityTableCheck,
 } from "./sqlite-integrity.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import type { SqliteIndexListRow } from "./sqlite-schema-contract-assembly.js";
 import {
-  collectSqliteIndexContract,
+  createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
   type CanonicalSqliteNamedIndexContract,
@@ -55,16 +53,15 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
     reuseIntegrity?: boolean;
-    integrityTables?: SqliteIntegrityTableCheck[];
   } = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, reuseIntegrity, integrityTables, ...repairOptions } = options;
+  const { diagnostics, reuseIntegrity, ...repairOptions } = options;
   if (reuseIntegrity) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, integrityTables);
+    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
   }
 
   const indexesStartedAt = performance.now();
@@ -101,27 +98,22 @@ export function repairCanonicalSqliteIndexes(
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
   runSqlitePinnedReadSnapshotSync(db, () => {
+    const readTable = createSqliteTableContractReader(db);
     for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
       assertSqliteIdentifier(tableName);
-      // Authorize catalog columns even when every expected index is absent, without loading DDL.
-      const tableExists = db
-        .prepare(`
-          SELECT 1 FROM (
-            SELECT sql, tbl_name FROM main.sqlite_schema WHERE type = 'table' AND name = ?
-          )
-        `)
-        .get(tableName);
-      if (!tableExists) {
+      const table = readTable(tableName);
+      if (!table) {
         continue;
       }
       const tableIndexes = indexesByTable.get(tableName) ?? [];
       const canonicalIndexNames = new Set(tableIndexes.map((index) => index.name));
-      const actualIndexes = db
-        .prepare(`PRAGMA main.index_list(${tableName})`)
-        .all() as SqliteIndexListRow[];
+      const actualIndexes = table.indexes;
       const unexpected = actualIndexes.find(
         (index) =>
-          index.unique === 1 && index.origin === "c" && !canonicalIndexNames.has(index.name),
+          index.unique === 1 &&
+          index.origin === "c" &&
+          index.name !== null &&
+          !canonicalIndexNames.has(index.name),
       );
       if (unexpected) {
         throw new Error(
@@ -129,8 +121,7 @@ export function repairCanonicalSqliteIndexes(
         );
       }
       for (const index of tableIndexes) {
-        const row = actualIndexes.find((candidate) => candidate.name === index.name);
-        const actual = row ? collectSqliteIndexContract(db, row) : undefined;
+        const actual = actualIndexes.find((candidate) => candidate.name === index.name);
         if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
           repairIndexes.add(index);
         }
@@ -151,21 +142,24 @@ export function repairCanonicalSqliteIndexes(
   try {
     for (const index of repairIndexes) {
       activeIndex = index;
-      const probeName = findUnusedProbeIndexName(db, index.name);
-      // Build the canonical constraint first. If existing rows conflict, the
-      // wrong same-name index remains in place and the whole repair rolls back.
+      // Transactional DDL preserves the old index on failure or process death;
+      // a probe would build the same index twice. Isolate skipped migrations too.
+      db.exec("SAVEPOINT repair_canonical_index;");
       try {
-        db.exec(createIndexSql(index, probeName));
+        db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
+        assertSqliteIdentifier(index.name);
+        const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
+        db.exec(`${create} main.${index.name} ${index.definition};`);
       } catch (error) {
+        db.exec("ROLLBACK TO SAVEPOINT repair_canonical_index;");
         if (options.allowMissingColumns && isMissingColumnError(error)) {
           repairIndexes.delete(index);
           continue;
         }
         throw error;
+      } finally {
+        db.exec("RELEASE SAVEPOINT repair_canonical_index;");
       }
-      db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
-      db.exec(createIndexSql(index, index.name));
-      db.exec(`DROP INDEX main.${probeName};`);
     }
     if (repairIndexes.size === 0) {
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
@@ -267,26 +261,6 @@ export function repairSqliteIndexCorruption(
       },
     },
   );
-}
-
-function createIndexSql(index: CanonicalSqliteNamedIndexContract, name: string): string {
-  assertSqliteIdentifier(name);
-  const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
-  return `${create} main.${name} ${index.definition};`;
-}
-
-function findUnusedProbeIndexName(db: DatabaseSync, canonicalName: string): string {
-  const prefix = `openclaw_probe_${canonicalName}`;
-  for (let suffix = 0; suffix < 100; suffix += 1) {
-    const candidate = suffix === 0 ? prefix : `${prefix}_${suffix}`;
-    const row = db
-      .prepare("SELECT 1 AS found FROM main.sqlite_schema WHERE name = ?")
-      .get(candidate);
-    if (!row) {
-      return candidate;
-    }
-  }
-  throw new Error(`could not allocate a probe index name for ${canonicalName}`);
 }
 
 function assertSqliteIdentifier(identifier: string): void {

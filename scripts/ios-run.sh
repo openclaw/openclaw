@@ -114,24 +114,14 @@ node "${ROOT_DIR}/scripts/ios-write-swift-filelist.mjs"
 
 cd "${IOS_DIR}"
 "${XCODEGEN_BIN}" generate
-if [[ "${push_sandbox_simulator}" == "1" ]]; then
-  "${XCODEBUILD_BIN}" \
-    -project OpenClaw.xcodeproj \
-    -scheme OpenClaw \
-    -destination "${IOS_DESTINATION}" \
-    -configuration "${CONFIGURATION}" \
-    -derivedDataPath "${DERIVED_DATA_DIR}" \
-    build \
-    "${xcodebuild_overrides[@]}"
-else
-  "${XCODEBUILD_BIN}" \
-    -project OpenClaw.xcodeproj \
-    -scheme OpenClaw \
-    -destination "${IOS_DESTINATION}" \
-    -configuration "${CONFIGURATION}" \
-    -derivedDataPath "${DERIVED_DATA_DIR}" \
-    build
-fi
+"${XCODEBUILD_BIN}" \
+  -project OpenClaw.xcodeproj \
+  -scheme OpenClaw \
+  -destination "${IOS_DESTINATION}" \
+  -configuration "${CONFIGURATION}" \
+  -derivedDataPath "${DERIVED_DATA_DIR}" \
+  build \
+  ${xcodebuild_overrides[@]+"${xcodebuild_overrides[@]}"}
 
 app_path="${DERIVED_DATA_DIR}/Build/Products/${CONFIGURATION}-iphonesimulator/${APP_NAME}.app"
 if [[ ! -d "${app_path}" ]]; then

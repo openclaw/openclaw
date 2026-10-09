@@ -55,12 +55,14 @@ const event = {
   data: { phase: "error", startedAt: 1_000, endedAt: 2_000, error },
 };
 
-async function seed(assistantBranch?: "active" | "inactive" | "other-run" | "partial") {
+async function seed(
+  assistantBranch?: "active" | "inactive" | "other-run" | "partial" | "commentary" | "success",
+) {
+  const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1_000,
     startedAt: 1_000,
-    status: "running",
     lifecycleRunId: runId,
     activeWriterRunId: runId,
     goal: {
@@ -91,12 +93,27 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run" | "par
             parentId: "user-turn",
             message: {
               role: "assistant",
-              content:
-                assistantBranch === "partial"
+              content: hasPriorOutput
+                ? [
+                    {
+                      type: "text",
+                      text: "Running it now.",
+                      ...(assistantBranch === "commentary"
+                        ? {
+                            textSignature: JSON.stringify({
+                              v: 1,
+                              id: "commentary",
+                              phase: "commentary",
+                            }),
+                          }
+                        : {}),
+                    },
+                  ]
+                : assistantBranch === "partial"
                   ? [{ type: "text", text: "I updated the file." }]
                   : [],
-              stopReason: "error",
-              errorMessage: "Provider failed",
+              stopReason: hasPriorOutput ? "stop" : "error",
+              errorMessage: hasPriorOutput ? undefined : "Provider failed",
               __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
             },
           },
@@ -189,12 +206,12 @@ describe("durable pre-reply run failure", () => {
                   key: target.sessionKey,
                   sessionId: target.sessionId,
                   kind: "direct",
-                  status: "running",
                   updatedAt: before.updatedAt,
                   startedAt: before.startedAt,
                   goal: before.goal,
                 },
                 lifecycleRunId: runId,
+                activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
                 includeSession: true,
                 lifecycle: true,
@@ -297,6 +314,50 @@ describe("durable pre-reply run failure", () => {
       expect(JSON.stringify(report)).not.toContain("Missing bearer");
     });
   });
+
+  it.each(["current-writer", "foreign-writer", "newer-lifecycle"] as const)(
+    "uses the %s identity when deadline admission predates session preparation",
+    async (owner) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await seed();
+        await patchSessionEntryCore(target, () => ({
+          lifecycleRunId: owner === "newer-lifecycle" ? "newer-run" : undefined,
+          activeWriterRunId: owner === "foreign-writer" ? "newer-run" : runId,
+          startedAt: 1_500,
+        }));
+        const before = loadSessionEntry(target);
+        const transcriptBefore = await loadTranscriptEvents(target);
+        await persistGatewaySessionLifecycleEvent({
+          ...target,
+          event: {
+            ...event,
+            data: {
+              phase: "end",
+              status: "cancelled",
+              aborted: true,
+              stopReason: "timeout",
+              startedAt: 1_000,
+              endedAt: 2_000,
+            },
+          },
+          timeoutPartialText: "Unfinished work from the current writer",
+        });
+        if (owner === "current-writer") {
+          expect(loadSessionEntry(target)).toMatchObject({ status: "timeout", lastRunId: runId });
+          expect(await reports()).toEqual([
+            expect.objectContaining({
+              content: expect.stringContaining("Unfinished work from the current writer"),
+              details: expect.objectContaining({ runId }),
+            }),
+          ]);
+        } else {
+          expect(loadSessionEntry(target)).toEqual(before);
+          expect(await loadTranscriptEvents(target)).toEqual(transcriptBefore);
+          expect(await reports()).toEqual([]);
+        }
+      });
+    },
+  );
 
   it.each(["none", "persisted", "buffered"] as const)(
     "retains one timeout outcome with %s output",
@@ -461,7 +522,7 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it.each(["active", "inactive", "other-run"] as const)(
+  it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
     "checks assistant output on the %s branch for this run",
     async (branch) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -637,7 +698,7 @@ describe("durable pre-reply run failure", () => {
             },
           }),
         ).rejects.toThrow("Run authority expired");
-        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : "running");
+        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : undefined);
         expect(await reports()).toEqual([]);
       });
     },
@@ -682,7 +743,6 @@ async function createCliHistoryFixture() {
     startedAt: 1_000,
     lifecycleRunId: cliRunId,
     activeWriterRunId: cliRunId,
-    status: "running",
   });
   const scope = await resolveSessionTranscriptRuntimeTarget(cliTarget);
   const admission = prepareSystemAgentRunAdmission({}, cliRunId, "main", "cli-timeout-test");

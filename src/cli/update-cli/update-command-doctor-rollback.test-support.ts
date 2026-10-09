@@ -399,7 +399,10 @@ export function registerDoctorRestorationRollbackTests(
           }),
         );
       } else {
-        expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual(facts);
+        expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual([
+          ...facts,
+          { check: "update", code: "update-failed" },
+        ]);
       }
       const recorded = getUpdateRun(run.runId, { env });
       expect(recorded?.status).toBe("rolled-back");

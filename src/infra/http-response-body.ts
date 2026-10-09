@@ -14,12 +14,6 @@ export async function cancelUnreadResponseBody(response: Response | undefined): 
   }
 }
 
-type ReadResponsePrefixResult = {
-  materializeBuffer: () => Buffer;
-  size: number;
-  truncated: boolean;
-};
-
 export type ReadResponseTextPrefixOptions = {
   signal?: AbortSignal;
   chunkTimeoutMs?: number;
@@ -34,7 +28,7 @@ async function readResponsePrefix(
   maxBytes: number,
   stopAtLimit: boolean,
   options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponsePrefixResult> {
+) {
   if (!Number.isFinite(maxBytes) || maxBytes < 0) {
     throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
   }
@@ -106,18 +100,12 @@ async function readResponsePrefix(
   }
 }
 
-export type ReadResponseTextPrefixResult = {
-  text: string;
-  size: number;
-  truncated: boolean;
-};
-
 /** Reads and decodes a bounded text prefix while cancelling unread overflow. */
 export async function readResponseTextPrefix(
   response: Response,
   maxBytes: number,
   options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponseTextPrefixResult> {
+) {
   const prefix = await readResponsePrefix(response, maxBytes, true, options);
   return {
     text: decodeTextPrefix(prefix.materializeBuffer(), { truncated: prefix.truncated }),

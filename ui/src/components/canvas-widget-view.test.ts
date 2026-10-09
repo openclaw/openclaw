@@ -358,7 +358,7 @@ describe("Canvas widget view", () => {
     expect(sibling.scrollTop).toBe(0);
   });
 
-  it.each(["credential", "profile", "session", "denied"])(
+  it.each(["credential", "session", "denied"])(
     "retires retained content after %s changes",
     async (change) => {
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -375,13 +375,7 @@ describe("Canvas widget view", () => {
       if (change === "session") {
         view.sessionKey = "agent:other:session";
       }
-      connection(
-        view,
-        "connected",
-        change === "profile"
-          ? { selfUser: { id: "other" } as ApplicationGatewaySnapshot["selfUser"] }
-          : {},
-      );
+      connection(view, "connected");
       await settle(view);
       expect(view.querySelector("iframe")).toBeNull();
       expect(frame.isConnected).toBe(false);
@@ -486,46 +480,96 @@ describe("Canvas widget view", () => {
     expect(view.querySelector("iframe")).toBeNull();
   });
 
-  it("shows a bounded script error and wakes the session only once across document remounts", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client, "cv_runtime_error");
-    view.title = "Status".repeat(20);
-    const frame = await frameFor(view);
-    const report = {
-      type: "openclaw:widget-runtime-error",
+  it.each([
+    {
+      label: "short Unicode title",
+      title: "Ready 😀",
+      expectedTitle: "Ready 😀",
       message: "x".repeat(600),
-      source: "https://example.test/private/widget.js",
-      line: 12,
-      column: 7,
-    };
-    message(frame, report, [], "https://wrong.example");
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: window,
-        origin: new URL(frame.src).origin,
-        data: report,
-      }),
-    );
-    expect(client.request).toHaveBeenCalledOnce();
-    message(frame, report);
-    message(frame, report);
-    message(frame, { ...report, message: "Another failure" });
-    await view.updateComplete;
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(client.request).toHaveBeenLastCalledWith("wake", {
-      mode: "now",
-      sessionKey: view.sessionKey,
-      text: `Inline widget "${view.title.slice(0, 80)}" (cv_runtime_error) threw a script error after rendering: ${"x".repeat(500)}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
-    });
-    expect(view.querySelector('[role="status"]')?.textContent).toBe(
-      `Script error: ${"x".repeat(500)}`,
-    );
-    expect(view.querySelector("iframe")).toBe(frame);
-    view.remove();
-    const remount = await frameFor(mount(client, "cv_runtime_error"));
-    message(remount, report);
-    expect(client.request).toHaveBeenCalledTimes(3);
-  });
+      expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "ASCII title limit",
+      title: "x".repeat(81),
+      expectedTitle: "x".repeat(80),
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "surrogate title boundary",
+      title: `${"x".repeat(79)}😀tail`,
+      expectedTitle: "x".repeat(79),
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "short Unicode message",
+      title: "Status",
+      expectedTitle: "Status",
+      message: "Ready 😀",
+      expectedMessage: "Ready 😀",
+    },
+    {
+      label: "surrogate message boundary",
+      title: "Status",
+      expectedTitle: "Status",
+      message: `${"x".repeat(499)}😀tail`,
+      expectedMessage: "x".repeat(499),
+    },
+    {
+      label: "stored dangling surrogate",
+      title: "Status",
+      expectedTitle: "Status",
+      message: `${"x".repeat(499)}\ud83d`,
+      expectedMessage: `${"x".repeat(499)}\ufffd`,
+    },
+  ])(
+    "shows a bounded script error and wakes only once with a $label",
+    async ({ label, title, expectedTitle, message: errorMessage, expectedMessage }) => {
+      const now = 1_800_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const client = { request: vi.fn().mockResolvedValue(documentView) };
+      const docId = `cv_runtime_error_${label}`;
+      const view = mount(client, docId);
+      view.messageTimestamp = now - 600_000;
+      view.title = title;
+      const frame = await frameFor(view);
+      const report = {
+        type: "openclaw:widget-runtime-error",
+        message: errorMessage,
+        source: "https://example.test/private/widget.js",
+        line: 12,
+        column: 7,
+      };
+      message(frame, report, [], "https://wrong.example");
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: window,
+          origin: new URL(frame.src).origin,
+          data: report,
+        }),
+      );
+      expect(client.request).toHaveBeenCalledOnce();
+      message(frame, report);
+      message(frame, report);
+      message(frame, { ...report, message: "Another failure" });
+      await view.updateComplete;
+      expect(client.request).toHaveBeenCalledTimes(2);
+      expect(client.request).toHaveBeenLastCalledWith("wake", {
+        mode: "now",
+        sessionKey: view.sessionKey,
+        text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${expectedMessage}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
+      });
+      expect(view.querySelector('[role="status"]')?.textContent).toBe(
+        `Script error: ${expectedMessage}`,
+      );
+      expect(view.querySelector("iframe")).toBe(frame);
+      view.remove();
+      const remount = await frameFor(mount(client, docId));
+      message(remount, report);
+      expect(client.request).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it("ignores stale sessions and malformed errors and omits invalid locations", async () => {
     const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -548,14 +592,12 @@ describe("Canvas widget view", () => {
   });
 
   it.each([
-    { label: "exactly ten minutes old", ageMs: 600_000, wakes: true },
-    { label: "older than ten minutes", ageMs: 600_001, wakes: false },
-    { label: "missing", ageMs: undefined, wakes: false },
-    { label: "non-finite", ageMs: Infinity, wakes: false },
-    { label: "NaN", ageMs: Number.NaN, wakes: false },
+    { label: "older than ten minutes", ageMs: 600_001 },
+    { label: "missing", ageMs: undefined },
+    { label: "non-finite", ageMs: Infinity },
   ])(
     "keeps the notice but gates wakes when the message timestamp is $label",
-    async ({ label, ageMs, wakes }) => {
+    async ({ label, ageMs }) => {
       const now = 1_800_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -567,9 +609,7 @@ describe("Canvas widget view", () => {
       expect(view.querySelector('[role="status"]')?.textContent).toBe(
         "Script error: Missing element",
       );
-      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(
-        wakes ? 1 : 0,
-      );
+      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },
   );

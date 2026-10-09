@@ -256,18 +256,14 @@ export function prepareRequesterCronAuthority(params: {
     () => {},
   );
   let consumed = false;
-  let transferred = false;
   let released = false;
   let boundAuthority: RequesterCronAuthority | undefined;
-  const assertCaptureCurrent = () => {
+  const assertCurrent = () => {
     if (!capture.isActive()) {
       throw new Error("Requester authority retired during session preparation");
     }
     operatorAuthority?.assertCurrent();
-  };
-  const assertCurrent = () => {
-    assertCaptureCurrent();
-    if ((released && !transferred) || boundAuthority?.active === false) {
+    if ((released && !boundAuthority) || boundAuthority?.active === false) {
       throw new Error("Requester authority retired before yield handoff");
     }
     if (readyFacts) {
@@ -284,7 +280,7 @@ export function prepareRequesterCronAuthority(params: {
   };
   const releaseFacts = (sessionFacts?: SessionFactsRead<PreparedSessionMutationFacts>) => {
     try {
-      if (sessionFacts && !transferred) {
+      if (sessionFacts && !boundAuthority) {
         sessionFacts.release();
       }
     } catch {
@@ -332,7 +328,6 @@ export function prepareRequesterCronAuthority(params: {
         active: true,
       };
       boundAuthority = authority;
-      transferred = true;
       releaseOperatorAuthority = undefined;
       const sessionAuthorities = state.bySession.get(authority.requesterSessionKey) ?? new Set();
       sessionAuthorities.add(authority);

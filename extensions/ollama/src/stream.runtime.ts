@@ -48,18 +48,19 @@ import {
   OLLAMA_DEFAULT_BASE_URL,
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
+import { applyOllamaThinkingFloor } from "./model-reasoning.js";
 import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
+import { appendOllamaResponseText } from "./stream-commentary.js";
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
-  resolveOllamaThinkParamValue,
+  resolveOllamaConfiguredThink,
   supportsNativeOllamaMax,
-  shouldForwardNativeOllamaThink,
 } from "./stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
@@ -227,13 +228,11 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   }
 }
 
-function resolveOllamaTopLevelParams(
-  model: ProviderRuntimeModel,
-): Record<string, unknown> | undefined {
+function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
   const params = model.params;
   const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
-  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
-  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
+  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl));
+  if (think !== undefined) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -646,6 +645,7 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+  const stopReason = resolveOllamaStopReason(response);
   const thinking =
     modelInfo.reasoning === false
       ? ""
@@ -661,9 +661,7 @@ export function buildAssistantMessage(
           modelId: modelInfo.id,
           text: rawText,
         });
-  if (text) {
-    content.push({ type: "text", text });
-  }
+  appendOllamaResponseText(content, text, stopReason);
 
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
@@ -695,7 +693,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: resolveOllamaStopReason(response),
+    stopReason,
     usage: {
       ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),
@@ -868,7 +866,7 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model),
+          ...resolveOllamaTopLevelParams(model, baseUrl),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 
@@ -919,7 +917,8 @@ function createRawOllamaStreamFn(
           init: {
             method: "POST",
             headers,
-            body: JSON.stringify(requestBody),
+            // Applied after payload hooks, so a `false` from any writer gets the model's floor.
+            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model.id)),
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),

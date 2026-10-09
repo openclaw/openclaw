@@ -58,7 +58,10 @@ describe("agent defaults schema", () => {
       cwd: "/default-repo",
     });
     expect(result.config.agents?.entries?.worker?.cwd).toBe("/agent-repo");
-    expect(result.config.agents?.list?.[0]?.cwd).toBe("/agent-repo");
+    expect(Object.getOwnPropertyDescriptor(result.config.agents, "list")).toMatchObject({
+      enumerable: false,
+      value: [{ id: "worker", cwd: "/agent-repo" }],
+    });
   });
 
   it("requires exact model refs even when disabling Code Mode", () => {

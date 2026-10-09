@@ -1,12 +1,16 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
-import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
+import {
+  assertMemoryCallerCurrent,
+  isHostMemoryAudience,
+  prepareMemoryCallerRead,
+} from "./memory-audience.js";
 import { adaptLegacyMemoryProvider, bindMemoryProvider } from "./memory-provider-adapter.js";
 import type {
   ActiveMemoryProviderResult,
@@ -24,6 +28,7 @@ import {
 } from "./memory-state.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
@@ -101,7 +106,8 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   if (!plugins.enabled || !pluginId) {
     return [];
   }
-  if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
+  const policyId = normalizePluginPolicyId(pluginId);
+  if (plugins.deny.includes(policyId) || plugins.entries[policyId]?.enabled === false) {
     return [];
   }
   return [pluginId];
@@ -146,29 +152,26 @@ function isValidMemoryProviderCapabilities(
   );
 }
 
-function ensureMemoryRuntime(params?: {
+function ensureMemoryRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): MemoryRuntimeOwner | undefined {
   const current = getMemoryRuntime();
   const currentProviderRuntime = getMemoryProviderRuntime();
   assertMemoryProviderRuntime(currentProviderRuntime);
-  if (current || currentProviderRuntime || !params) {
-    return current || currentProviderRuntime
-      ? {
-          runtime: current,
-          providerRuntime: currentProviderRuntime,
-          providerId: getMemoryCapabilityRegistration()?.pluginId,
-          searchRuntimeRegistered: true,
-        }
-      : undefined;
+  if (current || currentProviderRuntime) {
+    return {
+      runtime: current,
+      providerRuntime: currentProviderRuntime,
+      providerId: getMemoryCapabilityRegistration()?.pluginId,
+      searchRuntimeRegistered: true,
+    };
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const dir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const workspaceDir = typeof dir === "string" && dir.trim() ? resolveUserPath(dir) : undefined;
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     onlyPluginIds,
@@ -315,6 +318,10 @@ export async function getActiveMemoryProviderCore(
     assertCurrent: () => assertMemoryCallerCurrent(params.context),
   };
   const openParams: MemoryProviderOpenParams = { ...params, context };
+  const before = prepareMemoryCallerRead(context);
+  if (before) {
+    await racePromiseWithAbortSignal(before, context.signal);
+  }
   context.assertCurrent();
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
@@ -332,6 +339,10 @@ export async function getActiveMemoryProviderCore(
     ? await owner.providerRuntime.open(openParams)
     : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
   try {
+    const after = prepareMemoryCallerRead(context);
+    if (after) {
+      await racePromiseWithAbortSignal(after, context.signal);
+    }
     context.assertCurrent();
     if (
       result.provider &&
@@ -550,10 +561,35 @@ export function prepareMemoryRuntimeReload(
     }
     return cleanup;
   };
+  // Reload retires capability caches too; managers can hold adapters absent from this registry.
+  const retainedPluginIds = new Set(
+    previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+      [capability.runtime, capability.providerRuntime].some(
+        (runtime) => runtime !== undefined && nextRuntimes.has(runtime),
+      )
+        ? [pluginId]
+        : [],
+    ),
+  );
   return {
+    retainedPluginIds,
     drain: () => withPluginHostCleanupTimeout("memory managers", close),
     close,
     commit: (retained = nextRegistry) => resume(true, retained),
-    rollback: () => resume(false),
+    rollback: () => {
+      resume(false);
+      // Admission can be prepared without draining; only drained owners need service restart.
+      return new Set(
+        previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+          cleanup &&
+          prepared.some(
+            ({ runtime }) =>
+              runtime === capability.runtime || runtime === capability.providerRuntime,
+          )
+            ? [pluginId]
+            : [],
+        ),
+      );
+    },
   };
 }

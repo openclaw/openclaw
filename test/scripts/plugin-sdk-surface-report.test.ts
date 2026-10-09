@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import {
+  evaluatePluginSdkShippedSurface,
+  type PluginSdkShippedSurface,
+} from "../../scripts/lib/plugin-sdk-shipped-surface.mts";
+import {
   collectPluginSdkSurfaceReport,
   evaluatePluginSdkSurfaceReport,
   readPluginSdkSurfaceBudgets,
@@ -211,6 +215,32 @@ describe("plugin SDK surface report", () => {
     ]) {
       expect(source).not.toContain(internalName);
     }
+  });
+
+  it("does not let a lowered export budget authorize a shipped name removal", () => {
+    const report = {
+      ...surfaceReport,
+      publicStats: {
+        ...surfaceReport.publicStats,
+        totals: {
+          ...surfaceReport.publicStats.totals,
+          exports: surfaceReport.publicStats.totals.exports - 1,
+        },
+      },
+    };
+    const budgetConfig = readPluginSdkSurfaceBudgets({
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: String(report.publicStats.totals.exports),
+    });
+    const inventory: PluginSdkShippedSurface = {
+      schema: "openclaw.plugin-sdk-shipped-surface/v1",
+      release: "v2026.9.8",
+      commit: "f".repeat(40),
+      entrypoints: { core: ["RemovedPublicType"] },
+    };
+    expect(evaluatePluginSdkSurfaceReport(report, budgetConfig)).toEqual([]);
+    expect(
+      evaluatePluginSdkShippedSurface(inventory, new Map([["core", []]]), [], "2026-10-02"),
+    ).toEqual([{ subpath: "core", missingSubpath: false, names: ["RemovedPublicType"] }]);
   });
 
   it("rejects callable surface growth from the canonical source graph", () => {

@@ -426,7 +426,7 @@ export async function preflightActiveSecretsRuntimeSnapshotRefresh(
 
 /** Publishes a config-write refresh after retrying any candidate invalidated while preparing. */
 export async function refreshActiveSecretsRuntimeSnapshotForConfig(
-  params: RuntimeConfigSnapshotRefreshParams,
+  params: RuntimeConfigSnapshotRefreshParams & { runtimeSourceConfig?: OpenClawConfig },
 ): Promise<boolean> {
   let candidate = coercePreflightRefresh(params.preflightResult, params.sourceConfig);
   for (;;) {
@@ -449,16 +449,18 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
     }
     // Preparation may yield; keep the admitting write owner at the activation boundary.
     params.assertCurrent?.();
-    if (activateSecretsRuntimeSnapshotIfCurrent(candidate.snapshot, candidate.expectedRevision)) {
+    if (
+      activateSecretsRuntimeSnapshotIfCurrent(candidate.snapshot, candidate.expectedRevision, {
+        runtimeSourceConfig: params.runtimeSourceConfig,
+      })
+    ) {
       return true;
     }
     candidate = null;
   }
 }
 
-type ResolvedSecretRefPatch =
-  | { changed: false; value: unknown }
-  | { changed: true; value: unknown };
+type ResolvedSecretRefPatch = { changed: boolean; value: unknown };
 
 function patchResolvedSecretRefLeaves(params: {
   current: unknown;
@@ -633,14 +635,8 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
   }
 }
 
-export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
-  return getActiveSecretsRuntimeSnapshotState();
-}
-
-export function getActiveSecretsRuntimeSnapshotRevision(): number {
-  return getActiveSecretsRuntimeSnapshotRevisionState();
-}
-
-export function clearSecretsRuntimeSnapshot(): void {
-  clearSecretsRuntimeSnapshotState();
-}
+export {
+  getActiveSecretsRuntimeSnapshotState as getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevisionState as getActiveSecretsRuntimeSnapshotRevision,
+  clearSecretsRuntimeSnapshotState as clearSecretsRuntimeSnapshot,
+};

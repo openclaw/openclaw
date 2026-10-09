@@ -29,11 +29,18 @@ change applies, and shutdown cancels pending retries. Other reload failures rema
 visible in the Gateway log.
 
 If an automatic plugin reload cannot drain active work, the Gateway records the
-failure and keeps the last-good runtime. Later config edits do not repeat that
-drain while its plugin generation is still active. Run `openclaw plugins reload
-<id> --wait` to finish the replacement, or revert the pending plugin settings.
-Edits that still include the unapplied plugin settings remain pending until
-recovery; they cannot publish those settings through an unrelated hot update.
+failure and keeps the last-good runtime. When the drain timed out on that
+plugin's admitted work, the Gateway retries the replacement automatically once
+the work finishes; no additional config edit is needed. Other drain failures
+wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
+settings. Until then, later edits do not repeat the drain, and edits that still
+include the unapplied plugin settings stay pending; they cannot publish those
+settings through an unrelated hot update, and they apply together with the
+retry or recovery. While edits are pending, `config.get` reports an
+`appliedConfigHash` that differs from the saved revision, which the Control UI
+shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
+watch a timed-out replacement finish. A Gateway restart applies the saved config
+in full.
 
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
@@ -278,7 +285,7 @@ Revoking a command cancels its active invocations and rejects later input and
 results. Revoking desktop streaming also closes its observer transports. Browser
 node routing applies to subsequent operations. Node pairing policy
 (`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
-the current policy before granting access, including after SSH probes. Existing
+the current policy before granting access, including after SSH checks. Existing
 paired devices remain paired. Terminal shell changes apply to newly opened
 terminals; active terminals keep their original shell. Detached-session timeout
 changes recalculate deadlines from each terminal's original disconnect time.

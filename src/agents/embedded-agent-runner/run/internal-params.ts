@@ -1,9 +1,12 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
+import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
+import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
@@ -36,6 +39,7 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  preparedTtsPreferences?: PreparedTtsPreferences;
   /** Fail-closed caller input admission against the actual prepared model, before dispatch. */
   assertModelInput?: (model: Pick<Model, "input">) => void;
   /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
@@ -78,6 +82,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
   Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+    /** The dispatch owner already selected this target, including any compaction successor. */
+    preparedSessionTarget?: {
+      readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
+      assertCurrent(): void;
+    };
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */
     completionCheck?: EmbeddedRunCompletionCheck;

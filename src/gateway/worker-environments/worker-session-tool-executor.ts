@@ -3,9 +3,12 @@ import { normalizeOptionalString as relationKey } from "@openclaw/normalization-
 import {
   bindAgentToolExecutionLocation,
   copyAgentToolMetadata,
+  getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
+import { buildBlockedToolResult } from "../../agents/agent-tools.before-tool-call.wrapper.js";
+import { resolveSenderRestrictedSpawnError } from "../../agents/spawn-requester-policy.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { jsonResult, type AnyAgentTool } from "../../agents/tools/common.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -23,11 +26,13 @@ import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
+import {
+  getWorkerTurnExecutionIdentityCapability,
+  getWorkerTurnToolSurface,
+} from "./placement-turn-claim-events.js";
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
@@ -41,13 +46,13 @@ import {
   workerSessionToolErrorResult as errorResult,
   WorkerSessionToolOutcomeUnknownError,
   type WorkerSessionToolExecutor,
+  type WorkerSessionToolRequest,
   parseWorkerSessionToolResult,
 } from "./worker-session-tool-result.js";
 import { executeWorkerSessionSend } from "./worker-session-tool-send.js";
 import {
   createWorkerSessionToolSourceRunner,
   prepareWorkerSessionToolRequest,
-  workerSessionToolArguments,
   type WorkerSessionToolAuthority,
 } from "./worker-session-tool-source.js";
 import {
@@ -69,15 +74,59 @@ type WorkerGatewayToolsDependencies = {
   dispatchChild: WorkerPlacementDispatchContract["dispatch"];
   portals: WorkerPortalToolExecutorDependencies["portals"];
   skillWorkshop?: AnyAgentTool;
+  portalAvailable?: boolean;
+  inheritedToolPolicySource?: "sender";
+  prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
 };
 
 export function createWorkerSessionToolExecutor(
   params: WorkerGatewayToolsDependencies,
+  definitions: Record<WorkerSessionToolRequest["toolName"], AnyAgentTool>,
 ): WorkerSessionToolExecutor {
   const inFlight = new Map<string, Promise<string>>();
   const executePortal = createWorkerPortalToolExecutor(params);
 
   const runWithSource = createWorkerSessionToolSourceRunner(params);
+  const runTool = (
+    source: ExactSource,
+    request: WorkerSessionToolRequest,
+    execute: (
+      authority: WorkerSessionToolAuthority,
+      request: WorkerSessionToolRequest,
+    ) => ReturnType<AnyAgentTool["execute"]>,
+  ) => {
+    const { toolCallId, ...args } = request.request;
+    return runWithSource({
+      source,
+      request: {
+        ...request,
+        approvalMode: "deny",
+        request: { toolCallId, arguments: args },
+        tool: (authority) =>
+          copyAgentToolMetadata(definitions[request.toolName], {
+            ...definitions[request.toolName],
+            execute: (id, raw, signal, onUpdate) => {
+              const prepared = prepareWorkerSessionToolRequest(
+                { ...request, signal, onUpdate },
+                request.toolName,
+                id,
+                raw,
+              );
+              if (!prepared) {
+                return Promise.resolve(
+                  buildBlockedToolResult({
+                    reason: `Tool call blocked because before_tool_call returned invalid ${request.toolName} input.`,
+                    toolCallId: id,
+                    runId: request.identity.runId ?? undefined,
+                  }),
+                );
+              }
+              return execute(authority, prepared);
+            },
+          }),
+      },
+    });
+  };
 
   const spawn = async (
     operation: {
@@ -90,6 +139,13 @@ export function createWorkerSessionToolExecutor(
     },
     { assertSource, callGateway, collectExecutionIdentity }: WorkerSessionToolAuthority,
   ) => {
+    const restrictedError = resolveSenderRestrictedSpawnError({
+      inheritedToolPolicySource: params.inheritedToolPolicySource,
+      visible: true,
+    });
+    if (restrictedError) {
+      return jsonResult({ status: "forbidden", error: restrictedError });
+    }
     const sourceEnvironment = params.environments.get(operation.identity.environmentId);
     if (
       !sourceEnvironment ||
@@ -100,9 +156,18 @@ export function createWorkerSessionToolExecutor(
       throw new Error("Worker source environment changed before child spawn");
     }
     const targetAgentId = normalizeAgentId(operation.request.agentId ?? operation.source.agentId);
-    const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
-      params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
+    const surface = await getWorkerTurnToolSurface(operation.identity)?.getSurface(
+      operation.identity,
     );
+    assertSource();
+    if (!surface) {
+      throw new Error("Worker tool surface is unavailable");
+    }
+    const authorizedTools = surface.tools
+      .map((tool) => tool.definition.name)
+      .filter((name) =>
+        params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
+      );
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -116,7 +181,7 @@ export function createWorkerSessionToolExecutor(
       }
       assertSource();
       let loaded = await readWorkerSessionToolEntry(operation.childSessionKey, targetAgentId);
-      let createResponse: Record<string, unknown>;
+      let createResponse: Record<string, unknown> | undefined;
       let creationAttempted = false;
       if (loaded.entry?.sessionId) {
         const parent =
@@ -129,12 +194,6 @@ export function createWorkerSessionToolExecutor(
         ) {
           throw new Error("Cloud child idempotency key is already owned by another session");
         }
-        createResponse = {
-          ok: true,
-          key: loaded.canonicalKey,
-          sessionId: loaded.entry.sessionId,
-          entry: loaded.entry,
-        };
       } else {
         const { source } = operation;
         const createParams: Record<string, unknown> = {
@@ -166,12 +225,6 @@ export function createWorkerSessionToolExecutor(
           if (!loaded.entry?.sessionId) {
             throw error;
           }
-          createResponse = {
-            ok: true,
-            key: loaded.canonicalKey,
-            sessionId: loaded.entry.sessionId,
-            entry: loaded.entry,
-          };
         }
         loaded = await readWorkerSessionToolEntry(operation.childSessionKey, targetAgentId);
       }
@@ -229,7 +282,7 @@ export function createWorkerSessionToolExecutor(
                 throw new Error("Cloud child placement does not match its parent profile");
               }
             };
-            const childPlacement = params.placements.get(childSessionId);
+            const childPlacement = await params.placements.getAsync(childSessionId);
             assertSource();
             if (childPlacement?.state !== "active") {
               try {
@@ -303,7 +356,12 @@ export function createWorkerSessionToolExecutor(
             });
             const runId = typeof run.runId === "string" ? run.runId : undefined;
             return {
-              ...createResponse,
+              ...(createResponse ?? {
+                ok: true,
+                key: loaded.canonicalKey,
+                sessionId: childSessionId,
+                entry: loaded.entry,
+              }),
               ...run,
               runStarted: Boolean(runId),
               ...(runId ? { runId } : {}),
@@ -322,6 +380,7 @@ export function createWorkerSessionToolExecutor(
       requesterAgentIdOverride: operation.source.agentId,
       inheritedToolAllowlist: authorizedTools,
       inheritedToolDenylist: [],
+      inheritedToolPolicySource: params.inheritedToolPolicySource,
       callGateway: gatewayCall,
       expectedParentSessionId: operation.source.sessionId,
       ...(operation.signal ? { signal: operation.signal } : {}),
@@ -337,29 +396,12 @@ export function createWorkerSessionToolExecutor(
 
   return async (request) => {
     const source = await exactSource({ identity: request.identity, placements: params.placements });
-    if (request.toolName !== "sessions_spawn" && request.toolName !== "sessions_send") {
-      return await runWithSource({ source, request }, async (authority, prepared) => {
-        if (prepared.toolName === "portal") {
-          return executePortal(prepared, source, authority.assertSource);
-        }
-        const tool =
-          prepared.toolName === "presence"
-            ? createPresenceTool({
-                assertSourceCurrent: authority.assertSource,
-                callGateway: authority.callGateway,
-              })
-            : prepared.toolName === "skill_workshop"
-              ? params.skillWorkshop
-              : undefined;
-        if (!tool) {
+    if (request.toolName === "portal") {
+      return await runTool(source, request, async (authority, prepared) => {
+        if (prepared.toolName !== "portal") {
           throw new Error("Worker tool policy changed the tool identity");
         }
-        return tool.execute(
-          prepared.request.toolCallId,
-          workerSessionToolArguments(prepared),
-          prepared.signal,
-          prepared.onUpdate,
-        );
+        return executePortal(prepared, source, authority.assertSource);
       });
     }
     const requestDigest = sha256Base64Url(
@@ -428,7 +470,7 @@ export function createWorkerSessionToolExecutor(
       let failed = false;
       try {
         // Only the elected durable owner runs policy; retries reuse its terminal result.
-        result = await runWithSource({ source, request }, async (authority, prepared) => {
+        result = await runTool(source, request, async (authority, prepared) => {
           if (prepared.toolName !== "sessions_spawn" && prepared.toolName !== "sessions_send") {
             throw new Error("Worker tool policy changed the tool identity");
           }
@@ -498,9 +540,7 @@ export function createWorkerSessionToolExecutor(
     try {
       return parseWorkerSessionToolResult(await operation);
     } finally {
-      if (inFlight.get(inFlightKey) === operation) {
-        inFlight.delete(inFlightKey);
-      }
+      inFlight.delete(inFlightKey);
     }
   };
 }
@@ -526,16 +566,15 @@ export function createWorkerWorkshopCallRetention() {
   };
 }
 
-export function createWorkerGatewayTools(
+export async function createWorkerGatewayTools(
   params: WorkerGatewayToolsDependencies & { identity: WorkerConnectionIdentity },
-): AnyAgentTool[] {
+): Promise<AnyAgentTool[]> {
   const claim = params.identity.turnClaim;
   const capability = claim && getWorkerTurnExecutionIdentityCapability(params.placements, claim);
   if (!claim || !capability) {
     throw new Error("Worker source turn has no operational owner");
   }
   const source = capability.sessionTarget;
-  const execute = createWorkerSessionToolExecutor(params);
   const toolOptions = { agentSessionKey: source.sessionKey, workerPlacement: true };
   const portal = createAvailablePortalTools({
     sessionPortalTarget: {
@@ -545,25 +584,31 @@ export function createWorkerGatewayTools(
       assertCurrent: capability.receiptAuthority,
     },
   })[0]!;
-  const tools = [
-    createSessionsSpawnTool(toolOptions),
-    createSessionsSendTool(toolOptions),
+  const presence = createPresenceTool({
+    assertSourceCurrent: capability.assertPresenceSourceCurrent,
+  });
+  bindAgentToolExecutionLocation(presence, {
+    kind: "gateway",
+    connectionScoped: true,
+    timeout: { minimumMs: PRESENCE_QUERY_TIMEOUT_MS },
+  });
+  const assertAuthorized = (name: string) => {
+    capability.receiptAuthority();
+    if (!params.placements.isWorkerTurnToolAuthorized(claim, name)) {
+      throw new Error("Worker tool authority changed");
+    }
+  };
+  const definitions = {
+    sessions_spawn: createSessionsSpawnTool(toolOptions),
+    sessions_send: createSessionsSendTool(toolOptions),
     portal,
-    createPresenceTool(),
-    ...(params.skillWorkshop ? [params.skillWorkshop] : []),
-  ];
-  const retainWorkshopCall = createWorkerWorkshopCallRetention();
-  return tools.map((tool) => {
+  };
+  const execute = createWorkerSessionToolExecutor(params, definitions);
+  const adapters = Object.values(definitions).map((tool) => {
     const bound = copyAgentToolMetadata<AnyAgentTool>(tool, {
       ...tool,
       execute: async (toolCallId, raw, signal, onUpdate) => {
-        const assertAuthorized = () => {
-          capability.receiptAuthority();
-          if (!params.placements.isWorkerTurnToolAuthorized(claim, tool.name)) {
-            throw new Error("Worker session tool authority changed");
-          }
-        };
-        assertAuthorized();
+        assertAuthorized(tool.name);
         const operation = prepareWorkerSessionToolRequest(
           { identity: params.identity, signal, onUpdate },
           tool.name,
@@ -573,24 +618,60 @@ export function createWorkerGatewayTools(
         if (!operation) {
           throw new Error(`Invalid ${tool.name} arguments`);
         }
-        const value = await (tool.name === "skill_workshop"
-          ? retainWorkshopCall(toolCallId, raw, () => execute(operation))
-          : execute(operation));
-        assertAuthorized();
+        const value = await execute(operation);
+        assertAuthorized(tool.name);
         return value;
       },
     });
     bindAgentToolExecutionLocation(bound, {
       kind: "gateway",
+      ...(tool.name === "portal" && params.portalAvailable === false
+        ? { unavailableReason: "this placement has no portal transport" }
+        : {}),
       replay: tool.name === "sessions_spawn" || tool.name === "sessions_send",
-      ...(tool.name === "presence"
-        ? { connectionScoped: true, timeout: { minimumMs: PRESENCE_QUERY_TIMEOUT_MS } }
-        : tool.name === "sessions_spawn"
-          ? { timeout: { minimumMs: 900_000 } }
-          : tool.name === "sessions_send"
-            ? { timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 } }
-            : {}),
+      ...(tool.name === "sessions_spawn"
+        ? { timeout: { minimumMs: 900_000 } }
+        : tool.name === "sessions_send"
+          ? { timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 } }
+          : {}),
     });
     return bound;
+  });
+  const adapterNames = new Set(adapters.map((tool) => tool.name));
+  const runWithSource = createWorkerSessionToolSourceRunner(params);
+  const retainWorkshopCall = createWorkerWorkshopCallRetention();
+  const tools = [...adapters, presence, ...(params.skillWorkshop ? [params.skillWorkshop] : [])];
+  const preparedTools = await (params.prepareTools?.(tools) ?? tools);
+  capability.receiptAuthority();
+  return preparedTools.map((tool) => {
+    if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
+      return tool;
+    }
+    return copyAgentToolMetadata(tool, {
+      ...tool,
+      execute: async (toolCallId, args, signal, onUpdate) => {
+        assertAuthorized(tool.name);
+        const invoke = () =>
+          runWithSource({
+            source: { ...source, turnClaim: claim },
+            request: {
+              tool,
+              toolName: tool.name,
+              ...(tool.name === "presence" || tool.name === "skill_workshop"
+                ? { approvalMode: "deny" as const }
+                : {}),
+              identity: params.identity,
+              signal,
+              onUpdate,
+              request: { toolCallId, arguments: args },
+            },
+          });
+        const result = await (tool.name === "skill_workshop"
+          ? retainWorkshopCall(toolCallId, args, invoke)
+          : invoke());
+        assertAuthorized(tool.name);
+        return result;
+      },
+    });
   });
 }

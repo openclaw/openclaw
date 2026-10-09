@@ -50,38 +50,38 @@ export type ActiveResourceOwner = {
   isCurrent: () => boolean;
 };
 
-function placementResourceIdentity(placement: GatewaySessionRow["placement"]) {
-  if (!placement) {
-    return null;
-  }
-  const runner = placement.state === "active" ? placement.runner : undefined;
-  // Ack cursors, disk observations and timestamps advance during ordinary work;
-  // they do not replace the resource or revoke an in-flight discovery owner.
-  return [
-    placement.state,
-    placement.generation,
-    "environmentId" in placement ? placement.environmentId : undefined,
-    "activeOwnerEpoch" in placement ? placement.activeOwnerEpoch : undefined,
-    "providerId" in placement ? placement.providerId : undefined,
-    "profileId" in placement ? placement.profileId : undefined,
-    runner?.kind,
-    runner?.deviceId,
-    runner?.status,
-  ];
-}
-
 type ResourceIdentitySource = Pick<
   GatewaySessionRow,
   "sessionId" | "execNode" | "archived" | "placement"
 >;
 
 function resourceIdentityForSession(session: ResourceIdentitySource | undefined): string {
+  const placement = session?.placement;
+  const runner = placement?.state === "active" ? placement.runner : undefined;
+  // Ack cursors, disk observations and timestamps advance during ordinary work;
+  // they do not replace the resource or revoke an in-flight discovery owner.
   return JSON.stringify([
     session?.sessionId,
     session?.execNode,
     session?.archived === true,
-    placementResourceIdentity(session?.placement),
+    placement
+      ? [
+          placement.state,
+          placement.generation,
+          "environmentId" in placement ? placement.environmentId : undefined,
+          "activeOwnerEpoch" in placement ? placement.activeOwnerEpoch : undefined,
+          "providerId" in placement ? placement.providerId : undefined,
+          "profileId" in placement ? placement.profileId : undefined,
+          runner?.kind,
+          runner?.deviceId,
+          runner?.status,
+        ]
+      : null,
   ]);
+}
+
+function hasResourceSlot(layout: SidebarLayout, slot: ResourceSlot): boolean {
+  return layout.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
 }
 
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
@@ -197,9 +197,7 @@ export class ChatPaneActiveResources {
     }
     const layout = owner.layout();
     const desktopDiscovery =
-      owner.desktopAvailable &&
-      (this.desktop !== undefined ||
-        !layout.columns.some((column) => column.panels.some((panel) => panel.slot === "desktop")));
+      owner.desktopAvailable && (this.desktop !== undefined || !hasResourceSlot(layout, "desktop"));
     const browserDiscovery =
       !this.dismissed(layout) && owner.browserAvailable && owner.browserTab !== undefined;
     if (!desktopDiscovery && !browserDiscovery) {
@@ -390,9 +388,7 @@ export class ChatPaneActiveResources {
         };
       }
     }
-    const desktopAlreadyPresent = owner
-      .layout()
-      .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"));
+    const desktopAlreadyPresent = hasResourceSlot(owner.layout(), "desktop");
     if (this.dismissed(owner.layout()) && (!this.desktop || !desktopAlreadyPresent)) {
       this.desktop = undefined;
       return;
@@ -401,10 +397,7 @@ export class ChatPaneActiveResources {
       generation === this.generation &&
       owner.isCurrent() &&
       (!this.dismissed(owner.layout()) ||
-        (this.desktop !== undefined &&
-          owner
-            .layout()
-            .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"))));
+        (this.desktop !== undefined && hasResourceSlot(owner.layout(), "desktop")));
     this.probeCurrent = current;
     this.requestProbeUpdate = owner.requestUpdate;
     // Independent probes: a broken browser route must not hide an available desktop.
@@ -427,9 +420,7 @@ export class ChatPaneActiveResources {
   }
 
   private publishDesktop(owner: ActiveResourceOwner, source: string | null): void {
-    const existing = owner
-      .layout()
-      .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"));
+    const existing = hasResourceSlot(owner.layout(), "desktop");
     if (this.dismissed(owner.layout()) && !existing) {
       return;
     }
@@ -461,7 +452,7 @@ export class ChatPaneActiveResources {
       return;
     }
     // Existing tabs (including minimized ones) are user-owned. Never reselect them.
-    if (layout.columns.some((column) => column.panels.some((panel) => panel.slot === slot))) {
+    if (hasResourceSlot(layout, slot)) {
       return;
     }
     const next = openSlot(layout, slot);
@@ -516,15 +507,14 @@ export class ChatPaneActiveResources {
       });
       await this.afterReconciliation(current, () => {
         const environment = target?.environments.find((entry) => entry.id === source);
-        if (!environment || environment.status !== "available" || environment.desktop !== true) {
-          this.publishDesktop(owner, null);
-          return;
-        }
         if (
-          environment.type === "worker" &&
-          (environment.worker?.state !== "attached" ||
-            !session?.sessionId ||
-            !environment.worker.attachedSessionIds.includes(session.sessionId))
+          !environment ||
+          environment.status !== "available" ||
+          environment.desktop !== true ||
+          (environment.type === "worker" &&
+            (environment.worker?.state !== "attached" ||
+              !session?.sessionId ||
+              !environment.worker.attachedSessionIds.includes(session.sessionId)))
         ) {
           this.publishDesktop(owner, null);
           return;

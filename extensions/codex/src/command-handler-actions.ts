@@ -65,13 +65,11 @@ export function resolveCodexNativeCommandSandboxBlock(
   subcommand: string,
   args: readonly string[],
 ): string | undefined {
-  if (isReadOnlyCodexGoalCommand(subcommand, args)) {
-    return undefined;
-  }
-  if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
-    return undefined;
-  }
-  if (returnsBeforeNativeCodexExecution(subcommand, args)) {
+  if (
+    isReadOnlyCodexGoalCommand(subcommand, args) ||
+    !CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand) ||
+    returnsBeforeNativeCodexExecution(subcommand, args)
+  ) {
     return undefined;
   }
   if (isCodexCliNodeResumeBind(subcommand, args)) {
@@ -139,14 +137,10 @@ function isCodexCliNodeResumeBind(subcommand: string, args: readonly string[]): 
 
 function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
   const parsed = parseResumeArgs([...args]);
-  const normalizedThreadId = parsed.threadId?.trim();
-  if (parsed.help) {
+  if (parsed.help || !parsed.threadId) {
     return true;
   }
-  if (parsed.host) {
-    return !normalizedThreadId || parsed.bindHere !== true;
-  }
-  return !normalizedThreadId || args.length !== 1;
+  return parsed.host ? parsed.bindHere !== true : args.length !== 1;
 }
 
 export async function handleComputerUseCommand(
@@ -173,7 +167,7 @@ export async function handleComputerUseCommand(
     pluginConfig,
     config: ctx.config,
     agentDir,
-    forceEnable: parsed.action === "install" || parsed.hasOverrides,
+    forceEnable: parsed.action === "install" || Object.keys(parsed.overrides).length > 0,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
   if (parsed.action === "install") {
@@ -221,31 +215,25 @@ export async function handleNativeGoal(
     assertCurrent: authority.assertCurrent,
     ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
   };
-  if (action === "status" || action === "get") {
+  if (action === "status" || action === "get" || action === "clear") {
+    const clear = action === "clear";
     if (args.length > 1) {
-      return "Usage: /codex goal [status]";
+      return clear ? "Usage: /codex goal clear" : "Usage: /codex goal [status]";
     }
     const response = await deps.codexControlRequest(
       pluginConfig,
-      CODEX_CONTROL_METHODS.getThreadGoal,
+      clear ? CODEX_CONTROL_METHODS.clearThreadGoal : CODEX_CONTROL_METHODS.getThreadGoal,
       { threadId: binding.threadId },
-      goalRequestOptions,
+      clear
+        ? { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) }
+        : goalRequestOptions,
     );
+    if (clear) {
+      return isJsonObject(response) && response.cleared === true
+        ? "Cleared the Codex goal."
+        : "No Codex goal was active.";
+    }
     return formatNativeGoal(response);
-  }
-  if (action === "clear") {
-    if (args.length > 1) {
-      return "Usage: /codex goal clear";
-    }
-    const response = await deps.codexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.clearThreadGoal,
-      { threadId: binding.threadId },
-      { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) },
-    );
-    return isJsonObject(response) && response.cleared === true
-      ? "Cleared the Codex goal."
-      : "No Codex goal was active.";
   }
   const requestedStatus =
     action === "pause"
@@ -381,50 +369,43 @@ export async function setConversationModel(
   });
 }
 
-export async function setConversationFastMode(
+export async function setConversationPreference(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   args: string[],
+  kind: "fast" | "permissions",
 ): Promise<string> {
+  const usage = `Usage: /codex ${kind} ${kind === "fast" ? "[on|off|status]" : "[default|yolo|status]"}`;
   if (args.length > 1) {
-    return "Usage: /codex fast [on|off|status]";
+    return usage;
   }
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
-  if (!target) {
-    return "Cannot set Codex fast mode because this command did not include a stable binding identity.";
+  if (kind === "fast") {
+    if (!target) {
+      return "Cannot set Codex fast mode because this command did not include a stable binding identity.";
+    }
+    const value = args[0];
+    const parsed = parseCodexFastModeArg(value);
+    if (value && parsed == null && value.trim().toLowerCase() !== "status") {
+      return usage;
+    }
+    return await deps.setCodexConversationFastMode({
+      identity: target.identity,
+      bindingStore: deps.bindingStore,
+      binding,
+      enabled: parsed,
+      assertCurrent:
+        parsed === undefined ? authority.assertCurrent : authority.assertMutationCurrent,
+    });
   }
-  const value = args[0];
-  const parsed = parseCodexFastModeArg(value);
-  if (value && parsed == null && value.trim().toLowerCase() !== "status") {
-    return "Usage: /codex fast [on|off|status]";
-  }
-  return await deps.setCodexConversationFastMode({
-    identity: target.identity,
-    bindingStore: deps.bindingStore,
-    binding,
-    enabled: parsed,
-    assertCurrent: parsed === undefined ? authority.assertCurrent : authority.assertMutationCurrent,
-  });
-}
-
-export async function setConversationPermissions(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  args: string[],
-): Promise<string> {
-  if (args.length > 1) {
-    return "Usage: /codex permissions [default|yolo|status]";
-  }
-  const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
-  const { target } = authority;
   if (!target || !ctx.sessionId || !ctx.sessionKey) {
     return "Cannot set Codex permissions because this command did not include a complete session identity.";
   }
   const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
   if (value && !parsed && value.trim().toLowerCase() !== "status") {
-    return "Usage: /codex permissions [default|yolo|status]";
+    return usage;
   }
   // Match sessions.create/sessions.patch: full access requires operator.admin,
   // even when the command sender is an owner.

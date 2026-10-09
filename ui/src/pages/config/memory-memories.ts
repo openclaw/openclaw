@@ -14,8 +14,7 @@ registerSettingsEnglish();
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
-  | { kind: "idle" }
-  | { kind: "loading"; query: string }
+  | { kind: "idle" | "loading" }
   | ({ kind: "ready"; query: string } & MemorySearchResponse)
   | { kind: "error"; query: string; message: string };
 type DetailState =
@@ -89,7 +88,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     if (!normalizedQuery || !client || !agentId || !this.methodAdvertised) {
       return;
     }
-    const request: SearchState = { kind: "loading", query: normalizedQuery };
+    const request: SearchState = { kind: "loading" };
     this.query = normalizedQuery;
     this.searchState = request;
     this.openResultKey = null;

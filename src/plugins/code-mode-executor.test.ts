@@ -46,28 +46,43 @@ describe("Code Mode executor plugin selection", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("loads the selected bundled executor without global runtime registration", async () => {
-    const executor = resolvePluginCodeModeExecutor("quickjs", {});
-    expect(executor.id).toBe("quickjs");
-    expect(
-      await executor.execute(
-        {
-          kind: "exec",
-          source: "return 42",
-          catalog: [],
-          namespaces: [],
-          config: {
-            timeoutMs: 1000,
-            memoryLimitBytes: 1024 * 1024,
-            maxOutputBytes: 1024,
-            maxPendingToolCalls: 1,
-            maxSnapshotBytes: 1024 * 1024,
+  it.each(["bundled", "global"] as const)(
+    "loads the selected %s executor without global runtime registration",
+    async (origin) => {
+      const config: OpenClawConfig =
+        origin === "bundled"
+          ? {}
+          : {
+              plugins: {
+                allow: ["code-mode-quickjs"],
+                entries: { "code-mode-quickjs": { enabled: true } },
+              },
+            };
+      const snapshot = loadManifestMetadataSnapshot();
+      snapshot.plugins[0].origin = origin;
+      snapshot.index.plugins[0].origin = origin;
+      const executor = resolvePluginCodeModeExecutor("quickjs", config);
+      expect(executor.id).toBe("quickjs");
+      expect(
+        await executor.execute(
+          {
+            kind: "exec",
+            source: "return 42",
+            catalog: [],
+            namespaces: [],
+            config: {
+              timeoutMs: 1000,
+              memoryLimitBytes: 1024 * 1024,
+              maxOutputBytes: 1024,
+              maxPendingToolCalls: 1,
+              maxSnapshotBytes: 1024 * 1024,
+            },
           },
-        },
-        { timeoutMs: 1000 },
-      ),
-    ).toMatchObject({ status: "completed", value: { json: "42" } });
-  });
+          { timeoutMs: 1000 },
+        ),
+      ).toMatchObject({ status: "completed", value: { json: "42" } });
+    },
+  );
 
   it.each([
     { plugins: { enabled: false } },
@@ -81,19 +96,6 @@ describe("Code Mode executor plugin selection", () => {
     expect(() => resolvePluginCodeModeExecutor("quickjs", config)).toThrow(
       'Code Mode executor "quickjs" is unavailable or disabled',
     );
-  });
-
-  it("loads an explicitly enabled external executor", () => {
-    const snapshot = loadManifestMetadataSnapshot();
-    snapshot.plugins[0].origin = "global";
-    snapshot.index.plugins[0].origin = "global";
-    const config = {
-      plugins: {
-        allow: ["code-mode-quickjs"],
-        entries: { "code-mode-quickjs": { enabled: true } },
-      },
-    };
-    expect(resolvePluginCodeModeExecutor("quickjs", config).id).toBe("quickjs");
   });
 
   it.each([
@@ -129,24 +131,23 @@ describe("Code Mode executor plugin selection", () => {
     },
   );
 
-  it("fails when the selected plugin has no runtime artifact", () => {
-    fs.unlinkSync(path.join(root, "code-mode-executor-api.js"));
-    expect(() => resolvePluginCodeModeExecutor("quickjs", {})).toThrow(
-      "missing its runtime artifact",
-    );
-  });
-
-  it("rejects an artifact advertising another executor", () => {
-    fs.writeFileSync(
-      path.join(root, "code-mode-executor-api.js"),
-      'export const codeModeExecutor = { id: "node", async execute() {} };\n',
-    );
-    expect(() => resolvePluginCodeModeExecutor("quickjs", {})).toThrow("invalid runtime artifact");
-  });
-
-  it("rejects ambiguous owners instead of choosing a different executor", () => {
-    const snapshot = loadManifestMetadataSnapshot();
-    snapshot.plugins.push({ ...snapshot.plugins[0], id: "second-executor" });
-    expect(() => resolvePluginCodeModeExecutor("quickjs", {})).toThrow("multiple plugin owners");
+  it.each([
+    ["missing", "missing its runtime artifact"],
+    ["mismatched", "invalid runtime artifact"],
+    ["ambiguous", "multiple plugin owners"],
+  ])("rejects a %s executor owner", (kind, error) => {
+    const artifact = path.join(root, "code-mode-executor-api.js");
+    if (kind === "missing") {
+      fs.unlinkSync(artifact);
+    } else if (kind === "mismatched") {
+      fs.writeFileSync(
+        artifact,
+        'export const codeModeExecutor = { id: "node", async execute() {} };\n',
+      );
+    } else {
+      const snapshot = loadManifestMetadataSnapshot();
+      snapshot.plugins.push({ ...snapshot.plugins[0], id: "second-executor" });
+    }
+    expect(() => resolvePluginCodeModeExecutor("quickjs", {})).toThrow(error);
   });
 });

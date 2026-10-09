@@ -18,11 +18,7 @@ import {
   type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  buildApiKeyCredential,
-  coerceSecretRef,
-  isNonSecretApiKeyMarker,
-} from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
@@ -859,32 +855,11 @@ export default definePluginEntry({
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
               env: ctx.env,
-              workspaceDir: ctx.workspaceDir,
-              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
               ...(ctx.signal ? { signal: ctx.signal } : {}),
-              secretInputMode: ctx.secretInputMode,
-              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
-              profiles: result.credential
-                ? [
-                    {
-                      profileId: "ollama:default",
-                      credential: buildApiKeyCredential(
-                        OLLAMA_PROVIDER_ID,
-                        result.credential,
-                        undefined,
-                        result.credentialMode
-                          ? {
-                              secretInputMode: result.credentialMode,
-                              config: ctx.config,
-                            }
-                          : undefined,
-                      ),
-                    },
-                  ]
-                : [],
+              profiles: [],
               configPatch: result.config,
               ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
             };

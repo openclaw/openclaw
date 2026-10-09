@@ -136,6 +136,50 @@ describe("auth profile batch persistence", () => {
     },
   );
 
+  it("refuses inherited OAuth authority that changes during the worker callback handoff", async () => {
+    await withAgentDir(async (agentDir) => {
+      const profileId = "openai:handoff";
+      const incoming: OAuthCredential = {
+        type: "oauth",
+        provider: "openai",
+        access: "synthetic-old-access",
+        refresh: "synthetic-old-refresh",
+        expires: Date.now() + 60_000,
+      };
+      const authoritative: OAuthCredential = {
+        ...incoming,
+        access: "synthetic-new-access",
+        refresh: "synthetic-new-refresh",
+      };
+      const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
+      saveAuthProfileStore({ version: 1, profiles: {} }, undefined, saveOptions);
+      saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
+      let callbacks = 0;
+      const realUpdate = storeRuntime.updateAuthProfileStoreWithLock;
+      vi.spyOn(storeRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) =>
+        realUpdate({
+          ...params,
+          updater(store, owner, sharedStore) {
+            callbacks += 1;
+            saveAuthProfileStore(
+              { version: 1, profiles: { [profileId]: authoritative } },
+              undefined,
+              saveOptions,
+            );
+            return params.updater(store, owner, sharedStore);
+          },
+        }),
+      );
+
+      await expect(
+        upsertAuthProfileWithLock({ agentDir, profileId, credential: incoming }),
+      ).resolves.toBeNull();
+      expect(callbacks).toBe(1);
+      expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(authoritative);
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
+    });
+  });
+
   it("does not restore a fenced OAuth refresh generation", async () => {
     await withAgentDir(async (agentDir) => {
       const profileId = "openai:default";
@@ -743,7 +787,9 @@ describe("auth profile batch persistence", () => {
         credential: apiKey("sk-new"),
       }).catch((error: unknown) => error);
 
-      expect(String(failure)).toContain("no column named updated_at");
+      expect(failure).toMatchObject({ name: "SqliteSchemaMismatchError" });
+      expect(String(failure)).toContain("column definitions differ for auth_profile_store");
+      expect(String(failure)).toContain("openclaw doctor --fix");
       expect(String(failure)).not.toContain("lock may be busy");
     });
   });

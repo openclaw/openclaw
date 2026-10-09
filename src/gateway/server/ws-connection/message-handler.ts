@@ -75,6 +75,7 @@ function claimsWorkerConnectionIdentity(value: unknown): boolean {
 }
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
+  let waitingForPairing = false;
   const {
     socket,
     ingressAttribution,
@@ -356,6 +357,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sendHandshakeErrorResponse,
           sendFrame,
           onHelloDelivered: flushQueuedHandshakeFrames,
+          onPairingWait: () => {
+            waitingForPairing = true;
+            params.clearHandshakeTimer();
+          },
           isWebchatConnect,
           runDetachedConnectWork,
           pendingNodePairingCleanup,
@@ -539,6 +544,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
   const onMessage = (data: GatewayConnectionFrame): void => {
     if (isClosed()) {
+      return;
+    }
+    if (waitingForPairing) {
+      close(1008, "pairing approval pending; reconnect to request again");
       return;
     }
     if (queuedHandshakeFrames) {

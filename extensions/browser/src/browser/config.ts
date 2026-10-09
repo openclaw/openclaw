@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
@@ -125,10 +124,8 @@ function normalizeExistingSessionCdpUrl(
     return undefined;
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     throw new Error(`browser.profiles.${profileName}.cdpUrl must be a valid URL.`);
   }
 
@@ -208,8 +205,8 @@ function resolveExtensionRelayPorts(
   // allocation so an extension relay cannot bind another profile's listener.
   const reservedPorts = new Set(
     Object.values(profiles)
-      .map((profile) => profile.cdpPort)
-      .filter((port): port is number => typeof port === "number"),
+      .flatMap((profile) => [profile.cdpPort, Number(URL.parse(profile.cdpUrl ?? "")?.port)])
+      .filter((port): port is number => typeof port === "number" && port > 0),
   );
   const ports: Record<string, number> = {};
   const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
@@ -259,7 +256,7 @@ export function resolveBrowserConfig(
   rootConfig?: OpenClawConfig,
 ): ResolvedBrowserConfig {
   const gatewayPort = resolveGatewayPort(rootConfig);
-  const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
+  const controlPort = deriveDefaultBrowserControlPort(gatewayPort);
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
 

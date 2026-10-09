@@ -141,7 +141,7 @@ export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): 
     return [];
   }
   return input.slice(turn.index + 1).flatMap((item) => {
-    const text = item.role === "user" ? extractInputText(item.content) : "";
+    const text = extractInputText(item.content);
     if (!isInternalRuntimeContextCarrierText(text)) {
       return [];
     }
@@ -182,7 +182,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
   | undefined {
   let settled = false;
   for (const item of input.toReversed()) {
-    if (item.role !== "user") {
+    if (item.role !== "user" && item.role !== "developer" && item.role !== "system") {
       continue;
     }
     const current = splitMockConversationContext(extractInputText(item.content)).current.trim();
@@ -198,6 +198,9 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
       };
     }
     if (isInternalRuntimeContextCarrierText(current)) {
+      continue;
+    }
+    if (item.role !== "user") {
       continue;
     }
     if (isMockSubagentSettledWake(current)) {
@@ -536,7 +539,6 @@ export function buildWhatsAppPendingHistoryReply(prompt: string, input: Response
 
 function extractWhatsAppPendingHistoryRuntimeContext(input: ResponsesInputItem[]) {
   return input
-    .filter((item) => item.role === "user")
     .map((item) => {
       const text = extractInputText(item.content);
       return isInternalRuntimeContextCarrierText(text) ? text : undefined;

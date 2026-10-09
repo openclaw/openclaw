@@ -17,6 +17,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeHostname } from "./hostname.js";
 import {
@@ -701,26 +702,16 @@ async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<vo
     destroyDispatcher(candidate);
     return;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await raceWithTimeout(
       Promise.resolve(close.call(candidate)),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => {
-          timeout = undefined;
-          destroyDispatcher(candidate);
-          resolve();
-        }, DISPATCHER_CLOSE_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
+      DISPATCHER_CLOSE_TIMEOUT_MS,
+      () => destroyDispatcher(candidate),
+      { ref: false },
+    );
   } catch (err) {
     destroyDispatcher(candidate);
     throw err;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }
 

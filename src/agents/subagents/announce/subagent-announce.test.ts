@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import * as announceDelivery from "./subagent-announce-delivery.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -267,44 +268,8 @@ describe("subagent announce seam flow", () => {
     outputTesting.setDepsForTest();
   });
 
-  it("keeps the parent's authored result instead of forwarding private grandchildren", async () => {
-    const parentKey = "agent:main:subagent:parent";
-    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      {
-        runId: "grandchild-run",
-        childSessionKey: "agent:main:subagent:grandchild",
-        requesterSessionKey: parentKey,
-        requesterDisplayKey: parentKey,
-        task: "grandchild work",
-        cleanup: "keep",
-        createdAt: 1,
-        execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "raw grandchild marker" },
-        delivery: { status: "delivered" },
-        completionTarget: "parent",
-        completionRequesterSessionId: "parent-id",
-      },
-    ]);
-    expect(
-      await runSubagentAnnounceFlow({
-        childSessionKey: parentKey,
-        childRunId: "parent-run",
-        requesterSessionKey: "agent:main:main",
-        task: "parent work",
-        timeoutMs: 10,
-        cleanup: "keep",
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
-        terminalReply: { disposition: "visible", text: "parent reviewed and approved" },
-      }),
-    ).toBe("delivered");
-    const message = String(requireAgentCall().params?.message);
-    expect(message).toContain("parent reviewed and approved");
-    expect(message).not.toContain("raw grandchild marker");
-  });
-
   it.each([false, true])(
-    "delivers the result while deleting the child: terminal=%s",
+    "delivers the result while deleting the encoded child owner: terminal=%s",
     async (terminal) => {
       loadSessionStoreMock.mockReturnValue({
         "agent:main:subagent:test": {
@@ -316,6 +281,7 @@ describe("subagent announce seam flow", () => {
         startedAt: 10,
         endedAt: 20,
         childRunId: "run-direct-skip-whitespace",
+        childAgentId: "research",
         cleanup: "delete",
         roundOneReply: "  child result  ",
         ...(terminal
@@ -356,6 +322,49 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe("delivered");
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
+  it("carries a raw child's recorded owner from metadata selection into delete cleanup", async () => {
+    const entries = new Map(
+      ["main", "research"].map((agentId) => [
+        agentId,
+        {
+          sessionId: `${agentId}-child`,
+          lifecycleRevision: `${agentId}-revision`,
+          updatedAt: 1,
+        },
+      ]),
+    );
+    const load = announceDelivery.loadSessionEntryByKey;
+    const read = vi
+      .spyOn(announceDelivery, "loadSessionEntryByKey")
+      .mockImplementation(async (key, agentId) =>
+        key === "global" ? entries.get(agentId ?? "main") : load(key, agentId),
+      );
+    try {
+      expect(
+        await runAnnounceFlow({
+          childSessionKey: "global",
+          childAgentId: "research",
+          cleanup: "delete",
+          terminalReply: { disposition: "visible", text: "Research result" },
+        }),
+      ).toBe("delivered");
+      expect(sessionsDeleteSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          params: {
+            key: "global",
+            agentId: "research",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+            expectedSessionId: "research-child",
+            expectedLifecycleRevision: "research-revision",
+          },
+        }),
+      );
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it.each(["explicit", "host", "currency"] as const)(

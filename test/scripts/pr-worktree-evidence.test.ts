@@ -180,7 +180,7 @@ ${commands.join("\n")}
     expect(result.status, result.output).toBe(0);
     return `refs/openclaw/pr-merge-outcomes/${pr}`;
   };
-  return { root, repo, head, git, add, run, record, branches, outcomes, worktrees };
+  return { root, repo, env, head, git, add, run, record, branches, outcomes, worktrees };
 }
 
 function evidence(dir: string, captureName = "merge-output.log") {
@@ -196,6 +196,60 @@ function evidence(dir: string, captureName = "merge-output.log") {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
+  it.for(["", ".local/nested"])(
+    "defers removal while the parent session holds cwd %s, then removes after release",
+    async (subdirectory, { command }) => {
+      await command.lifetime.run(async () => {
+        const f = await fixture(command);
+        const dir = await f.add(910001);
+        const cwd = join(dir, subdirectory);
+        mkdirSync(cwd, { recursive: true });
+        mkdirSync(dir + "-sibling");
+        const result = await command.run(
+          process.execPath,
+          [
+            "-e",
+            `
+const { spawnSync } = require("node:child_process");
+const { existsSync } = require("node:fs");
+const [repo, target, scripts] = process.argv.slice(1);
+const remove = () => spawnSync(process.platform === "darwin" ? "/bin/bash" : "bash", [
+  "-c", 'set -euo pipefail; canonical_repo_root="$FIXTURE_REPO"; source "$1/pr-lib/worktree.sh"; source "$1/pr-lib/common.sh"; remove_worktree_if_present "$2"',
+  "cleanup", scripts, target,
+], { cwd: repo, encoding: "utf8" });
+const held = remove();
+const preserved = existsSync(target);
+// Match the incident: the cleanup child ran elsewhere, then the live parent spawns again.
+const next = spawnSync(process.execPath, ["-e", "process.stdout.write(process.cwd())"], {
+  encoding: "utf8",
+});
+process.chdir(target + "-sibling");
+const released = preserved ? remove() : null;
+process.stdout.write(JSON.stringify({
+  held: { status: held.status, stderr: held.stderr }, preserved,
+  next: { status: next.status, stdout: next.stdout },
+  released: released && { status: released.status, stderr: released.stderr },
+}));
+`,
+            f.repo,
+            dir,
+            scripts,
+          ],
+          { cwd, env: f.env },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        const observation = JSON.parse(result.stdout);
+        expect(observation.held.status, observation.held.stderr).not.toBe(0);
+        expect(observation.held.stderr).toContain("live process");
+        expect(observation.preserved).toBe(true);
+        expect(observation.next).toEqual({ status: 0, stdout: cwd });
+        expect(observation.released.status, observation.released.stderr).toBe(0);
+        expect(existsSync(dir)).toBe(false);
+        expect(await f.worktrees()).not.toContain(`worktree ${dir}\n`);
+      });
+    },
+  );
+
   it.for(["tracked.txt", "unpublished.txt"])(
     "retains dirty %s and local branches",
     async (file, { command }) => {

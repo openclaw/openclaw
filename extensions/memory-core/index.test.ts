@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  OpenClawPluginService,
+  OpenClawPluginServiceV2,
+} from "openclaw/plugin-sdk/core";
 import type {
   AnyAgentTool,
   MemoryPluginRuntime,
@@ -13,7 +18,7 @@ import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
-const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => ({ manager: null })));
 const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
@@ -24,13 +29,9 @@ const createMemoryRuntimeMock = vi.hoisted(() =>
   })),
 );
 
+// mock-isolation: Keep the lazy manager engine outside registration tests.
 vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
-  memoryRuntime: {
-    closeAllMemorySearchManagers: vi.fn(async () => {}),
-    closeMemorySearchManager: closeMemorySearchManagerMock,
-    getMemorySearchManager: getMemorySearchManagerMock,
-  },
 }));
 
 import plugin from "./index.js";
@@ -109,20 +110,17 @@ function captureMemoryModelContract(initialConfig: OpenClawConfig) {
 }
 
 describe("buildPromptSection", () => {
-  it("prepares explicitly owned memory tools without resolving unrelated legacy defaults", () => {
-    let unrelatedDefaultReads = 0;
+  it("prepares explicitly owned memory tools without resolving the system agent", () => {
+    let systemAgentReads = 0;
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main" },
-          {
-            id: "unrelated",
-            get default() {
-              unrelatedDefaultReads += 1;
-              return false;
-            },
+        defaults: {
+          get systemAgent() {
+            systemAgentReads += 1;
+            return { agentId: "unrelated" };
           },
-        ],
+        },
+        entries: { main: {}, unrelated: {} },
       },
     };
     const { search, get, promptBuilder } = captureMemoryModelContract(config);
@@ -131,7 +129,7 @@ describe("buildPromptSection", () => {
     expect(
       promptBuilder({ availableTools: new Set(["memory_search", "memory_get"]), agentId: "main" }),
     ).toContain("## Memory Recall");
-    expect(unrelatedDefaultReads).toBe(0);
+    expect(systemAgentReads).toBe(0);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
@@ -172,7 +170,7 @@ describe("buildPromptSection", () => {
     [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
   ])("offers only available session follow-up tools: %j", (sessionTools, included, excluded) => {
     const { search, promptBuilder } = captureMemoryModelContract({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     });
     const prompt = promptBuilder({
       availableTools: new Set(["memory_search", "memory_get", ...sessionTools]),
@@ -212,10 +210,8 @@ describe("buildPromptSection", () => {
   ])("keeps eager, lazy, and prompt contracts aligned for $label", async (sourceCase) => {
     const config = {
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: {
               search: {
                 sources: sourceCase.sessions ? ["memory", "sessions"] : ["memory"],
@@ -223,7 +219,7 @@ describe("buildPromptSection", () => {
               },
             },
           },
-        ],
+        },
       },
       memory: { search: { provider: "none", extraPaths: sourceCase.extraPaths } },
     } as OpenClawConfig;
@@ -406,7 +402,7 @@ describe("memory-core plugin runtime registration", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps memory manager initialization demand-driven", () => {
+  it("keeps memory manager initialization out of registration", () => {
     plugin.register(
       createTestPluginApi({
         runtime: hostRuntime,
@@ -416,6 +412,39 @@ describe("memory-core plugin runtime registration", () => {
     expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
+
+  it.each(["memory-core", "honcho", "none"])(
+    "starts configured indexes only for the selected memory slot: %s",
+    async (owner) => {
+      const config: OpenClawConfig = {
+        plugins: { slots: { memory: owner } },
+        agents: { entries: { main: {}, research: {} } },
+      };
+      const services: Array<OpenClawPluginService | OpenClawPluginServiceV2> = [];
+      const api = createTestPluginApi({
+        id: "memory-core",
+        config,
+        runtime: hostRuntime,
+        registerService: (service) => {
+          if (service.id === "memory-core-index") {
+            services.push(service);
+          }
+        },
+      });
+      plugin.register(api);
+      for (const service of services) {
+        if (service.apiVersion === 2) {
+          throw new Error("Unexpected scheduled service");
+        }
+        await service.start({ config, stateDir: "unused", logger: api.logger });
+      }
+      expect(getMemorySearchManagerMock.mock.calls).toEqual(
+        owner === "memory-core"
+          ? [[{ cfg: config, agentId: "main" }], [{ cfg: config, agentId: "research" }]]
+          : [],
+      );
+    },
+  );
 
   it("wires scoped memory search cleanup through the lazy runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
@@ -506,14 +535,13 @@ describe("memory-core plugin runtime registration", () => {
 });
 
 describe("buildMemoryFlushPlan", () => {
-  const cfg = {
+  const cfg: OpenClawConfig = {
     agents: {
       defaults: {
         userTimezone: "America/New_York",
-        timeFormat: "12",
       },
     },
-  } as OpenClawConfig;
+  };
 
   it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
     const plan = buildMemoryFlushPlan({

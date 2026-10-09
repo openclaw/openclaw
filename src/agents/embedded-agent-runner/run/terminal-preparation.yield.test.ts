@@ -111,7 +111,7 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
       expect(prepared.attemptToolSummary).toMatchObject({
         unresolvedError: { toolName: input.lastToolError.toolName },
       });
-      const result = await resolveEmbeddedRunTerminal({ ...terminal, ...prepared });
+      const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
       expect(result.action).toBe("complete");
       if (result.action !== "complete") {
         throw new Error("Expected a paused terminal result");
@@ -130,7 +130,7 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
           ? input.assistantTexts.map((text) => ({ text, replyToTag: false }))
           : [{ text: YIELD_DIAGNOSTIC_TEXT }],
       );
-      expect(terminal.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(terminal.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
 

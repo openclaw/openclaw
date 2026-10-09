@@ -6,7 +6,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
-import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -152,30 +151,17 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
       assertOpenClawDatabasesReady({
         env,
         operation: "gateway-startup",
-        config: { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } },
+        config: {
+          agents: {
+            entries: { main: {}, worker: {} },
+            defaults: { systemAgent: { agentId: "main" } },
+          },
+        },
       }),
     ).resolves.toBeUndefined();
     expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
       embeddedOwnerId: "foreign",
     });
-  } finally {
-    writer.close();
-  }
-});
-
-it("preserves the startup maintenance-required error class across the direct child", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-startup-legacy-") };
-  const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const writer = new (requireNodeSqlite().DatabaseSync)(agentPath);
-  try {
-    writer.exec(
-      "PRAGMA journal_mode=DELETE; PRAGMA user_version=1; UPDATE schema_meta SET schema_version=1;",
-    );
-    await expect(
-      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
-    ).rejects.toBeInstanceOf(OpenClawAgentDatabaseMediaMigrationRequiredError);
   } finally {
     writer.close();
   }

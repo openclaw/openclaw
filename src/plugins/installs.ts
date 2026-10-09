@@ -92,21 +92,17 @@ export function reconcileNpmPluginLoadPath(params: {
   };
 }
 
-function isExactRegistryNpmSpec(spec: string | undefined): spec is string {
-  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
-  return parsed?.selectorKind === "exact-version";
-}
-
 export function resolveNpmInstallRecordSpec(params: {
   requestedSpec?: string;
   resolution?: NpmSpecResolution;
   pinResolvedRegistrySpec?: boolean;
 }): string | undefined {
   const resolvedSpec = params.resolution?.resolvedSpec;
-  if (!params.pinResolvedRegistrySpec || !isExactRegistryNpmSpec(resolvedSpec)) {
-    return params.requestedSpec;
-  }
-  return resolvedSpec;
+  return params.pinResolvedRegistrySpec &&
+    resolvedSpec &&
+    parseRegistryNpmSpec(resolvedSpec)?.selectorKind === "exact-version"
+    ? resolvedSpec
+    : params.requestedSpec;
 }
 
 export function recordPluginInstallInRecords(

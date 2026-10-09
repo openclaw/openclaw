@@ -11,6 +11,11 @@ import {
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
@@ -77,14 +82,10 @@ function runQueueDragAutoScroll(): void {
 
 function updateQueueDragAutoScroll(container: HTMLElement, pointerY: number): void {
   const bounds = container.getBoundingClientRect();
-  const topProximity = Math.min(
-    QUEUE_DRAG_SCROLL_EDGE,
-    Math.max(0, QUEUE_DRAG_SCROLL_EDGE - (pointerY - bounds.top)),
-  );
-  const bottomProximity = Math.min(
-    QUEUE_DRAG_SCROLL_EDGE,
-    Math.max(0, QUEUE_DRAG_SCROLL_EDGE - (bounds.bottom - pointerY)),
-  );
+  const edgeProximity = (distance: number) =>
+    Math.min(QUEUE_DRAG_SCROLL_EDGE, Math.max(0, QUEUE_DRAG_SCROLL_EDGE - distance));
+  const topProximity = edgeProximity(pointerY - bounds.top);
+  const bottomProximity = edgeProximity(bounds.bottom - pointerY);
   const proximity = bottomProximity > 0 ? bottomProximity : -topProximity;
   const velocity = (proximity / QUEUE_DRAG_SCROLL_EDGE) * QUEUE_DRAG_SCROLL_MAX_SPEED;
   if (velocity === 0) {
@@ -322,6 +323,16 @@ function renderChatQueueItem(
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
     editing ? " chat-queue__item--editing" : ""
   }`;
+  const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => html`<button
+    class="chat-queue__action chat-queue__${action}"
+    type="button"
+    ?disabled=${disabled}
+    aria-label=${t(`chat.queue.${action}QueuedMessage`)}
+    @click=${() => (action === "retry" ? props.onQueueRetry?.(item.id) : props.onQueueSteer?.(item.id))}
+  >
+    ${action === "retry" ? icons.refresh : icons.arrowUp}
+    <span>${t(`chat.queue.${action}`)}</span>
+  </button>`;
   // The error occupies the grid's final columns below the primary row, so a
   // diagnostic grows the attached tray without disturbing its action rail.
   return html`
@@ -491,7 +502,7 @@ function renderChatQueueItem(
                 }
               }}
               @keydown=${(event: KeyboardEvent) => {
-                if (event.isComposing || event.keyCode === 229) {
+                if (isComposingKeyboardEvent(event)) {
                   return;
                 }
                 if (event.key === "Escape") {
@@ -503,6 +514,9 @@ function renderChatQueueItem(
                   edit?.onEditSubmit?.();
                 }
               }}
+              @compositionend=${recordCompositionEnd}
+              @keyup=${clearCompositionEnd}
+              @blur=${clearCompositionEnd}
             ></textarea>`
           : html`<span class="chat-queue__copy">
               <span class="chat-queue__text" title=${text}>${text}</span>
@@ -531,37 +545,8 @@ function renderChatQueueItem(
             </span>`
       }
       <span class="chat-queue__actions">
-        ${
-          failed && !editing && props.onQueueRetry
-            ? html`
-                <button
-                  class="chat-queue__action chat-queue__retry"
-                  type="button"
-                  aria-label=${t("chat.queue.retryQueuedMessage")}
-                  @click=${() => props.onQueueRetry?.(item.id)}
-                >
-                  ${icons.refresh}
-                  <span>${t("chat.queue.retry")}</span>
-                </button>
-              `
-            : nothing
-        }
-        ${
-          showsSteer
-            ? html`
-                <button
-                  class="chat-queue__action chat-queue__steer"
-                  type="button"
-                  ?disabled=${!canSteer}
-                  aria-label=${t("chat.queue.steerQueuedMessage")}
-                  @click=${() => props.onQueueSteer?.(item.id)}
-                >
-                  ${icons.arrowUp}
-                  <span>${t("chat.queue.steer")}</span>
-                </button>
-              `
-            : nothing
-        }
+        ${failed && !editing && props.onQueueRetry ? renderDeliveryAction("retry") : nothing}
+        ${showsSteer ? renderDeliveryAction("steer", !canSteer) : nothing}
         ${
           editing
             ? html`
@@ -592,7 +577,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
+                    ?disabled=${item.serverQueued && !props.canRemoveServerQueued}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.

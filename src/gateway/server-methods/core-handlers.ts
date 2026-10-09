@@ -20,6 +20,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
   "claws-packages": () =>
     import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
+  "claws-removal-journal": () =>
+    import("./claws-removal-journal.js").then((module) => module.clawsRemovalJournalHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
@@ -128,6 +130,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>
     import("./sessions-mutations.js").then((module) => module.sessionMutationHandlers),
+  "session-processes": () =>
+    import("./session-processes.js").then((module) => module.sessionProcessHandlers),
   "sessions-read": () => import("./sessions-read.js").then((module) => module.sessionReadHandlers),
   "sessions-rewind": () =>
     import("./sessions-rewind.js").then((module) => module.sessionRewindHandlers),

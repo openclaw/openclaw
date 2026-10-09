@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
@@ -10,8 +12,15 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
+import {
+  readTranscriptContextStateInTransaction,
+  readTranscriptContextVersionInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -48,7 +57,17 @@ function inCustody<T>(
     ? runWithSessionPendingInputWorkerCustody(
         input.custody,
         input.relocation,
-        () => context.admit("transaction", { kind: "session-turn-custody" }),
+        () =>
+          context.admit("transaction", {
+            kind: "session-turn-custody",
+            authority: input.custody!.preparedAuthority
+              ? readSessionPendingInputAuthorityFacts(
+                  context.open(),
+                  input.custody!.sessionKey,
+                  input.custody!.agentId,
+                )
+              : undefined,
+          }),
         owned,
       ).value
     : owned();
@@ -92,6 +111,19 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
       : !expectedEntry
         ? sqliteSessionTranscriptTurnRebound(selected, input.options.sessionFile)
         : undefined;
+  const transcriptState =
+    !result && input.options.messages.length
+      ? readTranscriptContextStateInTransaction(database, scope.sessionId)
+      : undefined;
+  if (input.prepareColdTranscript && transcriptState?.coldArchive) {
+    return {
+      result: undefined,
+      messages: [],
+      coldArchive: transcriptState.coldArchive,
+      version: undefined,
+      goalId: undefined,
+    };
+  }
   const messages = result
     ? []
     : inCustody(input, context, () =>
@@ -114,6 +146,8 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
   return {
     result,
     messages,
+    coldArchive: undefined,
+    version: transcriptState?.version,
     goalId:
       mutation && !result && expectedEntry && input.options.messages.length
         ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
@@ -134,10 +168,36 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
         sessionKey: input.sessionKey,
         sessionId: input.options.expectedSessionId,
       };
-      const messages = input.options.messages.map((append) => ({
+      const transactionVersion = input.options.messages.some((append) => append.preparationVersion)
+        ? { ...readTranscriptContextVersionInTransaction(database, scope.sessionId) }
+        : undefined;
+      const messages = input.options.messages.map((append, index) => ({
         ...append,
         ...(append.preparation
           ? { prepareMessageAfterIdempotencyCheck: () => append.preparation!.message }
+          : {}),
+        ...(append.freshGuard || append.preparation
+          ? {
+              beforeFreshMessageCommit: () => {
+                // The append kernel invokes this only after replay and custody recognition.
+                if (append.preparation && !append.preparation.prepared) {
+                  throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+                }
+                if (
+                  append.preparationVersion &&
+                  !isDeepStrictEqual(append.preparationVersion, transactionVersion)
+                ) {
+                  throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+                }
+                if (append.freshGuard) {
+                  context.admit("transaction", {
+                    kind: "session-turn-fresh",
+                    index,
+                    sourceValidation: readSessionSourceValidation(database, append.sources),
+                  });
+                }
+              },
+            }
           : {}),
       }));
       const kernel = createSessionTranscriptTurnKernel(
@@ -151,7 +211,7 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
       );
       // Prepared host hooks are never replayed after a foreign writer changes their idempotency decision.
       for (const append of input.options.messages) {
-        if (!append.preparation) {
+        if (!append.preparation?.prepared) {
           continue;
         }
         const key = readMessageIdempotencyKey(append.message);
@@ -175,23 +235,43 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
           projectionNeedsReconcile = true;
         },
       });
+      const revision = getSqliteReadScopeRevision(database.db);
+      const publication = committed.identity
+        ? prepareSessionEntryReplacementPublication(
+            {
+              ...committed.identity,
+              pendingArchiveRecovery: false,
+              membershipInvalidatedKeys: [],
+              maintenancePlans: [],
+            },
+            database,
+          )
+        : undefined;
+      const custodyEntry =
+        input.custody &&
+        revision &&
+        getSqliteReadScopeRevision(database.db) === revision &&
+        publication?.current.get(input.custody.sessionKey);
       const candidate: SessionTurnCommitted = {
         kind: "session-turn",
         result: committed.result,
         projectionNeedsReconcile,
         sequences: committed.result.appendedMessages.map(readCommittedTranscriptMessageSequence),
         custody: readSessionPendingInputWorkerReceipt(database),
-        publication: committed.identity
-          ? prepareSessionEntryReplacementPublication(
-              {
-                ...committed.identity,
-                pendingArchiveRecovery: false,
-                membershipInvalidatedKeys: [],
-                maintenancePlans: [],
-              },
-              database,
-            )
-          : undefined,
+        authority:
+          input.custody?.preparedAuthority &&
+          input.custody.databasePath ===
+            (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path)
+            ? readSessionPendingInputAuthorityFacts(
+                database,
+                input.custody.sessionKey,
+                input.custody.agentId,
+                custodyEntry && revision
+                  ? { sessionKey: input.custody.sessionKey, entry: custodyEntry, revision }
+                  : undefined,
+              )
+            : undefined,
+        publication,
       };
       return transferSessionEntryWorkerCandidate(database, context.admit, candidate);
     }),

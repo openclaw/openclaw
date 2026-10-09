@@ -22,6 +22,7 @@ import {
   type WorkerConnectionIdentity,
 } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
@@ -582,6 +583,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!binding.ok) {
       return binding;
     }
+    const environment = options.store.get(identity.environmentId);
+    if (!environment || workerInferencePlacement(environment) !== "gateway") {
+      return { ok: false, reason: "model-not-approved" };
+    }
     const source = sourceFor(identity);
     if (!source) {
       return { ok: false, reason: "session-not-attached" };
@@ -591,13 +596,8 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!runtime) {
         return { ok: false, reason: "invalid-context" };
       }
-      const surface = await runtime.getSurface(identity);
+      const { tools } = await runtime.getPromptProjection(identity);
       source.receiptAuthority();
-      const tools = surface.tools.map(({ definition: { name, description, parameters } }) => ({
-        name,
-        description,
-        parameters,
-      }));
       if (JSON.stringify(request.context.tools) !== JSON.stringify(tools)) {
         return { ok: false, reason: "invalid-context" };
       }

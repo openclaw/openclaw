@@ -108,10 +108,7 @@ export function createConfigFileAdapter(opts: {
     }
     primaryTarget ??=
       admitted.find((entry) => entry.primary)?.primary?.target ?? nodePath.resolve(opts.path);
-    const plans = new Map<
-      string,
-      { root: Root; entries: Map<string, string>; scopes: WatchScope[] }
-    >();
+    const plans = new Map<string, Pick<Source, "root" | "entries" | "scopes">>();
     for (const boundary of admitted) {
       const entries = [...configObservationEntries(boundary, desiredPaths)];
       for (let offset = 0; offset < entries.length; offset += 128) {

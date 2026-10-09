@@ -34,26 +34,11 @@ const VOLCENGINE_VOICES: readonly string[] = [
   "zh_female_shuangkuaisisi_moon_bigtts",
 ];
 
-type VolcengineTtsProviderConfig = {
-  apiKey?: string;
-  appId?: string;
-  token?: string;
-  voice: string;
-  cluster: string;
-  resourceId: string;
-  appKey: string;
-  baseUrl?: string;
-  speedRatio?: number;
-  emotion?: string;
-};
-
 function normalizeSpeedRatio(value: unknown): number | undefined {
   return asFiniteNumberInRange(value, { min: 0.2, max: 3 });
 }
 
-function normalizeVolcengineProviderConfig(
-  rawConfig: Record<string, unknown>,
-): VolcengineTtsProviderConfig {
+function normalizeVolcengineProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.volcengine) ?? asOptionalRecord(rawConfig.volcengine);
   return {
@@ -96,17 +81,14 @@ function resolveSeedSpeechApiKey(configApiKey?: string): string | undefined {
   );
 }
 
-function resolveLegacyVolcengineCredentials(config: {
-  appId?: string;
-  token?: string;
-}): Pick<VolcengineTtsProviderConfig, "appId" | "token"> {
+function resolveLegacyVolcengineCredentials(config: { appId?: string; token?: string }) {
   return {
     appId: trimToUndefined(config.appId) ?? trimToUndefined(process.env.VOLCENGINE_TTS_APPID),
     token: resolveSpeechProviderApiKey(config.token, process.env.VOLCENGINE_TTS_TOKEN),
   };
 }
 
-function readProviderConfig(config: SpeechProviderConfig): VolcengineTtsProviderConfig {
+function readProviderConfig(config: SpeechProviderConfig) {
   return normalizeVolcengineProviderConfig({
     volcengine: { ...config, token: trimToUndefined(config.token) },
   });

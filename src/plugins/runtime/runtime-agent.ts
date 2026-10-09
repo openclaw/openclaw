@@ -1,4 +1,3 @@
-// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -29,6 +28,10 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  captureExternalSessionCommitGuard,
+  sessionEntryCommitGuardOptions,
+} from "../../config/sessions/session-source-authority.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -80,11 +83,24 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
+async function getSessionEntryAsync(
+  params: RuntimeSessionStoreReadParams,
+): Promise<SessionEntry | undefined> {
+  const { readSessionEntryReadOnlyInWorker } =
+    await import("../../config/sessions/session-entry-read-runtime.js");
+  return await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
+}
+
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return listEntries({
+    ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
+    ...(params.includeParticipants !== undefined
+      ? { includeParticipants: params.includeParticipants }
+      : {}),
+    ...(params.captureSource ? { captureSource: params.captureSource } : {}),
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -96,7 +112,9 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
 
 const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
-    assertCommitAllowed: params.assertCommitAllowed,
+    ...sessionEntryCommitGuardOptions(
+      captureExternalSessionCommitGuard(params.assertCommitAllowed),
+    ),
     fallbackEntry: params.fallbackEntry,
     maintenanceConfig:
       params.maintenanceConfig !== undefined
@@ -149,7 +167,7 @@ async function createSessionEntry(
     import("../../gateway/session-utils.js"),
     import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
-    import("../../gateway/operator-role-policy.js"),
+    import("../../gateway/operator-session-run.js"),
   ]);
   creationOwner.assertCurrent();
   const requiredCreation = resolveSandboxedSessionCreation(
@@ -283,6 +301,7 @@ async function createSessionEntry(
             }
           },
           { config: params.cfg, agentId: captured.agentId, entry: expected },
+          creationOwner,
         );
         initialization.handle.assertCurrent();
         if (!afterCreate) {
@@ -466,7 +485,7 @@ async function createSessionEntry(
             {
               preserveActivity: true,
               requireWriteSuccess: true,
-              assertCommitAllowed: () => initialization?.handle.assertCurrent(),
+              ...sessionEntryCommitGuardOptions(creationOwner.assertCurrent),
             },
           );
           if (!finalized) {
@@ -615,7 +634,6 @@ async function runWithSessionWorkAdmission<T>(
   }
 }
 
-/** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
@@ -685,6 +703,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
+    getSessionEntryAsync,
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,

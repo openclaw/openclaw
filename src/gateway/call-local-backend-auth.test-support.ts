@@ -35,6 +35,24 @@ export function registerGatewayCallLocalBackendAuthTests({
   loadDeviceAuthTokenReadOnlyMock: DeviceAuthLookupMock;
   loadOriginDeviceTokenMock: DeviceAuthLookupMock;
 }): void {
+  it.each([undefined, "read-only"] as const)(
+    "fails before connecting when identity storage is unavailable (%s)",
+    async (sharedStateMode) => {
+      setGatewayConfig({ mode: "local", auth: { mode: "none" } });
+      const load =
+        sharedStateMode === "read-only"
+          ? loadDeviceIdentityIfPresentMock
+          : loadOrCreateDeviceIdentityMock;
+      load.mockImplementationOnce(() => {
+        throw new Error("synthetic unreadable identity storage");
+      });
+      await expect(callGateway({ method: "sessions.create", sharedStateMode })).rejects.toThrow(
+        /device identity.*openclaw doctor --fix/is,
+      );
+      expect(getClientOptions()).toBeNull();
+    },
+  );
+
   it("uses local backend shared auth without a device identity when required", async () => {
     setLocalLoopbackGatewayConfig();
 

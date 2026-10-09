@@ -26,3 +26,8 @@ export {
   type NativeSessionBindingAuthority,
   type NativeSessionBindingWithCurrent,
 } from "../agents/harness/native-session/binding-authority.js";
+export {
+  createNativeSessionCommitFinalizer,
+  wrapNativeSessionDeletionMutation,
+  isNativeSessionDeletionUnresolved,
+} from "../agents/harness/native-session/deletion-participant.js";

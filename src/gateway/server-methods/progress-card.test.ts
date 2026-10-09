@@ -46,7 +46,7 @@ function createHarness() {
       respond,
       context: {
         broadcast,
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
       } as unknown as GatewayRequestContext,
     } as never);
     return respond;

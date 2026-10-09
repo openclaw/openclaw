@@ -59,7 +59,7 @@ function createSession(
   const messages = sessionManager
     .getBranch()
     .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message as AgentMessage);
+    .map((entry) => structuredClone(entry.message) as AgentMessage);
   return { sessionManager, messages };
 }
 

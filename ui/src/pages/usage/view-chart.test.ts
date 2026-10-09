@@ -53,61 +53,45 @@ describe("renderDailyChartCompact", () => {
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true, ["2026-05-04"]);
   });
 
-  it("labels the true midpoint of a compressed chart scale", () => {
-    const { container } = renderDailyChart([
-      dailyEntry("2026-05-03", 500, 1),
-      dailyEntry("2026-05-04", 1_000, 100),
-    ]);
-
+  it.each([
+    { costs: [1, 100], labels: ["$100.00", "$25.00", "$0.00"], stacked: false, badge: "√" },
+    { costs: [0.004, 0.008], labels: ["$0.0080", "$0.0040", "$0.00"], stacked: false, badge: null },
+    { costs: [0.00001], labels: ["$0.000010", "$0.000005", "$0.00"], stacked: true, badge: null },
+    {
+      costs: Array.from({ length: 15 }, (_, index) => index + 1),
+      labels: ["$15.00", "$7.50", "$0.00"],
+      stacked: false,
+      badge: null,
+    },
+  ])("scales cost bars and labels consistently for $costs", ({ costs, labels, stacked, badge }) => {
+    const daily = costs.map((cost, index) => ({
+      ...dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, cost),
+      ...(stacked ? { inputCost: 0.000004, outputCost: 0.000006 } : {}),
+    }));
+    const { container } = renderDailyChart(daily, "cost", stacked ? "by-type" : "total");
     expect(
       Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
         entry.textContent?.trim(),
       ),
-    ).toEqual(["$100.00", "$25.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")?.textContent?.trim()).toBe("√");
-  });
-
-  it("preserves sub-cent values in chart scale labels", () => {
-    const { container } = renderDailyChart([
-      dailyEntry("2026-05-03", 500, 0.004),
-      dailyEntry("2026-05-04", 1_000, 0.008),
-    ]);
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.0080", "$0.0040", "$0.00"]);
-  });
-
-  it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
-    const microCostDay = {
-      ...dailyEntry("2026-05-04", 1_000, 0.00001),
-      inputCost: 0.000004,
-      outputCost: 0.000006,
-    };
-    const { container } = renderDailyChart([microCostDay], "cost", "by-type");
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
-    expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
-    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
-    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip?.content).toContain("$0.000010");
-    expect(tooltip?.content).toContain("Output $0.000006");
-    expect(tooltip?.content).toContain("Input $0.000004");
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("reserves the totals row when dense ranges hide bar totals", () => {
-    const daily = Array.from({ length: 15 }, (_, index) =>
-      dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, index + 1),
+    ).toEqual(labels);
+    const scaleBadge = container.querySelector(".daily-chart-scale-badge");
+    if (badge === null) {
+      expect(scaleBadge).toBeNull();
+    } else {
+      expect(scaleBadge?.textContent?.trim()).toBe(badge);
+    }
+    if (stacked) {
+      expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
+      expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
+      const tooltip = container.querySelector<HTMLElement & { content: string }>(
+        "openclaw-tooltip",
+      );
+      expect(tooltip?.content).toContain("$0.000010");
+      expect(tooltip?.content).toContain("Output $0.000006");
+      expect(tooltip?.content).toContain("Input $0.000004");
+    }
+    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(
+      costs.length === 15 ? 15 : 0,
     );
-    const { container } = renderDailyChart(daily);
-
-    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(15);
   });
 });

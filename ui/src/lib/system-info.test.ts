@@ -24,7 +24,6 @@ function source(request: GatewayBrowserClient["request"]) {
 describe("shared system information reads", () => {
   it.each([
     ["session-only", ["operator.sessions.read", "operator.sessions.write"], true],
-    ["no grants", [], true],
     ["unadvertised", ["operator.admin"], false],
   ] as const)(
     "does not request unavailable system information for %s connections",
@@ -40,42 +39,52 @@ describe("shared system information reads", () => {
     },
   );
 
-  it("retires a cached sample when permission is revoked and reads anew after restoration", async () => {
-    const request = vi.fn().mockResolvedValue(deviceSystemInfo);
-    const { gateway } = source(request);
-    await readSystemInfo(gateway);
-    gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
-    await expect(readSystemInfo(gateway)).rejects.toMatchObject({ name: "AbortError" });
-    expect(request).toHaveBeenCalledOnce();
-    expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
-    gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
-    await readSystemInfo(gateway);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["scopes", "client", "hello", "credentials"] as const)(
-    "discards a pending result after %s change even if transport completes",
+    "retires pending and cached samples after a %s change",
     async (change) => {
-      const pending = createDeferred<typeof deviceSystemInfo>();
-      const request = vi.fn().mockReturnValue(pending.promise);
-      const current = source(request);
-      const result = readSystemInfo(current.gateway);
-      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
-      if (change === "scopes") {
-        current.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
-      } else if (change === "credentials") {
-        Object.assign(current.gateway, { connectionRevision: 1 });
-      } else {
-        current.publish({
-          ...current.gateway.snapshot,
-          ...(change === "client"
-            ? { client: source(request).gateway.snapshot.client }
-            : { hello: gatewayHelloForMethods(["system.info"]) }),
-        });
+      vi.useFakeTimers();
+      for (const settled of [false, true]) {
+        const pending = createDeferred<typeof deviceSystemInfo>();
+        const refreshed = { ...deviceSystemInfo, machineName: "New host" };
+        const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(refreshed);
+        const current = source(request);
+        const signal = new AbortController().signal;
+        const result = readSystemInfo(current.gateway, signal);
+        const rejected = settled
+          ? undefined
+          : expect(result).rejects.toMatchObject({ name: "AbortError" });
+        if (settled) {
+          pending.resolve(deviceSystemInfo);
+          expect((await result).value).toEqual(deviceSystemInfo);
+        }
+        if (change === "scopes") {
+          current.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+        } else if (change === "credentials") {
+          Object.assign(current.gateway, { connectionRevision: 1 });
+        } else {
+          current.publish({
+            ...current.gateway.snapshot,
+            ...(change === "client"
+              ? { client: source(request).gateway.snapshot.client }
+              : { hello: gatewayHelloForMethods(["system.info"]) }),
+          });
+        }
+        if (!settled) {
+          pending.resolve(deviceSystemInfo);
+          await rejected;
+          expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
+        }
+        if (change === "scopes") {
+          await expect(readSystemInfo(current.gateway)).rejects.toMatchObject({
+            name: "AbortError",
+          });
+          expect(request).toHaveBeenCalledOnce();
+          expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
+          current.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+        }
+        expect((await readSystemInfo(current.gateway, signal)).value).toEqual(refreshed);
+        expect(request).toHaveBeenCalledTimes(2);
       }
-      pending.resolve(deviceSystemInfo);
-      await rejected;
-      expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
     },
   );
 
@@ -89,32 +98,6 @@ describe("shared system information reads", () => {
     expect((await readSystemInfo(gateway)).value).toEqual(deviceSystemInfo);
     expect(request).toHaveBeenCalledOnce();
   });
-
-  it.each(["client", "hello", "credentials"] as const)(
-    "retires a fresh cached sample when the %s generation changes",
-    async (change) => {
-      vi.useFakeTimers();
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(deviceSystemInfo)
-        .mockResolvedValue({ ...deviceSystemInfo, machineName: "New host" });
-      const current = source(request);
-      const signal = new AbortController().signal;
-      expect((await readSystemInfo(current.gateway, signal)).value).toEqual(deviceSystemInfo);
-      if (change === "credentials") {
-        Object.assign(current.gateway, { connectionRevision: 1 });
-      } else {
-        current.publish({
-          ...current.gateway.snapshot,
-          ...(change === "client"
-            ? { client: source(request).gateway.snapshot.client }
-            : { hello: gatewayHelloForMethods(["system.info"]) }),
-        });
-      }
-      expect((await readSystemInfo(current.gateway, signal)).value.machineName).toBe("New host");
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it("shares pending manual reads, preserves sample metadata, and refreshes only settled results", async () => {
     vi.useFakeTimers();

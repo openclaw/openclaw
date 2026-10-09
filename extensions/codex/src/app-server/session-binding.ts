@@ -6,11 +6,10 @@ import {
   type AgentHarnessSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  prepareNativeSessionGenerationAuthority,
-  type NativeSessionBindingAuthority,
   createNativeSessionBindingLifecycle,
   reclaimNativeSessionGenerationWithAuthority,
   resolveNativeSessionBindingWithAuthority,
+  type NativeSessionBindingAuthority,
   type NativeSessionBindingLeaseOptions,
   type NativeSessionBindingStateStore,
   type NativeSessionGenerationAdoptionResult,
@@ -29,6 +28,10 @@ import {
   adoptCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
+import {
+  CODEX_APP_SERVER_BINDING_LEASE,
+  PHYSICAL_SESSION_RETIRE_TTL_MS,
+} from "./session-binding-meta.js";
 import {
   mutateNativeSubagentBinding,
   type CodexNativeSubagentBindingMutation,
@@ -76,43 +79,11 @@ export {
 export type CodexBindingAuthority = NativeSessionBindingAuthority;
 export type CodexBindingWithCurrent = NativeSessionBindingAuthority["withCurrent"];
 
-const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
-
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
 } from "./session-binding-meta.js";
-export const CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
-const BINDING_LEASE_STALE_MS = CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS + 5_000;
-const BINDING_LEASE_WAIT_MS = BINDING_LEASE_STALE_MS + 5_000;
-const BINDING_LEASE_RENEW_INTERVAL_MS = Math.floor(BINDING_LEASE_STALE_MS / 3);
-// Physical session keys cannot have a successor generation. Retain their
-// retirement fence only long enough for bounded stale lease work to drain.
-const PHYSICAL_SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
-
-/** Decides whether a run may share the durable stable-key binding owner. */
-export async function resolveCodexRunSessionBindingAuthority(params: {
-  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
-  config?: OpenClawConfig;
-  storePath?: string;
-}): Promise<Awaited<ReturnType<typeof prepareNativeSessionGenerationAuthority>>["state"]> {
-  return (
-    await prepareNativeSessionGenerationAuthority({
-      ...params,
-      target: params.identity,
-      createSupersededError: createCodexSessionGenerationSupersededError,
-    })
-  ).state;
-}
-
-/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
-export function createCodexSessionGenerationSupersededError(
-  sessionId: string,
-): AgentHarnessSessionSupersededError {
-  return new AgentHarnessSessionSupersededError(
-    `Codex session generation is no longer current: ${sessionId}`,
-  );
-}
 
 type CodexAppServerBindingMutation =
   | CodexNativeSubagentBindingMutation
@@ -248,6 +219,15 @@ type CodexSessionGenerationReclaimParams = {
   reclaimStale?: boolean;
 };
 
+/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
+export function createCodexSessionGenerationSupersededError(
+  sessionId: string,
+): AgentHarnessSessionSupersededError {
+  return new AgentHarnessSessionSupersededError(
+    `Codex session generation is no longer current: ${sessionId}`,
+  );
+}
+
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(
   params: CodexSessionGenerationReclaimParams,
@@ -297,13 +277,9 @@ export function createCodexAppServerBindingStore(
   state: CodexBindingStateStore,
 ): CodexAppServerBindingStore {
   const lifecycle = createNativeSessionBindingLifecycle<StoredCodexAppServerBinding>(state, {
+    workerCodec: "codex",
     readRecord: readStoredCodexAppServerBinding,
-    lease: {
-      staleMs: BINDING_LEASE_STALE_MS,
-      waitMs: BINDING_LEASE_WAIT_MS,
-      retryIntervalMs: BINDING_LEASE_RETRY_INTERVAL_MS,
-      renewIntervalMs: BINDING_LEASE_RENEW_INTERVAL_MS,
-    },
+    lease: CODEX_APP_SERVER_BINDING_LEASE,
     releaseTtlMs: (key, current) =>
       current.nativeSubagentTaskImport !== undefined ||
       current.state === "active" ||
@@ -490,35 +466,21 @@ export function createCodexAppServerBindingStore(
               }
               if (ownsGeneration) {
                 if (
-                  current.state === "cleared" &&
-                  current.retired === true &&
-                  current.sessionId === mutation.expectedPreviousSessionId
+                  current.state !== "cleared" ||
+                  current.retired !== true ||
+                  current.sessionId !== mutation.expectedPreviousSessionId
                 ) {
-                  // Reset boundaries now retain the OpenClaw session id. The
-                  // authoritative session-store check above proves this fence
-                  // belongs to the previous in-place lifecycle, not live work.
                   return {
-                    result: true,
-                    next: {
-                      version: 1,
-                      state: "cleared",
-                      sessionId: identity.sessionId,
-                      ...preserveNativeTaskImport(current),
-                      ...ownedLease,
-                    },
+                    result: current.state !== "cleared" || current.retired !== true,
                   };
                 }
-                return {
-                  result: current.state !== "cleared" || current.retired !== true,
-                };
-              }
-              if (current.sessionId !== mutation.expectedPreviousSessionId) {
-                return { result: false };
-              }
-              // A stale physical generation must never turn private user-home ownership into
-              // an ordinary empty binding. Supervision adoption has an explicit generation
-              // transfer path; every other successor fails closed and preserves this owner.
-              if (current.state === "active" && current.binding.connectionScope === "supervision") {
+                // The authoritative session-store check proves this same-id fence
+                // belongs to the previous in-place lifecycle, not live work.
+              } else if (
+                current.sessionId !== mutation.expectedPreviousSessionId ||
+                // Only explicit supervision adoption can transfer private user-home ownership.
+                (current.state === "active" && current.binding.connectionScope === "supervision")
+              ) {
                 return { result: false };
               }
               return {
