@@ -248,6 +248,64 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
+  it("reports a superseded preview as retired only after Telegram confirms the delete", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.sendMessage
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockResolvedValueOnce({ message_id: 42 });
+      const onPreviewRetired = vi.fn();
+      const stream = createDraftStream(api, { onPreviewRetired });
+
+      stream.update("Old preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement preview");
+      await stream.flush();
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      expect(onPreviewRetired).toHaveBeenCalledTimes(1);
+      expect(onPreviewRetired).toHaveBeenCalledWith(17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["rejected", "unconfirmed"] as const)(
+    "does not report a preview as retired when its delete is %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const api = createMockDraftApi();
+        api.sendMessage
+          .mockResolvedValueOnce({ message_id: 17 })
+          .mockResolvedValueOnce({ message_id: 42 });
+        if (failure === "rejected") {
+          api.deleteMessage.mockRejectedValueOnce(new Error("delete rejected"));
+        } else {
+          api.deleteMessage.mockResolvedValueOnce(false);
+        }
+        const onPreviewRetired = vi.fn();
+        const stream = createDraftStream(api, { onPreviewRetired });
+
+        stream.update("Old preview");
+        await stream.flush();
+        stream.rotateToNewMessageDeferringDelete();
+        stream.update("Replacement preview");
+        await stream.flush();
+
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+        // The preview may still be visible, so its history copies must stay.
+        expect(onPreviewRetired).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["first"] as const)(
     "keeps a settled %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
