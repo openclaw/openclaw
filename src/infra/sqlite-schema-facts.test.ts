@@ -46,6 +46,15 @@ describe("admitted SQLite schema facts", () => {
     return database;
   }
 
+  function openDatabasePair(schema?: string, admitted = true) {
+    const filename = path.join(tempDirs.make("openclaw-schema-facts-"), "state.sqlite");
+    const reader = openDatabase(schema, admitted, filename);
+    // Native peers bypass this process's schema publications, as foreign writers do.
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    return { filename, reader, writer };
+  }
+
   afterEach(() => {
     for (const database of databases.splice(0)) {
       if (database.isOpen) {
@@ -140,16 +149,11 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
-    const database = openDatabase(
+    const { reader: database, writer: peer } = openDatabasePair(
       `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
-      true,
-      filename,
     );
     database.exec("PRAGMA journal_mode=WAL");
     assertCanonicalSessionValidationSchema(database);
-    const peer = new DatabaseSync(filename);
-    databases.push(peer);
     runSqliteReadOperationSync(database, () => {
       peer.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
       expect(() =>
@@ -202,15 +206,10 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("retains table and column facts with one statement per foreign data commit", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
-    const reader = openDatabase(
+    const { filename, reader, writer } = openDatabasePair(
       "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
-      true,
-      filename,
     );
     reader.exec("PRAGMA journal_mode=WAL");
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(reader, schemaMutation);
     const read = () =>
@@ -249,11 +248,10 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("invalidates derived column facts when adopting a foreign schema publication", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
-    const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
+    const { filename, reader, writer } = openDatabasePair(
+      "CREATE TABLE session_nodes (id INTEGER)",
+    );
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
     writer.exec(`
       ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
       ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
@@ -283,12 +281,8 @@ describe("admitted SQLite schema facts", () => {
   it.each(["transaction", "implicit snapshot"])(
     "observes foreign commits on the next read while preserving an active %s",
     (pin) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-foreign-"), "state.sqlite");
-      const reader = openDatabase(undefined, true, filename);
+      const { filename, reader, writer } = openDatabasePair();
       reader.exec("PRAGMA journal_mode=WAL");
-      // Bypass local schema publications, as a worker or another process does.
-      const writer = new DatabaseSync(filename);
-      databases.push(writer);
       const schemaMutation = vi.fn();
       registerSqliteSchemaMutationListener(reader, schemaMutation);
       const hasTable = (name: string) =>
@@ -345,10 +339,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
-    const reader = openDatabase(undefined, false, filename);
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
+    const { reader, writer } = openDatabasePair(undefined, false);
     const hasTable = (name: string) =>
       runSqliteReadOperationSync(reader, () => tableExists(reader, name));
     const admission = observeSqliteReadSql(StatementSync.prototype);
@@ -373,10 +364,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("executes fresh version probes inside a read scope without preparing warm statements", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-fresh-"), "state.sqlite");
-    const reader = openDatabase(undefined, true, filename);
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
+    const { reader, writer } = openDatabasePair();
     readSqliteDataVersion(reader);
     readSqliteDataVersion(reader);
     readSqliteCacheDataVersion(reader);

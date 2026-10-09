@@ -1592,9 +1592,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeGatewayRestartIntentForTargetSync"],
+        operations: ["writeGatewayRestartIntentForTargetSync", "clearGatewayRestartIntentSync"],
         evidence:
-          "CLI lifecycle src/cli/daemon-cli/lifecycle-restart-intent.ts:68,75, lifecycle-unmanaged.ts:131; update stop src/daemon/launchd-stop.ts:219,271; QA suite-runtime-gateway.ts:262. Gateway system-agent uses host.request (operations-execute.ts:601,608), not daemon lifecycle.",
+          "Native service CLI intent recording and exact-owned cleanup: daemon-cli/lifecycle-restart-intent.ts, lifecycle-unmanaged.ts, daemon/launchd-stop.ts; runtime signal consumption uses restart-lifecycle.worker.ts. Gateway system-agent uses host.request, not daemon lifecycle.",
       },
     ],
   ],
@@ -1603,7 +1603,7 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeRestartSentinelRowIfRevisionSync"],
+        operations: ["writeRestartSentinelRowIfRevisionSync", "readRestartSentinelRowForKeySync"],
         evidence:
           "src/infra/restart-sentinel.worker.ts:74,150 plus generated one-shot child in src/infra/update-managed-service-handoff.ts:101,439,1639,1649.",
       },
@@ -1612,6 +1612,21 @@ const reviewedOperations = new Map([
         operations: ["deleteRestartSentinelRowSync"],
         evidence:
           "Only src/infra/restart-sentinel.worker.ts:79; worker registration src/state/openclaw-state-worker-registry.ts:110.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-failure-report-receipt-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "replaceReceiptAtRevision",
+          "reserveUpdateFailureReportReceiptRowSync",
+          "completeUpdateFailureReportReceiptCleanupRowSync",
+        ],
+        evidence:
+          "Receipt mutations and authoritative revision rereads are called only by restart-sentinel.worker.ts; report submission and artifact sweep await that physical shared-state owner.",
       },
     ],
   ],

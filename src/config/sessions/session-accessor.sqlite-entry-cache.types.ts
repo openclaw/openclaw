@@ -140,6 +140,11 @@ export type SessionEntryReplacementPublication = {
   membershipInvalidatedKeys: string[];
   sharingUnchangedKeys: string[];
   generationUnchangedKeys: string[];
+  /** Scoped receipt; raw writers and other session domains remain incomplete. */
+  receipt?: import("../../infra/sqlite-commit-receipt.js").SqliteCommitReceipt<
+    { entry: SessionEntry; projection: SessionEntryProjectionFacts },
+    SessionEntryPublicationSource
+  >;
 };
 
 export type CreationDatabase =

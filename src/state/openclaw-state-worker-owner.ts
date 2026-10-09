@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -10,6 +9,7 @@ import {
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
+  prepareSharedStateSqliteWorkerRuntime,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   isSqliteWorkerStoreAvailable,
@@ -38,6 +38,7 @@ import type {
   OpenClawStateWorkerCleanupOperations,
   OpenClawStateWorkerOperationOptions as OperationOptions,
 } from "./openclaw-state-worker-contract.js";
+import { createStateWorkerMemoryPressureSubscription } from "./openclaw-state-worker-memory-pressure.js";
 import {
   assertOpenClawStateWorkerActorPath,
   captureOpenClawStateWorkerOpeningGuard,
@@ -60,21 +61,10 @@ function createSharedStateWorkerOwner() {
   const activeEntries = new Set<Entry>();
   const retiring = new Map<Entry, { pending?: Promise<void>; actorSettlement?: Promise<void> }>();
   const retiringActors = new Map<object, ActorRetirement>();
-  const memoryPressure = channel("openclaw.memory.critical");
-  let pressureSubscribed = false;
-  const refreshPressureSubscription = () => {
-    const hasCustody =
-      stores.size > 0 || retiring.size > 0 || retiringActors.size > 0 || activeEntries.size > 0;
-    if (hasCustody === pressureSubscribed) {
-      return;
-    }
-    pressureSubscribed = hasCustody;
-    if (hasCustody) {
-      memoryPressure.subscribe(retireIdleWorkers);
-    } else {
-      memoryPressure.unsubscribe(retireIdleWorkers);
-    }
-  };
+  const refreshPressureSubscription = createStateWorkerMemoryPressureSubscription(
+    () => stores.size > 0 || retiring.size > 0 || retiringActors.size > 0 || activeEntries.size > 0,
+    retireIdleWorkers,
+  );
   const matches = (entry: Entry, identity?: DatabasePathIdentity) =>
     identity === undefined || entry.context.admission.identity.key === identity.key;
   const hasActiveActorOperations = (entry: Entry) =>
@@ -438,6 +428,9 @@ function createSharedStateWorkerOwner() {
     }
   }
   return {
+    prepareRuntime() {
+      return prepareSharedStateSqliteWorkerRuntime(captureRuntimeWorkerSource(moduleUrl));
+    },
     close,
     retainOperation,
     // Source and bundled callers must share the owner's backend URL.
@@ -501,9 +494,12 @@ function createSharedStateWorkerOwner() {
     },
     async open(
       context: OpenClawStateWorkerContext,
-      options: Pick<OperationOptions, "existingOnly" | "assertCurrent" | "preparation"> = {},
+      options: Pick<
+        OperationOptions,
+        "existingOnly" | "assertCurrent" | "preparation" | "runtimePreparation"
+      > = {},
     ): Promise<Store | undefined> {
-      const { existingOnly = false, assertCurrent, preparation } = options;
+      const { existingOnly = false, assertCurrent, preparation, runtimePreparation } = options;
       const { admission } = context;
       const source = captureRuntimeWorkerSource(moduleUrl);
       const assertAdmission = () => {
@@ -617,6 +613,7 @@ function createSharedStateWorkerOwner() {
               {
                 maintenanceScope: context.maintenanceScope,
                 preparation,
+                runtimePreparation,
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
                 },

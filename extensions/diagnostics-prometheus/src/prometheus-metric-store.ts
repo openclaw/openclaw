@@ -1,4 +1,4 @@
-import { metricKey, type LabelSet } from "./prometheus-format.js";
+import { formatLabels, metricKey, type LabelSet } from "./prometheus-format.js";
 
 type ScalarSample = {
   help: string;
@@ -8,10 +8,11 @@ type ScalarSample = {
 
 type HistogramSample = {
   buckets: number[];
+  bucketPrefixes: string[];
   counts: number[];
   count: number;
   help: string;
-  labels: LabelSet;
+  labels: string;
   sum: number;
 };
 
@@ -103,10 +104,14 @@ export function createPrometheusMetricStore() {
     if (!sample) {
       sample = {
         buckets,
+        // Labels and bounds are fixed for this series; reset releases the prepared text.
+        bucketPrefixes: [...buckets, "+Inf"].map(
+          (le) => `${name}_bucket${formatLabels({ ...labels, le: String(le) })} `,
+        ),
         counts: buckets.map(() => 0),
         count: 0,
         help,
-        labels,
+        labels: formatLabels(labels),
         sum: 0,
       };
       histograms.set(key, sample);

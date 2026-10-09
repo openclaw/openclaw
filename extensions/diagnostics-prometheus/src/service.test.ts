@@ -22,6 +22,40 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("preserves escaped histogram labels and fresh values across scrapes and restarts", () => {
+    const metrics = createMetricsHarness();
+    const event = {
+      type: "gateway.rpc" as const,
+      method: 'test."\\\n😀',
+      phase: "handler" as const,
+      outcome: "returned" as const,
+      durationMs: 5,
+      admissionMs: 0,
+    };
+    const name = "openclaw_gateway_rpc_handler_seconds";
+    const label = String.raw`method="test.\"\\\n😀"`;
+    metrics.record(event);
+    const first = metrics.render();
+    expect(first).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
+    expect(first).toContain(`${name}_bucket{le="+Inf",${label}} 1\n`);
+    expect(metrics.render()).toBe(first);
+
+    metrics.record({ ...event, durationMs: 10 });
+    const updated = metrics.render();
+    expect(updated).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
+    expect(updated).toContain(`${name}_bucket{le="0.01",${label}} 2\n`);
+    expect(updated).toContain(`${name}_bucket{le="+Inf",${label}} 2\n`);
+    expect(updated).toContain(`${name}_sum{${label}} 0.015\n`);
+    expect(updated).toContain(`${name}_count{${label}} 2\n`);
+
+    metrics.stop();
+    expect(metrics.render()).toBe("");
+    metrics.start();
+    metrics.record(event);
+    expect(metrics.render()).toBe(first);
+    metrics.stop();
+  });
+
   it("exports bounded byte histograms, including late frames and negative heap changes", () => {
     const metrics = createMetricsHarness();
     const base = { type: "gateway.rpc" as const, method: "sessions.history" };

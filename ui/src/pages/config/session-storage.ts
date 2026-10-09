@@ -46,10 +46,9 @@ class SessionStorageSettings extends OpenClawLightDomElement {
   @property({ type: Boolean }) advancedExpanded = false;
 
   @state() private ageDraft: string | null = null;
-  @state() private runBusy = false;
   @state() private runError: string | null = null;
   @state() private runOutcome: string | null = null;
-  private runOperation: object | null = null;
+  @state() private runOperation: object | null = null;
   private followingRun = false;
 
   private connectionHello: unknown;
@@ -73,7 +72,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     this.followingRun = false;
     this.ageDraft = null;
     this.runOperation = null;
-    this.runBusy = false;
     this.runError = null;
     this.runOutcome = null;
   }
@@ -186,7 +184,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const config = this.context.runtimeConfig;
     return (
       this.mutationDisabled ||
-      this.runBusy ||
+      this.runOperation !== null ||
       !this.client ||
       !config.canSet ||
       !config.state.connected ||
@@ -237,7 +235,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const gateway = this.context.gateway;
     const hello = gateway.snapshot.hello;
     this.runOperation = operation;
-    this.runBusy = true;
     this.runError = null;
     this.runOutcome = null;
     const isCurrent = () =>
@@ -263,7 +260,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.runBusy = false;
         this.runOperation = null;
       }
     }
@@ -471,7 +467,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
                   @click=${() => void this.runNow()}
                 >
                   ${t(
-                    this.runBusy || status?.maintenance.running
+                    this.runOperation !== null || status?.maintenance.running
                       ? "configView.sessionStorage.running"
                       : "configView.sessionStorage.runNow",
                   )}

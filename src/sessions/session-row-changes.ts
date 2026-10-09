@@ -2,10 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import {
-  deferSqlitePostCommitPublication,
-  stageSqliteTransactionState,
+  publishSqliteCommittedState,
+  stageSqliteCommittedPublication,
+  type SqliteCommittedPublication,
 } from "../infra/sqlite-post-commit.js";
-import { resolveGlobalSet } from "../shared/global-singleton.js";
+import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowFacts =
@@ -82,6 +83,15 @@ const projectionListeners = resolveGlobalSet<(change: SessionRowChange) => void>
   Symbol.for("openclaw.sessionRowProjectionChanges"),
   "close-and-restart",
 );
+const invalidationSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionRowInvalidationSources"),
+  () => new WeakMap<object, object>(),
+);
+
+/** Failure invalidations retain physical provenance, but never their old postimages. */
+export function sessionRowChangeSource(change: object): object {
+  return invalidationSources.get(change) ?? change;
+}
 
 export const sessionChanges = {
   subscribe(listener: (change: SessionRowNotification) => void): () => void {
@@ -109,44 +119,68 @@ export const sessionChanges = {
     database?: DatabaseSync,
     beforePublicNotifications?: () => void,
   ): void {
-    const publishFacts = () => {
-      for (const change of changes) {
-        notifyListeners(factListeners, change);
+    const install = (
+      targets: Iterable<(change: SessionRowChange) => void>,
+      batch: readonly SessionRowChange[],
+    ) => {
+      const failures: unknown[] = [];
+      for (const change of batch) {
+        notifyListeners(targets, change, (error) => failures.push(error));
       }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Session committed fact installation failed");
+      }
+    };
+    const publishFacts = () => {
+      install(factListeners, changes);
     };
     const prepareObservers = () => {
-      for (const change of changes) {
-        notifyListeners(projectionListeners, change);
-      }
+      install(projectionListeners, changes);
     };
-    // Apply every committed delta before any row/lifecycle observer sees the transaction.
-    // Savepoint rollback discards these staged callbacks with the ordinary publications.
-    if (
-      !database ||
-      !stageSqliteTransactionState(database, {
-        stage: () => {},
-        rollback: () => {},
-        commit: publishFacts,
-        prepareObservers,
-      })
-    ) {
-      publishFacts();
-      prepareObservers();
-    }
     const publish = () => {
-      beforePublicNotifications?.();
-      for (const change of changes) {
-        if ("sessionKey" in change) {
-          const { facts: _facts, factsInvalidated: _invalidated, ...notification } = change;
-          notifyListeners(listeners, notification);
-        } else {
-          const { factsInvalidated: _invalidated, ...notification } = change;
-          notifyListeners(listeners, notification);
+      try {
+        beforePublicNotifications?.();
+      } finally {
+        for (const change of changes) {
+          if ("sessionKey" in change) {
+            const { facts: _facts, factsInvalidated: _invalidated, ...notification } = change;
+            notifyListeners(listeners, notification);
+          } else {
+            const { factsInvalidated: _invalidated, ...notification } = change;
+            notifyListeners(listeners, notification);
+          }
         }
       }
     };
-    if (!database || !deferSqlitePostCommitPublication(database, publish)) {
-      publish();
+    const publication: SqliteCommittedPublication = {
+      installFacts: publishFacts,
+      installProjection: prepareObservers,
+      invalidate() {
+        const invalidations: SessionRowChange[] = changes.map((change) => {
+          const invalidated: SessionRowChange =
+            "sessionKey" in change
+              ? { ...change, facts: undefined, factsInvalidated: true }
+              : { ...change, factsInvalidated: true };
+          invalidationSources.set(invalidated, sessionRowChangeSource(change));
+          return invalidated;
+        });
+        // Notify both owners even if one cannot retire its failed installation.
+        const failures: unknown[] = [];
+        for (const targets of [factListeners, projectionListeners]) {
+          try {
+            install(targets, invalidations);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Session publication invalidation failed");
+        }
+      },
+      notify: publish,
+    };
+    if (!database || !stageSqliteCommittedPublication(database, publication)) {
+      publishSqliteCommittedState(publication);
     }
   },
 };

@@ -12,6 +12,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   retainPreparedSessionEntryPredicate,
+  retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
@@ -34,6 +35,66 @@ import { addSessionMember, removeSessionMember } from "./session-sharing-store.n
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+it("fences every retained reader after a native installer fails, including older pending receipts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:failed-native",
+    };
+    replaceSessionEntrySync(scope, { sessionId: "before", updatedAt: 1 });
+    const source = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof source.identity !== "string") {
+      throw new Error("Expected durable native publication fixture");
+    }
+    const entry = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
+    const params = {
+      databaseIdentity: `file:${source.identity}`,
+      sessionKey: scope.sessionKey,
+      entry,
+    };
+    const failed = retainPreparedSessionEntryPredicate({
+      ...params,
+      matches() {
+        throw new Error("unavailable comparator");
+      },
+    });
+    const sibling = retainPreparedSessionEntryPredicate({
+      ...params,
+      matches: (before, after) => before?.sessionId === after?.sessionId,
+    });
+    const generation = retainPreparedSessionGenerationFacts(params);
+    const acquiring = retainPreparedSessionSharingFacts({
+      databaseIdentity: params.databaseIdentity,
+      sessionKey: scope.sessionKey,
+      acquiring: true,
+    });
+    const older = retainSessionEntryWorkerPublication({
+      ...scope,
+      databaseIdentity: source.identity,
+    });
+    older.begin([scope.sessionKey], []);
+    try {
+      replaceSessionEntrySync(scope, { sessionId: "after", updatedAt: 2 });
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe("after");
+      older.settle(undefined, false);
+      expect(failed.isCurrent()).toBe(false);
+      expect(sibling.isCurrent()).toBe(false);
+      expect(generation.readCurrent()).toBeNull();
+      expect(() =>
+        acquiring.initialize({ entry: projectSessionSharingEntry(entry), membership: new Set() }),
+      ).toThrow("no longer current");
+    } finally {
+      older.settle(undefined, false);
+      failed.release();
+      sibling.release();
+      generation.release();
+      acquiring.release();
+    }
+  });
+});
 
 it("withholds a watermark receipt after a synchronous transcript append publishes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -248,7 +309,22 @@ it.each(["before preparation", "before settlement"] as const)(
   },
 );
 
-it.each(["lower revision", "retired incarnation", "partial", "unknown", "newer unknown"] as const)(
+it.each([
+  "lower revision",
+  "retired incarnation",
+  "partial",
+  "unknown",
+  "newer unknown",
+  "missing coverage",
+  "source mismatch",
+  "unknown scope",
+  "malformed source",
+  "malformed facts",
+  "truncated keys",
+  "malformed rows",
+  "malformed postimage",
+  "mismatched postimage",
+] as const)(
   "keeps replacement receipt coverage and ordering through %s delivery",
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -275,6 +351,11 @@ it.each(["lower revision", "retired incarnation", "partial", "unknown", "newer u
           readExactSessionEntryRow(database, scope.sessionKey)!.entry,
         ),
         membership: new Set(["retained"]),
+      });
+      const generation = retainPreparedSessionGenerationFacts({
+        databaseIdentity: `file:${source.identity}`,
+        sessionKey: scope.sessionKey,
+        entry: readExactSessionEntryRow(database, scope.sessionKey)!.entry,
       });
       const projection = createSessionMembershipProjection();
       projection.updateTargets([{ ...scope, ...source }]);
@@ -324,7 +405,68 @@ it.each(["lower revision", "retired incarnation", "partial", "unknown", "newer u
           expect(projection.ready(database.path, scope.sessionKey)).toBe(true);
           return;
         }
-        if (boundary === "partial" || boundary === "unknown") {
+        if (
+          [
+            "partial",
+            "unknown",
+            "missing coverage",
+            "source mismatch",
+            "unknown scope",
+            "malformed source",
+            "malformed facts",
+            "truncated keys",
+            "malformed rows",
+            "malformed postimage",
+            "mismatched postimage",
+          ].includes(boundary)
+        ) {
+          expect(receipt!.receipt).toBeDefined();
+          if (boundary === "missing coverage") {
+            receipt = { ...receipt!, receipt: { ...receipt!.receipt!, facts: new Map() } };
+          } else if (boundary === "source mismatch") {
+            receipt = {
+              ...receipt!,
+              receipt: {
+                ...receipt!.receipt!,
+                source: { ...receipt!.receipt!.source, incarnation: "superseded" },
+              },
+            };
+          } else if (boundary === "unknown scope") {
+            receipt = {
+              ...receipt!,
+              receipt: {
+                ...receipt!.receipt!,
+                facts: new Map([[scope.sessionKey, { kind: "unknown" }]]),
+              },
+            };
+          } else if (boundary === "malformed source") {
+            Reflect.set(receipt!.receipt!, "source", null);
+          } else if (boundary === "malformed facts") {
+            Reflect.set(receipt!.receipt!, "facts", {});
+          } else if (boundary === "truncated keys") {
+            receipt = {
+              ...receipt!,
+              changedKeys: [],
+              receipt: { ...receipt!.receipt!, facts: new Map() },
+            };
+          } else if (boundary === "malformed rows") {
+            Reflect.set(receipt!, "current", null);
+          } else if (boundary === "malformed postimage" || boundary === "mismatched postimage") {
+            const fact = receipt!.receipt!.facts.get(scope.sessionKey);
+            if (fact?.kind !== "postimage") {
+              throw new Error("Expected the writer's real postimage");
+            }
+            Reflect.set(
+              fact,
+              "value",
+              boundary === "malformed postimage"
+                ? undefined
+                : {
+                    ...fact.value,
+                    entry: { ...fact.value.entry, sessionId: "different-incarnation" },
+                  },
+            );
+          }
           delayed.settle(
             boundary === "partial" ? { ...receipt!, projection: undefined } : receipt,
             boundary === "unknown",
@@ -332,6 +474,9 @@ it.each(["lower revision", "retired incarnation", "partial", "unknown", "newer u
           expect(projection.ready(database.path, scope.sessionKey)).toBe(false);
           expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
           expect(sharing.readCurrent()).toBeUndefined();
+          if (boundary !== "partial") {
+            expect(generation.readCurrent()).toBeUndefined();
+          }
           await projection.prepare();
           expect([...projection.groupTargets().keys()]).toEqual(["older"]);
         } else {
@@ -352,6 +497,71 @@ it.each(["lower revision", "retired incarnation", "partial", "unknown", "newer u
         delayed.settle(undefined, false);
         stop();
         sharing.release();
+        generation.release();
+        projection.dispose();
+      }
+    });
+  },
+);
+
+it.each(["facts", "projection"] as const)(
+  "preserves a native commit and fences a failed %s installation before notification",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:failed-install",
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: "failed-install",
+        updatedAt: 1,
+        category: "before",
+      });
+      const source = readOpenClawAgentDatabaseIdentity(database);
+      const projection = createSessionMembershipProjection();
+      projection.updateTargets([{ ...scope, ...source }]);
+      const stopFacts = sessionChanges.subscribeFacts((change) => projection.invalidate(change));
+      let fail = true;
+      const failInstallation = (change: SessionRowChange) => {
+        if (
+          fail &&
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey &&
+          !change.factsInvalidated
+        ) {
+          fail = false;
+          throw new Error("injected installation failure");
+        }
+      };
+      const stopFailure =
+        phase === "facts"
+          ? sessionChanges.subscribeFacts(failInstallation)
+          : sessionChanges.subscribeProjection(failInstallation);
+      const observed: boolean[] = [];
+      const stopObserver = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          observed.push(projection.ready(database.path, scope.sessionKey));
+        }
+      });
+      try {
+        await projection.prepare();
+        replaceSessionEntrySync(scope, {
+          sessionId: "failed-install",
+          updatedAt: 2,
+          category: "after",
+        });
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.category).toBe("after");
+        expect(fail).toBe(false);
+        expect(observed.length).toBeGreaterThan(0);
+        expect(observed.every((ready) => !ready)).toBe(true);
+        await projection.prepare();
+        expect([...projection.groupTargets().keys()]).toEqual(["after"]);
+      } finally {
+        stopObserver();
+        stopFailure();
+        stopFacts();
         projection.dispose();
       }
     });

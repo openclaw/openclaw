@@ -59,15 +59,12 @@ export function parseSessionDiffPatch(
       truncated = true;
       break;
     }
-    if (raw.startsWith("+")) {
-      lines.push({ kind: "add", lineNo: newNo, text: raw.slice(1) });
-      newNo += 1;
-    } else if (raw.startsWith("-")) {
-      lines.push({ kind: "del", lineNo: oldNo, text: raw.slice(1) });
+    const kind = raw.startsWith("+") ? "add" : raw.startsWith("-") ? "del" : "ctx";
+    lines.push({ kind, lineNo: kind === "del" ? oldNo : newNo, text: raw.slice(1) });
+    if (kind !== "add") {
       oldNo += 1;
-    } else {
-      lines.push({ kind: "ctx", lineNo: newNo, text: raw.slice(1) });
-      oldNo += 1;
+    }
+    if (kind !== "del") {
       newNo += 1;
     }
     oldNext = oldNo;

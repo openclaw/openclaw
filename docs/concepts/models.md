@@ -467,8 +467,12 @@ provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
 preparation; a failed or superseded preparation leaves it in place. A provider
 whose discovery fails publishes with the new generation's built-in rows.
-Admitted runs retain their captured generation, and each usage-estimation
-operation uses one pricing context.
+Reply, scheduled-run, and agent RPC preparation retain their captured model
+generation through admission. Publishing a newer catalog does not interrupt
+those turns before their first model request. Native model lookups can finish
+for an admitted turn without replacing the newer shared catalog. Nested model
+calls keep the admitted config, and each usage-estimation operation uses one
+pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a
 background refresh fails, the Gateway records the error and keeps serving its
