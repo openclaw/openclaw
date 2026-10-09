@@ -358,6 +358,9 @@ function serializeConversationEntries(messages: Message[]): {
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
       const toolCalls: string[] = [];
+      // Results answer the latest assistant turn; calls an earlier turn left
+      // unanswered (aborted, failed) must not label them.
+      callLabels.clear();
 
       for (const block of msg.content) {
         if (block.type === "text") {

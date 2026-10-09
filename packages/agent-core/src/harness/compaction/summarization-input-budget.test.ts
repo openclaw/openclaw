@@ -427,17 +427,20 @@ describe("summary request input budget", () => {
 
   it.each([
     // 0.8 × 8,192 visible output plus each level's thinking budget.
-    { api: "anthropic-messages", level: "high", window: 32_768, thinking: 16_384 },
+    { api: "anthropic-messages", id: "claude-legacy-thinking", level: "high", window: 32_768 },
     // The standalone Anthropic provider keeps the full `max` budget.
-    { api: "anthropic-messages", level: "max", window: 65_536, thinking: 32_768 },
-    { api: "bedrock-converse-stream", level: "high", window: 32_768, thinking: 16_384 },
+    { api: "anthropic-messages", id: "claude-legacy-thinking", level: "max", window: 65_536 },
+    { api: "bedrock-converse-stream", id: "claude-legacy-thinking", level: "high", window: 32_768 },
+    // Bedrock Mantle adds a budget even for adaptive models.
+    { api: "anthropic-messages", id: "claude-sonnet-4-6", level: "high", window: 32_768 },
   ] as const)(
-    "reserves the $level thinking budget $api adds to the output limit",
-    async ({ api, level, window, thinking }) => {
+    "reserves the $level thinking budget $api may add for $id",
+    async ({ api, id, level, window }) => {
+      const thinking = level === "max" ? 32_768 : 16_384;
       const { streamFn, prompts } = createCapturingStream();
       const model: Model = {
         ...createModel(window, 64_000),
-        id: "claude-legacy-thinking",
+        id,
         api,
         provider: "anthropic",
         reasoning: true,
@@ -485,6 +488,22 @@ describe("summary request input budget", () => {
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
+  });
+
+  it("never labels a result with a call an earlier turn left unanswered", () => {
+    const messages: AgentMessage[] = [
+      { ...toolCallMessage([{ id: "0", name: "exec", cmd: "delete A" }]), stopReason: "aborted" },
+      toolCallMessage([{ id: "0", name: "exec", cmd: "write B" }]),
+      toolResultMessage("0", "exec", "done"),
+      { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
+    ];
+
+    const { text } = serializeConversationWithinBudget(
+      convertToLlm(messages),
+      MAX_SUMMARY_INPUT_CHARS,
+    );
+
+    expect(text).toContain('[Tool result of exec(cmd="write B")]: done');
   });
 
   it("names each result by the call occurrence it answers when call IDs repeat", () => {
