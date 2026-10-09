@@ -26,7 +26,7 @@ describe("WhatsApp self-LID mention through the agent context boundary", () => {
   it("renders the native self-LID token as the configured identity while preserving command text", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
-      agents: { list: [{ id: "main", identity: { name: "Kit" } }] },
+      agents: { entries: { main: { identity: { name: "Kit" } } } },
       bindings: [{ agentId: "main", match: { channel: "whatsapp", accountId: "default" } }],
     } satisfies OpenClawConfig);
 

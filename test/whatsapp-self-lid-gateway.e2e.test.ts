@@ -88,7 +88,7 @@ describe("WhatsApp self-LID mention through an ephemeral Gateway", () => {
     async () => {
       setLoadConfigMock({
         channels: { whatsapp: { allowFrom: ["*"] } },
-        agents: { list: [{ id: "main", identity: { name: "Kit" } }] },
+        agents: { entries: { main: { identity: { name: "Kit" } } } },
         bindings: [{ agentId: "main", match: { channel: "whatsapp", accountId: "default" } }],
       } satisfies OpenClawConfig);
 
@@ -182,7 +182,7 @@ function createGatewayConfig(baseUrl: string): GatewayConfig {
         skipBootstrap: true,
         skills: [],
       },
-      list: [{ id: "main", identity: { name: "Kit" } }],
+      entries: { main: { identity: { name: "Kit" } } },
     },
     tools: { profile: "minimal" },
     models: {

@@ -365,7 +365,7 @@ describe("processMessage group system prompt wiring", () => {
     await callProcessMessage({
       cfg: {
         agents: {
-          list: [{ id: "main", identity: { name: identityName } }],
+          entries: { main: { identity: { name: identityName } } },
         },
       },
       msg,
