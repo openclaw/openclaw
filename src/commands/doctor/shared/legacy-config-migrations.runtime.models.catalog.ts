@@ -34,6 +34,8 @@ const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: numbe
   "xai/grok-4.20-non-reasoning": { stale: 2_000_000, correct: 1_000_000 },
 } as const;
 const DEAD_MODEL_COMPAT_KEYS = ["nativeWebSearchTool", "requiresMistralToolIds"] as const;
+// Operator replay preferences are never catalog-owned, so they are neither stripped nor flagged.
+const OPERATOR_OWNED_COMPAT_KEYS: ReadonlySet<string> = new Set(OPERATOR_OWNED_MODEL_COMPAT_KEYS);
 
 export function* providerModelEntries(providers: unknown) {
   for (const [providerId, value] of Object.entries(getRecord(providers) ?? {})) {
@@ -170,7 +172,7 @@ function* inspectModelCompatOverrides(providersValue: unknown) {
       for (const [key, value] of Object.entries(compat)) {
         if (
           (DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key) ||
-          (OPERATOR_OWNED_MODEL_COMPAT_KEYS as readonly string[]).includes(key)
+          OPERATOR_OWNED_COMPAT_KEYS.has(key)
         ) {
           continue;
         }
