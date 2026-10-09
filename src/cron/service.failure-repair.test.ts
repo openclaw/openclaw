@@ -263,6 +263,56 @@ describe("CronService failure repair", () => {
       expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
       expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
     });
+
+    it.each([
+      {
+        name: "a weekly job past the retry budget",
+        overrides: { schedule: { kind: "every" as const, everyMs: 7 * 86_400_000 } },
+        consecutiveErrors: 3,
+        expected: ["failure-repair"],
+      },
+      {
+        name: "a one-shot retired after the retry budget",
+        overrides: {
+          schedule: { kind: "at" as const, at: new Date(runningAtMs).toISOString() },
+        },
+        consecutiveErrors: 3,
+        expected: ["failure-alert"],
+      },
+      {
+        name: "a disabled job within the retry budget",
+        overrides: { enabled: false },
+        consecutiveErrors: 1,
+        expected: ["failure-alert"],
+      },
+      {
+        name: "a cron schedule with no next run within the retry budget",
+        overrides: { schedule: { kind: "cron" as const, expr: "0 0 30 2 *" } },
+        consecutiveErrors: 1,
+        expected: ["failure-repair"],
+      },
+    ])("does not hold $name", ({ overrides, consecutiveErrors, expected }) => {
+      const { state, job, deferredNotifications } = repairPolicyFixture({
+        ...overrides,
+        state: { consecutiveErrors },
+      });
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443",
+          startedAt: runningAtMs,
+          endedAt: runningAtMs + 1_000,
+        },
+        { deferredNotifications },
+      );
+      expect(job.state.consecutiveErrors).toBe(consecutiveErrors + 1);
+      if (consecutiveErrors < 3) {
+        expect(job.state.nextRunAtMs).toBeUndefined();
+      }
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+    });
   });
 
   it("alerts on the next failure when the repair request fails", async () => {
