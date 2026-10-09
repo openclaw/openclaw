@@ -219,7 +219,7 @@ function createDreamingTestContext(
       logger,
     }),
     logger,
-    on: vi.fn(),
+    on: vi.fn<DreamingPluginApi["on"]>(),
     scheduler: createTestPluginServiceScheduler(),
     registerService: vi.fn<DreamingPluginApi["registerService"]>(),
   };
