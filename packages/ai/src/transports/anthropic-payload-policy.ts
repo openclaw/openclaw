@@ -193,11 +193,7 @@ export function buildAnthropicSystemBlocks(
   const blocks: TextBlockParam[] = systemPrompt
     ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }]
     : [];
-  if (cacheControl) {
-    applyAnthropicCacheControlToSystem(blocks, cacheControl);
-  } else {
-    stripAnthropicSystemPromptBoundary(blocks);
-  }
+  normalizeAnthropicSystemBlocks(blocks, cacheControl);
   if (systemPrompt && blocks.length === 0) {
     blocks.push({ type: "text", text: "" });
   }
@@ -248,9 +244,9 @@ export function applyAnthropicRequestCacheControl(
   );
 }
 
-function applyAnthropicCacheControlToSystem(
+function normalizeAnthropicSystemBlocks(
   system: unknown,
-  cacheControl: AnthropicEphemeralCacheControl,
+  cacheControl: AnthropicEphemeralCacheControl | undefined,
 ): void {
   if (!Array.isArray(system)) {
     return;
@@ -266,6 +262,10 @@ function applyAnthropicCacheControlToSystem(
     const blockText = record.text;
     if (record.type !== "text" || typeof blockText !== "string") {
       normalizedBlocks.push(block);
+      continue;
+    }
+    if (!cacheControl) {
+      record.text = stripSystemPromptCacheBoundary(blockText);
       continue;
     }
     // This transport relocates nothing, so the relocatable marker must not
@@ -297,22 +297,8 @@ function applyAnthropicCacheControlToSystem(
     }
   }
 
-  system.splice(0, system.length, ...normalizedBlocks);
-}
-
-function stripAnthropicSystemPromptBoundary(system: unknown): void {
-  if (!Array.isArray(system)) {
-    return;
-  }
-
-  for (const block of system) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type === "text" && typeof record.text === "string") {
-      record.text = stripSystemPromptCacheBoundary(record.text);
-    }
+  if (cacheControl) {
+    system.splice(0, system.length, ...normalizedBlocks);
   }
 }
 
@@ -635,11 +621,7 @@ export function applyAnthropicPayloadPolicyToParams(
     payloadObj.service_tier = policy.serviceTier;
   }
 
-  if (policy.cacheControl) {
-    applyAnthropicCacheControlToSystem(payloadObj.system, policy.cacheControl);
-  } else {
-    stripAnthropicSystemPromptBoundary(payloadObj.system);
-  }
+  normalizeAnthropicSystemBlocks(payloadObj.system, policy.cacheControl);
 
   applyAnthropicContextManagementEdits(payloadObj, policy);
 

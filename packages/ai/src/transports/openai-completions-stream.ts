@@ -122,8 +122,7 @@ export async function processCompletionsStream(
   }
   type ToolCallBlock = ToolCall & { partialArgs: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
-  let directTextBlock: TextBlock | null = null;
-  let directThinkingBlock: ThinkingBlock | null = null;
+  const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
   let pendingInterruptedTextBlock: TextBlock | null = null;
   let confirmedInterruptedTextBlock: TextBlock | null = null;
@@ -170,69 +169,55 @@ export async function processCompletionsStream(
     }
     previous.text += next.text;
   };
-  const appendThinkingDelta = (reasoningDelta: { signature?: string; text: string }) => {
+  const appendContentDelta = (delta: CompletionsReasoningDelta) => {
     flushPendingPostToolCallDeltas();
-    if (directMode && directThinkingBlock) {
-      currentBlock = directThinkingBlock;
+    if (directMode && directContent.block?.type === delta.kind) {
+      currentBlock = directContent.block;
     }
-    if (!currentBlock || currentBlock.type !== "thinking") {
-      options?.beforeContentBlock?.("thinking");
-      const thinkingSignature = reasoningDelta.signature;
-      currentBlock = {
-        type: "thinking",
-        thinking: "",
-        ...(thinkingSignature ? { thinkingSignature } : {}),
-      };
-      if (directMode) {
-        directTextBlock = null;
-        directThinkingBlock = currentBlock;
-      }
-      output.content.push(currentBlock);
-      contentBlockIndices.set(currentBlock, output.content.length - 1);
-      pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-    }
-    appendAssistantThinking(currentBlock, reasoningDelta.text);
-    pushStreamEvent({
-      type: "thinking_delta",
-      contentIndex: blockIndex(),
-      delta: reasoningDelta.text,
-      partial: output,
-    });
-  };
-  const appendTextDelta = (text: string, source?: OpenAICompletionsTextSource) => {
-    flushPendingPostToolCallDeltas();
-    if (directMode && directTextBlock) {
-      currentBlock = directTextBlock;
-    }
-    if (currentBlock?.type === "text" && currentTextSource !== source) {
+    if (
+      delta.kind === "text" &&
+      currentBlock?.type === "text" &&
+      currentTextSource !== delta.source
+    ) {
       currentBlock = null;
     }
-    if (!currentBlock || currentBlock.type !== "text") {
-      options?.beforeContentBlock?.("text");
-      currentBlock = { type: "text", text: "" };
-      currentTextSource = source;
-      if (directMode) {
-        directTextBlock = currentBlock;
-        directThinkingBlock = null;
+    if (!currentBlock || currentBlock.type !== delta.kind) {
+      options?.beforeContentBlock?.(delta.kind);
+      if (delta.kind === "text") {
+        currentBlock = { type: "text", text: "" };
+        currentTextSource = delta.source;
+        if (delta.source === "reasoning_detail") {
+          (explicitVisibleTextBlocks ??= new Set()).add(currentBlock);
+        }
+      } else {
+        currentBlock = {
+          type: "thinking",
+          thinking: "",
+          ...(delta.signature ? { thinkingSignature: delta.signature } : {}),
+        };
       }
-      if (source === "reasoning_detail") {
-        (explicitVisibleTextBlocks ??= new Set()).add(currentBlock);
+      if (directMode) {
+        directContent.block = currentBlock;
       }
       output.content.push(currentBlock);
       contentBlockIndices.set(currentBlock, output.content.length - 1);
-      pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({ type: `${delta.kind}_start`, contentIndex: blockIndex(), partial: output });
     }
-    currentBlock.text += text;
-    if (pendingInterruptedTextBlock && text.trim()) {
-      confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
-      pendingInterruptedTextBlock = null;
+    if (currentBlock.type === "thinking") {
+      appendAssistantThinking(currentBlock, delta.text);
+    } else {
+      currentBlock.text += delta.text;
+      if (pendingInterruptedTextBlock && delta.text.trim()) {
+        confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
+        pendingInterruptedTextBlock = null;
+      }
     }
-    pushStreamEvent({
-      type: "text_delta",
-      contentIndex: blockIndex(),
-      delta: text,
-      ...(directMode ? { partial: output } : {}),
-    });
+    const event = { contentIndex: blockIndex(), delta: delta.text };
+    if (delta.kind === "thinking") {
+      pushStreamEvent({ type: "thinking_delta", ...event, partial: output });
+    } else {
+      pushStreamEvent({ type: "text_delta", ...event, ...(directMode ? { partial: output } : {}) });
+    }
   };
   const flushPendingPostToolCallDeltas = () => {
     if (currentBlock?.type === "toolCall" || pendingPostToolCallDeltas.length === 0) {
@@ -243,10 +228,8 @@ export async function processCompletionsStream(
     pendingPostToolCallDeltas = [];
     pendingPostToolCallBytes = 0;
     for (const delta of bufferedDeltas) {
-      if (delta.kind === "text") {
-        appendTextDelta(delta.text, delta.source);
-      } else if (emitReasoning) {
-        appendThinkingDelta(delta);
+      if (delta.kind === "text" || emitReasoning) {
+        appendContentDelta(delta);
       }
     }
   };
@@ -257,27 +240,26 @@ export async function processCompletionsStream(
     if (currentBlock?.type === "toolCall" && !directMode) {
       queuePostToolCallDelta({ kind: "text", text });
     } else {
-      appendTextDelta(text);
+      appendContentDelta({ kind: "text", text });
     }
   };
   const appendReasoningDeltas = (reasoningDeltas: readonly CompletionsReasoningDelta[]) => {
-    for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+    for (const delta of reasoningDeltas) {
+      if (delta.kind === "thinking" && !emitReasoning) {
         continue;
       }
       if (currentBlock?.type === "toolCall" && !directMode) {
-        queuePostToolCallDelta({ ...reasoningDelta });
+        queuePostToolCallDelta({ ...delta });
         continue;
       }
-      if (reasoningDelta.kind === "text") {
-        appendTextDelta(reasoningDelta.text, reasoningDelta.source);
-      } else {
-        appendThinkingDelta(
-          directMode && model.provider === "opencode-go" && reasoningDelta.signature === "reasoning"
-            ? { ...reasoningDelta, signature: "reasoning_content" }
-            : reasoningDelta,
-        );
-      }
+      appendContentDelta(
+        delta.kind === "thinking" &&
+          directMode &&
+          model.provider === "opencode-go" &&
+          delta.signature === "reasoning"
+          ? { ...delta, signature: "reasoning_content" }
+          : delta,
+      );
     }
   };
   const appendRecoveredToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
@@ -343,7 +325,7 @@ export async function processCompletionsStream(
     if (latestBlock?.type === "text" || latestBlock?.type === "toolCall") {
       return;
     }
-    appendThinkingDelta({ text: "" });
+    appendContentDelta({ kind: "thinking", text: "" });
   };
   const flushReasoningTagTextPartitioner = () => {
     for (const delta of reasoningTagTextPartitioner.flush()) {
@@ -365,7 +347,7 @@ export async function processCompletionsStream(
     }
     currentBlock = null;
     if (directMode) {
-      directTextBlock = null;
+      directContent.block = null;
     }
     currentTextSource = undefined;
   };
@@ -485,7 +467,7 @@ export async function processCompletionsStream(
             if (currentBlock?.type === "toolCall" && !directMode) {
               queuePostToolCallDelta(contentDelta);
             } else {
-              appendThinkingDelta(contentDelta);
+              appendContentDelta(contentDelta);
             }
           }
         }
@@ -515,8 +497,8 @@ export async function processCompletionsStream(
             }
             const initialSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);
             options?.beforeContentBlock?.("toolCall");
-            if (directMode) {
-              directThinkingBlock = null;
+            if (directMode && directContent.block?.type === "thinking") {
+              directContent.block = null;
             }
             block = {
               type: "toolCall",
