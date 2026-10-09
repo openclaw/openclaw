@@ -1498,6 +1498,17 @@ plugin normalization and CAS, and arbitrary null-returning callbacks retain
 their existing validation contract. These changes require no schema or update
 migration and preserve delivery durability and settlement.
 
+Completed usage commits also carry their pending-switch observation into the
+adjacent cleanup. A matching commit with no pending switch needs no additional
+preparation request; later model selections keep their pending flag. Missing,
+failed, or differently targeted usage commits retain fresh preparation and CAS.
+Final restart-claim cleanup evaluates its exact session, lifecycle, claim, and
+execution fence against the writer transaction's current entry. A refused
+cleanup never installs a replacement session or lifecycle into its run's cache.
+The host retains live
+lifecycle and restart-cancellation checks. These reductions preserve FIFO,
+accepted-write settlement, schemas, stored formats, and update behavior.
+
 First-turn diff-baseline claims and settlement, reply skill snapshots, and child
 agent admission and bookkeeping use that same entry writer. Preparation retains
 the selected physical store; the transaction rereads its entry and same-store

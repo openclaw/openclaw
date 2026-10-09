@@ -57,7 +57,17 @@ export async function persistSessionUsageUpdate(params: {
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
-}): Promise<void> {
+}): Promise<
+  | {
+      storePath: string;
+      sessionKey: string;
+      entry: Pick<
+        InternalSessionEntry,
+        "sessionId" | "lifecycleRevision" | "liveModelSwitchPending"
+      >;
+    }
+  | undefined
+> {
   const { agentId, storePath, sessionKey, sessionStore, authorize } = params;
   if (!storePath || !sessionKey) {
     return;
@@ -127,14 +137,22 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry?.model,
           }),
         );
+  let committedEntry:
+    | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "liveModelSwitchPending">
+    | undefined;
   const options = {
     skipMaintenance: true,
-    onCommitted: sessionStore
-      ? (entry: InternalSessionEntry) => {
-          // Publish this commit before a newer writer can replace the caller's cache.
-          sessionStore[sessionKey] = entry;
-        }
-      : undefined,
+    onCommitted: (entry: InternalSessionEntry) => {
+      // Copy the commit's facts before publishing the mutable caller cache.
+      committedEntry = {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        liveModelSwitchPending: entry.liveModelSwitchPending,
+      };
+      if (sessionStore) {
+        sessionStore[sessionKey] = entry;
+      }
+    },
     workerGuard: {
       assertCurrent: authorize
         ? () => {
@@ -183,7 +201,9 @@ export async function persistSessionUsageUpdate(params: {
         options,
       );
     }
+    return committedEntry ? { storePath, sessionKey, entry: committedEntry } : undefined;
   } catch (err) {
     logVerbose(`failed to persist usage update: ${String(err)}`);
+    return undefined;
   }
 }
