@@ -91,6 +91,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
+    params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
