@@ -228,6 +228,13 @@ incognito exclusions still apply.
 provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
 the managed server endpoints before rebuilding the index.
 
+OpenAI-compatible embedding requests honor the caller's deadline, including
+the longer indexing budget, without an earlier HTTP header or body timeout.
+Deep status probes make one attempt using the provider's query budget: normally
+60 seconds for remote providers or 5 minutes for `local`, unless the provider
+supplies its own query budget. Managed server readiness keeps its separate
+budget. A stalled probe reports `memory embedding probe timed out after Ns`.
+
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.
 

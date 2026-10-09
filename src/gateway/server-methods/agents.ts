@@ -8,7 +8,6 @@ import {
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createAgent } from "../../agents/agent-create.js";
 import {
   AgentSharedStoreOwnerError,
   assertAgentSessionStoreDeletionSafe,
@@ -66,7 +65,6 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/wo
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
   readConfigFileSnapshotForWrite,
-  transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../../config/config.js";
 import {
@@ -92,6 +90,7 @@ import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
   AgentConfigPreconditionError,
   AgentModelSelectionError,
+  createAgentConfigEntry,
   deleteAgentConfigEntry,
   isConfiguredAgent,
   isImplicitAgentModelUpdate,
@@ -168,24 +167,22 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const application = createAgentConfigApplication(respond);
     try {
-      const result = await createAgent({
-        name: params.name,
-        workspace: params.workspace,
-        model: params.model,
-        emoji: params.emoji,
-        avatar: params.avatar,
-        transformConfig: (mutation) =>
-          transformConfigFileWithRetry({
-            ...mutation,
-            writeOptions: application.attach(mutation.writeOptions ?? {}),
+      const result = await createAgentConfigEntry(
+        {
+          name: params.name,
+          workspace: params.workspace,
+          model: params.model,
+          emoji: params.emoji,
+          avatar: params.avatar,
+          assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
+            method: "agents.create",
+            requestParams: params,
+            client,
+            context,
           }),
-        assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
-          method: "agents.create",
-          requestParams: params,
-          client,
-          context,
-        }),
-      });
+        },
+        application.attach({}),
+      );
       if (result.status === "error") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
         return;
