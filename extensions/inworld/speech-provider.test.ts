@@ -148,7 +148,7 @@ describe("buildInworldSpeechProvider", () => {
   });
 
   it("preserves inherited Talk settings when overrides are blank", () => {
-    const params = {
+    const talkProviderConfig = {
       voiceId: " ",
       modelId: " inworld-tts-1.5-mini ",
       temperature: 0.5,
@@ -158,7 +158,7 @@ describe("buildInworldSpeechProvider", () => {
     const talk = provider.resolveTalkConfig?.({
       cfg: {},
       baseTtsConfig: { providers: { inworld: { apiKey: "base-key", voiceId: "Ashley" } } },
-      talkProviderConfig: { ...params, apiKey: " ", baseUrl: " " },
+      talkProviderConfig: { ...talkProviderConfig, apiKey: " ", baseUrl: " " },
       timeoutMs: 1000,
     });
     expect(talk).toMatchObject({
@@ -170,12 +170,23 @@ describe("buildInworldSpeechProvider", () => {
       speakingRate: 1.2,
       deliveryMode: "STABLE",
     });
-    expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+    // talk.speak params carry pace as `speed`; per-call deliveryMode is not part of the Talk schema.
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: {},
+        params: { voiceId: " ", modelId: " inworld-tts-1.5-mini ", temperature: 0.5, speed: 1.3 },
+      }),
+    ).toStrictEqual({
       modelId: "inworld-tts-1.5-mini",
       temperature: 0.5,
-      speakingRate: 1.2,
-      deliveryMode: "STABLE",
+      speakingRate: 1.3,
     });
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: {},
+        params: { text: "Hello", speed: 3 },
+      }),
+    ).toStrictEqual({});
   });
 
   it("parses Inworld TTS directive overrides", () => {
@@ -260,19 +271,6 @@ describe("buildInworldSpeechProvider", () => {
     expect(inworldTTSMock).toHaveBeenCalledWith(
       expect.not.objectContaining({ temperature: expect.any(Number) }),
     );
-  });
-
-  it("drops out-of-range speakingRate overrides and falls back to config", async () => {
-    inworldTTSMock.mockResolvedValueOnce(Buffer.from("audio"));
-
-    await provider.synthesize({
-      ...request,
-      providerConfig: { ...request.providerConfig, speakingRate: 1.3 },
-      providerOverrides: { speakingRate: 3 },
-      target: "audio-file",
-    });
-
-    expect(inworldTTSMock).toHaveBeenCalledWith(expect.objectContaining({ speakingRate: 1.3 }));
   });
 
   it("synthesizes voice-note targets with native OGG_OPUS output", async () => {

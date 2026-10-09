@@ -195,12 +195,10 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
       ...(normalizeInworldTemperature(params.temperature) == null
         ? {}
         : { temperature: normalizeInworldTemperature(params.temperature) }),
-      ...(normalizeInworldSpeakingRate(params.speakingRate) == null
+      // talk.speak carries pace as `speed` (TalkSpeakParamsSchema); map it to Inworld's speakingRate.
+      ...(normalizeInworldSpeakingRate(params.speed) == null
         ? {}
-        : { speakingRate: normalizeInworldSpeakingRate(params.speakingRate) }),
-      ...(normalizeInworldDeliveryMode(params.deliveryMode) == null
-        ? {}
-        : { deliveryMode: normalizeInworldDeliveryMode(params.deliveryMode) }),
+        : { speakingRate: normalizeInworldSpeakingRate(params.speed) }),
     }),
     listVoices: async (req) => {
       const config = req.providerConfig ? readInworldProviderConfig(req.providerConfig) : undefined;

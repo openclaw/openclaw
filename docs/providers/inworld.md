@@ -66,15 +66,15 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 ## Configuration options
 
-| Option         | Path                                 | Description                                                                                                                  |
-| -------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `apiKey`       | `tts.providers.inworld.apiKey`       | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.                                                                |
-| `baseUrl`      | `tts.providers.inworld.baseUrl`      | Override Inworld API base URL (default `https://api.inworld.ai`).                                                            |
-| `voiceId`      | `tts.providers.inworld.voiceId`      | Voice identifier (default `Sarah`). Legacy alias: `speakerVoiceId`.                                                          |
-| `modelId`      | `tts.providers.inworld.modelId`      | TTS model id (default `inworld-tts-1.5-max`).                                                                                |
-| `temperature`  | `tts.providers.inworld.temperature`  | Sampling temperature, `0` (exclusive) to `2` (optional). Honored by the 1.5 and 1 models; ignored by `inworld-tts-2` models. |
-| `speakingRate` | `tts.providers.inworld.speakingRate` | Speaking rate, `0.5` to `1.5` (optional; `1.0` is the voice's native speed).                                                 |
-| `deliveryMode` | `tts.providers.inworld.deliveryMode` | `STABLE`, `BALANCED` or `CREATIVE` for `inworld-tts-2` models (replaces `temperature` there).                                |
+| Option         | Path                                 | Description                                                                                                               |
+| -------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`       | `tts.providers.inworld.apiKey`       | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.                                                             |
+| `baseUrl`      | `tts.providers.inworld.baseUrl`      | Override Inworld API base URL (default `https://api.inworld.ai`).                                                         |
+| `voiceId`      | `tts.providers.inworld.voiceId`      | Voice identifier (default `Sarah`). Legacy alias: `speakerVoiceId`.                                                       |
+| `modelId`      | `tts.providers.inworld.modelId`      | TTS model id (default `inworld-tts-1.5-max`).                                                                             |
+| `temperature`  | `tts.providers.inworld.temperature`  | Sampling temperature, `0` (exclusive) to `2` (optional). Ignored by `inworld-tts-2`, which uses `deliveryMode` instead.   |
+| `speakingRate` | `tts.providers.inworld.speakingRate` | Speaking rate, `0.5` to `1.5` (optional; `1.0` is the voice's native speed).                                              |
+| `deliveryMode` | `tts.providers.inworld.deliveryMode` | `STABLE`, `BALANCED` or `CREATIVE`. Honored only by `inworld-tts-2`; Inworld ignores it on other models, including Flash. |
 
 ## Notes
 
@@ -83,7 +83,7 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
     Inworld uses HTTP Basic auth with a single Base64-encoded credential string. Copy it verbatim from the Inworld dashboard. The provider sends it as `Authorization: Basic <apiKey>` without any further encoding, so do not Base64-encode it yourself and do not pass a bearer-style token. See [TTS auth notes](/tools/tts#inworld-primary) for the same callout.
   </Accordion>
   <Accordion title="Models">
-    Supported model ids: `inworld-tts-1.5-max` (default), `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`, `inworld-tts-2`, `inworld-tts-2-flash`. The TTS-2 models ignore `temperature`; use `deliveryMode` (`STABLE`, `BALANCED`, `CREATIVE`) to steer delivery there. A `[[tts:delivery=creative]]` directive overrides it per message.
+    Supported model ids: `inworld-tts-1.5-max` (default), `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`, `inworld-tts-2`, `inworld-tts-2-flash`. Per Inworld's API reference, `inworld-tts-2` ignores `temperature` and takes `deliveryMode` (`STABLE`, `BALANCED`, `CREATIVE`) instead; `deliveryMode` is ignored on every other model, including `inworld-tts-2-flash`. A `[[tts:delivery=creative]]` directive overrides it per message.
   </Accordion>
   <Accordion title="Speaking rate">
     Set `tts.providers.inworld.speakingRate` between `0.5` and `1.5` to slow down or speed up the voice (`1.0` is the native speed; Inworld recommends values above `0.8` for quality). The value is sent as `audioConfig.speakingRate`. A `[[tts:speed=1.3]]` or `[[tts:speaking_rate=1.3]]` directive overrides it per message; out-of-range values are ignored with a warning.

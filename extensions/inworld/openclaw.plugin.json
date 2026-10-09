@@ -68,7 +68,7 @@
       "deliveryMode": {
         "type": "string",
         "enum": ["STABLE", "BALANCED", "CREATIVE"],
-        "description": "Delivery preset for inworld-tts-2 models (replaces temperature there; ignored by other models)."
+        "description": "Delivery preset, honored only by inworld-tts-2 (which ignores temperature); Inworld ignores it on other models."
       }
     }
   }

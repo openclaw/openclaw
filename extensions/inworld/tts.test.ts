@@ -261,18 +261,18 @@ describe("inworldTTS", () => {
     expect(callBody).not.toHaveProperty("deliveryMode");
   });
 
-  it("sends deliveryMode for TTS-2 models", async () => {
+  it("sends deliveryMode for inworld-tts-2", async () => {
     queueAudioResponse();
 
     await inworldTTS({
       text: "Hello",
       apiKey: "test-key",
-      modelId: "inworld-tts-2-flash",
+      modelId: "inworld-tts-2",
       deliveryMode: "CREATIVE",
     });
 
     const callBody = JSON.parse(readRequestBody(lastGuardRequest()));
-    expect(callBody.modelId).toBe("inworld-tts-2-flash");
+    expect(callBody.modelId).toBe("inworld-tts-2");
     expect(callBody.deliveryMode).toBe("CREATIVE");
   });
 

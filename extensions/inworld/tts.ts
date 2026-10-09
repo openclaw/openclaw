@@ -49,7 +49,7 @@ export const INWORLD_TTS_MODELS = [
   "inworld-tts-2-flash",
 ] as const;
 
-// Inworld TTS-2 models replace `temperature` with a delivery preset.
+// inworld-tts-2 replaces `temperature` with a delivery preset; Inworld ignores it on other models.
 export const INWORLD_DELIVERY_MODES = ["STABLE", "BALANCED", "CREATIVE"] as const;
 export type InworldDeliveryMode = (typeof INWORLD_DELIVERY_MODES)[number];
 
