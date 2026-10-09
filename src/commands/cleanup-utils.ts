@@ -62,6 +62,7 @@ export async function moveToTrashResult(
   pathname: string,
   runtime: RuntimeEnv,
   assertCurrent?: () => void,
+  assertCurrentAsync?: () => Promise<void>,
 ): Promise<MoveToTrashResult> {
   if (!pathname) {
     return { failed: { path: pathname, reason: "path is empty" } };
@@ -83,6 +84,9 @@ export async function moveToTrashResult(
       isSymbolicLink ? await fs.realpath(sourcePath).catch(() => undefined) : undefined,
     );
     // Preparation can outlive its owner; revalidate immediately before Trash dispatch.
+    if (assertCurrentAsync) {
+      await assertCurrentAsync();
+    }
     assertCurrent?.();
     await movePathToTrash(sourcePath, { allowedRoots });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
@@ -97,8 +101,11 @@ export async function moveToTrash(
   pathname: string,
   runtime: RuntimeEnv,
   assertCurrent?: () => void,
+  assertCurrentAsync?: () => Promise<void>,
 ): Promise<boolean> {
-  return "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent));
+  return (
+    "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent, assertCurrentAsync))
+  );
 }
 
 /**

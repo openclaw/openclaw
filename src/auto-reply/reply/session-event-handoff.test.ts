@@ -44,8 +44,8 @@ import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
-  prepareSessionEventTargetForHost,
 } from "./session-event-handoff.js";
+import { prepareSessionEventTargetForHost } from "./session-event-target.js";
 // These cases stop before turn admission. Unexpected dispatch is a failure,
 // never a synthetic adoption/settlement supplied by the fixture.
 const dispatch = vi.hoisted(() =>

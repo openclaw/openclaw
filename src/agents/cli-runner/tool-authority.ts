@@ -16,7 +16,7 @@ import {
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 /** Bind CLI and loopback questions to the original creator, not their callback transport. */
-export function bindCliQuestionAnswerAuthority(params: {
+function bindCliQuestionAnswerAuthority(params: {
   operation: RunCliAgentParams["replyOperation"];
   snapshot: ReturnType<typeof prepareCliReplyToolAuthority> | undefined;
   route: { provider: string; model: string };

@@ -6,7 +6,6 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -30,6 +29,7 @@ import {
   captureAgentDatabasePreparationCompletion,
   captureAgentDatabasePreparationJournal,
 } from "./agent-database-admission.js";
+import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
   captureOpenClawAgentDatabaseRegistration,
@@ -42,7 +42,11 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   retireReplacedAgentValidation,
 } from "./openclaw-agent-db-validation-cache.js";
-import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
+import {
+  cleanupRetiredAgentDatabaseLease,
+  readAgentDatabaseClosedReceipt,
+  publishAgentDatabaseCloseCheckpoint,
+} from "./openclaw-agent-execution-cleanup.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
@@ -144,6 +148,11 @@ export function createAgentDatabaseNativeGeneration(
           );
         }
       };
+      const cleanup = captureAgentDeletionCleanupAdmission(
+        { agentId, path: pathname, env: context.environment },
+        operation,
+        assertSourceCurrent,
+      );
       const observeNative = (request: SqliteWorkerAdmissionRequest): void => {
         const facts = request.facts;
         if (
@@ -176,6 +185,9 @@ export function createAgentDatabaseNativeGeneration(
         request: SqliteWorkerAdmissionRequest,
       ): AgentDatabaseFileExecutionIdentity | undefined => {
         const facts = request.facts;
+        if (cleanup?.authorize(request)) {
+          return undefined;
+        }
         if (
           request.stage === "prepare" &&
           isRecord(facts) &&
@@ -184,6 +196,7 @@ export function createAgentDatabaseNativeGeneration(
           return undefined;
         }
         assertCurrent();
+        cleanup?.assertCurrent();
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }
@@ -328,6 +341,7 @@ export function createAgentDatabaseNativeGeneration(
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
+          ...(cleanup ? { deletion: cleanup.guard } : {}),
         },
         nativeLocations,
         assertCurrent,
@@ -608,37 +622,6 @@ export function createAgentDatabaseNativeGeneration(
       admission(source, undefined, assertCallerCurrent),
     );
   }
-  const readConfirmedClose = () => {
-    const receipt = readCloseReceipt?.();
-    if (
-      !receipt ||
-      !nativeIdentity ||
-      !lease ||
-      receipt.incarnation !== nativeIdentity.incarnation ||
-      receipt.identity.key !== `file:${nativeIdentity.physicalIdentity}` ||
-      receipt.identity.canonicalPath !== nativeIdentity.nativeLocation
-    ) {
-      return undefined;
-    }
-    return { receipt, identity: nativeIdentity, lease };
-  };
-  const publishCloseCheckpoint = () => {
-    const closed = readConfirmedClose();
-    if (!closed) {
-      return;
-    }
-    const { receipt, identity, lease: closedLease } = closed;
-    try {
-      // Cleanup retains custody after ordinary admission is revoked during shutdown.
-      assertCleanupOwned();
-      assertExistingDatabaseIdentity(pathname, receipt.identity.key);
-      assertExistingDatabaseIdentity(identity.nativeLocation, receipt.identity.key);
-      assertExistingDatabaseIdentity(closedLease.sharedStatePath, closedLease.sharedStateIdentity);
-      publishSqliteWalCheckpointObservation(pathname, receipt.checkpoint);
-    } catch {
-      // A stale diagnostic must not clear another generation's budget or fail native cleanup.
-    }
-  };
   return {
     failure: () =>
       openingFailure ??
@@ -692,7 +675,10 @@ export function createAgentDatabaseNativeGeneration(
             assertCleanupOwned();
             // The backend publishes this receipt only after native close and lease release.
             // A closed client or exited Worker alone still needs orphan recovery.
-            if (storeClosed && readConfirmedClose()) {
+            if (
+              storeClosed &&
+              readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)
+            ) {
               assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
             } else {
               await cleanupRetiredAgentDatabaseLease({
@@ -707,7 +693,11 @@ export function createAgentDatabaseNativeGeneration(
           }
         }
         throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
-        publishCloseCheckpoint();
+        publishAgentDatabaseCloseCheckpoint(
+          pathname,
+          readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease),
+          assertCleanupOwned,
+        );
       })().catch((error: unknown) => {
         closing = undefined;
         throw error;

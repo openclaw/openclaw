@@ -251,9 +251,21 @@ const reviewedOperations = new Map([
           "ensureSqliteTranscriptGenerationsForCanonicalRepair",
           "rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch",
           "copySqliteSessionOwnedStateForRepair",
+          "readExactSessionEntryRowForCanonicalRepair",
         ],
         evidence:
-          "Doctor canonical-key repair/import; exact-row reader stays T1 via agents.create -> agent-create.ts:238 -> legacy-main-session-migration-claims.ts:101",
+          "Doctor canonical-key repair/import and worker-only legacy comparison in session-retirement-read.worker.ts; native full claims run only after detect returns, and allowCanonicalRepair is supplied only by Doctor canonical-key repair",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/legacy-main-session-key-scan.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["readClaimsFromStores", "readClaimsFromStores.readStore"],
+        evidence:
+          "legacy-main-session-migration.ts calls full native claims only after detect mode returns; detection uses prepareComparisonClaimsFromStores and session-retirement-read.worker.ts",
       },
     ],
   ],
@@ -712,15 +724,16 @@ const reviewedOperations = new Map([
         operations: [
           "registerWorkspaceStateAliasIdentitiesInTransaction",
           "readWorkspaceStateSnapshotFromDatabase",
+          "resolveWorkspaceIdentityFromDatabase",
         ],
         evidence:
-          "Worker runtime/read dispatch plus Doctor workspace-alias-rebind.ts:83,324, migration workspace-setup-store.ts:528 and relocation retirement workspace-state-store.ts:256; native identity/deletion stay T1",
+          "Workspace worker/read dispatch plus Doctor alias rebind, workspace setup migration, and relocation retirement; native identity resolution remains only with those maintenance callers",
       },
       {
         tier: "W",
-        operations: ["replaceWorkspaceAttestationInDatabase"],
+        operations: ["replaceWorkspaceAttestationInDatabase", "deleteWorkspaceStateRowsInDatabase"],
         evidence:
-          "workspace.replaceAttestation dispatch in openclaw-state-worker-runtime.ts:212; shared snapshot/alias helpers retain Doctor/migration exposure",
+          "workspace.replaceAttestation, workspace.expire and workspace.delete dispatch in the shared-state worker; shared snapshot/alias helpers retain Doctor/migration exposure",
       },
     ],
   ],
@@ -777,6 +790,18 @@ const reviewedOperations = new Map([
     "src/state/agent-deletion-journal.ts",
     [
       {
+        tier: "W",
+        operations: [
+          "beginAgentDeletionJournalInDatabase",
+          "updateAgentDeletionJournalPathsInDatabase",
+          "handoffAgentDeletionJournalInDatabase",
+          "completeAgentDeletionJournalInDatabase",
+          "deleteAgentDeletionJournalInDatabase",
+        ],
+        evidence:
+          "agent-deletion.worker.ts owns all production journal mutations; synchronous fixture adapters live under test-utils. Native SDK cleanup retains only live journal/lease reads around agent COMMIT",
+      },
+      {
         tier: "T2",
         operations: ["prepareAgentDeletionPathFence"],
         evidence:
@@ -832,9 +857,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["copySqliteSessionGenerationRows"],
+        operations: [
+          "copySqliteSessionGenerationRows",
+          "readSqliteSessionGenerationWindows",
+          "readSqliteSessionGenerationFacts",
+        ],
         evidence:
-          "Doctor cross-store repair: legacy-main-session-migration-operations.ts:324 is gated by doctor-fix at :550; session-accessor.sqlite-canonical-repair.ts:504 is called by commands/doctor-session-canonical-keys.ts:454. Gateway agents.create detect mode does not copy.",
+          "Comparison reads run in session-retirement-read.worker.ts; full claims and generation copies are Doctor legacy/canonical repair. Native deletion-plan generation reads require expectedGenerations, supplied only by legacy-main-session-migration-operations.ts",
       },
     ],
   ],
@@ -854,9 +883,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["deleteSessionMembersForRepair"],
+        operations: ["deleteSessionMembersForRepair", "readSessionNodeArtifactFingerprint"],
         evidence:
-          "Only commands/doctor-session-canonical-keys.ts:311 and session-accessor.sqlite-canonical-repair.ts:513 call this member cleanup; the latter is Doctor repair via doctor-session-canonical-keys.ts:454.",
+          "Member cleanup is Doctor canonical repair. Full readClaim is Doctor-only; deletion-plan fingerprint reads require expectedNodeArtifactFingerprint, supplied only by Doctor deleteExpectedClaim. Worker detection omits artifact custody; other native artifact kernels remain separately classified",
       },
     ],
   ],
@@ -1764,13 +1793,39 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/agent-deletion-journal-recovery.ts",
+    [
+      {
+        tier: "W",
+        operations: ["resolveAgentDeletionRecoveryHolds"],
+        evidence:
+          "Only agent-deletion-recovery.worker.ts and worker-only journal completion resolve holds; reconstruction and Doctor hold producers remain separate native maintenance operations",
+      },
+    ],
+  ],
+  [
+    "src/state/agent-provenance.ts",
+    [
+      {
+        tier: "W",
+        operations: ["deleteAgentProvenanceForAgent"],
+        evidence:
+          "Only completeAgentDeletionJournalInDatabase, reached from agent-deletion.worker.ts, deletes provenance; lifecycle incarnation readers retain synchronous live-authority checks",
+      },
+    ],
+  ],
+  [
     "src/state/agent-provenance.kernel.ts",
     [
       {
         tier: "W",
-        operations: ["listAgentProvenanceInDatabase"],
+        operations: [
+          "listAgentProvenanceInDatabase",
+          "recordAgentProvenanceInDatabase",
+          "readAgentProvenanceBatchInDatabase",
+        ],
         evidence:
-          "src/state/agent-provenance.ts:114 submits agentProvenance.list → openclaw-state-worker-runtime.ts:277.",
+          "agentProvenance.list/readBatch/record execute through openclaw-state-worker-runtime.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
       },
     ],
   ],
@@ -2353,7 +2408,7 @@ function render(rows) {
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer. Initializer exceptions exclude nested function bodies, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations remain T2 Doctor work, but its exact-row reader remains T1 because Gateway agent creation invokes legacy-main detection. Incognito category reads and native approval SDK compatibility remain T1. Claw provenance's counted writes are CLI-only; its raw Gateway reads are still runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks or initialization rollback require native transactions. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",
