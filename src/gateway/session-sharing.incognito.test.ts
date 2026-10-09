@@ -15,6 +15,8 @@ import { prepareSessionSourceAuthority } from "../config/sessions/session-source
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
@@ -288,12 +290,21 @@ it("keeps ordinary unbound incognito authorization on the native owner", async (
   });
   expect(result.error).toBeNull();
   const prepared = await prepareSessionSourceAuthority(result.authorization!.assertCurrent);
+  let sharedPath: string | undefined;
   try {
-    expect(prepared.nativeSource).toBe(true);
-    expect(result.authorization!.admittedInputAuthority).toBeUndefined();
-    prepared.assertCurrent();
+    try {
+      expect(prepared.nativeSource).toBe(true);
+      expect(result.authorization!.admittedInputAuthority).toBeUndefined();
+      prepared.assertCurrent();
+      sharedPath = openOpenClawStateDatabase({ env }).path;
+      expect(() => prepared.assertCurrent()).toThrow(/identity changed|admission changed/);
+    } finally {
+      await prepared.release?.();
+    }
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual(before);
   } finally {
-    await prepared.release?.();
+    if (sharedPath) {
+      await closeOpenClawStateDatabaseByPathAsync(sharedPath);
+    }
   }
-  expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual(before);
 });

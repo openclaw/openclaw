@@ -22,7 +22,10 @@ import { captureSessionStoreReadCandidates } from "../config/sessions/session-st
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertDatabasePathIdentity,
+  assertExistingDatabaseIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
@@ -434,6 +437,7 @@ async function prepareNativeSessionSharingSource(
   try {
     assertSourceCurrent();
     const sharedContext = captureOpenClawStateReadWorkerContext({ env });
+    const sharedIdentity = sharedContext.admission.identity;
     const retainSource = (agentId: string, path: string) => {
       const retained = retainOpenClawAgentDatabaseReadOnly({ agentId, path, env });
       if (!retained.found) {
@@ -504,12 +508,17 @@ async function prepareNativeSessionSharingSource(
         import("../state/agent-deletion-journal.js"),
       ]);
     const shared = await prepareOpenClawStateCurrentReader(sharedContext);
-    if (!shared) {
-      throw new Error("Session sharing source has no admitted shared state");
+    if (shared) {
+      resources.push({ release: () => shared.dispose() });
     }
-    resources.push({ release: () => shared.dispose() });
     const assertCurrent = () => {
       assertSourceCurrent();
+      if (!shared) {
+        // Native one-shots may have no shared state; later creation revokes that absence.
+        sharedContext.maintenanceScope?.assertReadAdmission();
+        sharedContext.admission.assertCurrent();
+        assertDatabasePathIdentity(sharedContext.admission.databasePath, sharedIdentity);
+      }
       for (const read of reads) {
         read.assertSourceCurrent?.();
         read.retained.claim.assertCurrent();
@@ -523,7 +532,7 @@ async function prepareNativeSessionSharingSource(
           );
         }
         if (
-          shared.read((database) =>
+          shared?.read((database) =>
             readAgentDeletionJournalInDatabase(database, read.target.agentId, "runtime"),
           )
         ) {

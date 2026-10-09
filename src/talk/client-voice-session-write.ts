@@ -107,10 +107,10 @@ export function captureClientVoiceSessionWriter(params: {
             if (!authority) {
               throw new Error("Voice session authority omitted its prepared assertion");
             }
-            // SAFETY: voice.session.mutate supplies validation from this transaction.
             if (facts.sourceValidation) {
               acceptSessionSourceValidation(
                 authority,
+                // SAFETY: voice.session.mutate supplies validation from this transaction.
                 facts.sourceValidation as SessionSourceValidation,
               );
             }
@@ -118,6 +118,7 @@ export function captureClientVoiceSessionWriter(params: {
               if (!authority.transaction) {
                 throw new Error("Voice session transaction omitted its prepared assertion");
               }
+              // SAFETY: voice.session.mutate supplies the pending-input facts from this transaction.
               authority.transaction.assertCurrent(facts.facts as SessionPendingInputAuthorityFacts);
             }
             authority.assertCurrent();
