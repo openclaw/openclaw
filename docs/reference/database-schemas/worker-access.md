@@ -3977,6 +3977,11 @@ before returning or starting another repair. A following repair can immediately
 reopen the same database; the existing journal and retry semantics remain intact.
 This changes no schema, retention, permissions, or update format.
 
+History read routing uses native-handle presence only to select its admission lane.
+It does not acquire a native database or run native admission while preparing a
+worker read. The worker retains physical identity, schema, quarantine, and caller
+authority checks; cold reads still serialize with first creation.
+
 OAuth peer fencing, restoration, and settlement use the existing auth reader and
 agent writer. Discovery retains each candidate's physical database identity,
 including registered custom paths. The writer compares the exact credential

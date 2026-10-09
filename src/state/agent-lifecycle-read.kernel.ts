@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { agentProvenanceFromRow } from "./agent-provenance.kernel.js";
@@ -36,11 +35,11 @@ export function readAgentLifecycleStoreFacts(
         ]),
     )
     .$if(!hasProvenance, (query) =>
-      query.select([
-        sql<string | null>`NULL`.as("provenanceAgentId"),
-        sql<string | null>`NULL`.as("createdVia"),
-        sql<string | null>`NULL`.as("creatorAgentId"),
-        sql<number | null>`NULL`.as("createdAtMs"),
+      query.select((eb) => [
+        eb.val(null).as("provenanceAgentId"),
+        eb.val(null).as("createdVia"),
+        eb.val(null).as("creatorAgentId"),
+        eb.val(null).as("createdAtMs"),
       ]),
     )
     .$if(hasJournal, (query) =>
@@ -48,7 +47,7 @@ export function readAgentLifecycleStoreFacts(
         .leftJoin("agent_deletion_journal as deletion", "deletion.agent_id", "target.agent_id")
         .select("deletion.agent_id as deletedAgentId"),
     )
-    .$if(!hasJournal, (query) => query.select(sql<string | null>`NULL`.as("deletedAgentId")));
+    .$if(!hasJournal, (query) => query.select((eb) => eb.val(null).as("deletedAgentId")));
   const row = executeSqliteQueryTakeFirstSync(database, lifecycleQuery);
   if (!row) {
     throw new Error("Agent lifecycle lookup returned no target row");

@@ -1,6 +1,6 @@
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import { isOpenClawAgentDatabaseOpen } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureExistingOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -48,12 +48,12 @@ export async function withSessionHistoryReadAdmission<T>(
   let additionalLane: SessionHistoryWorkerLane | undefined;
   let outcome: { value: T } | { error: unknown };
   try {
-    const admittedNative = getOpenClawAgentDatabaseIfOpen(options);
-    if (!request.knownSource && !admittedNative) {
+    const hasOpenNativeHandle = isOpenClawAgentDatabaseOpen(options.path);
+    if (!request.knownSource && !hasOpenNativeHandle) {
       execution = captureExistingOpenClawAgentDatabaseExecution(options);
     }
     const prepared = execution?.capturePreparedGenerationClaim();
-    const cold = !request.knownSource && !admittedNative && !prepared;
+    const cold = !request.knownSource && !hasOpenNativeHandle && !prepared;
     const lane = cold ? targetDiscoveryLane : requestedLane;
     if (lane !== requestedLane) {
       historyClearTimeout(lane.idleTimer);
