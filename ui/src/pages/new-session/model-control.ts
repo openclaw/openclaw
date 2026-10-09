@@ -705,12 +705,12 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
       onModelPickerOpen: () => {
-        const client = this.metadataClient;
-        const scope = this.metadataScope;
-        if (!this.metadataReader.pending && client && scope) {
+        const metadataClient = this.metadataClient;
+        const metadataScope = this.metadataScope;
+        if (!this.metadataReader.pending && metadataClient && metadataScope) {
           void this.metadataReader.read();
         }
-        this.catalogTargets.retry(client, this.agentId);
+        this.catalogTargets.retry(metadataClient, this.agentId);
       },
       onRequestUpdate: this.notify,
     });

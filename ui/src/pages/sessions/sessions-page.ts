@@ -525,7 +525,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     // Claim before refreshList publishes. Only this connection's completion may
     // release the slot; the next query is read from page state, never queued here.
-    const completion = createDeferredCore<void>();
+    const completion = createDeferredCore();
     const pending = completion.promise.finally(() => {
       if (this.listRequest !== pending) {
         return;

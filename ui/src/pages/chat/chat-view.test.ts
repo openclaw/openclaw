@@ -551,7 +551,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     onFastModeSelect: (value, targetSessionKey) =>
       switchChatSetting(
         state as unknown as Parameters<typeof switchChatSetting>[0],
-        { kind: "fastMode", value: value },
+        { kind: "fastMode", value },
         targetSessionKey,
       ),
     onModelSelect: (value, targetSessionKey, agentRuntime) =>
@@ -564,7 +564,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     onThinkingSelect: (value, targetSessionKey) =>
       switchChatSetting(
         state as unknown as Parameters<typeof switchChatSetting>[0],
-        { kind: "thinkingLevel", value: value },
+        { kind: "thinkingLevel", value },
         targetSessionKey,
       ),
   };
