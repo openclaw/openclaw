@@ -27,11 +27,12 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const probe = useIncognitoActorProbe();
 const authority = { assertCurrent() {} };
-afterAll(closeOpenClawAgentDatabasesAsync);
+afterAll(() => closeOpenClawAgentDatabasesAsync());
 
 const completeEntry: InternalSessionEntry = {
   sessionId: "selected",
   updatedAt: 1,
+  createdAt: 1,
   category: "Synthetic",
   execCwd: "/synthetic/workspace",
   skillsSnapshot: { prompt: "Complete saved prompt", skills: [] },
@@ -122,7 +123,7 @@ it.each(["bound", "native"] as const)(
     const entry = { sessionId: "helper", updatedAt: 1, pluginOwnerId: "active-memory" };
     replaceSessionEntrySync({ ...scope, sessionKey: durableKey }, entry);
     const actor = mode === "bound" ? await openIncognitoTestActor(env, authority) : undefined;
-    const privateEntry = { ...entry, incognito: true };
+    const privateEntry: InternalSessionEntry = { ...entry, incognito: true };
     if (actor) {
       await actor.sessions.create(authority, { sessionKey, entry: privateEntry });
     } else {
@@ -139,7 +140,7 @@ it.each(["bound", "native"] as const)(
             transcriptContentMarker: '"runId":"helper"',
             archiveRemovedEntryTranscripts: false,
             orphanTranscriptMinAgeMs: 0,
-            nowMs: 10_000,
+            nowMs: Date.now(),
           }),
         ).resolves.toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 0 });
         await expect(getSessionEntryAsync({ ...scope, sessionKey })).resolves.toBeUndefined();

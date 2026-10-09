@@ -23,11 +23,7 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import {
-  readSessionEntryByIdReadOnlyInWorker,
-  readSessionEntryReadOnlyInWorker,
-  readSessionUpdatedAtInWorker,
-} from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
@@ -47,10 +43,15 @@ import {
   generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
+  type SessionStoreEntrySummary,
   type SessionStoreReadParams,
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+export {
+  getSessionEntryAsync,
+  getSessionEntryByIdAsync,
+} from "./session-store-runtime-internal.js";
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 export { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 
@@ -67,11 +68,6 @@ export {
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 type SessionStoreListParams = Partial<Omit<SessionStoreReadParams, "sessionKey">>;
-
-type SessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
 
 export type SessionStoreTranscriptEvent = SessionTranscriptEvent;
 
@@ -169,27 +165,6 @@ export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessi
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
-}
-
-/** Loads the complete public entry through the selected asynchronous read owner. */
-export async function getSessionEntryAsync(
-  params: SessionStoreReadParams,
-): Promise<SessionEntry | undefined> {
-  const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
-  return entry ? projectPluginSessionEntry(entry) : undefined;
-}
-
-/** Looks up a visible current session ID in one selected store. */
-export async function getSessionEntryByIdAsync(
-  params: Omit<SessionStoreReadParams, "sessionKey"> & { sessionId: string },
-): Promise<SessionStoreEntrySummary | undefined> {
-  const selected = await readSessionEntryByIdReadOnlyInWorker({
-    ...toSessionAccessScope({ ...params, sessionKey: "" }),
-    sessionId: params.sessionId,
-  });
-  return selected
-    ? { sessionKey: selected.sessionKey, entry: projectPluginSessionEntry(selected.entry) }
-    : undefined;
 }
 
 /** Reads the current session binding of one canonical transport address. */

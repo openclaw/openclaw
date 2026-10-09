@@ -37,7 +37,7 @@ import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.j
 import {
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
-} from "../../plugin-sdk/session-store-runtime.js";
+} from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   captureSessionInitializationOwner,
   createSessionInitialization,

@@ -12,6 +12,7 @@ import {
   parseSqliteSessionFileMarker,
   patchSessionEntry,
   rethrowIncognitoSessionError,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -123,6 +124,7 @@ export async function runRecallSubagent(params: {
   storePath: string;
   fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
+  assertMemoryAudienceCurrent?: () => void;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
   onEmbeddedRunSettled?: () => void;
 }): Promise<RecallSubagentResult> {
@@ -222,7 +224,7 @@ export async function runRecallSubagent(params: {
   };
 
   try {
-    const runtimeEntry = {
+    const runtimeEntry: SessionEntry = {
       pluginOwnerId: params.api.id,
       sessionId: subagentSessionId,
       sessionFile: runtimeSessionFile,
@@ -261,6 +263,8 @@ export async function runRecallSubagent(params: {
       channelId: params.channelId,
     });
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
+    params.abortSignal?.throwIfAborted();
+    params.assertMemoryAudienceCurrent?.();
     const result = await params.api.runtime.agent
       .runEmbeddedAgent({
         sessionId: subagentSessionId,

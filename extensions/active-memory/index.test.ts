@@ -1710,36 +1710,48 @@ describe("active-memory plugin", () => {
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
   });
 
-  it("rechecks the audience after asynchronous recall metadata preparation", async () => {
-    registerPluginConfig({ mode: "always" });
-    const prepared = createDeferred<void>();
-    const resume = createDeferred<Record<string, unknown>>();
-    let audienceCurrent = true;
-    api.runtime.agent.session.getSessionEntryAsync
-      .mockResolvedValueOnce(hoisted.sessionStore["agent:main:main"])
-      .mockImplementationOnce(() => {
-        prepared.resolve();
-        return resume.promise;
-      });
-    const pending = runPromptBuild(
-      { prompt: "what did we decide?" },
-      {
-        sessionKey: "agent:main:main",
-        assertMemoryAudienceCurrent: () => {
-          if (!audienceCurrent) {
-            throw new Error("memory audience ended");
+  it.each([
+    { stage: "recall", gateRead: 2 },
+    { stage: "channel", gateRead: 3 },
+  ])(
+    "rechecks the audience after asynchronous $stage metadata preparation",
+    async ({ gateRead }) => {
+      registerPluginConfig({ mode: "always" });
+      const prepared = createDeferred<void>();
+      const resume = createDeferred<Record<string, unknown>>();
+      let audienceCurrent = true;
+      let readIndex = 0;
+      api.runtime.agent.session.getSessionEntryAsync.mockImplementation(
+        (params: { sessionKey: string }) => {
+          if (++readIndex === gateRead) {
+            prepared.resolve();
+            return resume.promise;
           }
+          return Promise.resolve(hoisted.sessionStore[params.sessionKey]);
         },
-      },
-    );
-    await prepared.promise;
-    audienceCurrent = false;
-    resume.resolve(hoisted.sessionStore["agent:main:main"]);
+      );
+      const pending = runPromptBuild(
+        { prompt: "what did we decide?" },
+        {
+          sessionKey: "agent:main:main",
+          assertMemoryAudienceCurrent: () => {
+            if (!audienceCurrent) {
+              throw new Error("memory audience ended");
+            }
+          },
+        },
+      );
+      await prepared.promise;
+      audienceCurrent = false;
+      resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
 
-    expect(await pending).toBeUndefined();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
-  });
+      expect(await pending).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      if (gateRead === 2) {
+        expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(
     // prettier-ignore
