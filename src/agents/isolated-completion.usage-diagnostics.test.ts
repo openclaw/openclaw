@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -63,6 +66,49 @@ it("emits one model.usage event when a CLI isolated completion reports usage", a
       total: 4583,
     },
   });
+});
+
+it("prices CLI usage from the admitted agent directory instead of the default agent", async () => {
+  const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "isolated-usage-pricing-"));
+  const seen = collectUsageEvents();
+  try {
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-test",
+                cost: { input: 20, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
+      snapshot: { ...preparedModelRuntime, agentDir },
+      [Symbol.asyncDispose]: releaseRuntimeLease,
+    });
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 1_000_000, output: 0 } } },
+    });
+
+    await runIsolatedCompletion({
+      ...isolatedRequest(),
+      agentId: "second",
+      purpose: "session-activity-summary",
+    });
+
+    expect(seen.events).toHaveLength(1);
+    expect(seen.events[0]).toMatchObject({ agentId: "second", costUsd: 20 });
+  } finally {
+    seen.stop();
+    await fs.rm(agentDir, { recursive: true, force: true });
+  }
 });
 
 it("emits one model.usage event from the harness path", async () => {

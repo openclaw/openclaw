@@ -277,6 +277,7 @@ function prepareIsolatedHostAuthorization<
 async function emitIsolatedCompletionUsage(params: {
   config: OpenClawConfig;
   agentId: string;
+  agentDir: string;
   result: IsolatedCompletionResult;
 }): Promise<void> {
   const usage = normalizeUsage(params.result.usage);
@@ -294,6 +295,7 @@ async function emitIsolatedCompletionUsage(params: {
     provider: params.result.provider,
     model: params.result.model,
     config: params.config,
+    agentDir: params.agentDir,
     usage,
   });
   const hasPositiveUsage = [input, output, cacheRead, cacheWrite, total, costUsd].some(
@@ -714,7 +716,12 @@ async function runIsolatedCompletionOwned(
       );
     }
     if (input.purpose !== "plugin-completion") {
-      await emitIsolatedCompletionUsage({ config: lease.snapshot.config, agentId, result });
+      await emitIsolatedCompletionUsage({
+        config: lease.snapshot.config,
+        agentId,
+        agentDir: lease.snapshot.agentDir,
+        result,
+      });
     }
     return result;
   } finally {
