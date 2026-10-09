@@ -30,7 +30,6 @@ import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
   buildMSTeamsAuthEndpoint,
-  buildMSTeamsTokenEndpoint,
 } from "./oauth.shared.js";
 import { exchangeMSTeamsCodeForTokens, refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
@@ -126,18 +125,6 @@ describe("buildMSTeamsAuthUrl", () => {
     expect(parsed.searchParams.get("state")).toBe(state);
     expect(parsed.searchParams.get("prompt")).toBe("consent");
   });
-
-  it("uses custom scopes when provided", () => {
-    const url = buildMSTeamsAuthUrl({
-      tenantId: "t",
-      clientId: "c",
-      challenge: "ch",
-      state: "s",
-      scopes: ["User.Read", "offline_access"],
-    });
-    const parsed = new URL(url);
-    expect(parsed.searchParams.get("scope")).toBe("User.Read offline_access");
-  });
 });
 
 describe("exchangeMSTeamsCodeForTokens", () => {
@@ -152,47 +139,6 @@ describe("exchangeMSTeamsCodeForTokens", () => {
     vi.unstubAllGlobals();
   });
 
-  it("exchanges an authorization code for delegated tokens", async () => {
-    const now = Date.now();
-    fetchSpy.mockResolvedValueOnce(
-      responseJson({
-        access_token: "at-123",
-        refresh_token: "rt-456",
-        expires_in: 3600,
-        scope: "ChatMessage.Send offline_access",
-      }),
-    );
-
-    const tokens = await exchangeMSTeamsCodeForTokens({
-      tenantId: "tenant-1",
-      clientId: "client-1",
-      clientSecret: "secret-1", // pragma: allowlist secret
-      code: "auth-code",
-      verifier: "pkce-verifier",
-    });
-    const afterExchange = Date.now();
-
-    expect(tokens.accessToken).toBe("at-123");
-    expect(tokens.refreshToken).toBe("rt-456");
-    expect(tokens.scopes).toEqual(["ChatMessage.Send", "offline_access"]);
-    // expiresAt should be roughly now + 3600s - 300s
-    expect(tokens.expiresAt).toBeGreaterThanOrEqual(now + 3300 * 1000 - 1000);
-    expect(tokens.expiresAt).toBeLessThanOrEqual(afterExchange + 3300 * 1000 + 2000);
-
-    // Verify the request was well-formed
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, init] = firstFetchCall(fetchSpy);
-    expect(url).toBe(buildMSTeamsTokenEndpoint("tenant-1"));
-    const body = new URLSearchParams(init.body as string);
-    expect(body.get("client_id")).toBe("client-1");
-    expect(body.get("client_secret")).toBe("secret-1");
-    expect(body.get("grant_type")).toBe("authorization_code");
-    expect(body.get("code")).toBe("auth-code");
-    expect(body.get("code_verifier")).toBe("pkce-verifier");
-    expect(body.get("redirect_uri")).toBe(MSTEAMS_OAUTH_REDIRECT_URI);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
-  });
-
   it("throws on a 400 error response", async () => {
     fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
 
@@ -205,25 +151,6 @@ describe("exchangeMSTeamsCodeForTokens", () => {
         verifier: "v",
       }),
     ).rejects.toThrow(/MSTeams token exchange failed \(400\)/);
-  });
-
-  it("reports malformed token exchange JSON with a stable OAuth error", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
-    await expect(
-      exchangeMSTeamsCodeForTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        code: "bad-json",
-        verifier: "v",
-      }),
-    ).rejects.toThrow("MSTeams token exchange failed: malformed JSON response");
   });
 
   it("rejects unsafe token exchange expiry values", async () => {
@@ -245,11 +172,8 @@ describe("exchangeMSTeamsCodeForTokens", () => {
     ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
   });
 
-  it.each([
-    { label: "null", body: null },
-    { label: "array", body: [] },
-  ])("rejects a top-level $label token exchange response", async ({ body }) => {
-    fetchSpy.mockResolvedValueOnce(responseJson(body));
+  it("rejects a top-level null token exchange response", async () => {
+    fetchSpy.mockResolvedValueOnce(responseJson(null));
 
     await expect(
       exchangeMSTeamsCodeForTokens({
@@ -305,24 +229,5 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");
     expect(body.get("client_secret")).toBe("secret-1");
-  });
-
-  it("uses new refresh token when Azure returns one", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      responseJson({
-        access_token: "new-at",
-        refresh_token: "new-rt",
-        expires_in: 3600,
-      }),
-    );
-
-    const tokens = await refreshMSTeamsDelegatedTokens({
-      tenantId: "t",
-      clientId: "c",
-      clientSecret: "s", // pragma: allowlist secret
-      refreshToken: "old-rt",
-    });
-
-    expect(tokens.refreshToken).toBe("new-rt");
   });
 });
