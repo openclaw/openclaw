@@ -5071,7 +5071,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/media/anthropic-inline-images.test.ts",
   "src/meeting-bot/transcripts-bridge.test.ts",
   "src/node-host/node-worker-launch-store.test.ts",
-  "src/node-host/node-worker-supervisor.stop-initialization.test.ts",
   "src/node-host/node-worker-workspace-retention.test.ts",
   "src/plugin-sdk/persistent-dedupe.worker.test.ts",
   "src/plugin-sdk/test-helpers/temp-home.test.ts",
