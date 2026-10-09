@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
 describe("xai provider thinking policy", () => {
   it.each([
@@ -7,19 +8,25 @@ describe("xai provider thinking policy", () => {
     ["x-ai", "grok-4.3-latest"],
     ["x-ai", "grok-latest"],
   ])("exposes Grok 4.3 thinking levels for %s/%s", (provider, modelId) => {
-    const profile = resolveThinkingProfile({
-      provider,
-      modelId,
-    });
-
-    expect(profile.defaultLevel).toBe("low");
-    expect(profile.levels.map((level) => level.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-    ]);
+    // Catalog rows reach the policy after runtime normalization stamps their ID-rule efforts.
+    const stamped = applyXaiRuntimeModelCompat({ id: modelId, reasoning: true }).compat
+      .supportedReasoningEfforts;
+    if (!Array.isArray(stamped)) {
+      throw new Error("expected runtime normalization to stamp Grok 4.3 efforts");
+    }
+    for (const profile of [
+      resolveThinkingProfile({ provider, modelId }),
+      resolveThinkingProfile({ provider, modelId, compat: { supportedReasoningEfforts: stamped } }),
+    ]) {
+      expect(profile.defaultLevel).toBe("low");
+      expect(profile.levels.map((level) => level.id)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+      ]);
+    }
   });
 
   it.each([
