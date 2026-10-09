@@ -1,4 +1,3 @@
-import { DEFAULT_EMOJIS, resolveToolEmoji } from "openclaw/plugin-sdk/channel-feedback";
 import {
   compactChannelProgressDraftLine,
   formatChannelProgressDraftDiffStat,
@@ -67,17 +66,12 @@ function progressLineText(
   maxLineChars: number,
 ): ProgressText {
   const compact = (text: string) => compactChannelProgressDraftLine(text, maxLineChars);
-  if (typeof line === "string") {
-    return markdownProgressText(compact(line));
-  }
-  // Telegram tool rows need text glyphs; keep graphical display metadata unchanged.
-  const icon =
-    line.icon || (line.toolName ? resolveToolEmoji(line.toolName, DEFAULT_EMOJIS) : undefined);
-  if (!icon && (!line.label || line.label === "Commentary")) {
+  if (typeof line === "string" || (!line.icon && (!line.label || line.label === "Commentary"))) {
     // Reasoning/commentary retain authored Markdown; checklist labels stay literal.
-    return markdownProgressText(compact(line.text));
+    const text = compact(typeof line === "string" ? line : line.text);
+    return markdownProgressText(text);
   }
-  const label = [icon, line.label].filter(Boolean).join(" ");
+  const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts = [literalProgressText(label, "bold")];
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
