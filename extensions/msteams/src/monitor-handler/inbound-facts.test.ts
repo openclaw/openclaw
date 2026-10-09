@@ -1,12 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
-import { assembleMSTeamsInboundFacts, prepareMSTeamsDebounceEntry } from "./inbound-facts.js";
+import {
+  assembleMSTeamsInboundFacts,
+  mergeMSTeamsQuoteInfo,
+  prepareMSTeamsDebounceEntry,
+} from "./inbound-facts.js";
 
 function context(activity: MSTeamsTurnContext["activity"]): MSTeamsTurnContext {
   return { activity } as MSTeamsTurnContext;
 }
 
 describe("msteams inbound facts", () => {
+  it("preserves one quote fact across debounced plain text and rejects ambiguous quotes", () => {
+    const quoteInfo = { sender: "Alice", senderId: "alice-aad", body: "quoted" };
+    expect(mergeMSTeamsQuoteInfo([{ quoteInfo }, {}])).toBe(quoteInfo);
+    expect(
+      mergeMSTeamsQuoteInfo([
+        { quoteInfo },
+        { quoteInfo: { sender: "Bob", senderId: "bob-aad", body: "another quote" } },
+      ]),
+    ).toBeUndefined();
+  });
+
   it("prefers activity text, then HTML, then adaptive-card values", async () => {
     const textEntry = await prepareMSTeamsDebounceEntry({
       context: context({

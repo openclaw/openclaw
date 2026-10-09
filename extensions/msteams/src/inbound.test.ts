@@ -1,6 +1,7 @@
 // Msteams tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  buildMSTeamsNormalizedText,
   extractMSTeamsQuoteInfo,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -8,6 +9,65 @@ import {
 } from "./inbound.js";
 
 describe("msteams inbound", () => {
+  describe("buildMSTeamsNormalizedText", () => {
+    it("normalizes user mentions while removing the bot mention", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "<at>Bot</at> ask <at>Alice</at>",
+          botId: "bot-id",
+          entities: [
+            { type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id", name: "Bot" } },
+            {
+              type: "mention",
+              text: "<at>Alice</at>",
+              mentioned: { id: "alice-id", name: "Alice" },
+            },
+          ],
+        }),
+      ).toBe("ask @Alice");
+    });
+
+    it("matches reordered mention entities to their text spans", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "<at>Bot</at> ask <at>Alice</at>",
+          botId: "bot-id",
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Alice</at>",
+              mentioned: { id: "alice-id", name: "Alice" },
+            },
+            { type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id", name: "Bot" } },
+          ],
+        }),
+      ).toBe("ask @Alice");
+    });
+
+    it("removes every inline quote marker", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: '<quoted messageId="one"/>\n<quoted messageId="two"/>\ncurrent message',
+        }),
+      ).toBe("current message");
+    });
+
+    it("labels forwarded body text", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "see this\r\n\r\nthe forwarded body",
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<blockquote itemtype="http://schema.skype.com/Forward"><p>the forwarded body</p></blockquote>',
+            },
+          ],
+        }),
+      ).toBe("see this\n\n[Forwarded message]\nthe forwarded body\n[/Forwarded message]");
+    });
+  });
+
   describe("stripMSTeamsMentionTags", () => {
     it("removes <at ...> tags with attributes", () => {
       expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
@@ -68,6 +128,114 @@ describe("msteams inbound", () => {
 
     it("returns undefined for empty attachments array", () => {
       expect(extractMSTeamsQuoteInfo([])).toBeUndefined();
+    });
+
+    it("prefers authenticated quotedReply metadata over attachment HTML", () => {
+      expect(
+        extractMSTeamsQuoteInfo(
+          [replyAttachment()],
+          [
+            {
+              type: "quotedReply",
+              quotedReply: {
+                messageId: "quote-1",
+                senderId: "blocked-aad",
+                senderName: "Mallory",
+                preview: "entity preview",
+              },
+            },
+          ],
+        ),
+      ).toEqual({
+        id: "quote-1",
+        senderId: "blocked-aad",
+        sender: "Mallory",
+        body: "entity preview",
+        fromQuotedReplyEntity: true,
+      });
+    });
+
+    it("keeps entity sender identity when its message id matches the attachment", () => {
+      expect(
+        extractMSTeamsQuoteInfo(
+          [
+            replyAttachment({
+              content:
+                '<blockquote itemtype="http://schema.skype.com/Reply" itemid="quote-1">' +
+                '<strong itemprop="mri">Mallory</strong>' +
+                '<p itemprop="copy">Hello world</p></blockquote>',
+            }),
+          ],
+          [
+            {
+              type: "quotedReply",
+              quotedReply: {
+                messageId: "quote-1",
+                senderId: "blocked-aad",
+                senderName: "Mallory",
+              },
+            },
+          ],
+        ),
+      ).toEqual({
+        senderId: "blocked-aad",
+        sender: "Mallory",
+        body: "Hello world",
+        id: "quote-1",
+        fromQuotedReplyEntity: true,
+      });
+    });
+
+    it("rejects an attachment body whose message id does not match the entity", () => {
+      expect(
+        extractMSTeamsQuoteInfo(
+          [
+            replyAttachment({
+              content:
+                '<blockquote itemtype="http://schema.skype.com/Reply" itemid="quote-b">' +
+                '<strong itemprop="mri">Mallory</strong>' +
+                '<p itemprop="copy">Blocked attachment body</p></blockquote>',
+            }),
+          ],
+          [
+            {
+              type: "quotedReply",
+              quotedReply: {
+                messageId: "quote-a",
+                senderId: "alice-aad",
+                senderName: "Alice",
+              },
+            },
+          ],
+        ),
+      ).toBeUndefined();
+    });
+
+    it("does not combine one Reply block's id with another block's body", () => {
+      expect(
+        extractMSTeamsQuoteInfo(
+          [
+            replyAttachment({
+              content:
+                '<blockquote itemtype="http://schema.skype.com/Reply" itemid="quote-a">' +
+                '<strong itemprop="mri">Alice</strong></blockquote>' +
+                '<blockquote itemtype="http://schema.skype.com/Reply" itemid="quote-b">' +
+                '<strong itemprop="mri">Mallory</strong>' +
+                '<p itemprop="copy">Blocked attachment body</p></blockquote>',
+            }),
+          ],
+          [
+            {
+              type: "quotedReply",
+              quotedReply: {
+                messageId: "quote-a",
+                senderId: "alice-aad",
+                senderName: "Alice",
+              },
+            },
+          ],
+        ),
+      ).toBeUndefined();
     });
 
     it("returns undefined when no reply blockquote is present", () => {

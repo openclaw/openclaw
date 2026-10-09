@@ -72,7 +72,10 @@ function threadMessage(
 ): GraphThreadMessage {
   return { id, from: { user }, body: { content, contentType: "text" } };
 }
-function threadActivity(attachments: MSTeamsTurnContext["activity"]["attachments"] = []) {
+function threadActivity(
+  attachments: MSTeamsTurnContext["activity"]["attachments"] = [],
+  overrides: Partial<MSTeamsTurnContext["activity"]> = {},
+) {
   return activity({
     replyToId: parentId,
     attachments,
@@ -80,6 +83,7 @@ function threadActivity(attachments: MSTeamsTurnContext["activity"]["attachments
       team: { id: "team123", aadGroupId: "graph-team-123" },
       channel: { id: "19:graph-channel@thread.tacv2" },
     },
+    ...overrides,
   });
 }
 function threadConfig(groupAllowFrom = ["alice-aad"]): MSTeamsConfig {
@@ -370,6 +374,119 @@ describe("msteams message authorization and supplemental context", () => {
       expect(context().BodyForAgent).toBe("Current message");
     },
   );
+
+  it("does not let an allowed parent authorize a blocked quotedReply sender", async () => {
+    graph.fetchChannelMessage.mockResolvedValue(
+      threadMessage(parentId, { id: "alice-aad", displayName: "Alice" }, "Allowed parent"),
+    );
+    const { handler } = setup(threadConfig());
+    await handler(
+      threadActivity(quote(), {
+        entities: [
+          {
+            type: "quotedReply",
+            quotedReply: {
+              senderId: "mallory-aad",
+              senderName: "Mallory",
+              preview: "Blocked entity preview",
+            },
+          },
+        ],
+      }),
+    );
+    expect(context().ReplyToBody).toBeUndefined();
+    expect(context().ReplyToSender).toBeUndefined();
+    expect(context().BodyForAgent).toBe("Current message");
+  });
+
+  it("observes allowed and mismatched quotes at final agent context", async () => {
+    const dispatchFinalContext = async (quoteSenderId: string) => {
+      dispatch.mockClear();
+      graph.fetchChannelMessage.mockResolvedValue(
+        threadMessage(
+          parentId,
+          { id: "alice-aad", displayName: "Alice" },
+          "Allowlisted thread parent",
+        ),
+      );
+      const { handler } = setup(threadConfig());
+      await handler(
+        threadActivity(
+          [
+            {
+              contentType: "text/html",
+              content:
+                '<blockquote itemtype="http://schema.skype.com/Forward">' +
+                "<p>forwarded body</p></blockquote>",
+            },
+          ],
+          {
+            text: "<at>Bot</at> ask <at>Bob</at>\n\nforwarded body",
+            entities: [
+              { type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id", name: "Bot" } },
+              { type: "mention", text: "<at>Bob</at>", mentioned: { id: "bob-id", name: "Bob" } },
+              {
+                type: "quotedReply",
+                quotedReply: {
+                  senderId: quoteSenderId,
+                  senderName: quoteSenderId === "alice-aad" ? "Alice" : "Mallory",
+                  preview: "Sanitized quoted preview",
+                },
+              },
+            ],
+          },
+        ),
+      );
+      return context();
+    };
+
+    const allowed = await dispatchFinalContext("alice-aad");
+    expect(allowed.BodyForAgent).toBe(
+      "ask @Bob\n\n[Forwarded message]\nforwarded body\n[/Forwarded message]",
+    );
+    expect(allowed.ReplyToBody).toBe("Sanitized quoted preview");
+    expect(allowed.ReplyToSender).toBe("Alice");
+
+    const mismatched = await dispatchFinalContext("mallory-aad");
+    expect(mismatched.BodyForAgent).toBe(allowed.BodyForAgent);
+    expect(mismatched.ReplyToBody).toBeUndefined();
+    expect(mismatched.ReplyToSender).toBeUndefined();
+  });
+
+  it("does not let an allowed entity authorize a body from another Reply block", async () => {
+    graph.fetchChannelMessage.mockResolvedValue(
+      threadMessage(parentId, { id: "alice-aad", displayName: "Alice" }, "Allowed parent"),
+    );
+    const { handler } = setup(threadConfig());
+    await handler(
+      threadActivity(
+        [
+          {
+            contentType: "text/html",
+            content:
+              '<blockquote itemtype="http://schema.skype.com/Reply" itemid="quote-a">' +
+              '<strong itemprop="mri">Alice</strong></blockquote>' +
+              quote("Mallory", "Blocked attachment body", "quote-b")[0]!.content,
+          },
+        ],
+        {
+          entities: [
+            {
+              type: "quotedReply",
+              quotedReply: {
+                messageId: "quote-a",
+                senderId: "alice-aad",
+                senderName: "Alice",
+              },
+            },
+          ],
+        },
+      ),
+    );
+    expect(context().ReplyToBody).toBeUndefined();
+    expect(context().ReplyToSender).toBeUndefined();
+    expect(context().BodyForAgent).toBe("Current message");
+  });
 
   it("does not fetch group-chat quotes with app-only Graph authority", async () => {
     const { handler } = setup({ groupPolicy: "open", requireMention: false });
