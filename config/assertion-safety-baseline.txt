@@ -354,7 +354,7 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts	2
 extensions/file-transfer/src/shared/policy.ts	6
 extensions/file-transfer/src/tools/dir-fetch-tool.ts	1
 extensions/file-transfer/src/tools/dir-list-tool.ts	2
-extensions/file-transfer/src/tools/file-fetch-tool.ts	2
+extensions/file-transfer/src/tools/file-fetch-tool.ts	1
 extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
