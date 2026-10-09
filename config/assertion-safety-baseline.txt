@@ -2748,7 +2748,7 @@ ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-app-view.ts	5
 ui/src/components/mcp-server-form.ts	1
-ui/src/components/model-picker.ts	2
+ui/src/components/model-picker.ts	1
 ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
 ui/src/components/select-picker.ts	2
@@ -2813,7 +2813,7 @@ ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
-ui/src/pages/chat/components/chat-composer.ts	5
+ui/src/pages/chat/components/chat-composer.ts	4
 ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1

@@ -5,8 +5,8 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
   admitStoredChatComposerQueueItem,

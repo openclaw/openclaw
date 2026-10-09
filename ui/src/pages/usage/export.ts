@@ -6,7 +6,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { currentLocalDate } from "./helpers.ts";
+import { formatIsoDate } from "./helpers.ts";
 import { createUsageRequest } from "./request.ts";
 import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
 
@@ -28,7 +28,7 @@ export function createUsageJsonExportRequest(
       if (!connection) {
         throw new Error(t("common.offline"));
       }
-      const filename = `openclaw-usage-${currentLocalDate()}.json`;
+      const filename = `openclaw-usage-${formatIsoDate(new Date())}.json`;
       let weights = new Map<string, UsageSessionEntry["contextWeight"]>();
       if (data.sessions.some((session) => session.hasContextWeight)) {
         const result = await requestSessionUsage(connection.client, query(), {

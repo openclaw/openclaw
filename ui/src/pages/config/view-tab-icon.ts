@@ -16,6 +16,7 @@ import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { renderSettingsRow, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 
 export type TabIconViewProps = {
   tabIcon: TabIconPreference | undefined;
@@ -57,9 +58,7 @@ export function renderTabIconSection(props: TabIconViewProps) {
       id=${APPEARANCE_SETTINGS_TARGET_IDS.tabIcon}
       class="settings-section settings-tab-icon"
     >
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.appearance.tabIcon.title")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.appearance.tabIcon.title"))}
       <div class="settings-group">
         ${renderSettingsRow({
           title: t("configView.appearance.tabIcon.source"),

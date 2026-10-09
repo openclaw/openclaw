@@ -38,28 +38,28 @@ const SHORT_COMMIT_LENGTH = 12;
 
 // Docs-first where a docs page exists; GitHub/Discord match the native
 // macOS/iOS About screens (AboutSettings.swift, SettingsProTabSections.swift).
-const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> = [
-  { href: "https://openclaw.ai", icon: icons.globe, label: () => t("aboutPage.linkWebsite") },
-  { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("aboutPage.linkDocs") },
+const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> = [
+  { href: "https://openclaw.ai", icon: icons.globe, labelKey: "aboutPage.linkWebsite" },
+  { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "aboutPage.linkDocs" },
   {
     href: "https://github.com/openclaw/openclaw",
     icon: brandIcons.github,
-    label: () => t("aboutPage.linkGitHub"),
+    labelKey: "aboutPage.linkGitHub",
   },
   {
     href: COMMUNITY_DISCORD_URL,
     icon: brandIcons.discord,
-    label: () => t("aboutPage.linkDiscord"),
+    labelKey: "aboutPage.linkDiscord",
   },
   {
     href: "https://x.com/openclaw",
     icon: brandIcons.x,
-    label: () => t("aboutPage.linkX"),
+    labelKey: "aboutPage.linkX",
   },
   {
     href: "https://docs.openclaw.ai/releases",
     icon: icons.scrollText,
-    label: () => t("aboutPage.linkChangelog"),
+    labelKey: "aboutPage.linkChangelog",
   },
 ];
 
@@ -160,7 +160,7 @@ function renderHero(props: AboutProps) {
               rel=${buildExternalLinkRel()}
             >
               <span class="about-hero__link-icon" aria-hidden="true">${link.icon}</span>
-              <span>${link.label()}</span>
+              <span>${t(link.labelKey)}</span>
             </a>
           `,
         )}
