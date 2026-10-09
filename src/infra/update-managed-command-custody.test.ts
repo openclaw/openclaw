@@ -179,6 +179,35 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
     }
   });
 
+  it("reserves commands for a Doctor started without an update run id", async () => {
+    const f = fixture();
+    const owner = await createManagedCommandProcessCustody({
+      roots: f.roots,
+      runId: "",
+      anchorOwner: "doctor:legacy-parent",
+    });
+    const other = await createManagedCommandProcessCustody({
+      roots: f.roots,
+      runId: "",
+      anchorOwner: "doctor:other",
+    });
+    const reservation = owner.custody.reserve([process.execPath]);
+    const claims = f.store.readCommandChildren(f.roots);
+    try {
+      expect(claims).toHaveLength(f.roots.length);
+      for (const claim of claims) {
+        expect(claim.owner).toBe("doctor:legacy-parent");
+      }
+      expect(() => owner.prepareSettlement(process.pid, [])).toThrow(
+        "Unmatched native command reservation",
+      );
+      expect(() => other.prepareSettlement(process.pid, [])).toThrow("belongs to another Doctor");
+    } finally {
+      reservation.settled();
+      owner.releaseAnchors();
+    }
+  });
+
   it("retains every installation after helper death until the tracked group exits, including orphan rows", async () => {
     const f = fixture();
     const binding = createManagedHandoffTestBinding(f.privateTmp);
