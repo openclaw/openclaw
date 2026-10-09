@@ -237,10 +237,14 @@ async function executeOperation(
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;
-  const contentGit =
-    contentRead ||
-    command.type === "worktree.snapshot" ||
-    command.type === "worktree.snapshot-verify-exact";
+  const snapshot =
+    command.type === "worktree.snapshot" || command.type === "worktree.snapshot-verify-exact";
+  const contentGit = contentRead || snapshot;
+  if (snapshot) {
+    // Missing snapshot objects must preserve the checkout, never start a promisor fetch.
+    baseEnv.GIT_NO_LAZY_FETCH = "1";
+    baseEnv.GIT_ALLOW_PROTOCOL = "";
+  }
   let gitCommandCount = 0;
   let summedGitWallMs = 0;
   let summedGitQueueWaitMs = 0;
