@@ -61,6 +61,12 @@ export async function fetchOllamaUsage(params: {
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
+    if (response.status === 401) {
+      return buildUsageErrorSnapshot("ollama", "Sign in to Ollama Cloud on the configured server");
+    }
+    if (response.status === 404) {
+      return buildUsageErrorSnapshot("ollama", "Update the configured Ollama server to 0.40.1+");
+    }
     return buildUsageHttpErrorSnapshot({ provider: "ollama", status: response.status });
   }
 

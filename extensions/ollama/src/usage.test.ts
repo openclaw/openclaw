@@ -101,9 +101,21 @@ describe("Ollama balance usage", () => {
   it("reports HTTP failures without exposing response contents", async () => {
     const snapshot = await fetchOllamaUsage({
       ...baseParams,
-      fetchFn: vi.fn(async () => new Response("private", { status: 401 })),
+      fetchFn: vi.fn(async () => new Response("private", { status: 403 })),
     });
-    expect(snapshot.error).toBe("HTTP 401");
+    expect(snapshot.error).toBe("HTTP 403");
+    expect(snapshot.windows).toEqual([]);
+  });
+
+  it.each([
+    [401, "Sign in to Ollama Cloud on the configured server"],
+    [404, "Update the configured Ollama server to 0.40.1+"],
+  ])("gives a recovery action for HTTP %i", async (status, message) => {
+    const snapshot = await fetchOllamaUsage({
+      ...baseParams,
+      fetchFn: vi.fn(async () => new Response("private", { status })),
+    });
+    expect(snapshot.error).toBe(message);
     expect(snapshot.windows).toEqual([]);
   });
 
