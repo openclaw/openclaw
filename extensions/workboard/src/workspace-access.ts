@@ -68,6 +68,7 @@ export const WORKBOARD_CARD_TOOL_NAMES = [
   "workboard_protocol_violation",
   "workboard_unblock",
   "workboard_move",
+  "workboard_board_move",
 ] as const;
 
 const WORKBOARD_TOOL_NAMES = [

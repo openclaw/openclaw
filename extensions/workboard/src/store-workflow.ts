@@ -41,6 +41,7 @@ import type {
   WorkboardHeartbeatInput,
   WorkboardMutationScope,
   WorkboardReassignInput,
+  WorkboardBoardMoveInput,
   WorkboardReclaimInput,
   WorkboardSpecifyInput,
 } from "./store-inputs.js";
@@ -51,6 +52,7 @@ import {
   deriveChildIdempotencyKey,
   normalizeArtifact,
   normalizeAutomation,
+  normalizeBoardId,
   normalizeBoundedString,
   normalizeProofInput,
   normalizeStatus,
@@ -378,6 +380,33 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         { agentId, status, metadata },
         { enforceStatusHolds: true },
       );
+    });
+  }
+
+  async boardMove(
+    id: string,
+    input: WorkboardBoardMoveInput = {},
+    scope?: WorkboardMutationScope | null,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const boardId = normalizeBoardId(input.boardId);
+      if (!boardId) {
+        throw new Error("board id is required.");
+      }
+      const reason = normalizeBoundedString(input.reason, undefined, 1000, "board move reason");
+      const result = await this.updateLatestCard(
+        id,
+        (current) => {
+          assertCanMutateClaimedCard(current, scope === null ? undefined : scope);
+          const metadata = {
+            ...current.metadata,
+            comments: appendComment(current.metadata?.comments, reason),
+          };
+          return { boardId, metadata };
+        },
+        { enforceStatusHolds: true },
+      );
+      return result.card;
     });
   }
 

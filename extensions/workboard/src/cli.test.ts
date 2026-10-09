@@ -354,4 +354,34 @@ describe("registerWorkboardCli", () => {
     ).rejects.toThrow("--status must be one of");
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "todo" });
   });
+
+  it("moves cards between boards without changing status and redacts JSON output", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Card on default", status: "blocked" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(
+        [
+          "workboard",
+          "board-move",
+          card.id.slice(0, 8),
+          "--board",
+          "people",
+          "--reason",
+          "moved to people board",
+          "--json",
+        ],
+        { from: "user" },
+      );
+    });
+
+    const parsed = JSON.parse(output);
+    expect(parsed).toMatchObject({ card: { id: card.id, status: "blocked" } });
+    expect(parsed.card.metadata.automation.boardId).toBe("people");
+    const updated = await store.get(card.id);
+    expect(updated?.status).toBe("blocked");
+    expect(updated?.metadata?.automation?.boardId).toBe("people");
+    expect(updated?.metadata?.comments?.at(-1)?.body).toBe("moved to people board");
+  });
 });
