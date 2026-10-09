@@ -623,6 +623,83 @@ describe("prompt cache observability", () => {
     expect(second.changes).toBeNull();
   });
 
+  it.each([
+    ["## Skills", "Skills", "prefix"],
+    ["# Project Context\n## MEMORY.md\n## Skills", "Project Context", "prefix"],
+    ["## Runtime", "Runtime", "suffix"],
+    ["## Temporal Context", "Temporal Context", "suffix"],
+    ["## private-plugin-heading", "Other", "suffix"],
+  ] as const)("attributes changed %s content in the %s section (%s)", (heading, section, side) => {
+    const sessionId = scopedKey("changed-prompt-section");
+    const prompt = (content: string) => {
+      const changed = `${heading}\n${content}\n`;
+      return side === "prefix"
+        ? `${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`
+        : `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}${changed}`;
+    };
+    beginOpenAIObservation({ sessionId, systemPrompt: prompt("private-content-before") });
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    beginOpenAIObservation({ sessionId, systemPrompt: prompt("private-content-after") });
+
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
+    ).toEqual([
+      {
+        code: side === "prefix" ? "systemPrompt" : "systemPromptSuffix",
+        detail: `system prompt${side === "suffix" ? " suffix" : ""} digest changed (sections: ${section})`,
+      },
+    ]);
+  });
+
+  it("bounds section metadata and excludes arbitrary headings and contents", () => {
+    const sessionId = scopedKey("bounded-prompt-sections");
+    const unknown = Array.from(
+      { length: 100 },
+      (_, index) => `## private-heading-${index}\nprivate-content-${index}`,
+    ).join("\n");
+    const first = beginOpenAIObservation({
+      sessionId,
+      systemPrompt: `${unknown}\n## Skills\nprivate-skill\n`,
+    });
+    expect(first.snapshot.systemPromptSections).toEqual({
+      Other: expect.stringMatching(/^[a-f0-9]{64}$/),
+      Skills: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    const changed = beginOpenAIObservation({
+      sessionId,
+      systemPrompt: `${unknown.replace("private-content-0", "private-replaced")}\n## Skills\nprivate-skill\n`,
+    });
+    expect(changed.changes).toEqual([
+      { code: "systemPrompt", detail: "system prompt digest changed (sections: Other)" },
+    ]);
+    expect(JSON.stringify([first.snapshot, changed])).not.toContain("private-");
+  });
+
+  it("reuses section digests when only the other side of the cache boundary changes", () => {
+    const sessionId = scopedKey("reused-prompt-sections");
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const prefix = "## Skills\nlarge-skill-catalog\n## Tooling\ntool descriptions\n";
+    const suffix = "## Runtime\nreasoning=off\n";
+    const observe = (stable: string, dynamic: string) =>
+      beginOpenAIObservation({
+        sessionId,
+        systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamic}`,
+      });
+    const first = observe(prefix, suffix);
+    expect(observe(prefix, suffix).changes).toBeNull();
+    const second = observe(prefix, `${suffix}new runtime fact\n`);
+    expect(second.snapshot.systemPromptSections).toEqual(first.snapshot.systemPromptSections);
+    expect(
+      hashes.mock.calls.filter(([value]) => value === "## Skills\nlarge-skill-catalog\n"),
+    ).toHaveLength(1);
+    expect(second.changes).toEqual([
+      {
+        code: "systemPromptSuffix",
+        detail: "system prompt suffix digest changed (sections: Runtime)",
+      },
+    ]);
+  });
+
   it("attributes dynamic system prompt suffix changes separately from the stable prefix", () => {
     const sessionId = scopedKey("dynamic-system-suffix");
     const stablePrefix = "stable instructions and tool capability directory";
