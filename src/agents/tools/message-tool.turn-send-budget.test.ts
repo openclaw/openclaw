@@ -1,10 +1,10 @@
 // Focused suite for the per-turn per-target send budget (#119992 / PR #120491), split out
 // of message-tool.test.ts to keep that grandfathered file from growing. Shares the
 // channel-plugin factory and runner-input type with the main suite via
-// message-tool.test-support.ts; the tool-assembly wiring assertion stays in
-// message-tool.test.ts where the createOpenClawTools mock forest lives.
+// message-tool.test-support.ts; the tool-assembly wiring assertion lives in
+// openclaw-tools.session-context.test.ts with the other run-identity checks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -105,9 +105,6 @@ describe("per-turn send budget", () => {
           source: "test",
           plugin: createChannelPlugin({
             id: "imessage",
-            label: "iMessage",
-            docsPath: "/channels/imessage",
-            blurb: "iMessage test plugin",
             actions: ["send", "sendAttachment"],
             config: { listAccountIds: () => ["primary"] },
           }),
@@ -127,9 +124,6 @@ describe("per-turn send budget", () => {
           source: "test",
           plugin: createChannelPlugin({
             id: "imessage",
-            label: "iMessage",
-            docsPath: "/channels/imessage",
-            blurb: "iMessage test plugin",
             actions: ["send", "sendAttachment"],
             config: { listAccountIds: () => ["primary"] },
             outbound: {
@@ -160,9 +154,6 @@ describe("per-turn send budget", () => {
           source: "test",
           plugin: createChannelPlugin({
             id: "imessage",
-            label: "iMessage",
-            docsPath: "/channels/imessage",
-            blurb: "iMessage test plugin",
             actions: ["send", "sendAttachment"],
             config: { listAccountIds: () => ["primary"] },
             outbound: { deliveryMode: "gateway" },

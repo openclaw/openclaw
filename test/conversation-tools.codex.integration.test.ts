@@ -10,7 +10,7 @@ import {
   createConversationsTurnTool,
 } from "../src/agents/tools/conversation-tools.js";
 import { callAgentToolGatewayRequest } from "../src/agents/tools/in-process-gateway.js";
-import { resolveConversation } from "../src/config/sessions/conversation-registry.js";
+import { readConversation } from "../src/config/sessions/conversation-registry.js";
 
 const conversationRef = "conv_0123456789abcdef0123456789abcdef";
 const destination = { conversationRef, channel: "qa-channel" };
@@ -76,7 +76,7 @@ describe("Codex core conversation delivery", () => {
     delivered: boolean;
     success: boolean;
   }>)("records $name without changing the Gateway result", async (testCase) => {
-    const deps = { callGateway: callAgentToolGatewayRequest, resolveConversation };
+    const deps = { callGateway: callAgentToolGatewayRequest, readConversation };
     const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue(testCase.receipt);
     const createTool =
       testCase.toolName === "conversations_send"

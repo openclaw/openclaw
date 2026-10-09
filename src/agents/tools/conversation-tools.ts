@@ -10,7 +10,7 @@ import {
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import {
-  resolveConversation,
+  readConversation,
   resolveConversationRegistryScope,
   type ConversationRecord,
 } from "../../config/sessions/conversation-registry.js";
@@ -107,12 +107,12 @@ type ConversationToolOptions = {
 
 type ConversationToolDeps = {
   callGateway: AgentToolGatewayRequestCaller;
-  resolveConversation: typeof resolveConversation;
+  readConversation: typeof readConversation;
 };
 
 const defaultDeps: ConversationToolDeps = {
   callGateway: callAgentToolGatewayRequest,
-  resolveConversation,
+  readConversation,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -184,11 +184,11 @@ export function createConversationsListTool(
   };
 }
 
-function resolveConversationBudgetContext(
+async function resolveConversationBudgetContext(
   options: ConversationToolOptions,
   deps: ConversationToolDeps,
   conversationRef: string,
-): { sessionKey: string; runId: string; targetKey: string; channel: string } | undefined {
+): Promise<{ sessionKey: string; runId: string; targetKey: string; channel: string } | undefined> {
   // Scope the ledger by the same agent-prefixed session slot the message tool uses
   // (buildTurnSendLedgerSessionKey), not the raw session key: keying one tool raw and
   // the other agent-prefixed splits one turn across two slots and lets alternating the
@@ -208,7 +208,7 @@ function resolveConversationBudgetContext(
   // block a send, mirroring resolveOutboundActionRoute returning undefined on ambiguity.
   let record: ConversationRecord | undefined;
   try {
-    record = deps.resolveConversation(
+    record = await deps.readConversation(
       resolveConversationRegistryScope({
         agentId: resolveToolAgentId(options),
         config: options.config,
@@ -266,7 +266,7 @@ export function createConversationsSendTool(
       // visible even though the loop detector hashes full params and can't see it.
       // The ref is resolved to its (channel, account, target) route so the ledger key
       // is identical to the message tool's for the same recipient.
-      const budgetContext = resolveConversationBudgetContext(options, deps, conversationRef);
+      const budgetContext = await resolveConversationBudgetContext(options, deps, conversationRef);
       // Reserve one send before the Gateway call so a concurrent same-target send cannot
       // slip past a positive cap while this one is in flight. The reserve is keyed by the
       // operationId: an idempotent replay (the same toolCallId retried) resolves to the

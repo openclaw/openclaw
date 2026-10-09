@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -6,6 +7,7 @@ import {
   shouldApplyCrossContextMarker,
 } from "../../infra/outbound/outbound-policy.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import type { AgentToolResult } from "../runtime/index.js";
 import {
   commitTurnSend,
   releaseTurnSend,
@@ -139,5 +141,30 @@ export function prepareMessageToolTurnSendBudget(input: {
       }
       return undefined;
     },
+  };
+}
+
+/**
+ * Appends the normalization and soft-nudge notices to a completed message-tool result as
+ * trailing text blocks. The nudge also rides in details because a Code Mode guest program
+ * only ever sees the projected details, never the text content.
+ */
+export function appendMessageToolNotices(
+  response: AgentToolResult<unknown>,
+  normalizationNotice: string | undefined,
+  turnSendNotice: string | undefined,
+): AgentToolResult<unknown> {
+  const notices = [normalizationNotice, turnSendNotice].filter((text): text is string =>
+    Boolean(text),
+  );
+  if (notices.length === 0) {
+    return response;
+  }
+  return {
+    ...response,
+    content: [...response.content, ...notices.map((text) => ({ type: "text" as const, text }))],
+    ...(turnSendNotice && isRecord(response.details)
+      ? { details: { ...response.details, turnSendNotice } }
+      : {}),
   };
 }

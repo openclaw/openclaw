@@ -270,7 +270,7 @@ async function waitForMockRequestText(
 }
 
 // One registry row read back from the running Gateway (conversations.list). Its
-// (channel, account, target) route is fed to the tool's in-process resolveConversation
+// (channel, account, target) route is fed to the tool's in-process readConversation
 // so the per-turn ledger keys on the exact route the Gateway itself delivers to.
 type LiveConversation = {
   conversationRef: string;
@@ -368,7 +368,7 @@ function deliverConversationMarker(
       },
       {
         callGateway: createLiveCallGateway(live),
-        resolveConversation: (() => conversation) as never,
+        readConversation: (async () => conversation) as never,
       },
     );
     return await tool.execute(
@@ -501,7 +501,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
       const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never;
       const deps = {
         callGateway: createLiveCallGateway(live),
-        resolveConversation: (() => conversation) as never,
+        readConversation: (async () => conversation) as never,
       };
       const tool = createConversationsSendTool(
         { agentId: "qa", agentSessionKey, runId, config },
@@ -682,7 +682,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
       const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never;
       const deps = {
         callGateway: createLiveCallGateway(live),
-        resolveConversation: (() => conversation) as never,
+        readConversation: (async () => conversation) as never,
       };
       const tool = createConversationsSendTool(
         { agentId: "qa", agentSessionKey, runId, config },
@@ -785,7 +785,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
       const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never;
       const deps = {
         callGateway: createLiveCallGateway(live),
-        resolveConversation: (() => conversation) as never,
+        readConversation: (async () => conversation) as never,
       };
       const tool = createConversationsSendTool(
         { agentId: "qa", agentSessionKey, runId, config },
@@ -1048,7 +1048,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         },
         {
           callGateway: createLiveCallGateway(live),
-          resolveConversation: (() => conversation) as never,
+          readConversation: (async () => conversation) as never,
         },
       );
       const positiveResult = await positiveTool.execute(

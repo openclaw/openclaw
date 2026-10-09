@@ -56,6 +56,21 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
 
+const conversationSendOptions = vi.hoisted((): unknown[] => []);
+
+vi.mock("./tools/conversation-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools/conversation-tools.js")>();
+  return {
+    ...actual,
+    createConversationsSendTool: (
+      ...args: Parameters<typeof actual.createConversationsSendTool>
+    ) => {
+      conversationSendOptions.push(args[0]);
+      return actual.createConversationsSendTool(...args);
+    },
+  };
+});
+
 function createTools(
   config: OpenClawToolsOptions["config"],
   options: { sandboxed?: boolean; sessionConfigSource?: "runtime" | "pinned" } = {},
@@ -358,5 +373,28 @@ describe("openclaw session lookup context", () => {
     expect((restored.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
       expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
     );
+  });
+});
+
+describe("per-turn send budget wiring", () => {
+  it("passes the run identity to conversations_send so it shares the message tool's ledger", () => {
+    conversationSendOptions.length = 0;
+    setActivePluginRegistry(createTestRegistry([]));
+    const tools = createOpenClawTools({
+      agentSessionKey: "agent:main:reef:direct:operator",
+      runId: "run-assembly-1",
+      config: {},
+      agentChannel: "reef",
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    requireTool(tools, "message");
+    requireTool(tools, "conversations_send");
+    // The per-turn ledger is keyed by (session, runId); without the same runId a
+    // conversations_send resend would count against a stale turn, not this one.
+    expect(conversationSendOptions.at(-1)).toMatchObject({
+      runId: "run-assembly-1",
+      agentSessionKey: "agent:main:reef:direct:operator",
+    });
   });
 });

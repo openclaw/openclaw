@@ -22,13 +22,12 @@ describe("Codex conversation delivery and cron retry", () => {
         await import("../src/agents/tools/conversation-tools.js");
       const { callAgentToolGatewayRequest } =
         await import("../src/agents/tools/in-process-gateway.js");
-      const { resolveConversation } =
-        await import("../src/config/sessions/conversation-registry.js");
+      const { readConversation } = await import("../src/config/sessions/conversation-registry.js");
       pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
         (payloads?: Array<{ text?: string }>) => payloads?.at(-1)?.text ?? "",
       );
       const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-      const deps = { callGateway: callAgentToolGatewayRequest, resolveConversation };
+      const deps = { callGateway: callAgentToolGatewayRequest, readConversation };
       const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue({
         status,
         conversationRef,
