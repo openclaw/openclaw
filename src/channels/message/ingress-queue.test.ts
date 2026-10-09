@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -109,19 +110,14 @@ describe("channel ingress queue", () => {
       const pending = await queue.listPending();
       const claims = await queue.listClaims();
       const controller = new AbortController();
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       let reachedCommit = false;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              reachedCommit = true;
-              controller.abort(new Error("account task retired"));
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          reachedCommit = true;
+          controller.abort(new Error("account task retired"));
+        }
+        admit(request, grant);
+      });
       try {
         await expect(queue.purge?.({ signal: controller.signal })).rejects.toThrow(
           "account task retired",

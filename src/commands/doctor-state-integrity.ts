@@ -94,6 +94,23 @@ type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
+function resolveSessionRuntimeDirectories(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): Map<string, RuntimeDirLabel> {
+  const directories = new Map<string, RuntimeDirLabel>();
+  const agentId = tryResolveDefaultAgentId(cfg);
+  if (agentId) {
+    directories.set(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "Sessions dir");
+    directories.set(
+      path.dirname(resolveSessionStorePathCore(cfg.session?.store, { agentId, env })),
+      "Session store dir",
+    );
+  }
+  return directories;
+}
+
 export type StateIntegrityHealthIssue = { path: string } & (
   | {
       kind: "mac-cloud-state-dir";
@@ -178,42 +195,29 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({
-        dirName: entry.name,
-        agentId: normalizeAgentId(entry.name),
-      }))
-      .filter(({ dirName, agentId }) => {
+      .flatMap((entry) => {
+        if (!entry.isDirectory()) {
+          return [];
+        }
+        const dirName = entry.name;
+        const agentId = normalizeAgentId(dirName);
         const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
-        const hasNestedAgentDir = existsDir(nestedAgentDir);
-        if (!hasNestedAgentDir) {
-          return false;
-        }
-        // Reserved system agent ids own a state dir but can never appear in
-        // agents.list, so their directories are never orphans.
-        if (isReservedSystemAgentId(agentId)) {
-          return false;
-        }
+        // Reserved system ids own state but cannot appear in the configured roster.
         if (
+          !existsDir(nestedAgentDir) ||
+          isReservedSystemAgentId(agentId) ||
           isSharedAuthStoreOwner({
             ownership: sharedAuthOwnership,
             agentAuthDbPath: resolveAuthProfileDatabasePath(nestedAgentDir),
             sharedAuthDbPath,
-          })
+          }) ||
+          (liveDefaultAgentDir && areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) ||
+          (configuredIds.has(agentId) &&
+            isReachableConfiguredAgentDir({ agentsRoot, dirName, agentId }))
         ) {
-          return false;
+          return [];
         }
-        if (liveDefaultAgentDir && areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) {
-          return false;
-        }
-        if (!configuredIds.has(agentId)) {
-          return true;
-        }
-        return !isReachableConfiguredAgentDir({
-          agentsRoot,
-          dirName,
-          agentId,
-        });
+        return [{ dirName, agentId }];
       })
       .toSorted(
         (left, right) =>
@@ -374,14 +378,7 @@ export function detectStateIntegrityHealthIssues(
   const homedir = () => resolveRequiredHomeDir(env, params?.homedir ?? os.homedir);
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const agentId = tryResolveDefaultAgentId(cfg);
-  const sessionsDir = agentId
-    ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
-    : undefined;
-  const storePath = agentId
-    ? resolveSessionStorePathCore(cfg.session?.store, { agentId, env })
-    : undefined;
-  const storeDir = storePath ? path.dirname(storePath) : undefined;
+  const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
 
   const macCloud = detectMacCloudSyncedStateDir(stateDir);
@@ -434,13 +431,6 @@ export function detectStateIntegrityHealthIssues(
   }
 
   if (stateDirExists) {
-    const dirCandidates = new Map<string, RuntimeDirLabel>();
-    if (sessionsDir) {
-      dirCandidates.set(sessionsDir, "Sessions dir");
-    }
-    if (storeDir) {
-      dirCandidates.set(storeDir, "Session store dir");
-    }
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     }
@@ -602,14 +592,7 @@ export async function noteStateIntegrity(
   const stateDir = resolveStateDir(env, homedir);
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const runtimeAgentId = tryResolveDefaultAgentId(cfg);
-  const runtimeSessionsDir = runtimeAgentId
-    ? resolveSessionTranscriptsDirForAgent(runtimeAgentId, env, homedir)
-    : undefined;
-  const runtimeStorePath = runtimeAgentId
-    ? resolveSessionStorePathCore(cfg.session?.store, { agentId: runtimeAgentId })
-    : undefined;
-  const runtimeStoreDir = runtimeStorePath ? path.dirname(runtimeStorePath) : undefined;
+  const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
@@ -748,13 +731,6 @@ export async function noteStateIntegrity(
   }
 
   if (stateDirExists) {
-    const dirCandidates = new Map<string, RuntimeDirLabel>();
-    if (runtimeSessionsDir) {
-      dirCandidates.set(runtimeSessionsDir, "Sessions dir");
-    }
-    if (runtimeStoreDir) {
-      dirCandidates.set(runtimeStoreDir, "Session store dir");
-    }
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     } else if (!existsDir(oauthDir)) {

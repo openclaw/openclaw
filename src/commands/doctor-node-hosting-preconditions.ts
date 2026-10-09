@@ -35,20 +35,6 @@ function usesIdentityHeadersWithoutMachineCredentials(cfg: OpenClawConfig): bool
   );
 }
 
-async function lacksNodeOnboardingUrl(cfg: OpenClawConfig): Promise<boolean> {
-  const bind = cfg.gateway?.bind ?? "loopback";
-  if (bind !== "loopback" && bind !== "auto") {
-    return false;
-  }
-  // This config-only check reports missing ingress, not live Tailscale availability.
-  const result = await resolvePairingGatewayUrl(cfg, {
-    env: process.env,
-    publicUrl: resolveConfiguredPairingPublicUrl(cfg),
-    networkInterfaces: os.networkInterfaces,
-  });
-  return result.error === PAIRING_GATEWAY_LOOPBACK_ERROR;
-}
-
 function lacksNodeOnboardingPlugin(cfg: OpenClawConfig): boolean {
   return !resolveEffectiveEnableState({
     id: "device-pair",
@@ -115,7 +101,18 @@ export async function collectNodeHostingPreconditionFindings(
         "Switch gateway.auth.mode to token and configure gateway.auth.token as a SecretRef so machine clients can authenticate as devices. Keep trusted-proxy only if machine clients use a clean loopback/direct gateway.auth.password path. For Access-fronted gateways, configure the node gateway.cloudflareAccess.clientId / clientSecret SecretInputs or set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET before openclaw connect.",
     });
   }
-  if (await lacksNodeOnboardingUrl(cfg)) {
+  const bind = cfg.gateway?.bind ?? "loopback";
+  // This config-only check reports missing ingress, not live Tailscale availability.
+  if (
+    (bind === "loopback" || bind === "auto") &&
+    (
+      await resolvePairingGatewayUrl(cfg, {
+        env: process.env,
+        publicUrl: resolveConfiguredPairingPublicUrl(cfg),
+        networkInterfaces: os.networkInterfaces,
+      })
+    ).error === PAIRING_GATEWAY_LOOPBACK_ERROR
+  ) {
     warn({
       message: PAIRING_GATEWAY_LOOPBACK_ERROR,
       path: "gateway.bind",

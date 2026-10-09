@@ -15,6 +15,7 @@ import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agen
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import { captureRuntimeConfig } from "../runtime-source-projection.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
@@ -308,7 +309,7 @@ export function prepareSessionStoreTargetInventory(
   const env = cloneEnvWithPlatformSemantics(inputEnv);
   const stateDir = resolveStateDir(env);
   env.OPENCLAW_STATE_DIR = stateDir;
-  const config = structuredClone(cfg);
+  const config = captureRuntimeConfig(cfg);
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
   const configured = listConfiguredSessionStoreAgentIds(config);
   const paths = new Map(
@@ -357,8 +358,6 @@ export function prepareSessionStoreTargetInventory(
     }
   }
   const candidates = new Map<string, SessionStoreReadCandidate>();
-  const add = (candidate: SessionStoreReadCandidate) =>
-    candidates.set(JSON.stringify(candidate), candidate);
   for (const storePath of logicalPaths) {
     const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
     // Locator-only inventories keep incognito reads with their process-held owner.
@@ -369,7 +368,7 @@ export function prepareSessionStoreTargetInventory(
       throw new Error("Incognito session discovery requires its process-held owner");
     }
     for (const candidate of captureSessionStoreReadCandidates(storePath)) {
-      add(candidate);
+      candidates.set(JSON.stringify(candidate), candidate);
     }
   }
   return {

@@ -244,6 +244,16 @@ After a successful continuation, OpenClaw uses the provider's measured context u
 
 Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI can use their compact endpoint by default; `params.responsesCompactEndpoint: false` disables that endpoint for a model. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 
+Once the foreground request budget is prepared, a returned endpoint window must
+also fit beside its fixed instructions, tools, pending input, and reserve before
+OpenClaw saves it. If retained user messages still exceed that budget,
+client-side compaction selects a smaller recent tail instead of retrying the
+same oversized window.
+
+If the pending input alone fills the model's context window, recovery asks for a
+smaller message or a larger-context model without repeatedly compacting history.
+Later messages retain their normal recovery budget.
+
 If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
 
 ### Successor transcripts

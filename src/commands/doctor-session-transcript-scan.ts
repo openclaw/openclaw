@@ -16,6 +16,7 @@ export function scanDoctorSessionTranscripts(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv; title: string; failureLabel: string },
   visit: (context: {
     reader: ReadOnlySqliteTranscriptReader;
+    sessionId: string;
     target: ExistingAgentDatabaseTarget;
     databaseOptions: ReturnType<typeof resolveTargetSqliteOptions>;
     reportError: (message: string, error: unknown) => void;
@@ -32,12 +33,10 @@ export function scanDoctorSessionTranscripts(
     let database: DatabaseSync | undefined;
     try {
       database = openNodeSqliteDatabase(target.sqlitePath, { readOnly: true });
-      visit({
-        reader: new ReadOnlySqliteTranscriptReader(database),
-        target,
-        databaseOptions,
-        reportError,
-      });
+      const reader = new ReadOnlySqliteTranscriptReader(database);
+      for (const sessionId of reader.sessionIds()) {
+        visit({ reader, sessionId, target, databaseOptions, reportError });
+      }
     } catch (error) {
       reportError(`- ${params.failureLabel} for ${target.agentId} (${target.sqlitePath})`, error);
     } finally {

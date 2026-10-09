@@ -6,7 +6,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
-import type { SessionGoalManagementInput } from "./goals-operations.js";
+import type { SessionGoalManagementInput } from "./goals-operations.types.js";
 import type {
   SessionGoalManagementCandidate,
   SessionGoalManagementOperations,

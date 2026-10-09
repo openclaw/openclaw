@@ -307,13 +307,12 @@ export class SqliteBoardStore implements BoardStore {
                 "board database closed or changed; retry",
               );
             }
-            // First-use schema work must precede the worker's strict native-open validation.
-            ensureBoardSchema(database);
             if (
               nativeSource ||
               typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol"
             ) {
               // Released opaque/cross-store guards keep synchronous authority and mutation together.
+              ensureBoardSchema(database);
               return runOpenClawAgentWriteTransaction(
                 (current) => {
                   assertPreparedCurrent();

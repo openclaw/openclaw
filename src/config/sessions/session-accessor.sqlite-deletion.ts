@@ -234,10 +234,12 @@ export async function withSqliteSessionContextReset<T>(
   entry: DeletionEntry,
   run: SessionMutationRun<T>,
   assertSourceCurrent?: () => void,
+  incognito?: IncognitoDeletionSource,
 ): Promise<T> {
   return withSqliteSessionMutations(scope, [entry], run, {
     contextReset: true,
     assertSourceCurrent,
+    incognito,
   });
 }
 

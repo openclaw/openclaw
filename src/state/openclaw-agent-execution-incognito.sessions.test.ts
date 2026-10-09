@@ -36,6 +36,7 @@ import { readAgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.read
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import { registerIncognitoSessionMutationTests } from "./openclaw-agent-execution-incognito.mutations.test-support.js";
 import { useIncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
@@ -945,3 +946,5 @@ it.each(["default", "explicit", "durable-only"] as const)(
     }
   },
 );
+
+registerIncognitoSessionMutationTests(() => ({ actor, env, authority, key, entry }));

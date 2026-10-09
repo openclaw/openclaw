@@ -283,6 +283,20 @@ describe("anthropic provider policy public artifact", () => {
     }
   });
 
+  it("offers the effort ladder an unknown listed model advertises", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "claude-sonnet-9",
+      params: {
+        claudeCapabilities: { adaptiveThinking: true, xhighEffort: true, maxEffort: true },
+      },
+    });
+
+    expect(levelIds(profile?.levels)).toEqual(
+      expect.arrayContaining(["off", "high", "xhigh", "adaptive", "max"]),
+    );
+  });
+
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {
     expect(
       resolveThinkingProfile({

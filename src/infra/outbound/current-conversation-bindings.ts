@@ -40,6 +40,7 @@ import {
   readCurrentConversationBindingResolutionInDatabase,
   type CurrentConversationBindingScope,
 } from "./current-conversation-bindings.kernel.js";
+import { withCurrentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
   CurrentConversationBindingRemove,
@@ -71,15 +72,19 @@ function bindingWriteOptions(
 ) {
   return {
     assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(
-      (request) => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-        if (request.stage === "transaction" && request.facts === true) {
-          assertAgentResolved?.();
-        }
-      },
-      [context.admission.databasePath],
+    createAdmission: withCurrentConversationBindingPublication(
+      createSqliteWorkerWriteAdmission(
+        (request) => {
+          context.admission.assertCurrent();
+          assertCurrent?.();
+          if (request.stage === "transaction" && request.facts === true) {
+            assertAgentResolved?.();
+          }
+        },
+        [context.admission.databasePath],
+      ),
+      () => context.admission.identity.key,
+      () => (context.assertPublicationCurrent ?? (() => context.admission.assertCurrent()))(),
     ),
   };
 }
