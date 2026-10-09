@@ -4,6 +4,10 @@ import {
   type SimpleStreamOptions,
   type StreamFn,
 } from "@openclaw/llm-core";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -21,8 +25,48 @@ import {
   SummaryProviderError,
   type Result,
 } from "../types.js";
-import { createSummarizationContext } from "./summarization-prompts.js";
-import { extractSummaryText, serializeConversation } from "./utils.js";
+import {
+  createSummarizationContext,
+  SUMMARIZATION_SYSTEM_PROMPT,
+} from "./summarization-prompts.js";
+import {
+  extractSummaryText,
+  MAX_SUMMARY_INPUT_CHARS,
+  serializeConversationWithinBudget,
+} from "./utils.js";
+
+// Margin for the chars-per-token heuristic and the provider's message framing.
+const SUMMARY_WINDOW_SAFETY_MARGIN = 1.2;
+const SUMMARY_FRAMING_TOKENS = 1_024;
+const OMITTED_ENTRIES_INSTRUCTION =
+  "Some conversation entries were left out of this input where marked. Do not guess what they said. Keep facts from the previous summary that the shown entries do not change.";
+
+/**
+ * Smallest conversation budget worth a model call. Below it the summarizer
+ * window cannot hold the newest messages next to the instructions, previous
+ * summary and output reservation, so compaction fails and keeps the history.
+ */
+const MIN_SUMMARY_INPUT_CHARS = 4_000;
+
+/**
+ * Conversation budget for one summary request: the fixed cap, lowered when the
+ * summarizer's own window cannot hold it next to the prompt and the output.
+ */
+function resolveSummaryInputChars(model: Model, maxTokens: number, promptText: string): number {
+  const contextWindow = model.contextWindow ?? 0;
+  if (contextWindow <= 0) {
+    return MAX_SUMMARY_INPUT_CHARS;
+  }
+  const windowChars =
+    ((contextWindow - maxTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
+    SUMMARY_WINDOW_SAFETY_MARGIN;
+  const available = Math.floor(
+    windowChars -
+      estimateStringChars(SUMMARIZATION_SYSTEM_PROMPT) -
+      estimateStringChars(promptText),
+  );
+  return Math.min(MAX_SUMMARY_INPUT_CHARS, available);
+}
 
 export interface SummarizationCompletionParams {
   messages: AgentMessage[];
@@ -44,17 +88,35 @@ export interface SummarizationCompletionParams {
 export async function runSummarizationCompletion(
   params: SummarizationCompletionParams,
 ): Promise<Result<string, CompactionError>> {
-  const conversationText = serializeConversation(convertToLlm(params.messages));
-  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
+  let instructions = "";
   if (params.previousSummary) {
-    promptText += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
+    instructions += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
   }
-  promptText += params.prompt;
+  instructions += params.prompt;
   // SDK callers also pass generated policy here; the host bounds raw operator focus.
   if (params.customInstructions) {
-    promptText += `\n\nAdditional focus: ${params.customInstructions}`;
+    instructions += `\n\nAdditional focus: ${params.customInstructions}`;
   }
-  const context = createSummarizationContext(promptText);
+  const conversationBudget = resolveSummaryInputChars(
+    params.model,
+    params.maxTokens,
+    `${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`,
+  );
+  if (conversationBudget < MIN_SUMMARY_INPUT_CHARS) {
+    return err(
+      new SummaryOutputBudgetError(
+        `${params.errorLabel} needs more room than ${params.model.provider}/${params.model.id} has: its ${params.model.contextWindow}-token window cannot hold the conversation next to the instructions, previous summary and ${params.maxTokens}-token output. Set agents.defaults.compaction.model to a model with a larger context window.`,
+      ),
+    );
+  }
+  const conversation = serializeConversationWithinBudget(
+    convertToLlm(params.messages),
+    conversationBudget,
+  );
+  const omissionNote = conversation.omittedEntries > 0 ? `${OMITTED_ENTRIES_INSTRUCTION}\n\n` : "";
+  const context = createSummarizationContext(
+    `<conversation>\n${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
+  );
   const { model, thinkingLevel, maxTokens, signal, apiKey, headers } = params;
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
   const fableReasoning =

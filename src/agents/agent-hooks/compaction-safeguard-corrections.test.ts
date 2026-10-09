@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { summarizeInStages } from "../compaction.js";
+import type { summarizeCompactionHistory } from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import {
@@ -14,12 +14,12 @@ import {
   expectCompactionResult,
 } from "./compaction-safeguard.test-support.js";
 
-const mockSummarizeInStages = vi.fn<typeof summarizeInStages>();
+const mockSummarizeCompactionHistory = vi.fn<typeof summarizeCompactionHistory>();
 beforeEach(() => {
-  mockSummarizeInStages.mockReset();
-  testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+  mockSummarizeCompactionHistory.mockReset();
+  testing.setSummarizeCompactionHistoryForTest(mockSummarizeCompactionHistory);
 });
-afterEach(() => testing.setSummarizeInStagesForTest());
+afterEach(() => testing.setSummarizeCompactionHistoryForTest());
 
 describe("compaction correction reconciliation", () => {
   it.each([
@@ -44,7 +44,7 @@ describe("compaction correction reconciliation", () => {
       userMessage(oldState, 1),
       castAgentMessage(timestampedTextAssistant("Recorded.", 2)),
     ];
-    mockSummarizeInStages.mockImplementation(async (params) =>
+    mockSummarizeCompactionHistory.mockImplementation(async (params) =>
       params.summaryPrompt?.kind === "custom"
         ? structuredSummary({
             decisions:
@@ -64,12 +64,12 @@ describe("compaction correction reconciliation", () => {
         },
       }),
     );
-    const main = mockSummarizeInStages.mock.calls
+    const main = mockSummarizeCompactionHistory.mock.calls
       .map(([params]) => params)
       .find((params) => params.summaryPrompt?.kind === "custom");
     expect(main).toBeDefined();
     expect(main?.messages).toEqual(expect.arrayContaining([...oldMessages, ...corrections]));
-    expect(JSON.stringify(main?.messages)).toContain(oldState);
+    expect(main?.previousSummary).toBe(previous ? oldState : undefined);
     const decisions = expectCompactionResult(result).summary.split("## Open TODOs")[0];
     expect(decisions).toContain("October 15");
     expect(decisions).toContain("Verification ran and failed");

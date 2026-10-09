@@ -1,4 +1,5 @@
 import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
@@ -287,6 +288,12 @@ export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): st
 
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
+  return serializeConversationEntries(messages).join(ENTRY_SEPARATOR);
+}
+
+const ENTRY_SEPARATOR = "\n\n";
+
+function serializeConversationEntries(messages: Message[]): string[] {
   const parts: string[] = [];
   let omissionMessages = 0;
 
@@ -338,5 +345,185 @@ export function serializeConversation(messages: Message[]): string {
     }
   }
 
-  return parts.join("\n\n");
+  return parts;
+}
+
+/**
+ * Upper bound for the conversation text of one summary request, in CJK-weighted
+ * characters (about 40k tokens). Summary latency and cost follow this bound, not
+ * the session size, so a 1M-token window compacts as fast as a 128k one.
+ */
+export const MAX_SUMMARY_INPUT_CHARS = 160_000;
+const MAX_SAMPLED_ENTRY_CHARS = 6_000;
+const MIN_TRIMMED_ENTRY_CHARS = 200;
+const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
+// Covers "\n\n[... N characters omitted ...]\n\n" for any UTF-16 length.
+const ELISION_MARKER_RESERVE_CHARS = 64;
+const SUMMARY_INPUT_HEAD_SHARE = 0.1;
+const SUMMARY_INPUT_TAIL_SHARE = 0.5;
+const SUMMARY_INPUT_MIDDLE_SLICES = 8;
+// Each omission marker is under 100 characters; one can follow the head and each slice.
+const OMISSION_MARKER_RESERVE_CHARS = (SUMMARY_INPUT_MIDDLE_SLICES + 1) * 100;
+
+/**
+ * Keep both ends of `text` within `maxChars` CJK-weighted characters: the start
+ * usually states the request and the end its latest instruction or result.
+ * Weighted length is at least the UTF-16 length, so each binary search is
+ * bounded by the weight budget, not by the size of the text.
+ */
+function elideMiddleWithinWeight(text: string, maxChars: number): string | undefined {
+  const available = maxChars - ELISION_MARKER_RESERVE_CHARS;
+  if (available < MIN_TRIMMED_ENTRY_CHARS) {
+    return undefined;
+  }
+  const headBudget = Math.floor(available * TRIMMED_ENTRY_HEAD_SHARE);
+  let low = 0;
+  let high = Math.min(text.length, headBudget);
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateStringChars(truncateUtf16Safe(text, mid)) <= headBudget) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const head = truncateUtf16Safe(text, low);
+  const tailBudget = available - estimateStringChars(head);
+  low = Math.max(head.length, text.length - tailBudget);
+  high = text.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (estimateStringChars(sliceUtf16Safe(text, mid)) <= tailBudget) {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
+  }
+  const tail = sliceUtf16Safe(text, low);
+  return `${head}\n\n[... ${text.length - head.length - tail.length} characters omitted ...]\n\n${tail}`;
+}
+
+export interface BoundedConversation {
+  text: string;
+  /** Entries left out entirely; the text names each gap where it occurs. */
+  omittedEntries: number;
+  /** Entries kept with their middle elided. */
+  trimmedEntries: number;
+}
+
+/**
+ * Serialize messages for one summary request within `maxChars` CJK-weighted
+ * characters. Small inputs are unchanged. Larger inputs keep the newest entries
+ * verbatim (half the budget), the oldest entries (a tenth), and eight evenly
+ * spaced runs of the span between them. Sampled entries are trimmed to 6,000
+ * characters, and every gap is marked with its entry count, so the summarizer
+ * knows what it did not see. The transcript itself is not changed.
+ */
+export function serializeConversationWithinBudget(
+  messages: Message[],
+  maxChars: number,
+): BoundedConversation {
+  const entries = serializeConversationEntries(messages);
+  const weights = entries.map((entry) => estimateStringChars(entry));
+  const separatorChars = ENTRY_SEPARATOR.length;
+  const totalChars =
+    weights.reduce((sum, weight) => sum + weight, 0) +
+    separatorChars * Math.max(0, entries.length - 1);
+  if (totalChars <= maxChars) {
+    return { text: entries.join(ENTRY_SEPARATOR), omittedEntries: 0, trimmedEntries: 0 };
+  }
+
+  const budget = Math.max(0, maxChars - OMISSION_MARKER_RESERVE_CHARS);
+  const selected = new Map<number, string>();
+  let trimmedEntries = 0;
+  let usedChars = 0;
+
+  // Returns the entry text that fits `limit`, eliding its middle when needed.
+  const fit = (index: number, limit: number): { text: string; chars: number } | undefined => {
+    const entry = entries[index] ?? "";
+    const weight = weights[index] ?? 0;
+    if (weight + separatorChars <= limit) {
+      return { text: entry, chars: weight + separatorChars };
+    }
+    const trimmed = elideMiddleWithinWeight(entry, limit - separatorChars);
+    return trimmed === undefined
+      ? undefined
+      : { text: trimmed, chars: estimateStringChars(trimmed) + separatorChars };
+  };
+  const take = (index: number, limit: number, maxEntryChars = limit): boolean => {
+    const kept = fit(index, Math.min(limit, maxEntryChars + separatorChars));
+    if (!kept || kept.chars > limit) {
+      return false;
+    }
+    if (kept.text !== entries[index]) {
+      trimmedEntries += 1;
+    }
+    selected.set(index, kept.text);
+    usedChars += kept.chars;
+    return true;
+  };
+
+  // Newest entries carry the live task, so they stay verbatim. Only the newest
+  // entry may be trimmed, when it alone exceeds the tail share.
+  let tailStart = entries.length;
+  const tailLimit = Math.floor(budget * SUMMARY_INPUT_TAIL_SHARE);
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const remaining = tailLimit - usedChars;
+    const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
+    if (!verbatim && tailStart !== entries.length) {
+      break;
+    }
+    if (!take(index, remaining)) {
+      break;
+    }
+    tailStart = index;
+  }
+
+  // The oldest entries usually state the goal and the constraints of the session.
+  let headEnd = 0;
+  const headLimit = usedChars + Math.floor(budget * SUMMARY_INPUT_HEAD_SHARE);
+  while (headEnd < tailStart && take(headEnd, headLimit - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
+    headEnd += 1;
+  }
+
+  // Evenly spaced runs show how the omitted span developed.
+  const middleCount = tailStart - headEnd;
+  if (middleCount > 0) {
+    const sliceLimit = Math.floor((budget - usedChars) / SUMMARY_INPUT_MIDDLE_SLICES);
+    let nextFree = headEnd;
+    for (let slice = 0; slice < SUMMARY_INPUT_MIDDLE_SLICES; slice += 1) {
+      let index = Math.max(
+        nextFree,
+        headEnd + Math.floor((slice * middleCount) / SUMMARY_INPUT_MIDDLE_SLICES),
+      );
+      const sliceEnd = usedChars + sliceLimit;
+      while (index < tailStart && take(index, sliceEnd - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
+        index += 1;
+      }
+      nextFree = index;
+    }
+  }
+
+  const parts: string[] = [];
+  let omittedEntries = 0;
+  let gap = 0;
+  // The extra iteration flushes a trailing gap.
+  for (let index = 0; index <= entries.length; index += 1) {
+    const text = selected.get(index);
+    if (text === undefined && index < entries.length) {
+      gap += 1;
+      continue;
+    }
+    if (gap > 0) {
+      parts.push(
+        `[... ${gap} conversation ${gap === 1 ? "entry" : "entries"} omitted from this summary input ...]`,
+      );
+      omittedEntries += gap;
+      gap = 0;
+    }
+    if (text !== undefined) {
+      parts.push(text);
+    }
+  }
+  return { text: parts.join(ENTRY_SEPARATOR), omittedEntries, trimmedEntries };
 }
