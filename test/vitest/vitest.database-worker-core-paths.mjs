@@ -258,7 +258,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
-  "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.diagnostics.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.tool-search-catalog-abort.test.ts",
   "src/agents/mcp-oauth-provider.read.test.ts",
   "src/agents/mcp-oauth-store.test.ts",
