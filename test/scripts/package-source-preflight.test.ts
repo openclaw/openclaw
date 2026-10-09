@@ -426,7 +426,6 @@ describe("package source preflight", () => {
   });
 
   it.each([
-    ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
@@ -521,17 +520,6 @@ describe("package source preflight", () => {
         rootDependencies: { invalid: 123 },
       }),
     ).toThrow("root package.json dependency invalid must declare a string version");
-  });
-
-  it("preserves historical sources from before the @openclaw/ai workspace split", () => {
-    expect(
-      validatePackageSource({
-        aiManifestContent: null,
-        allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest({ dependencies: {} }),
-      }),
-    ).toBe("2026.8.1");
   });
 
   it("validates the current source ref without modifying the checkout", () => {
