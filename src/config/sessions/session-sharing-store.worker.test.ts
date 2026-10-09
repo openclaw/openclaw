@@ -484,8 +484,9 @@ it.each([
         createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
       };
       await upsertSessionEntryCore(scope, entry);
-      if (mutation === "removal")
+      if (mutation === "removal") {
         await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+      }
       const database = openOpenClawAgentDatabase(scope);
       const sharing =
         mutation === "removal"
@@ -718,11 +719,14 @@ it.each([
         .spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts")
         .mockImplementation((admission, observer) =>
           observeCommitted(admission, (committed) => {
-            if (receipt === "missing") return;
+            if (receipt === "missing") {
+              return;
+            }
             const facts: unknown = structuredClone(committed.facts);
             if (receipt === "conflicting") {
-              if (!isRecord(facts) || !isRecord(facts.result) || !isRecord(facts.result.facts))
+              if (!isRecord(facts) || !isRecord(facts.result) || !isRecord(facts.result.facts)) {
                 throw new Error("Expected native membership commit receipt");
+              }
               facts.result.facts.present = true;
             }
             observer({ facts });
@@ -749,8 +753,9 @@ it.each([
                       async execute(command, options) {
                         if (
                           command.type === (mutation === "category" ? "category.apply" : "remove")
-                        )
+                        ) {
                           mutations++;
+                        }
                         const result = await operation.execute(command, options);
                         if (
                           command.type === (mutation === "category" ? "category.apply" : "remove")
@@ -876,7 +881,9 @@ it.each(["agent", "profile"] as const)(
       };
       assignSessionOwner(scope, { owner: previousOwner.actor, assignedBy, assignedAt: 1 });
       const source = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof source.identity !== "string") throw new Error("Expected durable owner fixture");
+      if (typeof source.identity !== "string") {
+        throw new Error("Expected durable owner fixture");
+      }
       const sharing = retainPreparedSessionSharingFacts({
         databaseIdentity: `file:${source.identity}`,
         sessionKey: scope.sessionKey,
@@ -913,13 +920,15 @@ it.each(["agent", "profile"] as const)(
               receipt.facts.kind === "session-collaboration-committed"
             ) {
               committedReceipts++;
-              if (notice === "profile") emitUserProfilesChanged();
-              else
+              if (notice === "profile") {
+                emitUserProfilesChanged();
+              } else {
                 sessionChanges.emit({
                   all: true,
                   scope: { agentId: "other" },
                   factsInvalidated: true,
                 });
+              }
             }
             observer(receipt);
           }),

@@ -562,7 +562,9 @@ export function retainSessionEntryDeltaSupersession(params: {
       superseded.clear();
       postimages.clear();
       stop = sessionChanges.subscribeFacts((change) => {
-        if (!sessionChangeScopeAffectsStoredRows(change)) return;
+        if (!sessionChangeScopeAffectsStoredRows(change)) {
+          return;
+        }
         const source = readPreparedSessionEntryPublicationSource(change);
         if (source.identity !== undefined && source.identity !== params.databaseIdentity) {
           return;

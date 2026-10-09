@@ -16,11 +16,12 @@ import type {
 const participant = lazyCompile(SessionParticipantSchema);
 
 function requireReceipt(condition: unknown): asserts condition {
-  if (!condition)
+  if (!condition) {
     throw new SqliteWorkerError(
       "Session collaboration receipt is incomplete or conflicting",
       "outcome-unknown",
     );
+  }
 }
 
 function storedSuggestion(value: unknown): boolean {
@@ -71,14 +72,17 @@ export function readSessionCollaborationCandidate(
   };
   const result = value.result;
   const key = command.input.scope.sessionKey;
-  if (command.type !== "category.apply") requireReceipt(keys.length === 1 && keys[0] === key);
+  if (command.type !== "category.apply") {
+    requireReceipt(keys.length === 1 && keys[0] === key);
+  }
   switch (command.type) {
     case "add":
     case "remove": {
       requireReceipt(isRecord(result));
       const adding = command.type === "add";
-      if (adding)
+      if (adding) {
         requireReceipt(isRecord(result.value) && typeof result.value.inserted === "boolean");
+      }
       const member = adding && isRecord(result.value) ? result.value.member : result.value;
       const changed = adding && isRecord(result.value) ? result.value.inserted : member !== null;
       const identityId = adding
@@ -92,18 +96,21 @@ export function readSessionCollaborationCandidate(
             typeof member.addedAt === "number" &&
             Number.isFinite(member.addedAt),
         );
-        if (command.type === "add")
+        if (command.type === "add") {
           requireReceipt(
             member.addedBy === command.input.params.addedBy.trim() &&
               (command.input.params.addedAt === undefined ||
                 member.addedAt === command.input.params.addedAt),
           );
-        else if (command.input.expected)
+        } else if (command.input.expected) {
           requireReceipt(
             member.addedBy === command.input.expected.addedBy &&
               member.addedAt === command.input.expected.addedAt,
           );
-      } else requireReceipt(!adding);
+        }
+      } else {
+        requireReceipt(!adding);
+      }
       if (changed) {
         const facts = result.facts;
         const sessionId =
@@ -123,13 +130,16 @@ export function readSessionCollaborationCandidate(
         };
         requireReceipt(isDeepStrictEqual(facts, fact));
         setFact(key, fact);
-      } else requireReceipt(result.facts === undefined);
+      } else {
+        requireReceipt(result.facts === undefined);
+      }
       break;
     }
     case "owner.assign": {
       requireReceipt(isRecord(result));
-      if (result.value === null) requireReceipt(result.facts === undefined);
-      else {
+      if (result.value === null) {
+        requireReceipt(result.facts === undefined);
+      } else {
         const { params } = command.input;
         requireReceipt(
           isRecord(result.value) &&
@@ -183,7 +193,9 @@ export function readSessionCollaborationCandidate(
           participants: projection.participants,
           participantCount: projection.participants.length,
         };
-      } else requireReceipt(projection.participantCount === undefined);
+      } else {
+        requireReceipt(projection.participantCount === undefined);
+      }
       requireReceipt(isDeepStrictEqual(projection, projected));
       if (result.projectionChanged) {
         requireReceipt(result.value === "inserted" || result.value === "updated");
@@ -217,7 +229,9 @@ export function readSessionCollaborationCandidate(
           typeof result.changed === "boolean" &&
           (!result.changed || result.accepted),
       );
-      if (result.changed) setFact(key, { kind: "unchanged" });
+      if (result.changed) {
+        setFact(key, { kind: "unchanged" });
+      }
       break;
     case "suggestion.add":
       requireReceipt(

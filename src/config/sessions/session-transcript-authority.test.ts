@@ -179,21 +179,24 @@ it.each(["native", "worker"] as const)(
       );
       const refreshed =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
-      const rewrite =
-        realm === "native"
-          ? refreshed.prepareTranscriptRewrite()
-          : await refreshed.prepareTranscriptRewriteAsync();
-      rewrite.sessionManager.resetLeaf();
-      const ids = new Map<string, string>();
-      for (const entry of refreshed.getEntries()) {
-        if (entry.type === "message") {
-          ids.set(entry.id, rewrite.sessionManager.appendMessage(entry.message));
+      const populateRewrite = (rewriter: SessionManager) => {
+        rewriter.resetLeaf();
+        const ids = new Map<string, string>();
+        for (const entry of refreshed.getEntries()) {
+          if (entry.type === "message" && entry.message.role === "user") {
+            ids.set(entry.id, rewriter.appendMessage(entry.message));
+          }
         }
-      }
+        return ids;
+      };
       await invoke(
-        () => rewrite.commit(ids),
+        () => {
+          const rewrite = refreshed.prepareTranscriptRewrite();
+          rewrite.commit(populateRewrite(rewrite.sessionManager));
+        },
         async () => {
-          await rewrite.commit(ids);
+          const rewrite = await refreshed.prepareTranscriptRewriteAsync();
+          await rewrite.commit(populateRewrite(rewrite.sessionManager));
         },
       );
     });
@@ -399,7 +402,11 @@ it("rebases a delayed manager branch receipt onto a newer native owner without l
       env: state.env,
     };
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    assignSessionOwner(scope, { owner: { type: "human", id: "previous-owner" }, assignedAt: 1 });
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: "previous-owner" },
+      assignedBy: { type: "human", id: "assigner" },
+      assignedAt: 1,
+    });
     const manager = await SessionManager.openAsync(scope);
     const seed = await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
     const committed: Array<NonNullable<ReturnType<typeof readPreparedSessionEntryChange>>> = [];
@@ -416,6 +423,7 @@ it("rebases a delayed manager branch receipt onto a newer native owner without l
     );
     const newerOwner = {
       actor: { type: "human" as const, id: "newer-native-owner" },
+      assignedBy: { type: "human" as const, id: "assigner" },
       assignedAt: 2,
     };
     let interposed = false;
@@ -432,6 +440,7 @@ it("rebases a delayed manager branch receipt onto a newer native owner without l
             expect(
               assignSessionOwner(scope, {
                 owner: newerOwner.actor,
+                assignedBy: newerOwner.assignedBy,
                 assignedAt: newerOwner.assignedAt,
               }),
             ).toEqual(newerOwner);

@@ -44,12 +44,12 @@ export function createSessionManagerPublicationHooks(params: {
   };
   let pending: Pending | undefined;
   return {
-    unwrap(request: SqliteWorkerAdmissionRequest): SqliteWorkerAdmissionRequest {
+    unwrap: (request: SqliteWorkerAdmissionRequest): SqliteWorkerAdmissionRequest => {
       return isRecord(request.facts) && request.facts.kind === "session-manager-authority"
         ? { ...request, facts: request.facts.domainFacts }
         : request;
     },
-    onAdmitted(request: SqliteWorkerAdmissionRequest) {
+    onAdmitted: (request: SqliteWorkerAdmissionRequest) => {
       if (
         request.stage !== "commit" ||
         !isRecord(request.facts) ||
@@ -98,10 +98,10 @@ export function createSessionManagerPublicationHooks(params: {
       }
       pending.transcript.begin(transcriptPublication);
     },
-    observeAdmission(
+    observeAdmission: (
       admission: SqliteWorkerOperationAdmission,
       retained: RetainedWorkerTransactionAdmission,
-    ) {
+    ) => {
       const owner: Pending = {};
       pending = owner;
       let committed = false;

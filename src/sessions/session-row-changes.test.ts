@@ -7,7 +7,7 @@ import { captureSessionRowChanges, sessionChanges } from "./session-row-changes.
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
-  for (const close of cleanup.splice(0).reverse()) {
+  for (const close of cleanup.splice(0).toReversed()) {
     close();
   }
 });
@@ -66,7 +66,9 @@ it("keeps postcommit observer events outside the committing worker's captured po
   const observed: string[] = [];
   cleanup.push(
     sessionChanges.subscribe((change) => {
-      if (!("sessionKey" in change)) return;
+      if (!("sessionKey" in change)) {
+        return;
+      }
       observed.push(change.sessionKey);
       if (change.sessionKey === "committed") {
         sessionChanges.emit({ sessionKey: "observer" }, database);
@@ -92,10 +94,14 @@ it("installs private authority before observers without duplicate presentation n
   const pluginFacts: string[][] = [];
   cleanup.push(
     sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change) installed.push(change.sessionKey);
+      if ("sessionKey" in change) {
+        installed.push(change.sessionKey);
+      }
     }),
     sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change) projected.push(change.sessionKey);
+      if ("sessionKey" in change) {
+        projected.push(change.sessionKey);
+      }
     }),
     sessionChanges.subscribe(() => observed.push([...installed])),
     subscribeRuntimeSessionChanges((change) => {

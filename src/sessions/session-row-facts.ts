@@ -44,7 +44,9 @@ export function sessionChangeAffectsStoredRow(
     ignoreStoreTopology?: boolean;
   },
 ): boolean {
-  if (!sessionChangeScopeAffectsStoredRows(change)) return false;
+  if (!sessionChangeScopeAffectsStoredRows(change)) {
+    return false;
+  }
   const source = readPreparedSessionEntryPublicationSource(change);
   const matchesStore = (storePath: string) =>
     source.identity !== undefined && target.databaseIdentities.size > 0

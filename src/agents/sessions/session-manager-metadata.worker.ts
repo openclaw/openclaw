@@ -172,7 +172,6 @@ export function bindSqliteWorkerBackend(
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {
   let entryChanges: readonly SessionRowChange[] = [];
-  const admitNative = nativeContext.admit;
   const context = {
     ...nativeContext,
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction) {
@@ -183,7 +182,7 @@ export function bindSqliteWorkerBackend(
       const entryPublication =
         stage === "commit" ? captureSessionEntryMetadataReceipts(entryChanges) : [];
       if (!transcriptPublication.length && !entryPublication.length) {
-        admitNative(stage, restriction);
+        nativeContext.admit(stage, restriction);
         return;
       }
       const publication: SessionManagerAuthorityPublication = {
@@ -192,7 +191,7 @@ export function bindSqliteWorkerBackend(
         entryPublication,
       };
       deferSqliteWorkerCommitReceipt(context.database, publication);
-      admitNative(stage, (request, dispatch) => {
+      nativeContext.admit(stage, (request, dispatch) => {
         const publish = (restricted: typeof request) =>
           dispatch({ ...restricted, facts: { ...publication, domainFacts: restricted.facts } });
         if (restriction) {

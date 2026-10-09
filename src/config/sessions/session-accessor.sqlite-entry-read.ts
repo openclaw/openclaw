@@ -120,7 +120,7 @@ const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
             CanonicalSessionValidationRow & ResolvedSessionEntryRow["row"]
           >(database, (parameter) =>
             canonicalSessionValidationQuery({ db: database }, { metadata: includeOwner })
-              .$if(!includeOwner, (query) => query.select("session_nodes.updated_at"))
+              .$if(!includeOwner, (builder) => builder.select("session_nodes.updated_at"))
               .select(sessionEntrySnapshotColumnsForKeys(undefined, projection))
               .where(
                 "session_nodes.session_key",

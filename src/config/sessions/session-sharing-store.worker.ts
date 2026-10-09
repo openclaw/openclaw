@@ -52,6 +52,7 @@ export function bindSqliteWorkerBackend(
   },
 ): SqliteWorkerBackend<SessionSharingWorkerOperations> {
   const db = context.database;
+  const source = readOpenClawAgentDatabaseIdentity({ db });
   let categoryPlan:
     | {
         from: string;
@@ -103,10 +104,11 @@ export function bindSqliteWorkerBackend(
             admit(stage) {
               context.admit(
                 stage,
-                stage === "commit"
+                stage === "commit" && typeof source.identity === "string"
                   ? (request, dispatch) => {
-                      if (!candidate || !isRecord(request.facts))
+                      if (!candidate || !isRecord(request.facts)) {
                         throw new Error("Session collaboration commit omitted its candidate");
+                      }
                       dispatch({ ...request, facts: { ...request.facts, publication: candidate } });
                     }
                   : undefined,
@@ -214,28 +216,30 @@ export function bindSqliteWorkerBackend(
                 recordFact(change.sessionKey, { kind: "unchanged" });
               }
             }
-            const source = readOpenClawAgentDatabaseIdentity({ db });
-            const publication = createSqliteCommitReceipt<
-              readonly SessionCollaborationFact[],
-              typeof source
-            >({
-              source,
-              domain: "session-collaboration",
-              keys,
-              readFact: (key) => {
-                const current = factsByKey.get(key);
-                return current && current.length > 0
-                  ? { kind: "postimage", value: current }
-                  : { kind: "unchanged" };
-              },
-            });
-            candidate = {
-              kind: "session-collaboration-committed",
-              type: command.type,
-              result: captured.result,
-              publication,
-            };
-            deferSqliteWorkerCommitReceipt(db, candidate);
+            // Incognito's actor supplies its own receipt and session authority.
+            if (typeof source.identity === "string") {
+              const publication = createSqliteCommitReceipt<
+                readonly SessionCollaborationFact[],
+                typeof source
+              >({
+                source,
+                domain: "session-collaboration",
+                keys,
+                readFact: (key) => {
+                  const current = factsByKey.get(key);
+                  return current && current.length > 0
+                    ? { kind: "postimage", value: current }
+                    : { kind: "unchanged" };
+                },
+              });
+              candidate = {
+                kind: "session-collaboration-committed",
+                type: command.type,
+                result: captured.result,
+                publication,
+              };
+              deferSqliteWorkerCommitReceipt(db, candidate);
+            }
             return captured.result;
           },
           {

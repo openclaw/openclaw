@@ -251,11 +251,12 @@ export async function runSessionCollaborationWrite<
                 input: undefined,
                 assertAdmission(request) {
                   if (mutationDispatched && request.stage === "commit") {
-                    if (!isRecord(request.facts))
+                    if (!isRecord(request.facts)) {
                       throw new SqliteWorkerError(
                         "Session collaboration commit omitted its candidate",
                         "outcome-unknown",
                       );
+                    }
                     candidate = structuredClone(
                       readSessionCollaborationCandidate(
                         request.facts.publication,
@@ -274,8 +275,9 @@ export async function runSessionCollaborationWrite<
                     if (!capturedCommand.type.startsWith("suggestion.")) {
                       const memberships = new Map<string, string>();
                       for (const [key, fact] of candidate?.publication.facts ?? []) {
-                        if (fact.kind === "postimage" && fact.value[0]?.kind === "member")
+                        if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
                           memberships.set(key, fact.value[0].sessionId);
+                        }
                       }
                       publication.beginChanges(publicationKeys, memberships);
                     }
@@ -284,7 +286,9 @@ export async function runSessionCollaborationWrite<
                 observeAdmission(admission, retained) {
                   activeAdmission = retained;
                   observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
-                    if (!mutationDispatched || publicationState.result) return;
+                    if (!mutationDispatched || publicationState.result) {
+                      return;
+                    }
                     try {
                       if (!candidate || !isDeepStrictEqual(facts, candidate)) {
                         throw new SqliteWorkerError(
@@ -296,11 +300,11 @@ export async function runSessionCollaborationWrite<
                       const changes = [...receipt.publication.facts].flatMap<SessionRowChange>(
                         ([sessionKey, fact]) =>
                           fact.kind === "postimage"
-                            ? fact.value.map((facts) => ({
+                            ? fact.value.map((changeFacts) => ({
                                 ...location,
                                 sessionKey,
                                 scope: "session-entry" as const,
-                                facts,
+                                facts: changeFacts,
                               }))
                             : [{ ...location, sessionKey, facts: { kind: "unchanged" as const } }],
                       );
@@ -336,10 +340,10 @@ export async function runSessionCollaborationWrite<
                 if (prepare) {
                   const prepared = await prepare(
                     {
-                      async execute(command, executeOptions) {
-                        const result = await operation.execute(command, executeOptions);
+                      async execute(prepareCommand, executeOptions) {
+                        const result = await operation.execute(prepareCommand, executeOptions);
                         if (
-                          command.type === "category.prepare" &&
+                          prepareCommand.type === "category.prepare" &&
                           Array.isArray(result) &&
                           result.every((key) => typeof key === "string")
                         ) {
@@ -368,13 +372,15 @@ export async function runSessionCollaborationWrite<
               return publicationState.result.value;
             } catch (error) {
               await mutationAdmission?.settled;
-              if (publicationState.result) return publicationState.result.value;
+              if (publicationState.result) {
+                return publicationState.result.value;
+              }
               const unknown =
                 mutationDispatched &&
                 (receiptFailed ||
                   resultReceived ||
                   collectNestedErrorCandidates(error).some(
-                    (candidate) => extractErrorCode(candidate) === "outcome-unknown",
+                    (errorCandidate) => extractErrorCode(errorCandidate) === "outcome-unknown",
                   ));
               if (unknown && !capturedCommand.type.startsWith("suggestion.") && db.isOpen) {
                 publication.beginChanges(publicationKeys);
@@ -516,8 +522,11 @@ export function recordSessionParticipantInWorker(
             reason: "participants",
             scope: "session-entry",
           });
-        if (database) deferOpenClawAgentPostCommitPublication(database, notify);
-        else notify();
+        if (database) {
+          deferOpenClawAgentPostCommitPublication(database, notify);
+        } else {
+          notify();
+        }
       }
       return result.value;
     },

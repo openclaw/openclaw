@@ -94,11 +94,6 @@ export function readCommittedSessionEntryCache(database: DatabaseSync) {
   return sessionEntryCaches.get(database)?.entries;
 }
 
-/** A settled worker with an unknown write outcome cannot publish a trustworthy field patch. */
-export function discardCommittedSessionEntryCache(database: DatabaseSync): void {
-  sessionEntryCaches.delete(database);
-}
-
 /** Reuse only complete, current metadata; exact reads still own misses and invalid rows. */
 function readCachedExactSessionEntries(
   database: SessionEntryCacheDatabase,

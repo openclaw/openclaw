@@ -56,7 +56,6 @@ export {
   readPreparedSessionEntryChange,
   readPreparedSessionEntryPublicationSource,
   readPreparedSessionSharingChange,
-  readSessionEntryCreationTransition,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 export type {
   PreparedSessionEntryChanges,

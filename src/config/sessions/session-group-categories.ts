@@ -111,7 +111,9 @@ export function updateSessionGroupCategoriesInWorker(params: {
         facts: { kind: "category" as const, sessionId, category: to?.trim() || null },
       }));
       if (database) {
-        for (const change of changes) bindSessionEntryPublicationSource(change, database);
+        for (const change of changes) {
+          bindSessionEntryPublicationSource(change, database);
+        }
       }
       sessionChanges.emitBatch(changes, database?.db);
       return changed.length;

@@ -23,7 +23,10 @@ import {
   readSessionColdTranscript,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
-import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
+import {
+  publishSessionTranscriptAuthority,
+  type SessionTranscriptAuthority,
+} from "./session-transcript-authority.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -377,55 +380,55 @@ export function advanceTranscriptMutationAtInTransaction(
         : transcriptUpdatedAt,
     }))
     .where("session_id", "=", sessionId);
-  if (!findOpenClawAgentDatabaseIdentity(database)) {
-    // Offline legacy handles have no admitted publication source or current projection schema.
-    executeSqliteQuerySync(database.db, update);
-    return;
-  }
-  const context = executeSqliteQueryTakeFirstSync(
+  // Native execution returns no row for legacy UPDATEs without RETURNING, not Kysely's UpdateResult.
+  const context = executeSqliteQueryTakeFirstSync<SessionTranscriptAuthority>(
     database.db,
-    update.returning((eb) => [
-      "session_id as sessionId",
-      "session_key as sessionKey",
-      "transcript_updated_at as updatedAt",
-      eb
-        .selectFrom("transcript_rewrite_watermarks")
-        .select("generation")
-        .where("session_id", "=", sessionId)
-        .as("generation"),
-      eb.fn
-        .coalesce(
-          eb
-            .selectFrom("session_transcript_cold_archives")
-            .select("last_seq")
-            .where("session_id", "=", sessionId),
-          eb
-            .selectFrom("transcript_events")
-            .select((inner) => inner.fn.max<number | null>("seq").as("seq"))
-            .where("session_id", "=", sessionId),
-        )
-        .as("rawSeq"),
-      eb
-        .selectFrom("session_transcript_index_state")
-        .select("leaf_event_id")
-        .where("session_id", "=", sessionId)
-        .as("leafEventId"),
-      eb
-        .selectFrom("session_transcript_index_state")
-        .select("indexed_seq")
-        .where("session_id", "=", sessionId)
-        .as("indexedSeq"),
-      eb
-        .selectFrom("session_transcript_index_state")
-        .select("active_message_count")
-        .where("session_id", "=", sessionId)
-        .as("activeMessageCount"),
-      eb
-        .selectFrom("session_transcript_index_state")
-        .select("needs_rebuild")
-        .where("session_id", "=", sessionId)
-        .as("needsRebuild"),
-    ]),
+    findOpenClawAgentDatabaseIdentity(database)
+      ? update
+          .returning((eb) => [
+            "session_id as sessionId",
+            "session_key as sessionKey",
+            "transcript_updated_at as updatedAt",
+            eb
+              .selectFrom("transcript_rewrite_watermarks")
+              .select("generation")
+              .where("session_id", "=", sessionId)
+              .as("generation"),
+            eb.fn
+              .coalesce(
+                eb
+                  .selectFrom("session_transcript_cold_archives")
+                  .select("last_seq")
+                  .where("session_id", "=", sessionId),
+                eb
+                  .selectFrom("transcript_events")
+                  .select((inner) => inner.fn.max<number | null>("seq").as("seq"))
+                  .where("session_id", "=", sessionId),
+              )
+              .as("rawSeq"),
+            eb
+              .selectFrom("session_transcript_index_state")
+              .select("leaf_event_id")
+              .where("session_id", "=", sessionId)
+              .as("leafEventId"),
+            eb
+              .selectFrom("session_transcript_index_state")
+              .select("indexed_seq")
+              .where("session_id", "=", sessionId)
+              .as("indexedSeq"),
+            eb
+              .selectFrom("session_transcript_index_state")
+              .select("active_message_count")
+              .where("session_id", "=", sessionId)
+              .as("activeMessageCount"),
+            eb
+              .selectFrom("session_transcript_index_state")
+              .select("needs_rebuild")
+              .where("session_id", "=", sessionId)
+              .as("needsRebuild"),
+          ])
+          .$assertType<SessionTranscriptAuthority>()
+      : update,
   );
   if (context) {
     publishSessionTranscriptAuthority(database, context);
