@@ -101,6 +101,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
             assertCurrent: () => settlementAuthority.signal.throwIfAborted(),
             admittedSessionId: "close-session",
             clientRunId: "close-run",
+            controlUiVisible: false,
             startedAt: 1_000,
             status: "killed",
             retryable: false,
