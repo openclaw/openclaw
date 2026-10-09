@@ -114,6 +114,9 @@ describe("Gemma tool-call text recovery", () => {
     call.replace("sessionId:", "sessionId"),
     "<|tool_",
     "<|tool_call>call:read{limit:1 2}<tool_call|>",
+    "<|tool_call>call:process{,:1}<tool_call|>",
+    "<|tool_call>call:process{[:1}<tool_call|>",
+    "<|tool_call>call:process{::1}<tool_call|>",
   ])("preserves non-call or incomplete text: %s", async (content) => {
     const output = createAssistantOutput(model);
     await processCompletionsStream(

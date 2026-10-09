@@ -46,7 +46,7 @@ function recoverGemmaCalls(text: string): TextToolCallRecoveryPart[] | undefined
       json.push(
         value.startsWith(QUOTE)
           ? JSON.stringify(value.slice(QUOTE.length, -QUOTE.length))
-          : text[token.lastIndex] === ":" && value !== "}" && value !== "]"
+          : text[token.lastIndex] === ":" && /^[A-Za-z_][\w.-]*$/.test(value)
             ? JSON.stringify(value)
             : value,
       );
