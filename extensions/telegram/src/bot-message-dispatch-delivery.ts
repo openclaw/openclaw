@@ -501,7 +501,6 @@ export async function deliverFinalAnswerText(
       laneName: "answer",
       text: finalText,
       payload: finalPayload,
-      replyTargetBeforeRecovery: answerPayload,
       infoKind: "final",
       buttons,
       allowStream:
