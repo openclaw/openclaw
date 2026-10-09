@@ -2547,7 +2547,6 @@
 ["src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts","./logger.js","e937d720be22690174eb0c488c6f1882cbfd9c4d0b7681754419184abff4edb2",1]
 ["src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts","./provider-prompt-state.js","9307e57d05cc8dd4add5b8296f46711b2433bebfa218c5c56207d01ada6fba31",1]
 ["src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts","./run/session-bootstrap.js","e7f2f38dcc40b322c313150102672f484b9418f8526b08bbaafbb6956597c8aa",1]
-["src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts","./tool-result-truncation.js","e8151be8f8ce1ea90da81b0224a4879e8749b1acee05056a5528284062713df5",1]
 ["src/agents/embedded-agent-runner/run.prepared-harness-source-delivery.integration.test.ts","../../auto-reply/reply-payload.js","9a2fb1fee7e667f865631b3297c5b3271a3edc89b52e4eca03db3dde884c343c",1]
 ["src/agents/embedded-agent-runner/run.prepared-harness-source-delivery.integration.test.ts","../../tts/tts.js","3daf0961f5b7ce7b11c3e768926974a19858997a36fe42c7a2db6d02b4ec8f0b",1]
 ["src/agents/embedded-agent-runner/run.prepared-harness-source-delivery.integration.test.ts","../../tts/tts.js","e0ec4c2e9141cc9d3a550c3568c67d6a3770c359acc922a0895203f879bf3a4a",1]
