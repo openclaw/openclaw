@@ -476,7 +476,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
 function hasCurrentTurnToolOutput(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "user") {
+    if (readMockUserText(message) !== undefined) {
       return false;
     }
     if (message?.role === "tool" || message?.type === "function_call_output") {

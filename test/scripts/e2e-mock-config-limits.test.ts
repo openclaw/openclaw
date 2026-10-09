@@ -267,6 +267,11 @@ describe("mock OpenAI response markers", () => {
         const context = user(
           "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime facts.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         );
+        const currentContextText =
+          "OpenClaw runtime context:\nRuntime facts.\nEnd OpenClaw runtime context.";
+        const currentContext = stream
+          ? user(currentContextText)
+          : { role: "user", content: currentContextText };
         const request = async (input: unknown[], declaredTools: unknown[] = tools) => {
           const response = await fetch(`${baseUrl}/v1/responses`, {
             method: "POST",
@@ -294,7 +299,7 @@ describe("mock OpenAI response markers", () => {
 
         // Utility traffic must not consume the spawn slot.
         expectText(await request([user("ordinary startup request")]), "OPENCLAW_E2E_OK");
-        const first = await request([create, context]);
+        const first = await request([create, context, currentContext]);
         expect(first).toHaveLength(1);
         const call = first[0];
         expect(call).toMatchObject({ type: "function_call", name: "sessions_spawn" });
@@ -320,7 +325,7 @@ describe("mock OpenAI response markers", () => {
             mode: "session",
           }),
         };
-        const completed = [create, call, receipt, context];
+        const completed = [create, call, receipt, context, currentContext];
         expectText(await request(completed), `TELEGRAM_BINDING_ACK_PARENT_${run}`);
         expectText(
           await request([create, call, { ...receipt, call_id: "unrelated" }]),
@@ -334,12 +339,38 @@ describe("mock OpenAI response markers", () => {
         // Child tasks and follow-ups may carry parent history and still expose spawn.
         for (const phase of ["CHILD", "BEFORE", "AFTER"]) {
           expectText(
-            await request([...completed, user(`TELEGRAM_BINDING_${phase}_${run}`), context]),
+            await request([
+              ...completed,
+              user(`TELEGRAM_BINDING_${phase}_${run}`),
+              context,
+              currentContext,
+            ]),
             `TELEGRAM_BINDING_ACK_${phase}_${run}`,
           );
         }
         expectText(
-          await request([...completed, user("ordinary later request")]),
+          await request([...completed, user("ordinary later request"), currentContext]),
+          "OPENCLAW_E2E_OK",
+        );
+        for (const text of [
+          "OpenClaw runtime context:\nTELEGRAM_BINDING_CHILD_boundary",
+          "ordinary prefix\nOpenClaw runtime context:\nTELEGRAM_BINDING_CHILD_boundary\nEnd OpenClaw runtime context.",
+          "OpenClaw runtime context:\nTELEGRAM_BINDING_CHILD_boundary\nEnd OpenClaw runtime context.\nordinary suffix",
+        ]) {
+          expectText(
+            await request([...completed, user(text), currentContext]),
+            "TELEGRAM_BINDING_ACK_CHILD_boundary",
+          );
+        }
+        expectText(
+          await request([
+            ...completed,
+            {
+              role: "user",
+              content: [{ type: "text", text: "TELEGRAM_BINDING_CHILD_unsupported" }],
+            },
+            currentContext,
+          ]),
           "OPENCLAW_E2E_OK",
         );
         expectText(
@@ -353,6 +384,7 @@ describe("mock OpenAI response markers", () => {
                 "ordinary latest message",
               ].join("\n"),
             ),
+            currentContext,
           ]),
           "OPENCLAW_E2E_OK",
         );
@@ -531,12 +563,21 @@ describe("mock OpenAI response markers", () => {
             }
 
             const finalStartedAt = performance.now();
+            const runtimeText =
+              "OpenClaw runtime context:\nCurrent conversation facts\nEnd OpenClaw runtime context.";
+            const runtimeContext = {
+              role: "user",
+              content: stream
+                ? [{ type: api === "responses" ? "input_text" : "text", text: runtimeText }]
+                : runtimeText,
+            };
             const completedTurn = [
               user,
               ...assistant,
               api === "responses"
                 ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
                 : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
+              runtimeContext,
             ];
             const final = await request(completedTurn);
             if (api === "responses") {
@@ -561,6 +602,7 @@ describe("mock OpenAI response markers", () => {
               ...completedTurn,
               { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
               { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
+              runtimeContext,
             ]);
             if (api === "responses") {
               const items = stream
