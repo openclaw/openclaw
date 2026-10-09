@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,19 +6,13 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { loadDotEnv } from "../infra/dotenv.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import {
-  applyConfigEnvVars,
-  cloneEnvWithPlatformSemantics,
-  createConfigRuntimeEnvBase,
-  getPublishedConfigRuntimeEnvState,
-} from "./config-env-vars.js";
+import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { type EnvSubstitutionWarning, resolveConfigEnvVars } from "./env-substitution.js";
-import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
   type ConfigIncludeResolutionEvent,
   hashConfigIncludeRaw,
@@ -26,16 +21,46 @@ import {
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
 } from "./includes.js";
-import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
+import type {
+  ConfigIoDeps,
+  NormalizedConfigIoDeps,
+  ParseConfigJson5Result,
+} from "./io.read.types.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
-import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 
 export function hashConfigRaw(raw: string | null): string {
   // Present-file hashes stay compatible with last-known-good recovery metadata.
   // Missing needs a distinct token so optimistic writes reject missing-to-empty races.
   return raw === null ? hashConfigIncludeRaw(null) : sha256Hex(raw);
+}
+
+export function hashConfigRevision(
+  raw: string,
+  includeFileHashes: Record<string, string>,
+  includeFileTargets: Record<string, string>,
+): string {
+  const revision = createHash("sha256").update(raw);
+  for (const [includePath, includeHash] of Object.entries(includeFileHashes)) {
+    revision.update(JSON.stringify([includePath, includeFileTargets[includePath], includeHash]));
+  }
+  return revision.digest("hex");
+}
+
+export function readConfigFileIfPresent(
+  deps: Pick<NormalizedConfigIoDeps, "fs">,
+  configPath: string,
+): string | undefined {
+  try {
+    return deps.fs.readFileSync(configPath, "utf-8");
+  } catch (error) {
+    // existsSync also hides inaccessible parents; only ENOENT establishes absence.
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
@@ -60,16 +85,27 @@ export function resolveGatewayMode(value: unknown): string | null {
 }
 
 export function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
+  // Avoid call-stack limits from recursive traversal or spreading large arrays.
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        stack.push(item);
+      }
+      continue;
+    }
+    if (!isRecord(current)) {
+      continue;
+    }
+    if (INCLUDE_KEY in current) {
+      return true;
+    }
+    for (const child of Object.values(current)) {
+      stack.push(child);
+    }
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (INCLUDE_KEY in value) {
-    return true;
-  }
-  return Object.values(value).some((item) => containsConfigIncludeDirective(item));
+  return false;
 }
 
 export function resolveConfigPathForDeps(deps: NormalizedConfigIoDeps): string {
@@ -98,13 +134,6 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   };
 }
 
-export function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
-  // Injected env objects are test/diagnostic sandboxes and must stay isolated.
-  if (env === process.env) {
-    loadDotEnv({ quiet: true });
-  }
-}
-
 export function parseConfigJson5(
   raw: string,
   json5: { parse: (value: string) => unknown } = JSON5,
@@ -124,17 +153,6 @@ function isPathLikeConfigKey(key: string | undefined): boolean {
   return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
 }
 
-function expandAuthoredTildePath(value: string, home: string): string {
-  const suffix = value.slice(1);
-  if (!suffix) {
-    return home;
-  }
-  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
-    return path.join(home, suffix.slice(1));
-  }
-  return value;
-}
-
 export function restoreAuthoredTildePathsForWrite(
   next: unknown,
   authored: unknown,
@@ -146,7 +164,7 @@ export function restoreAuthoredTildePathsForWrite(
     typeof authored === "string" &&
     isPathLikeConfigKey(key) &&
     TILDE_PATH_VALUE_RE.test(authored.trim()) &&
-    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+    path.normalize(next) === path.join(home, authored.trim().slice(2))
   ) {
     return authored;
   }
@@ -293,27 +311,4 @@ export function replaceEnvSnapshot(
     delete env[key];
   }
   Object.assign(env, next);
-}
-
-export function resolveManagedRuntimeEnvBaseline(): {
-  generation: number;
-  sourceConfig: OpenClawConfig;
-} {
-  // Accepted restart candidates publish env before the runtime snapshot advances.
-  // Managed writes must stay on that publication generation to avoid mixed env refs.
-  const published = getPublishedConfigRuntimeEnvState();
-  return {
-    generation: published.generation,
-    sourceConfig: published.sourceConfig ?? getRuntimeConfigSourceSnapshot() ?? {},
-  };
-}
-
-export function createManagedRuntimeEnvBase(
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  return createConfigRuntimeEnvBase(resolveManagedRuntimeEnvBaseline().sourceConfig, env, {
-    // Copied caller environments still carry the published layer's recorded ownership.
-    ownedEnv: getPublishedConfigRuntimeEnvState().ownedEnv,
-    preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
-  });
 }

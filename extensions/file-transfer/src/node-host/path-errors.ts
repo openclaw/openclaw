@@ -1,4 +1,3 @@
-// File Transfer plugin module implements path errors behavior.
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

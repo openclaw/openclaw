@@ -122,22 +122,11 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
   migrateToCurrentVersion(entries);
 }
 
-export function parseSessionEntries(content: string): FileEntry[] {
-  return parseJsonlEntries(content);
-}
-
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    // SAFETY: The reverse index stays within the canonical session entries.
-    const entry = entries[index]!;
-    if (entry.type === "reset") {
-      return null;
-    }
-    if (entry.type === "compaction") {
-      return entry;
-    }
-  }
-  return null;
+  const boundary = entries.findLast(
+    (entry) => entry.type === "reset" || entry.type === "compaction",
+  );
+  return boundary?.type === "compaction" ? boundary : null;
 }
 
 export function buildSessionContext(
@@ -155,13 +144,7 @@ export function buildSessionContext(
     }
   }
 
-  let byId = contextById;
-  if (!byId) {
-    byId = new Map<string, SessionEntry>();
-    for (const entry of contextEntries) {
-      byId.set(entry.id, entry);
-    }
-  }
+  const byId = contextById ?? new Map(contextEntries.map((entry) => [entry.id, entry]));
 
   if (leafId === null) {
     return { messages: [], thinkingLevel: "off", model: null };
@@ -184,7 +167,7 @@ export function buildSessionContext(
   return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
 }
 
-function parseJsonlEntries(content: string): FileEntry[] {
+export function parseSessionEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   let skipped = 0;
   for (const line of content.trim().split("\n")) {

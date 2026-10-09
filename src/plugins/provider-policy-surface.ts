@@ -21,7 +21,9 @@ export type {
 export const PROVIDER_POLICY_ARTIFACT = "provider-policy-api.js";
 
 const PROVIDER_POLICY_HOOK_KEYS = [
+  "resolveModelAuthPolicy",
   "resolveFastModeSupport",
+  "resolveServiceTiers",
   "normalizeConfig",
   "applyConfigDefaults",
   "resolveConfigApiKey",
@@ -93,12 +95,8 @@ export function resolveDirectBundledProviderPolicySurface(
   resolveBundledPluginsDir();
   const selection = metadata.bundledPluginsDir;
   const cached = cacheable ? metadata.bundledProviderPolicySurfaces.get(pluginId) : undefined;
-  if (
-    cached &&
-    cached.registry === registry &&
-    cached.version === version &&
-    cached.selection === selection
-  ) {
+  // Publication versions identify registries uniquely without retaining their runtime graphs.
+  if (cached && cached.version === version && cached.selection === selection) {
     return cached.read();
   }
   const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
@@ -109,7 +107,6 @@ export function resolveDirectBundledProviderPolicySurface(
   if (cacheable) {
     const instance = mod ? getPluginValueInstance(mod) : undefined;
     metadata.bundledProviderPolicySurfaces.set(pluginId, {
-      registry,
       version,
       selection,
       read: instance ? () => instance.run(() => surface) : () => surface,

@@ -3,14 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressionState,
   collectLintDisableDirectives,
   isGovernedSourcePath,
   main,
 } from "../../scripts/check-max-lines-ratchet.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const tempDirs = createTempDirTracker();
 beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
@@ -140,7 +144,9 @@ describe("check-max-lines-ratchet", () => {
       },
     );
     expect(result.status, result.stderr).toBe(status);
-    expect(result.stderr).toBe(stderr);
+    // TypeScript 7.0.2 can emit this standalone line while closing its native parser.
+    // Remove after upgrading past https://github.com/microsoft/TypeScript/pull/64276.
+    expect(result.stderr.replace(/^context canceled\n/m, "")).toBe(stderr);
     expect(result.stdout).toBe(
       mode === "max-lines failure first"
         ? ""
@@ -163,12 +169,9 @@ describe("check-max-lines-ratchet", () => {
       "// eslint-disable max-lines, eqeqeq",
     ].join(newline);
 
-    expect(collectLintDisableDirectives(source)).toEqual([
-      ["no-debugger"],
-      ["no-console"],
-      ["no-console"],
-      ["max-lines", "eqeqeq"],
-    ]);
+    expect(
+      collectLintDisableDirectives(source, "file.ts", parser.parseSourceFile("file.ts", source)),
+    ).toEqual([["no-console"], ["no-debugger"], ["no-console"], ["max-lines", "eqeqeq"]]);
   });
 
   it.each<[string, string[][]]>([
@@ -187,7 +190,9 @@ describe("check-max-lines-ratchet", () => {
     ["// Example: oxlint-disable max-lines\n", []],
     ['const example = "/* oxlint-disable max-lines */";\n', []],
   ])("parses directive rules without matching reason prose: %j", (source, directives) => {
-    expect(collectLintDisableDirectives(source)).toEqual(directives);
+    expect(
+      collectLintDisableDirectives(source, "file.ts", parser.parseSourceFile("file.ts", source)),
+    ).toEqual(directives);
   });
 
   it("limits source roots and excludes generated output", () => {

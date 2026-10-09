@@ -13,8 +13,8 @@ import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   isToolCardError,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
-  type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import {
@@ -22,10 +22,11 @@ import {
   TOOL_OUTPUT_PREVIEW_CHARS,
   formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
+import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffBlock } from "./chat-diff-render.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: This handler is attached only to the raw-details button below.
@@ -38,26 +39,6 @@ function handleRawDetailsToggle(event: Event) {
   const expanded = button.getAttribute("aria-expanded") === "true";
   button.setAttribute("aria-expanded", String(!expanded));
   body.hidden = expanded;
-}
-
-function buildPreviewSidebarContent(
-  preview: ToolPreview,
-  rawText?: string | null,
-): SidebarContent | null {
-  if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
-    return null;
-  }
-  return {
-    kind: "canvas",
-    docId: preview.viewId,
-    entryUrl: preview.url,
-    ...(preview.title ? { title: preview.title } : {}),
-    ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
-    // The per-preview sandbox ceiling must survive the sidebar conversion, or a
-    // trusted global embed mode would re-grant same-origin to widget script.
-    ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
-    ...(rawText ? { rawText } : {}),
-  };
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -97,8 +78,6 @@ function renderToolDataBlock(params: { label?: string; text: string }) {
   `;
 }
 
-// ── Key-value args display (generic tools) ──
-
 const KV_MAX_KEYS = 12;
 const KV_MAX_VALUE_CHARS = 400;
 
@@ -106,10 +85,12 @@ function formatKeyValue(value: unknown): string {
   if (typeof value === "string") {
     return truncateUtf16Safe(value, KV_MAX_VALUE_CHARS);
   }
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  if (
+    value == null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     return String(value);
   }
   try {
@@ -119,10 +100,10 @@ function formatKeyValue(value: unknown): string {
   }
 }
 
-function renderArgsKeyValueList(args: Record<string, unknown>) {
+function renderArgsKeyValueList(args: readonly [string, unknown][]) {
   return html`
     <div class="chat-tool-kv">
-      ${Object.entries(args).map(
+      ${args.map(
         ([key, value]) => html`
           <div class="chat-tool-kv__row">
             <span class="chat-tool-kv__key">${key}:</span>
@@ -134,14 +115,6 @@ function renderArgsKeyValueList(args: Record<string, unknown>) {
   `;
 }
 
-function canRenderArgsAsKeyValue(args: unknown): args is Record<string, unknown> {
-  if (!isRecord(args)) {
-    return false;
-  }
-  const keys = Object.keys(args);
-  return keys.length > 0 && keys.length <= KV_MAX_KEYS;
-}
-
 // Args already represented in the collapsed row / header detail for kinds that
 // summarize their primary target; everything else stays auditable on expand.
 const ROW_SUMMARIZED_ARG_KEYS: Partial<Record<ToolCallView["kind"], ReadonlySet<string>>> = {
@@ -149,21 +122,6 @@ const ROW_SUMMARIZED_ARG_KEYS: Partial<Record<ToolCallView["kind"], ReadonlySet<
   search: new Set(["pattern", "query", "glob", "path"]),
   fetch: new Set(["url"]),
 };
-
-function extraArgsBeyondRowTarget(
-  args: unknown,
-  kind: ToolCallView["kind"],
-): Record<string, unknown> | null {
-  if (!isRecord(args)) {
-    return null;
-  }
-  const summarized = ROW_SUMMARIZED_ARG_KEYS[kind];
-  if (!summarized) {
-    return args;
-  }
-  const extras = Object.fromEntries(Object.entries(args).filter(([key]) => !summarized.has(key)));
-  return Object.keys(extras).length > 0 ? extras : null;
-}
 
 export function toolWorkspacePath(card: ToolCard, view: ToolCallView): string | null {
   if (view.kind !== "read" && view.kind !== "edit" && view.kind !== "write") {
@@ -215,20 +173,12 @@ function renderToolWorkspaceFilePath(
 
 /** Neutral end-state line every expanded tool surface closes with. */
 export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
+  const key =
+    outcome === "succeeded" ? "completed" : outcome === "unknown" ? "outcomeUnknown" : outcome;
   const label =
-    outcome === "skipped"
-      ? t("chat.toolCards.skipped")
-      : outcome === "failed"
-        ? exitCode === undefined
-          ? t("chat.toolCards.failed")
-          : t("chat.toolCards.exitCode", { code: String(exitCode) })
-        : outcome === "running"
-          ? t("chat.toolCards.running")
-          : outcome === "succeeded"
-            ? t("chat.toolCards.completed")
-            : outcome === "blocked"
-              ? t("chat.toolCards.blocked")
-              : t("chat.toolCards.outcomeUnknown");
+    outcome === "failed" && exitCode !== undefined
+      ? t("chat.toolCards.exitCode", { code: String(exitCode) })
+      : t(`chat.toolCards.${key}`);
   return html`<div class="chat-tool-card__outcome">${label}</div>`;
 }
 
@@ -261,6 +211,17 @@ function renderToolCardModes(
   const id = `${messageKey}:${card.id}`;
   const active = isError || outcome === "skipped" ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
+  const modes = [
+    ["diff", "chat.toolCards.diff", renderDiffBlock(diff, outcome, undefined, file)],
+    [
+      "raw",
+      "chat.toolCards.raw",
+      renderToolDataBlock({
+        ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+        text: card.outputText!,
+      }),
+    ],
+  ] as const;
   return html`
     <wa-tab-group
       class="chat-tool-card__modes"
@@ -270,43 +231,27 @@ function renderToolCardModes(
       without-scroll-controls
       ${ref((element) => syncTabGroupLabel(element, modeLabel))}
     >
-      <wa-tab
-        slot="nav"
-        id=${`${id}-diff-tab`}
-        aria-controls=${`${id}-diff-panel`}
-        panel="diff"
-        ?active=${active === "diff"}
-      >
-        ${t("chat.toolCards.diff")}
-      </wa-tab>
-      <wa-tab
-        slot="nav"
-        id=${`${id}-raw-tab`}
-        aria-controls=${`${id}-raw-panel`}
-        panel="raw"
-        ?active=${active === "raw"}
-      >
-        ${t("chat.toolCards.raw")}
-      </wa-tab>
-      <wa-tab-panel
-        id=${`${id}-diff-panel`}
-        aria-labelledby=${`${id}-diff-tab`}
-        name="diff"
-        ?active=${active === "diff"}
-      >
-        ${renderDiffBlock(diff, outcome, undefined, file)}
-      </wa-tab-panel>
-      <wa-tab-panel
-        id=${`${id}-raw-panel`}
-        aria-labelledby=${`${id}-raw-tab`}
-        name="raw"
-        ?active=${active === "raw"}
-      >
-        ${renderToolDataBlock({
-          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-          text: card.outputText!,
-        })}
-      </wa-tab-panel>
+      ${modes.map(
+        ([mode, label]) => html`<wa-tab
+          slot="nav"
+          id=${`${id}-${mode}-tab`}
+          aria-controls=${`${id}-${mode}-panel`}
+          panel=${mode}
+          ?active=${active === mode}
+        >
+          ${t(label)}
+        </wa-tab>`,
+      )}
+      ${modes.map(
+        ([mode, , content]) => html`<wa-tab-panel
+          id=${`${id}-${mode}-panel`}
+          aria-labelledby=${`${id}-${mode}-tab`}
+          name=${mode}
+          ?active=${active === mode}
+        >
+          ${content}
+        </wa-tab-panel>`,
+      )}
     </wa-tab-group>
   `;
 }
@@ -326,6 +271,8 @@ export type ToolRenderOptions = {
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  /** Lets a subagent's launch row show its session's state and open it. */
+  subagents?: SubagentRowContext;
 };
 
 export function renderExpandedToolCardContent(
@@ -345,18 +292,19 @@ export function renderExpandedToolCardContent(
     sessionKey,
     agentId,
   };
+  const displayCard = resolveToolCardDisplay(originalCard);
   const unavailable = isLegacyToolOutputUnavailable(originalCard);
-  const outputText = formatToolOutput(originalCard);
+  const outputText = formatToolOutput(displayCard);
   const outputIsLong =
     Math.max(outputText?.length ?? 0, originalCard.outputText?.length ?? 0) >
     TOOL_OUTPUT_PREVIEW_CHARS;
-  const card =
-    outputIsLong && onOpenSidebar && !unavailable
-      ? {
-          ...originalCard,
-          outputText: truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS),
-        }
-      : { ...originalCard, outputText };
+  const card = {
+    ...displayCard,
+    outputText:
+      outputIsLong && onOpenSidebar && !unavailable
+        ? truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS)
+        : outputText,
+  };
   const outputFooter = html`
     ${
       outputText !== originalCard.outputText &&
@@ -391,11 +339,20 @@ export function renderExpandedToolCardContent(
   const outcome = resolveToolCardOutcome(card, runActive);
   const workspaceFilePath = toolWorkspacePath(card, view);
   const canOpenSidebar = Boolean(onOpenSidebar);
-  const previewSidebarContent =
-    card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText)
-      : null;
-  const sidebarActionContent = previewSidebarContent ?? outputDetails;
+  const preview = card.preview;
+  const sidebarActionContent: SidebarContent =
+    preview?.kind === "canvas" && preview.render === "url" && preview.viewId && preview.url
+      ? {
+          kind: "canvas",
+          docId: preview.viewId,
+          entryUrl: preview.url,
+          ...(preview.title ? { title: preview.title } : {}),
+          ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
+          // Preserve the preview's sandbox ceiling when opening its sidebar.
+          ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
+          ...(card.outputText ? { rawText: card.outputText } : {}),
+        }
+      : outputDetails;
   const sidebarAction = canOpenSidebar
     ? html`
         <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
@@ -421,9 +378,7 @@ export function renderExpandedToolCardContent(
   if (view.kind === "command" && (view.command || view.code) && !card.preview) {
     const argsRecord = asNullableRecord(card.args);
     const sourceKey = view.code ? (argsRecord?.code === view.code ? "code" : "input") : "command";
-    const extraArgs = Object.fromEntries(
-      Object.entries(argsRecord ?? {}).filter(([key]) => key !== sourceKey),
-    );
+    const extraArgs = Object.entries(argsRecord ?? {}).filter(([key]) => key !== sourceKey);
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
@@ -439,8 +394,8 @@ export function renderExpandedToolCardContent(
                 ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
             : renderTerminalBlock(view.command!, card.outputText)
         }
-        ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
-        ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
+        ${extraArgs.length > 0 ? renderArgsKeyValueList(extraArgs) : nothing} ${outputFooter}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
@@ -472,10 +427,10 @@ export function renderExpandedToolCardContent(
   // File reads and searches summarize their primary target in the row, so the
   // full args JSON is noise — but any remaining args (filters, limits, request
   // options…) stay visible as key-value rows for auditability.
-  const inputBlockArgs = summarizedKind
-    ? extraArgsBeyondRowTarget(card.args, view.kind)
-    : card.args;
-  const showInputBlock = hasInput && (!summarizedKind || inputBlockArgs !== null);
+  const inputArgs = isRecord(card.args)
+    ? Object.entries(card.args).filter(([key]) => !ROW_SUMMARIZED_ARG_KEYS[view.kind]?.has(key))
+    : null;
+  const showInputBlock = hasInput && (!summarizedKind || Boolean(inputArgs?.length));
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
@@ -497,8 +452,8 @@ export function renderExpandedToolCardContent(
       }
       ${
         showInputBlock
-          ? canRenderArgsAsKeyValue(inputBlockArgs)
-            ? renderArgsKeyValueList(inputBlockArgs)
+          ? inputArgs && inputArgs.length > 0 && inputArgs.length <= KV_MAX_KEYS
+            ? renderArgsKeyValueList(inputArgs)
             : renderToolDataBlock({
                 label: t("chat.toolCards.toolInput"),
                 text: card.inputText!,

@@ -22,11 +22,11 @@ The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the docu
 
 ## How the gate decides
 
-Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The probe uses an in-memory database and caches the current process result; checks of another executable run the same probe in that executable with a bounded timeout. A build within the supported version table is refused if the probe fails.
+Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The check uses an in-memory database and caches the current process result; checks of another executable run the same check in that executable with a bounded timeout. A build within the supported version table is refused if the check fails.
 
-The running package's startup guard and Gateway runtime selection admit a Node 24 or newer release outside the table when the probe passes, with the note `unsupported version, capability probe passed`. Its capabilities meet this package's correctness gate, but it remains outside the tested support policy. This permits vendor backports without claiming support for their version. Node 22 and 23 remain excluded, and package manager engine checks still apply.
+The running package's startup guard and Gateway runtime selection admit a Node 24 or newer release outside the table when the check passes, with a note that the version is unsupported but its capabilities passed validation. Its capabilities meet this package's correctness gate, but it remains outside the tested support policy. This permits vendor backports without claiming support for their version. Node 22 and 23 remain excluded, and package manager engine checks still apply.
 
-Installers retain the numeric Node requirement and add the probe as a second gate. Package and Git update preflight also require the selected target's `engines.node` range numerically, including any fallback runtime. A passing probe cannot relax another package's requirements: an older release may still enforce its version table at startup.
+Installers retain the numeric Node requirement and add the check as a second gate. Package and Git update preflight also require the selected target's `engines.node` range numerically, including any fallback runtime. A passing check cannot relax another package's requirements: an older release may still enforce its version table at startup.
 
 Update recovery recommends the lowest standard release satisfying both the
 candidate's engine range and this updater's supported range above. For example,
@@ -43,9 +43,13 @@ The **SQLite WAL-reset corruption bug** requires a safe loaded library: SQLite *
 
 Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 silently truncates values at embedded NUL characters. The first fixed releases are Node 24.16.0 and 26.1.0; a WAL-safe SQLite library does not fix this decoder. Node 23 was excluded earlier for incompatible `node:sqlite` behavior.
 
+## V8 compiler settings
+
+On Node 24 and 26, `process.exit()` can hang forever after a command has printed its output: Node joins V8's background threads while a Maglev or concurrent Sparkplug compile job waits for a garbage collection the exiting main thread never runs ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). OpenClaw's CLI, Gateway, hook relay, and macOS node worker therefore start with Maglev and concurrent Sparkplug turned off, the tiering Node 22 used; TurboFan still optimizes hot code. Passing `--maglev` or `--concurrent-sparkplug` to `node` keeps that compiler enabled.
+
 ## Platform consequences
 
-Official Node 24+ binaries require **macOS 13.5+**, so macOS 11 through 13.4 no longer support the Node-based CLI or Gateway. The companion app has separate [macOS requirements](/platforms/macos).
+Official Node 24+ macOS binaries are built for **macOS 13.5+**, the oldest release Node supports. macOS does not block them on older releases, and the CLI and Gateway have been observed running on macOS 12 with official Node 24. OpenClaw does not test or support macOS 11 through 13.4, so features that ship their own native binaries can still fail there. The companion app has separate [macOS requirements](/platforms/macos).
 
 Supported Node lines have no official **Linux ARMv7** builds. Use a 64-bit operating system on compatible ARM hardware, or another supported host.
 
@@ -58,7 +62,7 @@ Recommended, supported, and provisioned are three different things.
 | Platform        | Installer path                              | Node provisioned                                                                           |
 | --------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Linux           | `install.sh`: apt/dnf/yum via NodeSource    | Node 24.x LTS.                                                                             |
-| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.19.0 by default; existing runtime reuse and explicit version selection can differ. |
+| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.21.0 by default; existing runtime reuse and explicit version selection can differ. |
 | macOS           | `install.sh`: Homebrew `node`               | Node 26; no exact patch pinned, and an existing supported Node can be retained.            |
 | Windows         | `install.ps1`: Chocolatey, Scoop, or winget | LTS package; no exact patch pinned, validated after installation.                          |
 | Windows         | `install.ps1`: portable fallback            | Latest 26.x Windows zip.                                                                   |
@@ -81,7 +85,7 @@ Rows identify the first effective release, including a beta when applicable. Rec
 
 | Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                          |
 | ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unreleased (main)                    | Unchanged support policy                         | Replaces decoder version-only admission with an in-memory NUL round-trip probe; capable vendor builds on Node 24+ may run with an unsupported-version note. Node 22/23 remain excluded.                       |
+| Unreleased (main)                    | Unchanged support policy                         | Replaces decoder version-only admission with an in-memory NUL round-trip check; capable vendor builds on Node 24+ may run with an unsupported-version note. Node 22/23 remain excluded.                       |
 | v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672 |
 | v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166           |
 | v2026.8.1                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Rootless defaults advance to 24.19.0, or 22.23.2 on ARMv7. Linux package provisioning returns to Node 24 LTS to avoid prerelease repository builds. #130369                                                   |

@@ -59,6 +59,6 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/active-model.ts src/defaults.ts src/errors.ts src/format.ts src/openai-compatible-video.ts src/output-extract.ts src/provider-id.ts src/provider-supports.ts src/types.ts src/video.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts media-understanding-common"
   }
 }

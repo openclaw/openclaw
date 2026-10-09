@@ -1,4 +1,5 @@
-// Shared test setup installs common Vitest mocks and cleanup behavior.
+// Native-loader projects replace execArgv, so their setup also owns SQLite admission.
+import "./vitest/vitest.sqlite-preload.mts";
 import { vi } from "vitest";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import { withIsolatedTestHome } from "./test-env.js";

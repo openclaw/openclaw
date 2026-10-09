@@ -1,21 +1,25 @@
-/**
- * Browser agent tool registration.
- *
- * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
- * maps high-level actions onto browser control client calls.
- */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  type AnyAgentTool,
+  callGatewayTool,
+  readGatewayToolOperatorScopes,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { assertBrowserDashboardTargetCurrent } from "./browser-dashboard.js";
 import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
   createBrowserNodeProxyRequest,
   createBrowserNodeSessionTabRoute,
   type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
-import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
-import { describeBrowserTool } from "./browser-tool-description.js";
+import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
+import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
 import { executeBrowserLifecycleAction } from "./browser-tool.lifecycle.js";
@@ -23,31 +27,18 @@ import {
   resolveBrowserBaseUrl,
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
-  type BrowserNodeTarget,
 } from "./browser-tool.routing.js";
+import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import type { browserAct } from "./browser/client-actions.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
+import { withBrowserRequestScope } from "./browser/request-scope.js";
 import {
-  type AnyAgentTool,
-  type browserAct,
-  BrowserToolOutputSchema,
-  createBrowserToolSchema,
-  resolveBrowserToolCapabilities,
-  type BrowserToolCapabilities,
-  getRuntimeConfig,
-  getBrowserProfileCapabilities,
-  readPositiveIntegerParam,
-  readStringParam,
-  readStringValue,
-  resolveBrowserConfig,
-  resolveProfile,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  jsonResult,
-  callGatewayTool,
-  readGatewayToolOperatorScopes,
-} from "./browser-tool.runtime.js";
-import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
-import { withBrowserRequestScope } from "./browser/request-scope.js";
+} from "./browser/session-tab-registry.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -153,41 +144,27 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "timeoutMs",
 ] as const;
 
-const LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS = new Set<
-  (typeof LEGACY_BROWSER_ACT_REQUEST_KEYS)[number]
->(["targetId"]);
-
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
-  if (requestParam && typeof requestParam === "object") {
-    const request = { ...(requestParam as Record<string, unknown>) };
-    const hasMismatchedKind =
-      typeof request.kind === "string" &&
-      typeof params.kind === "string" &&
-      request.kind !== params.kind;
-    for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
-      if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
-        continue;
-      }
-      // Flattened act fields are legacy shape repair. Only the tab scope is
-      // safe across kind mismatches; action-specific fields can corrupt the
-      // explicit nested request.
-      if (hasMismatchedKind && !LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS.has(key)) {
-        continue;
-      }
-      request[key] = params[key];
-    }
-    return request as Parameters<typeof browserAct>[1];
-  }
-
-  const kind = readStringParam(params, "kind");
-  if (!kind) {
+  const nestedRequest =
+    requestParam && typeof requestParam === "object"
+      ? { ...(requestParam as Record<string, unknown>) }
+      : undefined;
+  if (!nestedRequest && !readStringParam(params, "kind")) {
     return undefined;
   }
-
-  const request: Record<string, unknown> = {};
+  const request = nestedRequest ?? {};
+  const hasMismatchedKind =
+    typeof request.kind === "string" &&
+    typeof params.kind === "string" &&
+    request.kind !== params.kind;
   for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
-    if (!Object.hasOwn(params, key)) {
+    if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
+      continue;
+    }
+    // Only tab scope can cross mismatched kinds; action-specific flattened
+    // fields would corrupt an explicit nested request.
+    if (hasMismatchedKind && key !== "targetId") {
       continue;
     }
     request[key] = params[key];
@@ -201,7 +178,6 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
-/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(
   opts?: BrowserScreenshotOptions & {
     sandboxBridgeUrl?: string;
@@ -212,45 +188,12 @@ export function createBrowserTool(
     toolCapabilities?: BrowserToolCapabilities;
   },
 ): AnyAgentTool {
-  const bindingResult =
-    opts?.runToolBinding === undefined
-      ? undefined
-      : parseBrowserTabToolBinding(opts.runToolBinding);
-  if (bindingResult && !bindingResult.ok) {
-    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
-  }
-  const capabilities =
-    opts?.toolCapabilities ??
-    (() => {
-      const config = getRuntimeConfig();
-      const boundProfile =
-        bindingResult?.ok && bindingResult.binding.target === "host"
-          ? resolveProfile(
-              resolveBrowserConfig(config.browser, config),
-              bindingResult.binding.profile,
-            )
-          : undefined;
-      return resolveBrowserToolCapabilities({
-        tabBound: bindingResult?.ok,
-        evaluateEnabled: config.browser?.evaluateEnabled !== false,
-        ...(boundProfile
-          ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) }
-          : {}),
-      });
-    })();
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
-  const hostHint =
-    opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getRuntimeConfig);
   return {
-    label: "Browser",
-    name: "browser",
-    resultContentSource: "network",
-    description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
-    parameters: createBrowserToolSchema(capabilities),
-    outputSchema: BrowserToolOutputSchema,
+    ...metadata,
     execute: async (_toolCallId, args, signal) => {
-      let params = bindingResult?.ok
-        ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
+      let params = binding
+        ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
       if (!capabilities.actions.some((candidate) => candidate === action)) {
@@ -270,7 +213,7 @@ export function createBrowserTool(
             : ["operator.sessions.write" as const]
           : ["operator.admin" as const];
         if (
-          bindingResult ||
+          binding ||
           !opts?.agentSessionKey ||
           opts.allowHostControl === false ||
           (params.target && params.target !== "host") ||
@@ -390,8 +333,8 @@ export function createBrowserTool(
             signal,
             opts,
             sessionTabs: {
-              touch: () => {},
-              untrack: () => {},
+              touch: async () => {},
+              untrack: async () => {},
               trackOpened: async () => {
                 throw new Error("Dashboard owns its context.");
               },
@@ -436,15 +379,13 @@ export function createBrowserTool(
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
       const isUserBrowserProfile = profileCapabilities?.usesChromeMcp === true;
-      if (isUserBrowserProfile) {
-        if (target === "sandbox") {
-          throw new Error(
-            `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
-          );
-        }
+      if (isUserBrowserProfile && target === "sandbox") {
+        throw new Error(
+          `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
+        );
       }
 
-      let nodeTarget: BrowserNodeTarget | null = null;
+      let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
       try {
         nodeTarget = await resolveBrowserToolNodeTarget({
           requestedNode: requestedNode ?? undefined,
@@ -509,6 +450,7 @@ export function createBrowserTool(
         resolvedBrowser,
       });
       const sessionTabs = createBrowserToolSessionTabs({
+        agentId: opts?.agentId,
         sessionKey: opts?.agentSessionKey,
         requestedProfile: profile,
         defaultProfile: resolvedBrowser.defaultProfile,
@@ -544,6 +486,7 @@ export function createBrowserTool(
       }
       let tabIdentity: BrowserTabIdentity | undefined;
       if (browserDashboard) {
+        const { assertBrowserDashboardTargetCurrent } = await import("./browser-dashboard.js");
         await assertBrowserDashboardTargetCurrent(browserDashboard, opts?.agentId, { signal });
       }
       const dispatchTabAction = () =>
@@ -562,8 +505,8 @@ export function createBrowserTool(
           requestedTimeoutMs,
           signal,
           opts,
-          boundTargetId: bindingResult?.ok
-            ? bindingResult.binding.targetId
+          boundTargetId: binding
+            ? binding.targetId
             : dashboardName
               ? readStringParam(params, "targetId")
               : undefined,
@@ -590,8 +533,8 @@ export function createBrowserTool(
         ? await withBrowserRequestScope(
             {
               managedOnly: true,
-              assertCurrent: (admittedProfile) =>
-                assertBrowserDashboardTargetCurrent(
+              assertCurrent: async (admittedProfile) =>
+                (await import("./browser-dashboard.js")).assertBrowserDashboardTargetCurrent(
                   dashboardTarget,
                   opts?.agentId,
                   { signal },

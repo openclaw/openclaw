@@ -1,4 +1,3 @@
-// Markdown Core tests cover render aware chunking behavior.
 import { describe, expect, it } from "vitest";
 import { FormatCapabilityProfile } from "./format-capabilities.js";
 import type { MarkdownIR } from "./ir.js";
@@ -22,278 +21,193 @@ function renderEscapedHtml(ir: MarkdownIR): string {
   });
 }
 
-describe("renderMarkdownIRChunksWithinLimit", () => {
-  it("prefers word boundaries when escaping shrinks the render budget", () => {
-    const ir = markdownToIR("alpha <<");
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: 8,
-      renderChunk: renderEscapedHtml,
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["alpha ", "<<"]);
-    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe("alpha <<");
-    expect(chunks.every((chunk) => chunk.rendered.length <= 8)).toBe(true);
+function renderStringChunks(
+  ir: MarkdownIR,
+  limit: number,
+  renderChunk: (chunk: MarkdownIR) => string = renderEscapedHtml,
+) {
+  return renderMarkdownIRChunksWithinLimit({
+    ir,
+    limit,
+    renderChunk,
+    measureRendered: (rendered) => rendered.length,
   });
+}
 
-  it("preserves formatting when a rendered chunk is re-split", () => {
-    const ir = markdownToIR("**Which of these**", {
-      headingStyle: "none",
-    });
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: 16,
-      renderChunk: renderEscapedHtml,
-      measureRendered: (rendered) => rendered.length,
-    });
+const plainText = (ir: MarkdownIR) => ir.text;
+const plainIR = (text: string): MarkdownIR => ({ text, styles: [], links: [] });
 
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["Which of ", "these"]);
-    expect(chunks.every((chunk) => chunk.rendered.startsWith("<b>"))).toBe(true);
-    expect(chunks.every((chunk) => chunk.rendered.endsWith("</b>"))).toBe(true);
-  });
-
-  it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
-    "keeps internal code whitespace away from message edges: %s",
-    (first) => {
-      const second = "B".repeat(128);
-      const chunks = renderMarkdownIRChunksWithinLimit({
-        ir: markdownToIR(`    ${first}\n\n    ${second}`),
-        limit: 256,
-        renderChunk: (source) => ({
-          html: renderEscapedHtml(source),
-          receivedText: source.text.trim(),
-        }),
-        measureRendered: (rendered) => rendered.html.length,
-      });
-
-      expect(chunks.map((chunk) => chunk.rendered.receivedText).join("")).toBe(
-        `${first}\n\n${second}`,
-      );
-      expect(chunks.every((chunk) => chunk.rendered.html.length <= 256)).toBe(true);
-      expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk.source.text))).toBe(true);
-      expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk.source.text))).toBe(true);
-    },
-  );
-
-  it("checks exact candidates instead of assuming rendered length is monotonic", () => {
-    const ir: MarkdownIR = {
-      text: "README.md<",
-      styles: [],
-      links: [],
-    };
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: 10,
-      renderChunk: (chunk) =>
-        chunk.text === "README.md"
+it("splits at exact rendered budgets while retaining source and formatting", () => {
+  const unbounded = "one two three four five six seven eight nine ten";
+  const cases: [MarkdownIR, number, string[], ((ir: MarkdownIR) => string)?, string[]?][] = [
+    [markdownToIR("alpha <<"), 8, ["alpha ", "<<"]],
+    [
+      markdownToIR("**Which of these**", { headingStyle: "none" }),
+      16,
+      ["Which of ", "these"],
+      renderEscapedHtml,
+      ["<b>Which of </b>", "<b>these</b>"],
+    ],
+    [
+      plainIR("README.md<"),
+      10,
+      ["README.md", "<"],
+      ({ text }) =>
+        text === "README.md"
           ? "fits-here"
-          : chunk.text.startsWith("README.md")
+          : text.startsWith("README.md")
             ? "this-rendering-is-too-long"
-            : chunk.text,
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["README.md", "<"]);
-  });
-
-  it("preserves separator whitespace in the initial rendered-size split", () => {
-    const ir = markdownToIR("alpha beta gamma");
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: 10,
-      renderChunk: (chunk) => chunk.text,
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["alpha ", "beta gamma"]);
+            : text,
+    ],
+    [markdownToIR("alpha beta gamma"), 10, ["alpha ", "beta gamma"], plainText],
+    [markdownToIR("abc"), Number.NaN, ["a", "b", "c"]],
+    [markdownToIR(unbounded), Infinity, [unbounded]],
+  ];
+  for (const [ir, limit, expected, render, rendered] of cases) {
+    const chunks = renderStringChunks(ir, limit, render);
+    expect(
+      chunks.map((chunk) => chunk.source.text),
+      ir.text,
+    ).toEqual(expected);
     expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+    expect(
+      chunks.every((chunk) => chunk.rendered.length <= (Number.isNaN(limit) ? 1 : limit)),
+    ).toBe(true);
+    if (rendered) {
+      expect(chunks.map((chunk) => chunk.rendered)).toEqual(rendered);
+    }
+  }
+});
+
+it("bisects overflowing chunks instead of rendering every shorter prefix", () => {
+  const ir = markdownToIR("**a < b** ".repeat(600));
+  let renders = 0;
+  const chunks = renderStringChunks(ir, 1_000, (chunk) => {
+    renders += 1;
+    return renderEscapedHtml(chunk);
   });
 
-  it("normalizes non-finite limits before chunking", () => {
-    const ir = markdownToIR("abc");
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: Number.NaN,
-      renderChunk: renderEscapedHtml,
-      measureRendered: (rendered) => rendered.length,
-    });
+  expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+  expect(chunks.every((chunk) => chunk.rendered.length <= 1_000)).toBe(true);
+  expect(renders).toBeLessThan(200);
+});
 
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
-    expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
-  });
-
-  it("drops temporary boundary annotations when whitespace is coalesced", () => {
+it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
+  "keeps internal code whitespace away from message edges: %s",
+  (first) => {
+    const second = "B".repeat(128);
     const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: {
-        text: `alpha${" ".repeat(19)}\nuser[t] ok`,
-        styles: [],
-        links: [{ start: 25, end: 32, href: "https://example.test" }],
-      },
-      limit: 20,
-      assistantTranscriptRoleMessageBoundaries: true,
+      ir: markdownToIR(`    ${first}\n\n    ${second}`),
+      limit: 256,
       renderChunk: (source) => ({
-        source,
-        ...renderMarkdownWithAttributedRanges(source, {
-          styleMap: {},
-          annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },
-        }),
+        html: renderEscapedHtml(source),
+        receivedText: source.text.trim(),
       }),
-      measureRendered: (rendered) => rendered.text.length,
+      measureRendered: (rendered) => rendered.html.length,
     });
 
-    expect(chunks.map((chunk) => chunk.rendered.text)).toEqual([
-      `alpha${" ".repeat(15)}`,
-      "    \nuser[t] ok",
-    ]);
-    const final = chunks[1];
-    expect(final?.source.annotations).toBeUndefined();
-    expect(final?.source.links).toEqual([{ start: 5, end: 12, href: "https://example.test" }]);
-    expect(final?.rendered.ranges).toEqual([]);
-    expect(final?.rendered.source).toBe(final?.source);
+    expect(chunks.map((chunk) => chunk.rendered.receivedText).join("")).toBe(
+      `${first}\n\n${second}`,
+    );
+    expect(chunks.every((chunk) => chunk.rendered.html.length <= 256)).toBe(true);
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk.source.text))).toBe(true);
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk.source.text))).toBe(true);
+  },
+);
+
+it("drops temporary boundary annotations when whitespace is coalesced", () => {
+  const chunks = renderMarkdownIRChunksWithinLimit({
+    ir: {
+      text: `alpha${" ".repeat(19)}\nuser[t] ok`,
+      styles: [],
+      links: [{ start: 25, end: 32, href: "https://example.test" }],
+    },
+    limit: 20,
+    assistantTranscriptRoleMessageBoundaries: true,
+    renderChunk: (source) => ({
+      source,
+      ...renderMarkdownWithAttributedRanges(source, {
+        styleMap: {},
+        annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },
+      }),
+    }),
+    measureRendered: (rendered) => rendered.text.length,
   });
 
-  it("keeps astral characters whole when a positive limit reaches their pair", () => {
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: markdownToIR("A😀B"),
-      limit: 1,
-      renderChunk: (chunk) => chunk.text,
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["A", "😀", "B"]);
-  });
-
-  it("keeps astral characters whole when rendered size requires a retry split", () => {
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: markdownToIR("A😀"),
-      limit: 3,
-      renderChunk: (chunk) => (chunk.text === "A😀" ? "too long" : chunk.text),
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["A", "😀"]);
-  });
-
-  it("keeps split order while processing the worklist as a stack", () => {
-    const text = "abcdefghijklmnopqrstuvwx";
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: markdownToIR(text),
-      limit: 5,
-      renderChunk: (chunk) => chunk.text,
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(text);
-    expect(chunks.every((chunk) => chunk.rendered.length <= 5)).toBe(true);
-  });
-
-  it("treats Infinity as no size cap and returns a single chunk", () => {
-    const text = "one two three four five six seven eight nine ten";
-    const ir = markdownToIR(text);
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: Number.POSITIVE_INFINITY,
-      renderChunk: renderEscapedHtml,
-      measureRendered: (rendered) => rendered.length,
-    });
-
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.source.text).toBe(text);
-  });
+  expect(chunks.map((chunk) => chunk.rendered.text)).toEqual([
+    `alpha${" ".repeat(15)}`,
+    "    \nuser[t] ok",
+  ]);
+  const final = chunks[1];
+  expect(final?.source.annotations).toBeUndefined();
+  expect(final?.source.links).toEqual([{ start: 5, end: 12, href: "https://example.test" }]);
+  expect(final?.rendered.ranges).toEqual([]);
+  expect(final?.rendered.source).toBe(final?.source);
 });
 
-describe("grapheme-safe rendered chunk boundaries", () => {
-  it.each([false, true])("keeps clusters whole with render expansion=%s", (expand) => {
-    const prefix = "a".repeat(expand ? 12 : 10);
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: markdownToIR(`${prefix}👨‍👩‍👧‍👦Z`),
-      limit: expand ? 26 : 12,
-      renderChunk: (chunk) => (expand ? chunk.text.replaceAll("a", "aa") : chunk.text),
-      measureRendered: (rendered) => rendered.length,
-    });
-    expect(chunks.map((chunk) => chunk.source.text)).toEqual([prefix, "👨‍👩‍👧‍👦Z"]);
-    expect(chunks.map((chunk) => chunk.rendered)).toEqual([
-      expand ? prefix.repeat(2) : prefix,
-      "👨‍👩‍👧‍👦Z",
-    ]);
-  });
-
-  it.each([
-    { text: "ab \u0301cd", limit: 4, styled: false, expected: ["ab", " \u0301cd"] },
-    { text: "\u0600 \u0301abcd", limit: 4, styled: false, expected: ["\u0600 \u0301a", "bcd"] },
-    { text: "ab\r\n😀", limit: 3, styled: false, expected: ["ab", "😀"] },
-    { text: "ab\r\n😀", limit: 3, styled: true, expected: ["ab", "\r\n", "😀"] },
-    { text: "abc\r\n\r\nx", limit: 4, styled: false, expected: ["abc", "x"] },
-    { text: "abc\r\n\r\nx", limit: 4, styled: true, expected: ["abc", "\r\n\r\n", "x"] },
-  ])(
-    "keeps whitespace cuts outside clusters: $text (styled=$styled)",
-    ({ text, limit, styled, expected }) => {
-      const chunks = renderMarkdownIRChunksWithinLimit({
-        ir: {
-          text,
-          styles: styled ? [{ start: 0, end: text.length, style: "code_block" }] : [],
-          links: [],
-        },
-        limit,
-        renderChunk: (chunk) => chunk.text,
-        measureRendered: (rendered) => rendered.length,
-      });
-      expect(chunks.map((chunk) => chunk.rendered)).toEqual(expected);
-    },
-  );
-
-  it("makes surrogate-safe progress through an oversized cluster", () => {
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: markdownToIR("👨‍👩‍👧‍👦"),
-      limit: 4,
-      renderChunk: (chunk) => chunk.text,
-      measureRendered: (rendered) => rendered.length,
-    });
-    expect(chunks.map((chunk) => chunk.rendered)).toEqual(["👨‍", "👩‍", "👧‍", "👦"]);
-  });
+it("keeps Unicode boundaries through initial, retry, and whitespace splits", () => {
+  const cases: [string, number, string[], boolean?, ((ir: MarkdownIR) => string)?, string[]?][] = [
+    ["A😀B", 1, ["A", "😀", "B"]],
+    ["A😀", 3, ["A", "😀"], false, ({ text }) => (text === "A😀" ? "too long" : text)],
+    ["aaaaaaaaaa👨‍👩‍👧‍👦Z", 12, ["aaaaaaaaaa", "👨‍👩‍👧‍👦Z"]],
+    [
+      "aaaaaaaaaaaa👨‍👩‍👧‍👦Z",
+      26,
+      ["aaaaaaaaaaaa", "👨‍👩‍👧‍👦Z"],
+      false,
+      ({ text }) => text.replaceAll("a", "aa"),
+      ["a".repeat(24), "👨‍👩‍👧‍👦Z"],
+    ],
+    ["👨‍👩‍👧‍👦", 4, ["👨‍", "👩‍", "👧‍", "👦"]],
+    ["ab \u0301cd", 4, ["ab", " \u0301cd"]],
+    ["\u0600 \u0301abcd", 4, ["\u0600 \u0301a", "bcd"]],
+    ["ab\r\n😀", 3, ["ab", "😀"]],
+    ["ab\r\n😀", 3, ["ab", "\r\n", "😀"], true],
+    ["abc\r\n\r\nx", 4, ["abc", "x"]],
+    ["abc\r\n\r\nx", 4, ["abc", "\r\n\r\n", "x"], true],
+  ];
+  for (const [text, limit, expected, styled, render = plainText, rendered = expected] of cases) {
+    const ir: MarkdownIR = {
+      ...plainIR(text),
+      styles: styled ? [{ start: 0, end: text.length, style: "code_block" }] : [],
+    };
+    const chunks = renderStringChunks(ir, limit, render);
+    expect(
+      chunks.map((chunk) => chunk.source.text),
+      text,
+    ).toEqual(expected);
+    expect(
+      chunks.map((chunk) => chunk.rendered),
+      text,
+    ).toEqual(rendered);
+  }
 });
 
-describe("rendered semantic whitespace", () => {
-  it.each([
-    {
-      name: "standalone fenced code",
-      source: () => markdownToIR("```\n \n```"),
-      expectedSource: {
-        text: " \n",
-        styles: [{ start: 0, end: 2, style: "code_block" }],
-        links: [],
-      },
-      expectedRendered: ["<pre><code> \n</code></pre>"],
-    },
-    {
-      name: "sliced bold content",
-      source: () => sliceMarkdownIR(markdownToIR("**a b**"), 1, 2),
-      expectedSource: { text: " ", styles: [{ start: 0, end: 1, style: "bold" }], links: [] },
-      expectedRendered: ["<b> </b>"],
-    },
-    {
-      name: "sliced authored link",
-      source: () => sliceMarkdownIR(markdownToIR("[a b](https://example.com)"), 1, 2),
-      expectedSource: {
-        text: " ",
-        styles: [],
-        links: [{ start: 0, end: 1, href: "https://example.com" }],
-      },
-      expectedRendered: ['<a href="https://example.com"> </a>'],
-    },
-    {
-      name: "sliced transcript annotation",
-      source: () =>
-        sliceMarkdownIR(
-          markdownToIR("user[Thu 2026]", { assistantTranscriptRoleHeaders: true }),
-          8,
-          9,
-        ),
-      expectedSource: {
-        text: " ",
-        styles: [],
-        links: [],
+it("preserves semantic whitespace from styles, links, and transcript annotations", () => {
+  const cases: [MarkdownIR, MarkdownIR, string[]][] = [
+    [
+      markdownToIR("```\n \n```"),
+      { ...plainIR(" \n"), styles: [{ start: 0, end: 2, style: "code_block" }] },
+      ["<pre><code> \n</code></pre>"],
+    ],
+    [
+      sliceMarkdownIR(markdownToIR("**a b**"), 1, 2),
+      { ...plainIR(" "), styles: [{ start: 0, end: 1, style: "bold" }] },
+      ["<b> </b>"],
+    ],
+    [
+      sliceMarkdownIR(markdownToIR("[a b](https://example.com)"), 1, 2),
+      { ...plainIR(" "), links: [{ start: 0, end: 1, href: "https://example.com" }] },
+      ['<a href="https://example.com"> </a>'],
+    ],
+    [
+      sliceMarkdownIR(
+        markdownToIR("user[Thu 2026]", { assistantTranscriptRoleHeaders: true }),
+        8,
+        9,
+      ),
+      {
+        ...plainIR(" "),
         annotations: [
           {
             start: 0,
@@ -304,26 +218,11 @@ describe("rendered semantic whitespace", () => {
           },
         ],
       },
-      expectedRendered: ["<code> </code>"],
-    },
-    {
-      name: "unstyled separator control",
-      source: (): MarkdownIR => ({ text: " \n", styles: [], links: [] }),
-      expectedSource: { text: " \n", styles: [], links: [] },
-      expectedRendered: [],
-    },
-    {
-      name: "nonempty fenced code control",
-      source: () => markdownToIR("```\nx\n```"),
-      expectedSource: {
-        text: "x\n",
-        styles: [{ start: 0, end: 2, style: "code_block" }],
-        links: [],
-      },
-      expectedRendered: ["<pre><code>x\n</code></pre>"],
-    },
-  ])("preserves semantic whitespace: $name", ({ source, expectedSource, expectedRendered }) => {
-    const ir = source();
+      ["<code> </code>"],
+    ],
+    [plainIR(" \n"), plainIR(" \n"), []],
+  ];
+  for (const [ir, expectedSource, expectedRendered] of cases) {
     expect(ir).toEqual(expectedSource);
     const chunks = renderMarkdownIRChunksWithinLimit({
       ir,
@@ -350,7 +249,7 @@ describe("rendered semantic whitespace", () => {
       expectedRendered.length ? [expectedSource] : [],
     );
     expect(chunks.every((chunk) => chunk.rendered.length <= 64)).toBe(true);
-  });
+  }
 });
 
 it("coalesces semantic whitespace into neighboring rendered chunks", () => {

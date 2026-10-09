@@ -1,4 +1,3 @@
-// Shared skill status rendering and classification helpers.
 import { html, nothing } from "lit";
 import type { SkillStatusEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -31,6 +30,11 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
 
 export function isSkillAvailable(skill: SkillStatusEntry): boolean {
   return skill.eligible && !skill.blockedByAgentFilter;
+}
+
+/** Learned Workshop skills bypass agent allowlists; archiving in the Workshop hides one. */
+export function isWorkshopSkill(skill: Pick<SkillStatusEntry, "source">): boolean {
+  return skill.source === "openclaw-workshop";
 }
 
 export function renderSkillStatusChips(params: {

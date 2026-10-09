@@ -58,8 +58,6 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-export { formatDiscordReplySkip } from "./reply-delivery.js";
-
 type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
@@ -88,17 +86,17 @@ export async function processDiscordMessage(
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
-    messageText,
+    messageText: text,
     threadBindings,
     route,
     abortSignal,
+    isPolicyCurrent,
     turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
-  if (abortSignal?.aborted) {
+  if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
     return;
   }
-  const text = messageText;
   if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
@@ -106,7 +104,19 @@ export async function processDiscordMessage(
 
   const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
-    threadBindings.touchThread({ threadId: boundThreadId });
+    try {
+      await threadBindings.touchThread({ threadId: boundThreadId });
+    } catch (error) {
+      // Activity persistence must not suppress an otherwise authorized inbound turn.
+      runtime.error(
+        danger(
+          `discord: failed to refresh thread binding activity (${boundThreadId}): ${String(error)}`,
+        ),
+      );
+    }
+    if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
+      return;
+    }
   }
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
@@ -144,22 +154,14 @@ export async function processDiscordMessage(
   if (!processContext) {
     return;
   }
-  const {
-    ctxPayload,
-    persistedSessionKey,
-    turn,
-    replyPlan,
-    deliverTarget: initialDeliverTarget,
-    replyTarget,
-    replyReference: sourceReplyReference,
-  } = processContext;
-  let deliverTarget = initialDeliverTarget;
+  const { ctxPayload, persistedSessionKey, record, replyPlan } = processContext;
+  let deliverTarget = replyPlan.deliverTarget;
   const activeThreadRoute = createDiscordMessageActiveThreadRoute({
     sessionKey: ctxPayload.SessionKey,
     accountId,
     sourceChannelId: messageChannelId,
     sourceMessageId: ctx.canonicalMessageId ?? message.id,
-    sourceReplyReference,
+    sourceReplyReference: replyPlan.replyReference,
     log: logVerbose,
   });
   const replyReference = activeThreadRoute.replyReference;
@@ -170,7 +172,8 @@ export async function processDiscordMessage(
 
   const replyRuntime = createDiscordMessageReplyRuntime({
     ctx,
-    processContext: { ...processContext, replyReference },
+    processContext,
+    replyReference,
     sourceRepliesAreToolOnly,
     shouldDisableCoreTypingKeepalive,
     isRoomEvent,
@@ -192,10 +195,8 @@ export async function processDiscordMessage(
     draftPreview,
     resolvedBlockStreamingEnabled,
   } = replyRuntime;
-  let deliverThreadId = ctxPayload.MessageThreadId;
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
-    deliverThreadId = threadId;
     await draftPreview.retarget(threadId);
   });
   const { lifecycle } = draftPreview;
@@ -221,16 +222,15 @@ export async function processDiscordMessage(
         deliverySession: ReturnType<typeof getGroupThreadDeliverySession>;
       }
     | undefined;
-  const resetDeliveryState = () => {
-    pendingToolWarningFinal = undefined;
-  };
   const progress = createDiscordMessageProgressRuntime({
     ctx,
     sessionKey: ctxPayload.SessionKey,
     sourceRepliesAreToolOnly,
     draftPreview,
     reactions,
-    onTurnReset: resetDeliveryState,
+    onTurnReset: () => {
+      pendingToolWarningFinal = undefined;
+    },
   });
   let replyLifecycleStarted = false;
   const onDiscordReplyStart = async () => {
@@ -254,21 +254,22 @@ export async function processDiscordMessage(
     info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
-      allowProgressBlock?: boolean;
       deliverySession?: ReturnType<typeof getGroupThreadDeliverySession>;
     },
   ) => {
-    if (abortSignal?.aborted) {
-      // Surface so operators don't chase missing replies when an abort
-      // drops a model-produced text payload.
+    const logSkippedDelivery = (reason: Parameters<typeof formatDiscordReplySkip>[0]["reason"]) =>
       logVerbose(
         formatDiscordReplySkip({
           kind: info.kind,
-          reason: "aborted before delivery",
+          reason,
           target: deliverTarget,
           sessionKey: ctxPayload.SessionKey,
         }),
       );
+    if (abortSignal?.aborted) {
+      // Surface so operators don't chase missing replies when an abort
+      // drops a model-produced text payload.
+      logSkippedDelivery("aborted before delivery");
       return { visibleReplySent: false };
     }
     const deliverySession = options?.deliverySession ?? getGroupThreadDeliverySession();
@@ -277,7 +278,6 @@ export async function processDiscordMessage(
       token,
       accountId,
       rest: reactions.deliveryRest,
-      runtime,
       replyToMode,
       textLimit,
       maxLinesPerMessage,
@@ -362,24 +362,10 @@ export async function processDiscordMessage(
       kind: info.kind,
     });
     if (!deliverablePayload) {
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "internal-only payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
+      logSkippedDelivery("internal-only payload");
       return { visibleReplySent: false };
     }
-    if (
-      await draftPreview.adoptProgressContinuation(deliverablePayload, info, {
-        to: isDirectMessage
-          ? (ctxPayload.OriginatingTo ?? ctxPayload.To ?? deliverTarget)
-          : deliverTarget,
-        threadId: deliverThreadId,
-      })
-    ) {
+    if (await draftPreview.adoptProgressDraft(deliverablePayload, info)) {
       replyReference.markSent();
       return { visibleReplySent: true };
     }
@@ -393,8 +379,7 @@ export async function processDiscordMessage(
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
-      !deliverablePayload.isCommentary &&
-      !options?.allowProgressBlock
+      !deliverablePayload.isCommentary
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       if (!reply.hasMedia && !deliverablePayload.isError) {
@@ -408,14 +393,7 @@ export async function processDiscordMessage(
       isError: deliverablePayload.isError === true,
       deliverNormally: async () => {
         if (abortSignal?.aborted) {
-          logVerbose(
-            formatDiscordReplySkip({
-              kind: info.kind,
-              reason: "aborted before delivery",
-              target: deliverTarget,
-              sessionKey: ctxPayload.SessionKey,
-            }),
-          );
+          logSkippedDelivery("aborted before delivery");
           return deliveryResult;
         }
         // Final replies need MESSAGE_CREATE so Discord advances unread state.
@@ -494,7 +472,7 @@ export async function processDiscordMessage(
     }
   };
   try {
-    if (abortSignal?.aborted) {
+    if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
       dispatchAborted = true;
       return;
     }
@@ -522,7 +500,7 @@ export async function processDiscordMessage(
         deliverWithProviderMessageSending: deliverDiscordPayload,
         onError: onDiscordDeliveryError,
       },
-      record: turn.record,
+      record,
       history: isRoomEvent
         ? undefined
         : {
@@ -610,10 +588,6 @@ export async function processDiscordMessage(
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
-  if (dispatchAborted) {
-    return;
-  }
-
   const finalDispatchResult = dispatchResult;
   if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
     return;
@@ -621,7 +595,7 @@ export async function processDiscordMessage(
   if (shouldLogVerbose()) {
     const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
     logVerbose(
-      `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
+      `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyPlan.replyTarget}`,
     );
   }
 }

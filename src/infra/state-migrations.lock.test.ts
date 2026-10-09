@@ -1,13 +1,16 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 
 describe("legacy state migration ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.restoreAllMocks();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -39,6 +42,52 @@ describe("legacy state migration ownership", () => {
     expect(lock).not.toBeNull();
     await lock?.release();
   }
+
+  it.each([
+    { code: "EACCES", message: "permission denied", guidance: "permissions" },
+    { code: "ENOSYS", message: "function not implemented", guidance: "filesystem" },
+    { code: "ENOSPC", message: "no space left on device", guidance: "space" },
+    {
+      code: "ENOTSUP",
+      message: "operation not supported",
+      guidance: "exclusive file creation",
+    },
+  ])(
+    "reports $code acquisition failure on empty state without inventing an owner",
+    async (failure) => {
+      const options = migrationOptions();
+      expect(fs.readdirSync(options.stateDir)).toEqual([]);
+      const databasePath = path.join(options.stateDir, "state", "openclaw.sqlite");
+      const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+      const open = fs.openSync;
+      let injected = false;
+      vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+        if (
+          file === ownerPath &&
+          typeof flags === "number" &&
+          (flags & fs.constants.O_CREAT) !== 0
+        ) {
+          injected = true;
+          throw Object.assign(new Error(failure.message), { code: failure.code });
+        }
+        return open(file, flags, mode);
+      });
+      const run = vi.fn(async () => ({ changes: ["imported"], warnings: [] }));
+
+      const result = await withLegacyMigrationStateLock({ ...options, run });
+
+      expect(injected).toBe(true);
+      expect(result.changes).toEqual([]);
+      expect(run).not.toHaveBeenCalled();
+      const warning = result.warnings.join("\n");
+      expect(warning).toContain(failure.message);
+      expect(warning).toContain(failure.code);
+      expect(warning).toContain(failure.guidance);
+      expect(warning).not.toContain("owns this state directory");
+      expect(fs.readdirSync(path.dirname(ownerPath))).toEqual([]);
+      expect(fs.existsSync(databasePath)).toBe(false);
+    },
+  );
 
   it("keeps nested cleanup inside exclusive ownership and forwards canonical state env", async () => {
     const options = migrationOptions();
@@ -134,9 +183,8 @@ describe("legacy state migration ownership", () => {
         run,
       });
 
-      expect(result.warnings).toEqual([
-        "Failed migrating legacy example state: the Gateway or another SQLite maintenance command owns this state directory. Stop the Gateway and node host, then retry.",
-      ]);
+      expect(result.warnings).toEqual([expect.stringContaining("OpenClaw state database is busy")]);
+      expect(result.warnings[0]).toContain("Stop the Gateway and node host, then retry.");
       expect(run).not.toHaveBeenCalled();
     } finally {
       await owner.release();

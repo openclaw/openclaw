@@ -1,31 +1,27 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  bindProviderReplayNodeAvailability,
+  createProviderReplayDispatch,
+  createProviderReplayNodeTunnel,
+} from "./provider-replay.test-support.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
-import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker node provisioning shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -83,11 +79,11 @@ describe("worker node provisioning shutdown replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const requested = placements.startDispatch(REQUEST);
+    const requested = await placements.startDispatch(REQUEST);
     const intent = deriveEnvironmentIntent(
       `session-dispatch:${REQUEST.sessionId}:${requested.generation}`,
     );
-    const placement = placements.transition({
+    const placement = await placements.transition({
       sessionId: requested.sessionId,
       from: "requested",
       to: "provisioning",
@@ -132,29 +128,14 @@ describe("worker node provisioning shutdown replay", () => {
     });
 
     const createDispatch = (environments: typeof first) =>
-      createWorkerPlacementDispatchService({
+      createProviderReplayDispatch({
         placements,
         environments,
-        runnerAvailability: { read: () => undefined, version: () => 0 },
         resolveDevicePlacementRequirement: async () => ({
           requiredNodeCommands: [],
           consumesWorkerSlot: true,
         }),
         isCurrentNodePlacement: () => true,
-        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-        runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-        runRecoveryBarrier: async ({ run }) =>
-          await run({ kind: "local", path: "/gateway/workspace" }),
-        runActivationBarrier: async ({ activate }) => activate(),
-        runMoveBarrier: async ({ begin }) => begin(),
-        resolveMoveDestination: async () => undefined,
-        runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-        runReclaimBarrier: async ({ begin, reclaim }) =>
-          await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
-        runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       });
     const firstDispatch = createDispatch(first);
     const uninstallFirstGuard = first.installReconcileEnvironmentGuard(
@@ -219,53 +200,16 @@ describe("worker node provisioning shutdown replay", () => {
       prepareArtifact,
       transfer: restartedTransfer,
     });
-    const syncWorkspace = vi.fn(async () => ({
-      mode: "git" as const,
-      remoteWorkspaceDir: "/worker/workspace",
-      manifestRef: `sha256:${"b".repeat(64)}`,
-    }));
-    const nodeTunnelManager = {
-      status: () => "stopped" as const,
-      start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
-        environmentId,
-        ownerEpoch,
-        measureLaunchTurn,
-        launchTurn: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace,
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
-      })),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    };
+    const { nodeTunnelManager, syncWorkspace } = createProviderReplayNodeTunnel();
     const restarted = support.createService(provider, {
       prepareNodeBootstrap: restartedEnrollment.prepare,
       prepareNodeEnrollment: restartedEnrollment.begin,
       closeNodeEnrollment: restartedEnrollment.close,
       stopNodeEnrollmentWaits: restartedEnrollment.stop,
       ensureNodeWorkerBundle: async () => receipt,
-      nodeTunnelManager: nodeTunnelManager as never,
+      nodeTunnelManager,
     });
-    bindDeviceWorkerAvailability(restarted, async (nodeId) => ({
-      available: true,
-      node: {
-        nodeId,
-        connId: `conn-${nodeId}`,
-        pairingIdentity: `identity-${nodeId}`,
-        pairingGeneration: `generation-${nodeId}`,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: {
-          enabled: true,
-          capacity: { total: 1, available: 1 },
-          capturedExecPolicy: true,
-        },
-        commands: [],
-      },
-    }));
+    bindProviderReplayNodeAvailability(restarted);
     const restartedDispatch = createDispatch(restarted);
     const uninstallRestartedGuard = restarted.installReconcileEnvironmentGuard(
       async (environmentId, reconcileCore) => {

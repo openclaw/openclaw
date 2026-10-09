@@ -35,28 +35,6 @@ type LedgerQueuedSend = {
 
 type LedgerSettleResult = "settled" | "aborted" | "timed-out";
 
-type ReplyTurnLedger = {
-  /** Enqueue on the dispatcher and record the payload's settled visibility. */
-  sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
-  sendPreparedQueued: (kind: ReplyDispatchKind, plan: OutboundPayloadPlan) => LedgerQueuedSend;
-  /** Record a routed transport result; routed sends settle at their call site. */
-  recordRoutedDelivery: (
-    kind: ReplyDispatchKind,
-    payload: ReplyPayload,
-    result: Parameters<typeof resolveRoutedReplyDeliveryOutcome>[0],
-  ) => void;
-  /** Resolve every admitted payload's outcome so the fallback gate decides after
-   * beforeDeliver hooks and transport delivery, not at admission. Only a
-   * "settled" result proves the visibility verdict is complete. */
-  settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
-  /** Includes uncertain sends, which cannot safely be retried. */
-  mayHaveDelivered: () => boolean;
-  hasObservedDelivery: () => boolean;
-  canAttemptFallback: () => boolean;
-  hasPendingDelivery: () => boolean;
-  resolveTerminalDelivery: () => ReplyDeliveryState;
-};
-
 export async function requireQueuedReplyDelivery(params: {
   delivery: LedgerQueuedSend;
   dispatcher: Pick<ReplyDispatcher, "supportsSettledReceipt" | "waitForIdle">;
@@ -82,7 +60,7 @@ export async function requireQueuedReplyDelivery(params: {
   }
 }
 
-export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
+export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
   const outcomes = new Set<ReplyDispatchDeliveryOutcome>();
   let pendingDelivery = false;
   let terminalDelivery: ReplyDeliveryState = "missing";
@@ -148,9 +126,15 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     return { queued: true, outcome, hasPendingDelivery: capture.hasPendingDelivery };
   };
   return {
-    sendQueued: (kind, payload) => sendOperation(kind, { kind: "raw", payload }),
-    sendPreparedQueued: (kind, plan) => sendOperation(kind, { kind: "prepared", plan }),
-    recordRoutedDelivery(kind, payload, result) {
+    sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) =>
+      sendOperation(kind, { kind: "raw", payload }),
+    sendPreparedQueued: (kind: ReplyDispatchKind, plan: OutboundPayloadPlan) =>
+      sendOperation(kind, { kind: "prepared", plan }),
+    recordRoutedDelivery(
+      kind: ReplyDispatchKind,
+      payload: ReplyPayload,
+      result: Parameters<typeof resolveRoutedReplyDeliveryOutcome>[0],
+    ) {
       const outcome = resolveRoutedReplyDeliveryOutcome(result);
       recordDelivery(
         kind,
@@ -159,37 +143,23 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         result.queueCustody === "held" || result.ambiguous === true || outcome === "recovery-owned",
       );
     },
-    async settleQueued(abortSignal) {
+    // Only settlement proves visibility after beforeDeliver hooks and transport delivery.
+    async settleQueued(abortSignal?: AbortSignal): Promise<LedgerSettleResult> {
       if (abortSignal?.aborted) {
         return "aborted";
       }
-      let timedOut = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve();
-        }, SETTLE_QUEUED_TIMEOUT_MS);
-        timer.unref?.();
-      });
-      let removeAbortListener: (() => void) | undefined;
-      const aborted = abortSignal
-        ? new Promise<void>((resolve) => {
-            const onAbort = () => resolve();
-            abortSignal.addEventListener("abort", onAbort, { once: true });
-            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-          })
-        : undefined;
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(), SETTLE_QUEUED_TIMEOUT_MS);
+      timer.unref?.();
       try {
-        const receipt = await Promise.race([
-          dispatcher.waitForIdle(),
-          deadline,
-          ...(aborted ? [aborted] : []),
-        ]);
+        const receipt = await waitForReplyDispatcherIdle(
+          dispatcher,
+          abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal,
+        );
         if (abortSignal?.aborted) {
           return "aborted";
         }
-        if (timedOut) {
+        if (deadline.signal.aborted) {
           return "timed-out";
         }
         if (dispatcher.supportsSettledReceipt === true && receipt) {
@@ -205,10 +175,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         pendingDelivery ||= receipt?.hasPendingDelivery === true;
         return "settled";
       } finally {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        removeAbortListener?.();
+        clearTimeout(timer);
       }
     },
     mayHaveDelivered,

@@ -1,5 +1,7 @@
 import {
   createPreviewMessageReceipt,
+  createReplyPrefixOptions,
+  createTypingCallbacks,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -7,13 +9,15 @@ import {
   getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixExtraContent } from "../../outbound.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
-  buildMatrixFinalizedPreviewContent,
   loadMatrixSendModule,
   matrixTextWouldActivateMentions,
   type MatrixDraftStreamHandle,
@@ -24,12 +28,6 @@ import {
   toMatrixPartialDeliveryError,
   type MatrixReplyDeliveryResult,
 } from "./replies.js";
-import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./runtime-api.js";
 
 type MatrixDraftController = Awaited<ReturnType<typeof createMatrixDraftController>>;
 
@@ -100,19 +98,14 @@ export function createMatrixReplyDispatcher(config: {
     draftController.updateDraftFromLatestFullText();
   };
 
-  const dispatcherOptions = {
-    ...prefixOptions,
-    humanDelay,
-    deliver: async (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => {
-      const completeDelivery = async (
-        result: MatrixReplyDeliveryResult,
-      ): Promise<MatrixReplyDeliveryResult> => {
-        if (info.kind === "block") {
-          beginNextBlockDraft();
-          await typingCallbacks.onReplyStart();
-        }
-        return result;
-      };
+  return {
+    turnDispatcherOptions: {
+      ...prefixOptions,
+      humanDelay,
+      onReplyStart: typingCallbacks.onReplyStart,
+      onIdle: typingCallbacks.onIdle,
+    },
+    deliverReply: async (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => {
       const createDraftReceipt = (id: string): MessageReceipt =>
         createPreviewMessageReceipt({
           id,
@@ -182,7 +175,9 @@ export function createMatrixReplyDispatcher(config: {
                     ? undefined
                     : resolveMatrixExtraContent(payload);
                   const extraContent = {
-                    ...(quietDraftStreaming ? buildMatrixFinalizedPreviewContent() : {}),
+                    ...(quietDraftStreaming
+                      ? { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true }
+                      : {}),
                     ...presentationContent,
                   };
                   if (
@@ -263,15 +258,18 @@ export function createMatrixReplyDispatcher(config: {
       )
         ? retainedDraftDelivery
         : undefined;
-      return await completeDelivery(
-        mergeMatrixReplyDeliveryResults(
-          [retainedDraft, deliveryResult].filter(
-            (result): result is MatrixReplyDeliveryResult => result !== undefined,
-          ),
+      const mergedDelivery = mergeMatrixReplyDeliveryResults(
+        [retainedDraft, deliveryResult].filter(
+          (result): result is MatrixReplyDeliveryResult => result !== undefined,
         ),
       );
+      if (info.kind === "block") {
+        beginNextBlockDraft();
+        await typingCallbacks.onReplyStart();
+      }
+      return mergedDelivery;
     },
-    onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+    onReplyError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {
         previewLifecycle.observeFailure();
       } else {
@@ -282,19 +280,6 @@ export function createMatrixReplyDispatcher(config: {
       }
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
-    onReplyStart: typingCallbacks.onReplyStart,
-    onIdle: typingCallbacks.onIdle,
-  };
-  const {
-    deliver: deliverReply,
-    onError: onReplyError,
-    ...turnDispatcherOptions
-  } = dispatcherOptions;
-
-  return {
-    deliverReply,
-    onReplyError,
-    turnDispatcherOptions,
     nonFinalReplyDeliveryFailed: () => nonFinalReplyDeliveryFailed,
   };
 }

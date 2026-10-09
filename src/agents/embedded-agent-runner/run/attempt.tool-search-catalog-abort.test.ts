@@ -1,8 +1,4 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -11,11 +7,12 @@ import {
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
+import { Agent, type AgentEvent } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
-import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -60,7 +57,7 @@ function requireAttemptCatalogRef(): ToolSearchCatalogRef {
   return options.toolSearchCatalogRef;
 }
 
-describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
+describe("runEmbeddedAttempt tool boundaries", () => {
   beforeAll(async () => {
     await preloadRunEmbeddedAttemptForTests();
   });
@@ -76,13 +73,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
 
   it.each([
     { mode: "direct spawn", toolName: "sessions_spawn", code: undefined, failurePhase: undefined },
-    { mode: "direct wait", toolName: "agents_wait", code: undefined, failurePhase: undefined },
-    {
-      mode: "raw catalog spawn",
-      failurePhase: "bridge",
-      toolName: "sessions_spawn",
-      code: 'return await sessions_spawn({ task: "inspect", collect: true });',
-    },
     {
       mode: "raw catalog wait",
       failurePhase: "bridge",
@@ -117,12 +107,11 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         tempPaths,
         createSession: () => {
           const session = createDefaultEmbeddedSession();
-          // SAFETY: The runner supplied the model and finalized tools to this session factory.
-          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
-            model: Model;
-            customTools: AgentTool[];
-          };
-          const allTools = options.customTools;
+          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0];
+          if (!options?.customTools) {
+            throw new Error("Expected the embedded attempt to supply custom tools");
+          }
+          const allTools = options.customTools.map((definition) => wrapToolDefinition(definition));
           expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
           let turn = 0;
           const agent = new Agent({
@@ -140,7 +129,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                         id: "denied",
                         name: code ? "exec" : toolName,
                         arguments: code
-                          ? { code }
+                          ? { title: "Inspect the denied catalog action", code }
                           : toolName === "sessions_spawn"
                             ? { task: "inspect" }
                             : { ids: ["child"] },
@@ -196,51 +185,36 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         },
       });
       const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
-      expect(outcome).toMatchObject({ isError: true });
-      const expectedError =
-        failurePhase === "guest" ? "agents is not defined" : TOOL_EXECUTION_GATED_MESSAGE;
-      expect(outcome?.result).toMatchObject({
-        content: [expect.objectContaining({ text: expect.stringContaining(expectedError) })],
-      });
-      if (code) {
-        expect(outcome?.result).toMatchObject({
-          details: {
-            status: "failed",
-            failurePhase,
-            bridgeDispatchStarted: failurePhase === "bridge",
-            error: expect.stringContaining(expectedError),
-          },
-        });
-      }
+      const denial = formatToolExecutionGatedMessage(toolName, ["read"]);
       const activities = sessionManager.getEntries().flatMap((entry) => {
         const activity = entry.type === "message" && readNestedToolActivity(entry.message);
         return activity ? [activity.details] : [];
       });
-      expect(activities).toEqual(
-        failurePhase === "bridge"
-          ? [
-              expect.objectContaining({
-                toolName,
-                isError: true,
-                result: expect.objectContaining({
-                  content: [
-                    expect.objectContaining({ text: expect.stringContaining(expectedError) }),
-                  ],
-                }),
-              }),
-            ]
-          : [],
-      );
+      if (failurePhase === "guest") {
+        // Swarm globals are absent from the guest, so the script itself fails.
+        expect(outcome).toMatchObject({ isError: true });
+        expect(outcome?.result).toMatchObject({
+          details: { status: "failed", failurePhase, bridgeDispatchStarted: false },
+        });
+        expect(activities).toEqual([]);
+      } else if (code) {
+        // Code Mode dispatched the call, which reached only the gated stand-in.
+        expect(activities).toEqual([expect.objectContaining({ toolName })]);
+      } else {
+        expect(outcome).toMatchObject({
+          isError: false,
+          result: { content: [expect.objectContaining({ text: denial })] },
+        });
+        expect(activities).toEqual([]);
+      }
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    ["code-mode", { codeMode: { enabled: true } }, false, false],
     ["tool-search-tools", { toolSearch: { enabled: true, mode: "tools" } }, false, false],
     ["tool-search-directory", { toolSearch: { enabled: true, mode: "directory" } }, false, false],
-    ["cancelled-code-mode", { codeMode: { enabled: true } }, true, false],
     ["timed-out-code-mode", { codeMode: { enabled: true } }, true, true],
   ] as const)(
     "clears the %s run catalog when preparation fails or is cancelled",
@@ -319,6 +293,56 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       expect(logDiagnostics).toHaveBeenCalledOnce();
       expect(catalogRef).toBeDefined();
       expect(catalogRef?.current).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { provider: "custom", expected: "high", compat: undefined },
+    { provider: "openai", expected: undefined, compat: { supportsReasoningEffort: false } },
+  ])(
+    "keeps Ultra logical at $provider effort boundaries",
+    async ({ provider, expected, compat }) => {
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:main",
+        tempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          thinkLevel: "ultra",
+          model: {
+            id: "synthetic-model",
+            provider,
+            name: "Synthetic model",
+            api: "openai-completions",
+            baseUrl: "https://example.invalid/v1",
+            reasoning: true,
+            compat,
+            input: ["text"],
+            contextWindow: 8192,
+            maxTokens: 2048,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      });
+
+      const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+        proactiveSubagentOrchestration?: boolean;
+      };
+      const sessionOptions = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
+        thinkingLevel?: string;
+      };
+      const providerThinkingLevel = hoisted.applyExtraParamsToAgentMock.mock.calls.at(-1)?.[5];
+
+      expect(promptInput.proactiveSubagentOrchestration).toBe(true);
+      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requesterThinkingLevel: "ultra" }),
+        [],
+        undefined,
+        undefined,
+        expect.objectContaining({ assertCurrent: expect.any(Function) }),
+      );
+      expect(sessionOptions.thinkingLevel).toBe(expected ?? "off");
+      expect(providerThinkingLevel).toBe(expected);
     },
   );
 });

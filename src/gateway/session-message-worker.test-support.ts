@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import { captureWorkerTranscriptSource } from "./worker-environments/live-events.test-support.js";
-import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
+import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 export function createWorkerFanoutFixture({
@@ -15,13 +15,13 @@ export function createWorkerFanoutFixture({
   sessionKey: string;
 }) {
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { mainKey: "main", store: storePath },
   };
   const ledger: WorkerTranscriptCommitStore = {
-    begin: () => ({ kind: "claimed" }),
-    complete: ({ outcome }) => outcome,
-    discardUncommitted: () => {},
+    begin: async () => ({ kind: "claimed" }),
+    complete: async ({ outcome }) => outcome,
+    discardUncommitted: async () => {},
   };
   const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
   const identity: WorkerConnectionIdentity = {
@@ -48,9 +48,19 @@ export function createWorkerFanoutFixture({
     sessionKey,
     storePath,
   });
-  const receiver = createWorkerLiveEventReceiver({
-    startupBindings: [{ environmentId: identity.environmentId, runEpoch: 4, sessionId }],
-    startupOwners: new Map([[identity.environmentId, 4]]),
-  });
-  return { committer, identity, receiver, sessionTarget: source.sessionTarget, source };
+  const receiver = createWorkerLiveEventReceiver();
+  const push = (runEpoch = 4, runId = "worker") =>
+    receiver.apply({
+      identity,
+      source,
+      readAckedSeq: () => 0,
+      request: {
+        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
+        lastAckedSeq: 0,
+        seq: 1,
+        runEpoch,
+        runId,
+      },
+    });
+  return { committer, identity, receiver, push, sessionTarget: source.sessionTarget, source };
 }

@@ -1,52 +1,100 @@
-import { createHash } from "node:crypto";
-import type { AgentReasoningParam } from "openai/resources/beta/agents/agents";
-import {
-  buildCurrentInboundPrompt,
-  createAgentHarnessAttemptCancellation,
-  createAgentHarnessAttemptDeadlineController,
-  createAgentHarnessAttemptLifecycle,
-  emitAgentHarnessAttemptEvent,
-  selectSupportedReasoningEffort,
-  type AgentHarnessAttemptTimeout,
-} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   abortAndDrainAgentHarnessRun,
-  agentHarnessAttemptTerminal,
-  awaitAgentEndSideEffects,
-  buildAgentHookContextChannelFields,
-  buildEmbeddedForegroundPromptContext,
-  clearActiveEmbeddedRun,
   embeddedAgentLog,
-  formatErrorMessage,
+  resolveAgentExecutorController,
+  AgentHarnessPreflightError,
+  AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
-  resolveAgentDir,
-  runAgentEndSideEffects,
-  runAgentHarnessLlmOutputHook,
-  setActiveEmbeddedRun,
+  formatErrorMessage,
+  toolPolicy,
   type AgentHarnessAttemptParamsV2,
-  type AgentHarnessAttemptResult,
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  resolveOpenAIModelReasoningEfforts,
-  resolveOpenAIReasoningEffortMap,
-  resolveOpenAIReasoningEffortMapping,
-} from "openclaw/plugin-sdk/llm";
+  combineNativeSessionBindingAuthority,
+  createNativeSessionBindingAuthority,
+  prepareNativeSessionGenerationAuthority,
+  wrapNativeSessionDeletionMutation,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createAgentsApiBindings } from "./agentsapi-bindings.js";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
+import { createAgentsApiBindings, type AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
-import { createAgentsApiSession } from "./agentsapi-session.js";
+import { retireAgentsApiExecutor } from "./agentsapi-environment.js";
+import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
+
+const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
+  "exec",
+  "process",
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "web_search",
+] as const;
 
 /** Agents API owns native protocol; the host harness runtime owns coordination. */
 export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let disposed = false;
   let closing = false;
   const runningSessions = new Map<string, number>();
+  const isolatedRuns = new Map<AbortController, Promise<unknown>>();
+  const promptHistories: AgentsApiPromptHistories = new WeakMap();
+  const preparedNativeCleanup = new Map<
+    string,
+    {
+      nativeSessionId: string;
+      configFingerprint: string;
+      settle: (assertCleanupCurrent: () => void) => Promise<void>;
+    }
+  >();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
-  const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
+  const getBindings = () =>
+    (bindings ??= createAgentsApiBindings(runtime, {
+      settle: async (localSessionId, binding, assertCleanupCurrent) => {
+        let prepared = preparedNativeCleanup.get(localSessionId);
+        if (
+          prepared?.nativeSessionId !== binding.sessionId ||
+          prepared.configFingerprint !== binding.configFingerprint
+        ) {
+          assertCurrent();
+          assertCleanupCurrent();
+          // Reacquire agent-scoped auth after restart without persisting credentials
+          // or validating the new configuration against the session being removed.
+          const config = getRuntimeConfig();
+          const agentId = binding.executor!.agentId;
+          const auth = await resolveApiKeyForProvider({
+            provider: "openai",
+            cfg: config,
+            agentDir: runtime.agent.resolveAgentDir(config, agentId),
+            workspaceDir: runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+            signal: AbortSignal.timeout(30_000),
+          });
+          assertCurrent();
+          assertCleanupCurrent();
+          if (auth.mode !== "api-key" || !auth.apiKey?.trim()) {
+            throw new Error(
+              "Agents API session cleanup requires an OpenAI API key; restore API-key authentication and retry reset or deletion",
+            );
+          }
+          prepared = prepareNativeCleanup(localSessionId, binding, auth.apiKey);
+        }
+        // Losing the binding before native settlement would orphan active work.
+        try {
+          await prepared.settle(assertCleanupCurrent);
+        } catch (error) {
+          // Retry with current authentication after an operator repairs access.
+          preparedNativeCleanup.delete(localSessionId);
+          throw error;
+        }
+      },
+      retire: async (_localSessionId, binding, assertCleanupCurrent) => {
+        await retireExecutor(binding, assertCleanupCurrent);
+      },
+    }));
   const assertCurrent = () => {
     if (disposed) {
       throw new Error("Agents API harness is disposed");
@@ -57,6 +105,28 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
     deliveryDefaults: { visibleReplies: "automatic" },
+    conversationToolPolicySupport: "exact",
+    conversationToolPolicyNativeTools: AGENTS_API_NATIVE_TOOL_REQUIREMENTS,
+    // These capabilities exist only in the policy-filtered Gateway tool surface.
+    // Native multi-agent tools are disabled when the hosted session is created.
+    conversationToolPolicySafeDenyTools: [
+      "gateway",
+      "agents_list",
+      "openclaw",
+      "session_status",
+      "progress_card",
+      "automations",
+      "message",
+      "sessions_send",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "subagents",
+      "sessions_list",
+      "sessions_history",
+      "sessions_search",
+      "sessions_spawn",
+    ],
     supports: (ctx) => {
       if (ctx.provider !== "openai") {
         return { supported: false, reason: "Agents API requires the OpenAI provider" };
@@ -71,13 +141,31 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       }
       return { supported: true };
     },
+    runIsolatedCompletionV2: (params) => {
+      assertCurrent();
+      if (closing) {
+        throw new Error("Agents API harness is closing");
+      }
+      const controller = new AbortController();
+      const pending = runAgentsApiIsolatedCompletion(
+        {
+          ...params,
+          abortSignal: params.abortSignal
+            ? AbortSignal.any([params.abortSignal, controller.signal])
+            : controller.signal,
+        },
+        assertCurrent,
+      );
+      isolatedRuns.set(controller, pending);
+      return pending.finally(() => isolatedRuns.delete(controller));
+    },
     runAttempt: async (params) => {
       assertCurrent();
       if (closing) {
         throw new Error("Agents API harness is closing");
       }
       const target = validateAgentsApiInput(params);
-      const authority = captureNativeSessionGenerationAuthority({
+      const captured = await prepareNativeSessionGenerationAuthority({
         target,
         config: params.config,
         storePath: target.storePath,
@@ -90,29 +178,39 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             `Agents API session generation is no longer current: ${sessionId}`,
           ),
       });
-      authority.assertCurrent();
+      const authority = captured.authority;
+      authority.assertLegacyCurrent();
       runningSessions.set(params.sessionId, (runningSessions.get(params.sessionId) ?? 0) + 1);
       try {
         return await getBindings().withSession(
           params.sessionId,
-          () => authority.assertCurrent(),
+          () => authority.assertLegacyCurrent(),
           (binding, bind, assertLeaseCurrent) => {
             if (closing) {
               throw new Error("Agents API harness is closing");
             }
-            return runAgentsApiSession(
+            return runAgentsApiAttempt(
               params,
               binding,
               bind,
-              () => {
-                authority.assertCurrent();
-                assertLeaseCurrent();
-              },
+              combineNativeSessionBindingAuthority(
+                authority,
+                createNativeSessionBindingAuthority([], assertLeaseCurrent),
+              ).assertLegacyCurrent,
               () => {
                 assertCurrent();
                 assertLeaseCurrent();
               },
               target,
+              () => runtime.config.current().plugins?.entries?.agentsapi?.config,
+              promptHistories,
+              (nativeBinding, apiKey) =>
+                prepareNativeCleanup(params.sessionId, nativeBinding, apiKey),
+              (failedBinding) =>
+                retireExecutor(failedBinding, () => {
+                  assertCurrent();
+                  assertLeaseCurrent();
+                }),
             );
           },
         );
@@ -126,24 +224,68 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       }
     },
     reset: async (params) => {
-      assertCurrent();
-      if (params.sessionId) {
-        await getBindings().reset(params.sessionId, assertCurrent);
+      try {
+        assertCurrent();
+        if (params.sessionId) {
+          if (
+            runningSessions.has(params.sessionId) ||
+            preparedNativeCleanup.has(params.sessionId)
+          ) {
+            await drainForExecutorCleanup(params.sessionId);
+            assertCurrent();
+          }
+          await getBindings().reset(params.sessionId, assertCurrent);
+          preparedNativeCleanup.delete(params.sessionId);
+        }
+      } catch (error) {
+        // Native ownership is required cleanup, not a best-effort reset observer.
+        throw new AgentHarnessSessionCleanupError(formatErrorMessage(error), { cause: error });
       }
     },
-    withSessionDeletion: (params, run) =>
-      getBindings().withSessionDeletion(
-        {
-          ...params,
-          assertCurrent: () => {
-            params.assertCurrent();
-            assertCurrent();
+    withSessionDeletion: async (params, run) => {
+      if (runningSessions.has(params.sessionId) || preparedNativeCleanup.has(params.sessionId)) {
+        await drainForExecutorCleanup(params.sessionId);
+        params.assertCurrent();
+        assertCurrent();
+      }
+      let committed = false;
+      try {
+        return await getBindings().withSessionDeletion(
+          {
+            ...params,
+            assertCurrent: () => {
+              params.assertCurrent();
+              assertCurrent();
+            },
           },
-        },
-        run,
-      ),
+          (mutation) =>
+            run(
+              wrapNativeSessionDeletionMutation(mutation, {
+                assertCurrent: () => {
+                  params.assertCurrent();
+                  assertCurrent();
+                },
+                committed: () => {
+                  committed = true;
+                },
+                rolledBack: () => {
+                  committed = false;
+                },
+              }),
+            ),
+        );
+      } finally {
+        if (committed) {
+          preparedNativeCleanup.delete(params.sessionId);
+        }
+      }
+    },
     dispose: async () => {
       closing = true;
+      for (const controller of isolatedRuns.keys()) {
+        controller.abort();
+      }
+      await Promise.allSettled(isolatedRuns.values());
       await Promise.all(
         [...runningSessions.keys()].map((sessionId) =>
           abortAndDrainAgentHarnessRun({ sessionId, settleMs: 95_000 }),
@@ -156,381 +298,111 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       } else {
         disposed = true;
       }
+      // A Gateway restart drops credential handles, but retains the executor and
+      // canonical native bindings so the next input can reconcile them.
+      preparedNativeCleanup.clear();
     },
   };
-}
 
-async function runAgentsApiSession(
-  params: AgentHarnessAttemptParamsV2,
-  binding: import("./agentsapi-bindings.js").AgentsApiBinding | undefined,
-  bind: (binding: import("./agentsapi-bindings.js").AgentsApiBinding) => Promise<void>,
-  assertOwnerCurrent: () => void,
-  assertHarnessCurrent: () => void,
-  target: ReturnType<typeof validateAgentsApiInput>,
-): Promise<AgentHarnessAttemptResult> {
-  const startedAtMs = Date.now();
-  const cancellationState = {
-    explicitCancellationObserved: false,
-    terminalOutcomeFrozen: false,
-    sharedAbortAllowedAfterTerminalOutcome: false,
-  };
-  const cancellation = createAgentHarnessAttemptCancellation({
-    upstreamSignal: params.abortSignal,
-    onAttemptAbort: params.onAttemptAbort,
-    state: cancellationState,
-  });
-  const { controller } = cancellation;
-  const assertCurrent = () => {
-    assertOwnerCurrent();
-    controller.signal.throwIfAborted();
-  };
-  let timeout: AgentHarnessAttemptTimeout | undefined;
-  const deadlines = createAgentHarnessAttemptDeadlineController({
-    startedAtMs,
-    timeoutMs: params.timeoutMs,
-    settlementTimeoutMs: 30_000,
-    signal: controller.signal,
-    onDeadlineChanged: params.onAttemptDeadlineChanged,
-    onTimeout: (expired) => {
-      timeout = expired;
-      const error = new Error(`Agents API ${expired.kind} timed out`);
-      params.onAttemptTimeout?.(error);
-      cancellation.abortExplicitly(error);
-    },
-  });
-  const emitEvent = (
-    event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
-  ) => emitAgentHarnessAttemptEvent(params, event, { label: "Agents API", log: embeddedAgentLog });
-  const lifecycle = createAgentHarnessAttemptLifecycle({
-    attempt: params,
-    backend: "agentsapi",
-    startedAtMs,
-    state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
-    emitEvent,
-  });
-  let native: ReturnType<typeof createAgentsApiSession> | undefined;
-  let remoteSessionId = binding?.sessionId;
-  let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
-  let reply: ReturnType<typeof createAgentsApiMessageProjection>["reply"] | undefined;
-  let projection: ReturnType<typeof createAgentsApiMessageProjection> | undefined;
-  let usageRecorded = false;
-  let terminalTurnId: string | undefined;
-  const handle = {
-    kind: "embedded",
-    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-    supportsTranscriptCommitWait: true,
-    runId: params.runId,
-    startedAtMs,
-    queueMessage: async (text, options) => {
-      assertCurrent();
-      if (!native?.isAvailable()) {
-        throw new Error("Agents API turn is not ready for steering");
-      }
-      if (options?.images?.length) {
-        throw new Error("Agents API MVP accepts text steering only");
-      }
-      await options?.userTurnTranscriptRecorder?.persistApproved();
-      assertCurrent();
-      await native.queueMessage(
-        buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
-      );
-      options?.userTurnTranscriptRecorder?.markSentToProvider?.();
-    },
-    isStreaming: () => native?.isAvailable() ?? false,
-    isStopped: () => controller.signal.aborted || (native?.isSettled() ?? false),
-    isAborted: () => controller.signal.aborted,
-    isCompacting: () => false,
-    abort: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
-    cancel: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
-  } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
-  try {
-    params.replyOperation?.attachBackend(handle);
-    setActiveEmbeddedRun(
-      params.sessionId,
-      handle,
-      params.sessionKey,
-      params.sessionFile,
-      params.agentId,
+  async function retireExecutor(binding: AgentsApiBinding, assertCleanupCurrent: () => void) {
+    const executor = binding.executor;
+    if (!executor) {
+      return;
+    }
+    await attemptExecutorCleanup(
+      () =>
+        retireAgentsApiExecutor(
+          resolveAgentExecutorController(binding.executorControllerPluginId!),
+          executor,
+          assertCleanupCurrent,
+        ),
+      assertCleanupCurrent,
     );
+  }
+
+  async function attemptExecutorCleanup(
+    run: () => Promise<void>,
+    assertCleanupCurrent: () => void,
+  ) {
+    try {
+      assertCleanupCurrent();
+      await run();
+      assertCleanupCurrent();
+    } catch (error) {
+      // Lost authority still stops mutation; an unused remote child must not
+      // prevent the user from resetting or deleting the conversation.
+      assertCleanupCurrent();
+      embeddedAgentLog.warn("Agents API executor cleanup was not acknowledged", { error });
+    }
+  }
+
+  async function drainForExecutorCleanup(sessionId: string) {
+    const result = await abortAndDrainAgentHarnessRun({ sessionId, settleMs: 95_000 });
     assertCurrent();
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
-      .digest("hex");
-    if (binding && binding.authFingerprint !== fingerprint) {
+    if ((result.aborted && !result.drained) || runningSessions.has(sessionId)) {
       throw new Error(
-        "Agents API model or credential changed; reset the OpenClaw session before continuing",
+        "Agents API session is still settling; retry reset or deletion after its active turn finishes",
       );
     }
-    const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
-    const reasoningEffort = resolveAgentsApiReasoningEffort(params);
-    if (!remoteSessionId) {
-      remoteSessionId = await client.create(
-        controller.signal,
-        [
-          "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
-          "This MVP has no apps, connectors, OpenClaw tools, file transfers, or image generation. Do not claim access to them.",
-          params.extraSystemPrompt,
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-        params.model.id,
-        reasoningEffort,
-      );
-      assertCurrent();
-      await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
-    } else {
-      await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
-      assertCurrent();
-    }
-    projection = createAgentsApiMessageProjection(remoteSessionId, (event) => {
-      void emitEvent(event);
-    });
-    const messageProjection = projection;
-    reply = projection.reply;
-    native = createAgentsApiSession({
-      client,
-      // Admitted hosted work must still be retired when host run authority closes.
-      cleanupClient: new AgentsApiClient(params.resolvedApiKey!, assertHarnessCurrent),
-      sessionId: remoteSessionId,
-      signal: controller.signal,
-      assertCurrent,
-      onSettled: () => deadlines.beginSettlement(Date.now()),
-      onUsageError: (error) =>
-        embeddedAgentLog.warn("Agents API token accounting unavailable", { error }),
-      onEvent: (event) => {
-        messageProjection.observe(event);
-        params.onRunProgress?.({
-          reason: event.type,
-          provider: "openai",
-          model: params.model.id,
-          backend: "agentsapi",
-        });
-      },
-    });
-    lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
-    const result = await native.run(
-      buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
-      async () => {
-        await params.userTurnTranscriptRecorder?.persistApproved();
-      },
-      () => params.userTurnTranscriptRecorder?.markSentToProvider?.(),
-    );
-    // A terminal root turn is insufficient: run() also waits for native session idle.
-    terminalTurnId = result.turn.id;
-    const turns = await native.readUsageTurns();
-    assertCurrent();
-    projection.recordUsage(params.model, turns);
-    usageRecorded = true;
-    params.hostCapabilities.reportOutputTokens?.(reply.usage?.output ?? 0);
-    if (result.cancelled) {
-      terminal = { kind: "aborted", source: "runtime" };
-    } else {
-      const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
-      assertCurrent();
-      await projection.commit(params, result.turn, items, assertCurrent);
-      assertCurrent();
-    }
-  } catch (error) {
-    terminal = timeout
-      ? { kind: "timeout", phase: "prompt", source: "runtime", aborted: true }
-      : params.abortSignal?.aborted
-        ? { kind: "aborted", source: "external" }
-        : cancellationState.explicitCancellationObserved
-          ? { kind: "aborted", source: "runtime" }
-          : { kind: "failed", source: "prompt", error };
-    if (terminal.kind === "failed") {
-      embeddedAgentLog.warn("Agents API session failed", { error });
-    }
-  } finally {
-    try {
-      await native?.close();
-    } catch (error) {
-      terminal = { kind: "failed", source: "prompt", error };
-    }
-    try {
-      if (native && projection && !usageRecorded) {
-        const turns = await native.readUsageTurns();
-        assertHarnessCurrent();
-        projection.recordUsage(params.model, turns);
-        usageRecorded = true;
-      }
-    } catch (error) {
-      terminal = { kind: "failed", source: "prompt", error };
-    }
-    cancellation.freezeTerminalOutcome();
-    deadlines.dispose();
-    cancellation.dispose();
-    controller.abort();
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-    lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
   }
-  const result: AgentHarnessAttemptResult = {
-    terminal,
-    sessionIdUsed: params.sessionId,
-    sessionFileUsed: params.sessionFile,
-    agentHarnessId: "agentsapi",
-    messagesSnapshot: SessionManager.open(target, params.workspaceDir).buildSessionContext()
-      .messages,
-    assistantTexts:
-      reply?.lastAssistant?.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text) ?? [],
-    lastAssistant: reply?.lastAssistant,
-    currentAttemptAssistant: reply?.lastAssistant,
-    currentAttemptCompletedAssistant: reply?.lastAssistant,
-    assistantTranscriptOwned: Boolean(reply?.lastAssistant),
-    assistantTranscriptIdempotencyKey:
-      reply?.lastAssistant && terminalTurnId
-        ? `agentsapi:${remoteSessionId}:${terminalTurnId}`
-        : undefined,
-    toolMetas: [],
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    attemptUsage: reply?.usage,
-    replayMetadata: {
-      hadPotentialSideEffects: native?.wasSubmitted() ?? false,
-      replaySafe: !native?.wasSubmitted(),
-    },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-  };
-  assertHarnessCurrent();
-  const contextWindow = {
-    contextTokenBudget: params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
-    contextWindowSource: params.contextWindowInfo?.source,
-    contextWindowReferenceTokens: params.contextWindowInfo?.referenceTokens,
-  };
-  const hookContext = {
-    runId: params.runId,
-    agentId: target.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    modelProviderId: params.provider,
-    modelId: params.model.id,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-    channelContext: params.channelContext,
-    ...contextWindow,
-  };
-  runAgentHarnessLlmOutputHook({
-    event: {
-      runId: params.runId,
-      sessionId: params.sessionId,
-      provider: params.provider,
-      model: params.model.id,
-      resolvedRef: `${params.provider}/${params.model.id}`,
-      harnessId: "agentsapi",
-      prompt: params.prompt,
-      ...contextWindow,
-      assistantTexts: result.assistantTexts,
-      lastAssistant: result.lastAssistant,
-      usage: result.attemptUsage,
-    },
-    ctx: hookContext,
-  });
-  const agentEnd = {
-    event: {
-      runId: params.runId,
-      messages: result.messagesSnapshot,
-      success: terminal.kind === "ok",
-      error: terminal.kind === "failed" ? formatErrorMessage(terminal.error) : undefined,
-      durationMs: Date.now() - startedAtMs,
-    },
-    ctx: {
-      ...hookContext,
-      config: params.config,
-      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
-        { ...params, agentId: target.agentId },
-        params.agentDir ?? resolveAgentDir(params.config ?? {}, target.agentId),
-      ),
-      skillWorkshopAvailable: false,
-      compacted: false,
-    },
-  };
-  if (!params.messageChannel && !params.messageProvider) {
-    await awaitAgentEndSideEffects(agentEnd);
-  } else {
-    runAgentEndSideEffects(agentEnd);
-  }
-  return result;
-}
 
-function resolveAgentsApiReasoningEffort(
-  params: Pick<AgentHarnessAttemptParamsV2, "model" | "thinkLevel">,
-): AgentReasoningParam["effort"] {
-  if (params.thinkLevel === "ultra") {
-    throw new Error("Agents API MVP does not support the ultra delegation mode");
-  }
-  if (params.thinkLevel === "adaptive") {
-    return undefined;
-  }
-  const supportedEfforts = resolveOpenAIModelReasoningEfforts(params.model);
-  const modelMapped = params.model.thinkingLevelMap?.[params.thinkLevel];
-  if (!params.model.reasoning || supportedEfforts?.length === 0 || modelMapped === null) {
-    return undefined;
-  }
-  const mapped =
-    resolveOpenAIReasoningEffortMapping(
-      params.thinkLevel,
-      resolveOpenAIReasoningEffortMap(params.model),
-    ) ?? modelMapped;
-  const effort = mapped?.trim() ?? (params.thinkLevel === "off" ? "none" : params.thinkLevel);
-  switch (effort) {
-    case "none":
-      return supportedEfforts?.includes("none") ? effort : undefined;
-    case "minimal":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
-    case "max":
-      return supportedEfforts === undefined
-        ? effort
-        : selectSupportedReasoningEffort({
-            requested: effort,
-            supportedEfforts,
-            effortOrder: ["minimal", "low", "medium", "high", "xhigh", "max"] as const,
-          });
-    default:
-      throw new Error(`Agents API does not support reasoning effort ${effort}`);
+  function prepareNativeCleanup(localSessionId: string, binding: AgentsApiBinding, apiKey: string) {
+    assertCurrent();
+    const prepared = {
+      nativeSessionId: binding.sessionId,
+      configFingerprint: binding.configFingerprint,
+      settle: async (assertCleanupCurrent: () => void) => {
+        const assertCleanup = () => {
+          assertCurrent();
+          assertCleanupCurrent();
+        };
+        assertCleanup();
+        const client = new AgentsApiClient(apiKey, assertCleanup);
+        const signal = AbortSignal.timeout(30_000);
+        const session = await client.session(binding.sessionId, signal);
+        assertCleanup();
+        if (session.status !== "idle" && session.status !== "failed") {
+          await client.cancel(binding.sessionId, signal);
+          assertCleanup();
+        }
+      },
+    };
+    preparedNativeCleanup.set(localSessionId, prepared);
+    return prepared;
   }
 }
 
 function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
-  const target = params.sessionTarget;
+  const runtimeToolAllowed = toolPolicy.createToolPolicyMatcher({ allow: params.toolsAllow });
   if (
-    !target?.agentId ||
-    !target.sessionId ||
-    !target.sessionKey ||
-    !target.storePath ||
-    target.sessionId !== params.sessionId ||
-    target.agentId !== params.agentId ||
-    target.sessionKey !== params.sessionKey
+    params.disableTools ||
+    params.pluginHarnessToolPolicyRestricted ||
+    params.toolExecutionAllow !== undefined ||
+    params.toolsAllow?.length === 0 ||
+    AGENTS_API_NATIVE_TOOL_REQUIREMENTS.some((name) => !runtimeToolAllowed(name))
   ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
+    throw new AgentHarnessPreflightError(
+      "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
+      {
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      },
+    );
   }
+  const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
-  if (params.images?.length || params.sandbox) {
-    throw new Error(
-      "Agents API MVP supports text and its hosted VM only; images and Gateway sandbox placement are unsupported",
-    );
+  if (params.sandbox) {
+    throw new AgentHarnessPreflightError("Agents API does not support Gateway sandbox placement.", {
+      scope: "harness",
+      userMessage:
+        "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+    });
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");
   }
-  return {
-    ...target,
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
+  return target;
 }

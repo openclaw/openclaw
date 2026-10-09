@@ -66,11 +66,17 @@ describe("shared/node-list-parse", () => {
   it("drops pairing rows with a non-string or empty required id instead of emitting empty-id sentinels", () => {
     const { pending, paired } = parsePairingList({
       pending: [
+        null,
+        undefined,
+        42,
         { requestId: 7, nodeId: {}, ts: 1 }, // non-string required ids -> dropped
         { requestId: "  ", nodeId: "n0", ts: 2 }, // whitespace-only requestId -> dropped
         { requestId: "r1", nodeId: "n1", displayName: 42, remoteIp: 99, platform: true, ts: 3 },
       ],
       paired: [
+        null,
+        undefined,
+        false,
         { nodeId: 5, token: 3 }, // non-string nodeId -> dropped
         { nodeId: "n2", displayName: { x: 1 }, remoteIp: [], lastSeenReason: 0 },
       ],

@@ -48,6 +48,32 @@ describe("Claude CLI run diagnostics", () => {
     resetDiagnosticEventsForTest();
   });
 
+  it("attributes isolated run and harness events to their utility purpose", async () => {
+    const diagnostics = captureLifecycle("utility-run");
+    try {
+      await runClaudeCliAgentTurnWithDiagnostics(
+        {
+          runId: "utility-run",
+          sessionId: "utility-session",
+          isolatedCompletionPurpose: "session-activity-summary",
+        },
+        async () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }),
+      );
+      await flushDiagnosticEvents();
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "harness.run.started",
+        "run.started",
+        "run.completed",
+        "harness.run.completed",
+      ]);
+      for (const { event } of diagnostics.events) {
+        expect(event).toMatchObject({ trigger: "session-activity-summary" });
+      }
+    } finally {
+      diagnostics.unsubscribe();
+    }
+  });
+
   it("nests model calls beneath synthetic run and harness spans", async () => {
     const runId = "run-claude-hierarchy";
     const diagnostics = captureLifecycle(runId);

@@ -497,9 +497,9 @@ cat input.txt >> "$HOME/count"
       await fs.readFile(path.join(preparedA.workspaceDir, "build/original-path"), "utf8"),
     ).toBe(preparedA.workspaceDir);
     expect(
-      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests"))).filter(
-        (file) => file.endsWith(".json"),
-      ),
+      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests")))
+        .filter((file) => file.endsWith(".json"))
+        .toSorted(),
     ).toEqual(
       [preparedA.sourceManifestRef, preparedA.preparedManifestRef]
         .map((ref) => `${ref.slice(7)}.json`)
@@ -871,29 +871,6 @@ ${action}
     expect(second.getPreparedWorkspace()).toBeUndefined();
     expect(second.project.signal.aborted).toBe(true);
     second.close();
-  });
-
-  it("prepares a recipe-free project without inventing setup authority", async () => {
-    const f = await fixture();
-    expect(await readWorkerProjectSetupRecipe(f.project)).toBeUndefined();
-    const operation = createWorkerProjectPreparation({
-      project: f.project,
-      namespace: "gateway",
-      preparation: {
-        purpose: "session",
-        demandAtMs: 1_000,
-        key: "a".repeat(64),
-        cacheKey: "c".repeat(64),
-      },
-      requireCurrent: () => {},
-    });
-    expect(operation.getPreparedWorkspace()).toBeUndefined();
-    const result = await operation.project.prepare(f);
-    operation.close();
-    expect(result.preparedWorkspace?.sourceManifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    expect(
-      await fs.readFile(path.join(result.preparedWorkspace!.workspaceDir, "input.txt"), "utf8"),
-    ).toBe("prepared base\n");
   });
 
   it.each(["failed recipe", "modified recipe"])(

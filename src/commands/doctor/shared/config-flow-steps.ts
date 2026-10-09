@@ -51,24 +51,21 @@ export function applyLegacyCompatibilityStep(params: {
     authoredConfig: params.snapshot.parsed,
     resolvedConfig: params.snapshot.sourceConfig,
   });
-  if (otelOwnership) {
-    const ownership = otelOwnership;
-    if (ownership.kind === "manual") {
-      const otelPath = "diagnostics.otel.protocol";
-      const targets =
-        ownership.targetPaths.length > 0
-          ? ` Inspect these candidate source files and remove or replace ${otelPath} = "grpc" from every definition: ${ownership.targetPaths.join(", ")}.`
-          : ` Remove or replace ${otelPath} = "grpc" in the owning $include directive or included file.`;
-      return {
-        state: params.state,
-        issueLines: [
-          ...issueLines,
-          `- ${otelPath}: Doctor cannot safely rewrite this $include ownership.${targets} No config files were changed.`,
-        ],
-        changeLines: [],
-        blocksWrite: true,
-      };
-    }
+  if (otelOwnership?.kind === "manual") {
+    const otelPath = "diagnostics.otel.protocol";
+    const targets =
+      otelOwnership.targetPaths.length > 0
+        ? ` Inspect these candidate source files and remove or replace ${otelPath} = "grpc" from every definition: ${otelOwnership.targetPaths.join(", ")}.`
+        : ` Remove or replace ${otelPath} = "grpc" in the owning $include directive or included file.`;
+    return {
+      state: params.state,
+      issueLines: [
+        ...issueLines,
+        `- ${otelPath}: Doctor cannot safely rewrite this $include ownership.${targets} No config files were changed.`,
+      ],
+      changeLines: [],
+      blocksWrite: true,
+    };
   }
   const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
   // State repairs must inspect resolved paths, not literal env templates.
@@ -180,6 +177,10 @@ function retainValuePreservingMigrationRefs(
 ): unknown {
   const values = new Map<string, unknown>();
   const ambiguous = new Set<string>();
+  const resolvedEntry = (resolved: unknown, key: string): unknown =>
+    resolved && typeof resolved === "object"
+      ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
+      : undefined;
   const collect = (authored: unknown, resolved: unknown): void => {
     if (typeof authored === "string" && /\$\{[A-Z_][A-Z0-9_]*\}/.test(authored)) {
       if (values.has(authored) && !isDeepStrictEqual(values.get(authored), resolved)) {
@@ -188,12 +189,7 @@ function retainValuePreservingMigrationRefs(
       values.set(authored, resolved);
     } else if (authored && typeof authored === "object") {
       for (const [key, value] of Object.entries(authored)) {
-        collect(
-          value,
-          resolved && typeof resolved === "object"
-            ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
-            : undefined,
-        );
+        collect(value, resolvedEntry(resolved, key));
       }
     }
   };
@@ -217,12 +213,7 @@ function retainValuePreservingMigrationRefs(
       return Object.fromEntries(
         Object.entries(authored).map(([key, value]) => [
           key,
-          retain(
-            value,
-            resolved && typeof resolved === "object"
-              ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
-              : undefined,
-          ),
+          retain(value, resolvedEntry(resolved, key)),
         ]),
       );
     }

@@ -1,4 +1,3 @@
-// Loads provider usage snapshots from built-in and plugin providers.
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
@@ -36,48 +35,6 @@ type UsageSummaryOptions = {
   fetch?: typeof fetch;
 };
 
-async function fetchProviderUsageSnapshot(params: {
-  auth: ProviderAuth;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  agentDir?: string;
-  workspaceDir?: string;
-  timeoutMs: number;
-  signal: AbortSignal;
-  fetchFn: typeof fetch;
-}): Promise<ProviderUsageSnapshot> {
-  const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
-    provider: params.auth.hookProvider ?? params.auth.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    context: {
-      config: params.config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider: params.auth.provider,
-      token: params.auth.token,
-      accountId: params.auth.accountId,
-      authProfileId: params.auth.authProfileId,
-      subscriptionType: params.auth.subscriptionType,
-      rateLimitTier: params.auth.rateLimitTier,
-      email: params.auth.email,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      fetchFn: params.fetchFn,
-    },
-  });
-  return (
-    pluginSnapshot ?? {
-      provider: params.auth.provider,
-      displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
-      windows: [],
-      error: "Unsupported provider",
-    }
-  );
-}
-
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
@@ -86,21 +43,17 @@ export async function loadProviderUsageSummary(
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
-  const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
-    ? opts.providers.map((provider) => ({
+  const requestedProviders = opts.providers ?? opts.auth?.map(({ provider }) => provider);
+  const descriptors: ProviderUsagePluginDescriptor[] = requestedProviders
+    ? requestedProviders.map((provider) => ({
         provider,
         displayName: providerUsageLabel(provider) ?? provider,
       }))
-    : opts.auth
-      ? opts.auth.map((auth) => ({
-          provider: auth.provider,
-          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
-        }))
-      : listProviderUsagePluginDescriptors({
-          config,
-          workspaceDir: opts.workspaceDir,
-          env,
-        });
+    : listProviderUsagePluginDescriptors({
+        config,
+        workspaceDir: opts.workspaceDir,
+        env,
+      });
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
@@ -155,26 +108,47 @@ export async function loadProviderUsageSummary(
           if (!auth) {
             return undefined;
           }
-          return await fetchProviderUsageSnapshot({
-            auth,
+          const snapshot = await resolveProviderUsageSnapshotWithPlugin({
+            provider: auth.hookProvider ?? auth.provider,
             config,
-            env,
-            agentDir: opts.agentDir,
             workspaceDir: opts.workspaceDir,
-            timeoutMs,
-            signal,
-            fetchFn: (input, init) => {
-              signal.throwIfAborted();
-              const callerSignal =
-                init?.signal === undefined && input instanceof Request
-                  ? input.signal
-                  : init?.signal;
-              return fetchFn(input, {
-                ...init,
-                signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
-              });
+            env,
+            context: {
+              config,
+              agentDir: opts.agentDir,
+              workspaceDir: opts.workspaceDir,
+              env,
+              provider: auth.provider,
+              token: auth.token,
+              accountId: auth.accountId,
+              authProfileId: auth.authProfileId,
+              subscriptionType: auth.subscriptionType,
+              authFlow: auth.authFlow,
+              rateLimitTier: auth.rateLimitTier,
+              email: auth.email,
+              timeoutMs,
+              signal,
+              fetchFn: (input, init) => {
+                signal.throwIfAborted();
+                const callerSignal =
+                  init?.signal === undefined && input instanceof Request
+                    ? input.signal
+                    : init?.signal;
+                return fetchFn(input, {
+                  ...init,
+                  signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
+                });
+              },
             },
           });
+          return (
+            snapshot ?? {
+              provider: auth.provider,
+              displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+              windows: [],
+              error: "Unsupported provider",
+            }
+          );
         }),
       timeoutMs,
       failureSnapshot(provider, "Timeout"),
@@ -191,24 +165,15 @@ export async function loadProviderUsageSummary(
         (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
         (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
     );
-  const providers = snapshots.filter((entry) => {
-    if (entry.windows.length > 0) {
-      return true;
-    }
-    if (entry.billing && entry.billing.length > 0) {
-      return true;
-    }
-    if (entry.costHistory?.daily.length) {
-      return true;
-    }
-    if (entry.summary?.trim()) {
-      return true;
-    }
-    if (!entry.error) {
-      return true;
-    }
-    return !ignoredErrors.has(entry.error);
-  });
+  const providers = snapshots.filter(
+    (entry) =>
+      entry.windows.length > 0 ||
+      (entry.billing?.length ?? 0) > 0 ||
+      entry.costHistory?.daily.length ||
+      entry.summary?.trim() ||
+      !entry.error ||
+      !ignoredErrors.has(entry.error),
+  );
 
   return { updatedAt: now, providers };
 }

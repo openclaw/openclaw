@@ -14,26 +14,53 @@ import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js"
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent, type ModelRef } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
+import { prepareUserModelAccountAuthority } from "../state/user-model-account-operations.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "./model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
-import type { GatewaySessionTitleModelSelection } from "./session-lifecycle-preparation.js";
+import type {
+  CreateGatewaySessionParams,
+  GatewaySessionTitleModelSelection,
+} from "./session-create-service.types.js";
 
-const loadSessionAuthRuntime = createLazyRuntimeModule(
-  () => import("../agents/auth-profiles/session-override.js"),
-);
+export function resolveSessionCreateModelInputError(
+  params: Pick<
+    CreateGatewaySessionParams,
+    "agentRuntime" | "model" | "catalogTarget" | "personalModelSelection"
+  >,
+): ErrorShape | undefined {
+  if (params.agentRuntime !== undefined && (!params.model || params.catalogTarget)) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "agentRuntime requires an explicit canonical provider/model selection",
+    );
+  }
+  const requestedProfile = splitTrailingAuthProfile(
+    params.catalogTarget?.model ?? params.model ?? "",
+  ).profile;
+  if (
+    requestedProfile &&
+    isUserModelAuthProfileId(requestedProfile) &&
+    params.personalModelSelection?.authProfileId !== requestedProfile
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Choose your personal account from an identified Gateway connection.",
+    );
+  }
+  return undefined;
+}
 
 export function prepareSessionCreateModelSelection(params: {
   cfg: OpenClawConfig;
@@ -103,36 +130,52 @@ export function prepareSessionCreateModelSelection(params: {
   };
 }
 
-/** Title preparation and the row commit retain the same caller, model, and account fences. */
-export function createSessionCreateCommitGuard(params: {
-  assertCallerCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  selections: readonly ({ assertCurrent: () => void } | undefined)[];
-  personalAccountDefaults?: ModelAccountConnectAction;
-  readDefaultProfile: () => string | undefined;
-  validateSelection: () => ErrorShape | undefined;
-}): () => void {
+/** Assemble the creation lifetime once, including host-only publication intent. */
+export function resolveSessionCreationCommitGuard(
+  params: CreateGatewaySessionParams,
+  prepared: {
+    readOperatorAuthority: () => AdmittedRunOperatorAuthority | undefined;
+    assertPreparedTargetCurrent: () => void;
+    validateSelection: () => ErrorShape | undefined;
+  },
+): (() => void) | undefined {
+  const assertCallerCurrent = params.childSessionPublication
+    ? () => {
+        params.commitGuard?.();
+        params.childSessionPublication?.assertCurrent();
+      }
+    : params.commitGuard;
+  if (
+    !(
+      params.personalModelSelection ||
+      params.operatorAuthority ||
+      params.personalAccountDefaults ||
+      params.activeParentFork ||
+      params.preparedModelSelection ||
+      params.preparedPermissionSelection ||
+      typeof params.model === "string" ||
+      params.agentRuntime !== undefined
+    )
+  ) {
+    return assertCallerCurrent;
+  }
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    params.personalModelSelection,
+    params.personalAccountDefaults,
+  ];
   return () => {
-    params.assertCallerCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-    const error = params.validateSelection();
+    assertCallerCurrent?.();
+    prepared.assertPreparedTargetCurrent();
+    prepared.readOperatorAuthority()?.assertCurrent();
+    const error = prepared.validateSelection();
     if (error) {
       throw new Error(error.message);
     }
-    for (const selection of params.selections) {
+    for (const selection of selections) {
       selection?.assertCurrent();
-    }
-    const selectedProfile = params.readDefaultProfile();
-    if (
-      params.personalAccountDefaults &&
-      selectedProfile &&
-      isUserModelAuthProfileId(selectedProfile) &&
-      !isUserModelAuthProfileOwner({
-        profileId: params.personalAccountDefaults.owner,
-        authProfileId: selectedProfile,
-      })
-    ) {
-      throw new ModelAccountConnectAuthorityError();
     }
   };
 }
@@ -150,7 +193,8 @@ export async function prepareSessionCreateDefaultAccount(params: {
   | { ok: true; profileId?: string; validate: () => ErrorShape | undefined }
   | { ok: false; error: ErrorShape }
 > {
-  const { resolveUserLinkedAuthProfile } = await loadSessionAuthRuntime();
+  const { resolveUserLinkedAuthProfile } =
+    await import("../agents/auth-profiles/session-override.js");
   params.assertCurrent?.();
   params.defaults.assertCurrent();
   const selected = prepareSessionPatchModelSelection({
@@ -177,7 +221,23 @@ export async function prepareSessionCreateDefaultAccount(params: {
     provider: model.provider,
     requesterProfileId: params.defaults.owner,
   });
-  return { ok: true, profileId: linked?.profileId, validate: selected.validate };
+  const account =
+    linked && isUserModelAuthProfileId(linked.profileId)
+      ? await prepareUserModelAccountAuthority({
+          profileId: params.defaults.owner,
+          authProfileId: linked.profileId,
+        })
+      : undefined;
+  params.assertCurrent?.();
+  const validate = () => {
+    params.defaults.assertCurrent();
+    if (linked && isUserModelAuthProfileId(linked.profileId) && !account?.isCurrent()) {
+      throw new ModelAccountConnectAuthorityError();
+    }
+    return selected.validate();
+  };
+  const error = validate();
+  return error ? { ok: false, error } : { ok: true, profileId: linked?.profileId, validate };
 }
 
 /** Catalog-owned creations cannot mix independent model or key selections. */

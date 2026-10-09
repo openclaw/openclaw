@@ -46,6 +46,15 @@ same attempt reports its final failure or cancellation. A newer recorded attempt
 can also replace it. Intentional cancellations, already-current installs, and
 updates still in progress do not start triage.
 
+When a managed-service update cannot hand off to its helper, the saved attempt
+includes a bounded failure kind and a next step: runtime or spawn failure,
+permission or service refusal, ownership refusal, payload/control-channel
+failure, timeout, early helper exit, or preparation failure. If the failure
+happens before ownership transfer, the recovery outcome records that the Gateway
+kept serving. A transfer error alone does not establish whether the helper
+accepted ownership; check `openclaw update status` and
+`openclaw gateway status --deep` before retrying.
+
 For a final failed attempt, **Report update failure** is separate from **Retry**
 and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
 version, platform, update target, failed phase, sanitized diagnostics, and
@@ -117,6 +126,15 @@ authorizes concurrent repair or discards recovery backups. Active migration
 writes, unreadable state, incomplete migrations, and unconfirmed subprocess
 cleanup retain their failure and recovery guidance.
 
+On Windows, `windows-task-inspection-failed` means OpenClaw could not query
+Task Scheduler to verify service absence. Check Task Scheduler availability and
+the service account's query permissions, then run `openclaw gateway status --deep`
+before retrying. Install failures and update reports include the safe failure
+category and, when available, a numeric errno, hexadecimal HRESULT, exit code, or timeout
+budget. These facts appear before the recovery guidance so bounded reports retain
+them. Preserve those facts when reporting the problem; task definitions and raw
+native output are excluded.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -143,11 +161,19 @@ the original package owner. Its normal runtime selection, service refresh,
 restart, and verification checks apply. Containers redeploy the target image
 with the same state/config mounts.
 
-`global-install-foreign-destination` means the selected prefix is foreign or its
-ownership could not be established. An inaccessible prefix, failed npm prefix
-probe, or unreadable layout stops the update before staging; an unknown
-destination is never treated as empty. Restore inspection access or make
-`npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
+`global-install-foreign-destination` means the package transaction's destination
+is foreign or its ownership could not be established. The check uses the resolved
+installation target: an existing npm-global installation keeps its own prefix
+when nvm, fnm, Homebrew Node, or an operator's npm prefix change selects a different
+prefix in the shell. An unrelated installation at that shell prefix does not
+block an update to the original installation. pnpm global installations retain
+their pnpm owner and do not use this npm destination check.
+
+The actual destination must be empty, or its canonical package path must match
+the running installation or selected managed service, with any existing launcher
+pointing inside that package. An inaccessible or unreadable destination stops the
+update before staging; an unknown destination is never treated as empty. Restore
+inspection access or the selected package layout. Ask the deployment owner to
 verify unreadable layouts and explicitly select the intended installation.
 The saved outcome and public failure report name the destination prefix, package,
 launcher, running installation, and classified ownership cause. Public paths
@@ -198,6 +224,12 @@ that its installation has been replaced; restart the unit after the update.
 Use the unit name printed in your result, including any instance name, then
 check `openclaw gateway status --deep`.
 
+If the same Gateway unit exists in both user and system scopes, updates retain
+these system-scope restrictions. A differently named Gateway does not create this
+conflict. Installation-replacement restarts wait for the helper to confirm updater
+and cleanup settlement; an interrupted helper alone does not permit a restart.
+Inspect any surviving updater before manually restarting after an interruption.
+
 The restart remains operator-managed even when the updater runs as root:
 managed update handoffs own user-scope service supervision and recovery, not
 the system service's lifecycle. Pending Doctor or plugin maintenance is recorded
@@ -218,6 +250,36 @@ procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 once, then restart the named system unit; subsequent updates can use the fixed
 updater.
 
+## Candidate migration rehearsal timeouts
+
+Current updaters give snapshot preparation and each candidate check separate
+budgets derived from the copied database and plugin sizes. SQLite integrity
+checks report their database size, elapsed time, and active phase while running.
+A check that exhausts its budget reports
+`candidate-migration-rehearsal: <step> exceeded budget after <n> s (<last output>)`.
+The last output is an observation, not proof that the check completed. Preserve
+that detail when reporting a slow integrity check or migration. An explicit
+`--timeout` still controls the candidate check deadline.
+
+The published 2026.9.3 updater shares a five-minute deadline across snapshot
+preparation and candidate checks. Increasing `--timeout` cannot extend that cap.
+Stopping the Gateway can remove writer contention, but it cannot extend this
+deadline or eliminate migration work on the copied databases. Candidate-side
+Doctor improvements can reduce that work; they cannot change the installed
+updater's deadline.
+
+That release can also report a skipped repair with “could not provide a usable
+inference route” after a rehearsal timeout. This comes from a broad error handler
+while preparing automatic repair, not from an inference check performed by the
+rehearsal. Inspect the original failed step and elapsed time. Current updaters
+retain the `candidate-checks-timeout` reason and do not run inference repair for
+that failure. If the installed updater cannot finish, preserve a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+and use the installation owner's
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with an exact compatible target, then run the target's `openclaw doctor --fix`
+before starting its Gateway.
+
 ## Published 2026.9.4 on large agent fleets
 
 The published 2026.9.4 updater shares a five-minute deadline across snapshot
@@ -229,7 +291,7 @@ lint JSON report is needed to establish that lint finished before termination.
 
 Published OpenClaw 2026.9.4 can spend many minutes preparing model catalogs and
 chat metadata after its HTTP listener binds. In an instrumented 480-agent
-control with no update, HTTP probes remained unanswered during 944 seconds of
+control with no update, HTTP checks remained unanswered during 944 seconds of
 observation; the Gateway then logged `ready` at 947.5 seconds. Stopping that
 instance eventually required systemd's existing 5-minute-30-second stop limit.
 These are measurements of one synthetic fixture, not expected startup budgets.
@@ -268,6 +330,26 @@ Verify the actual serving version/build through an authenticated Gateway RPC
 and check `/readyz` before declaring recovery or removing backups. The
 plain-start control did not verify these recovery steps or establish that
 restarting the same 2026.9.4 fleet resolves the failed-update condition.
+
+## Headless nodes waiting on 2026.9.6
+
+A headless node running published 2026.9.6 with the default plugins prepares an
+automatic update but never activates it. Its log shows
+`node auto-update <version> is ready; waiting for active work to finish` even
+when no commands run. That release's bundled File Transfer plugin does not
+report its idle state, and the running node makes the idle decision before any
+newer code loads, so a later release cannot repair this automatically.
+
+Update the node once through the normal workflow, then restart it:
+
+```bash
+openclaw update
+openclaw node restart
+```
+
+For a foreground node, stop `openclaw node run` and start it again instead.
+Later releases report File Transfer commands as idle between invocations, so
+subsequent automatic node updates activate normally.
 
 ## Plugin repair warnings
 
@@ -331,6 +413,43 @@ Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
+### Database snapshots under continuous writes
+
+Older updaters can report that a database "did not stabilize after 10" attempts
+while the Gateway keeps writing. Current update schema inspection and rehearsal
+use a consistent SQLite online backup. Rehearsal progress records copied pages,
+bytes, and elapsed time in the update ledger.
+
+This cannot retrofit the installed 2026.9.5 driver. For that hop, stop the service
+through its service owner, run `openclaw update` from a separate terminal, then
+start the service. On a Linux user service, stop it with
+`systemctl --user stop openclaw-gateway.service`. If service shutdown itself
+hangs, treat that as a separate shutdown problem; do not start a second updater.
+
+### Snapshot parse errors from 2026.9.5 and 2026.9.6
+
+An update started from 2026.9.5 or 2026.9.6 can stop with a message such as
+`Update state snapshot failed (exit): Assigning to rvalue (308:4)`. The installed
+updater could not parse valid JavaScript that assigns to `import.meta.url` in a
+plugin's dependency, for example `@jsquash/png` or `@jsquash/avif`. The fix is in
+the target release, but the installed updater runs this check before the target
+starts. Disable the plugin for this one update:
+
+```bash
+openclaw plugins disable <id>
+openclaw update
+openclaw plugins enable <id>
+```
+
+Updates from the fixed release onward inspect these plugins normally.
+
+The 2026.9.5 updater can also report `Cannot use 'import.meta' outside a module`
+for ESM plugins, including bundles using `import.meta.dir`. Use the same temporary
+disable/update/enable sequence: a new candidate cannot replace the parser already
+running in the installed updater. Version 2026.9.6 admits retained `import.meta`
+syntax. Current snapshot inventory also records unparseable entries as named
+plugin warnings instead of aborting the snapshot.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside
@@ -340,11 +459,26 @@ workers reuse the selected runtime capture for provider discovery and remove
 their scratch tree when its owner retires.
 
 Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
-`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+On Linux and macOS, `openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
 when no other OpenClaw process is running. Do not delete captures based on their
 age or absence from open-file or memory-map lists: an idle owner can still need
 them. Modern captures use SQLite custody to prove retirement. See
 [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+Unrelated Node services running `node dist/index.js` do not count as OpenClaw
+owners. Doctor resolves generic entrypoints against their installation's package
+identity and honors OpenClaw service markers. If a live PID cannot be classified,
+Doctor preserves the captures and reports that PID and the inspection failure
+(including a missing or unreadable package manifest);
+this remains a maintenance warning and does not fail the update. Retry
+`openclaw doctor --fix` after resolving the reported inspection problem.
+On macOS, unreadable arguments from a process owned by another UID do not block
+cleanup; Doctor records that exclusion once at debug level. Unreadable arguments
+from the same UID, or an unknown UID, still preserve legacy captures. Doctor also
+preserves legacy capture roots owned by another UID, including in privileged runs. Managed
+native captures use their recorded custody and installed-index references rather
+than the host process census, as they do during startup cleanup.
+Windows host-wide legacy capture cleanup remains report-only.
 
 ## Reason codes
 
@@ -383,8 +517,8 @@ them. Modern captures use SQLite custody to prove retirement. See
   generated report's `Rollback outcome` line and `openclaw update status`
   record whether the previous install was restored and is safe to restart.
   `openclaw gateway status --deep` shows what is serving; confirm both before
-  assuming the previous version runs. The generated failure report redacts
-  the package manager's own error line; the failing step's bounded stderr tail
+  assuming the previous version runs. Current failure reports retain sanitized
+  npm error lines and codes while redacting commands and private paths. The failing step's bounded stderr tail
   is kept in the durable run record and in the update-failure context saved
   under `logs/support/` in the state directory. Two causes belong to the
   published 2026.9.3 and 2026.9.4 updaters, and a later release cannot rescue
@@ -404,6 +538,17 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `ETARGET`, `E404`, or `EINTEGRITY` during `package-install`: the report names
+  the npm error code and the dependency when npm supplies a registry spec.
+  Current updaters retry named dependency failures once with npm's `--prefer-online`
+  or Bun's `--no-cache` (pnpm has no equivalent forced metadata refresh);
+  a successful retry records a stale-cache repair warning. An unavailable
+  OpenClaw target is left to target resolution. If `ETARGET` or `E404` persists,
+  run `npm cache verify`, check the configured registry or mirror, and run
+  `npm view <spec> version` with the reported spec before retrying. A candidate
+  cannot repair this behavior in an older installed updater; use the
+  [manual install procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+  once to obtain the repaired updater.
 - `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
   when updating from 2026.9.4: the installed updater shares that deadline across
   the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
@@ -412,6 +557,14 @@ changed` when the updater's umask differs from the installed launcher's
   then run `openclaw doctor --fix` and restart the Gateway. See
   [#144858](https://github.com/openclaw/openclaw/issues/144858) and
   [#154381](https://github.com/openclaw/openclaw/issues/154381).
+- `Plugin dependency <name> is unresolvable inside the temporary update copy`:
+  an undeclared optional package was found only above the rehearsal directory.
+  Update inspection ignores that ancestor package and continues with a warning;
+  declared dependencies and links escaping the copy still fail containment.
+  After two identical candidate Doctor failures for the same version, automatic
+  updates pause before starting another rehearsal. Inspect the recorded failure
+  with `openclaw update status --json`, fix its cause, and run `openclaw update`
+  to retry. A new candidate version also clears the pause.
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

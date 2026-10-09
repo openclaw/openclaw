@@ -1,15 +1,18 @@
 // Managed-service handoff command tests cover immutable update target serialization.
 import { EventEmitter } from "node:events";
+import { symlinkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { withEnv } from "../test-utils/env.js";
+import { readDevUpdateTarget, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -103,10 +106,13 @@ afterEach(async () => {
 });
 
 async function startHandoffAndReadCommand(params: {
+  argv1?: string;
+  runtime?: "node" | "bun";
   runId?: string;
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
@@ -115,6 +121,8 @@ async function startHandoffAndReadCommand(params: {
 }): Promise<{
   command: string;
   commandArgv: string[] | undefined;
+  recoveryCommandArgv: string[];
+  triageCommandArgv: string[];
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -128,10 +136,11 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
-    execPath: "/usr/local/bin/node",
-    argv1: "/opt/openclaw/openclaw.mjs",
+    execPath: `/usr/local/bin/${params.runtime ?? "node"}`,
+    argv1: params.argv1 ?? "/opt/openclaw/openclaw.mjs",
     meta: {},
     ...(params.devTarget ? { devTarget: params.devTarget } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -140,13 +149,15 @@ async function startHandoffAndReadCommand(params: {
   const spawnCall = spawnMock.mock.calls[0] as unknown as
     | [string, string[], { env?: NodeJS.ProcessEnv }]
     | undefined;
-  const paramsPath = spawnCall?.[1]?.[1];
+  const paramsPath = spawnCall?.[1]?.at(-1);
   if (!paramsPath) {
     throw new Error("expected managed-service handoff params path");
   }
   tempDirs.add(path.dirname(paramsPath));
   const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
     commandArgv?: string[];
+    recoveryCommandArgv: string[];
+    triageCommandArgv: string[];
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -161,6 +172,8 @@ async function startHandoffAndReadCommand(params: {
   return {
     command: result.command,
     commandArgv: helperParams.commandArgv,
+    recoveryCommandArgv: helperParams.recoveryCommandArgv,
+    triageCommandArgv: helperParams.triageCommandArgv,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -168,13 +181,45 @@ async function startHandoffAndReadCommand(params: {
 }
 
 describe("managed service update handoff command", () => {
+  it("pins update, recovery, and triage before the detached helper starts", async () => {
+    const root = await fs.realpath(systemRoots.make("openclaw-handoff-launcher-"));
+    const releaseA = path.join(root, "release-a");
+    const releaseB = path.join(root, "release-b");
+    for (const release of [releaseA, releaseB]) {
+      await fs.mkdir(release);
+      await fs.writeFile(path.join(release, "openclaw.mjs"), "export {};\n");
+    }
+    const current = path.join(root, "current");
+    await fs.symlink(releaseA, current, "junction");
+    spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+      unlinkSync(current);
+      symlinkSync(releaseB, current, "junction");
+      return createReadyChild(command, args);
+    });
+
+    const prepared = await startHandoffAndReadCommand({
+      argv1: path.join(current, "openclaw.mjs"),
+      channel: "beta",
+    });
+    for (const argv of [
+      prepared.commandArgv,
+      prepared.recoveryCommandArgv,
+      prepared.triageCommandArgv,
+    ]) {
+      expect(await fs.realpath(expectDefined(argv?.[1], "prepared handoff entry"))).toBe(
+        path.join(releaseA, "openclaw.mjs"),
+      );
+    }
+  });
+
   it.each([
-    { writable: false, signal: null },
-    { writable: true, signal: null },
-    { writable: true, signal: "SIGKILL" },
+    { writable: false, signal: null, code: 0, receipt: false },
+    { writable: true, signal: null, code: 0, receipt: true },
+    { writable: true, signal: "SIGKILL", code: null, receipt: true },
+    { writable: true, signal: null, code: 143, receipt: false },
   ])(
-    "admits writable=$writable system updates and joins helper settlement (signal=$signal)",
-    async ({ writable, signal }) => {
+    "admits writable=$writable system updates and joins helper settlement (code=$code, signal=$signal, receipt=$receipt)",
+    async ({ writable, signal, code, receipt }) => {
       const root = systemRoots.make("openclaw-system-update-");
       const unitName = "openclaw-custom.service";
       vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({
@@ -238,12 +283,16 @@ describe("managed service update handoff command", () => {
       const settled = vi.fn();
       const observed = barrier?.then(settled, settled);
       const child = await spawned.promise;
-      Object.assign(child, { exitCode: signal ? null : 0, signalCode: signal });
-      child.emit("exit", signal ? null : 0, signal);
+      // Model the helper's completion receipt independently of its exit code.
+      if (receipt) {
+        child.stdout.write("system-update-settled\n");
+      }
+      Object.assign(child, { exitCode: code, signalCode: signal });
+      child.emit("exit", code, signal);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
-      child.emit("close", signal ? null : 0, signal);
-      if (signal) {
+      child.emit("close", code, signal);
+      if (signal || !receipt) {
         await expect(barrier).rejects.toThrow("settlement could not be confirmed");
       } else {
         await expect(barrier).resolves.toBeUndefined();
@@ -325,44 +374,55 @@ describe("managed service update handoff command", () => {
     },
   );
 
-  it("stages automatic triage in a stop-linked scope with the installed entry", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-command-"));
-    tempDirs.add(root);
-    await fs.writeFile(path.join(root, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-    await startManagedServiceUpdateHandoff({
-      root,
-      restartDrainTimeoutMs: 0,
-      supervisor: "systemd",
-      env: {
-        PATH: root,
-        OPENCLAW_STATE_DIR: root,
-      },
-      handoffId: "triage-fixture",
-      meta: {},
-      action: {
-        kind: "triage" as const,
-        entrypoint: path.join(root, "dist/index.js"),
-        nodeRunner: process.execPath,
-        failure: {
-          kind: "gateway-startup" as const,
-          phase: "startup",
-          error: "bad certificate",
-          gateway: "verify-running" as const,
+  it.each([
+    { runtime: "node", runtimeArgs: [] },
+    { runtime: "bun", runtimeArgs: ["--no-install"] },
+  ])(
+    "stages automatic triage in a stop-linked scope using $runtime",
+    async ({ runtime, runtimeArgs }) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-command-"));
+      tempDirs.add(root);
+      const executable = path.join(root, runtime);
+      await fs.writeFile(path.join(root, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+      const { startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      await startManagedServiceUpdateHandoff({
+        root,
+        restartDrainTimeoutMs: 0,
+        supervisor: "systemd",
+        env: {
+          PATH: root,
+          OPENCLAW_STATE_DIR: root,
         },
-      },
-    });
-    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    tempDirs.add(path.dirname(args.at(-1)!));
-    expect(args).toContain("--property=PartOf=openclaw-gateway.service");
-    const staged = JSON.parse(await fs.readFile(args.at(-1)!, "utf8"));
-    expect(staged.commandArgv).toEqual([
-      process.execPath,
-      path.join(root, "dist/index.js"),
-      "triage",
-    ]);
-  });
+        handoffId: "triage-fixture",
+        execPath: executable,
+        meta: {},
+        action: {
+          kind: "triage" as const,
+          entrypoint: path.join(root, "dist/index.js"),
+          nodeRunner: executable,
+          failure: {
+            kind: "gateway-startup" as const,
+            phase: "startup",
+            error: "bad certificate",
+            gateway: "verify-running" as const,
+          },
+        },
+      });
+      const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+      tempDirs.add(path.dirname(args.at(-1)!));
+      expect(args).toContain("--property=PartOf=openclaw-gateway.service");
+      const staged = JSON.parse(await fs.readFile(args.at(-1)!, "utf8"));
+      expect(args.slice(args.indexOf(executable) + 1, -2)).toEqual(runtimeArgs);
+      expect(staged.runtimeArgs).toEqual(runtimeArgs);
+      expect(staged.commandArgv).toEqual([
+        executable,
+        ...runtimeArgs,
+        path.join(root, "dist/index.js"),
+        "triage",
+      ]);
+    },
+  );
 
   it.each([
     { drain: 300_000, expected: 330_000 },
@@ -510,31 +570,47 @@ describe("managed service update handoff command", () => {
     },
   );
 
-  it("serializes an immutable package target into the detached CLI command", async () => {
-    const result = await startHandoffAndReadCommand({
-      channel: "beta",
-      tag: "2.0.0-beta.1",
-      acceptCapabilities: true,
-    });
+  it.each(["auto", "installed"] as const)(
+    "preserves %s admission through the detached CLI command",
+    async (admission) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", admission });
+      const flagIndex = result.commandArgv?.indexOf("--admission") ?? -1;
+      expect(flagIndex).toBeGreaterThan(0);
+      expect(result.commandArgv?.[flagIndex + 1]).toBe(admission);
+      expect(result.command).toContain(`--admission ${admission}`);
+    },
+  );
 
-    expect(result.commandArgv).toEqual([
-      "/usr/local/bin/node",
-      "/opt/openclaw/openclaw.mjs",
-      "update",
-      "--yes",
-      "--json",
-      "--accept-capabilities",
-      "--channel",
-      "beta",
-      "--tag",
-      "2.0.0-beta.1",
-    ]);
-    expect(result.command).toContain("--tag 2.0.0-beta.1");
-    expect(result.command).toContain("--channel beta");
-    expect(result.command).toContain("--accept-capabilities");
-    expect(result.command).toContain("--yes");
-    expect(result.command).not.toContain("--json");
-  });
+  it.each(["node", "bun"] as const)(
+    "serializes an immutable package target into the detached %s command",
+    async (runtime) => {
+      const result = await startHandoffAndReadCommand({
+        runtime,
+        channel: "beta",
+        tag: "2.0.0-beta.1",
+        acceptCapabilities: true,
+      });
+
+      expect(result.commandArgv).toEqual([
+        `/usr/local/bin/${runtime}`,
+        ...(runtime === "bun" ? ["--no-install"] : []),
+        "/opt/openclaw/openclaw.mjs",
+        "update",
+        "--yes",
+        "--json",
+        "--accept-capabilities",
+        "--channel",
+        "beta",
+        "--tag",
+        "2.0.0-beta.1",
+      ]);
+      expect(result.command).toContain("--tag 2.0.0-beta.1");
+      expect(result.command).toContain("--channel beta");
+      expect(result.command).toContain("--accept-capabilities");
+      expect(result.command).toContain("--yes");
+      expect(result.command).not.toContain("--json");
+    },
+  );
 
   it("merges a tracked target into the child environment without replacing caller fields", async () => {
     const runId = "970895bf-61e5-48e6-b0f6-468ce6f8e33a";
@@ -554,13 +630,15 @@ describe("managed service update handoff command", () => {
 
     expect(result.spawnEnv?.KEEP).toBe("value");
     expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
-    expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
-      status: "valid",
-      target: {
-        mode: "tracked",
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
+    expect(
+      withEnv(
+        { OPENCLAW_UPDATE_DEV_TARGET_REF: result.spawnEnv?.OPENCLAW_UPDATE_DEV_TARGET_REF },
+        readDevUpdateTarget,
+      ),
+    ).toEqual({
+      mode: "tracked",
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
     });
   });
 });

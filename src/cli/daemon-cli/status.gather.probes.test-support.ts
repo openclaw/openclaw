@@ -1,4 +1,7 @@
 import { vi } from "vitest";
+import type { GatewayServiceInventory } from "../../daemon/inspect.js";
+import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
+import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -89,3 +92,20 @@ export const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnec
 );
 
 export const formatPortDiagnostics = vi.fn<(usage: PortUsageTestSummary) => string[]>(() => []);
+
+export const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
+  ok: true as const,
+  value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
+}));
+export const findExtraGatewayServices = vi.fn<
+  (_env?: unknown, _opts?: unknown) => Promise<GatewayServiceInventory>
+>(async () => ({ services: [], errors: [] }));
+export const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
+>(async () => []);
+export const findForeignLaunchdJobs = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJob[]>
+>(async () => []);
+export const readLastGatewayErrorLine = vi.fn<
+  (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
+>(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);

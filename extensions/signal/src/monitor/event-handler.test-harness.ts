@@ -7,7 +7,26 @@ import type {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { setSignalRuntime } from "../runtime.js";
-import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
+
+export type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
 
 export function createBaseSignalEventHandlerDeps(
   overrides: Partial<SignalEventHandlerDeps> = {},
@@ -15,13 +34,6 @@ export function createBaseSignalEventHandlerDeps(
   setSignalRuntime(createPluginRuntimeMock());
   return {
     runtime: { log: () => {}, error: () => {} } as SignalEventHandlerDeps["runtime"],
-    statusReactionTiming: {
-      debounceMs: 0,
-      doneHoldMs: 0,
-      errorHoldMs: 0,
-      stallSoftMs: 60_000,
-      stallHardMs: 120_000,
-    },
     cfg: {},
     baseUrl: "http://localhost",
     accountId: "default",
@@ -40,12 +52,6 @@ export function createBaseSignalEventHandlerDeps(
     readReceiptsViaDaemon: false,
     fetchAttachment: async () => null,
     deliverReplies: async () => {},
-    resolveSignalReactionTargets: () => [],
-    isSignalReactionMessage: (
-      _reaction: SignalReactionMessage | null | undefined,
-    ): _reaction is SignalReactionMessage => false,
-    shouldEmitSignalReactionNotification: () => false,
-    buildSignalReactionSystemEventText: () => "reaction",
     ...overrides,
   };
 }

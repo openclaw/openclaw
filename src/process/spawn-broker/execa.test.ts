@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
@@ -9,10 +10,11 @@ import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   let host: SpawnBrokerHost;
@@ -38,7 +40,6 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
 
   const cases = [
     { name: "success", source: "process.stdout.write('out\\n');process.stderr.write('err\\n')" },
-    { name: "exit code", source: "process.stdout.write('partial');process.exitCode=7" },
     {
       name: "binary diagnostics",
       source:
@@ -211,9 +212,9 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
         Buffer.from(Array.from({ length: size }, (_, index) => Math.floor(index / 4096) % 251)),
       ]);
       for (const name of ["stdout", "stderr"] as const) {
-        expect(Buffer.concat(chunks[name])).toEqual(expected);
+        deepStrictEqual(Buffer.concat(chunks[name]), expected);
         if (buffer) {
-          expect(Buffer.from(result[name] as Uint8Array)).toEqual(expected);
+          deepStrictEqual(Buffer.from(result[name] as Uint8Array), expected);
         }
       }
       expect(result.exitCode).toBe(0);

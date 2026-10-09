@@ -1,15 +1,12 @@
-/**
- * Login-shell environment snapshot capture.
- *
- * Caches safe shell-derived environment variables while filtering secrets and stale snapshots.
- */
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { resolveStateDir } from "../config/paths.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { spawnProcess } from "../process/spawn-utils.js";
@@ -17,6 +14,8 @@ import { spawnProcess } from "../process/spawn-utils.js";
 const SNAPSHOT_VERSION = 1;
 const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
 const SNAPSHOT_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+// Bound process-wide cwd/env history while keeping recently used snapshots hot.
+const SNAPSHOT_CACHE_MAX_ENTRIES = 128;
 const CAPTURE_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_CAPTURE__";
 const ENV_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_ENV__";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
@@ -61,10 +60,6 @@ const SECRET_SHELL_STATE_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ] as const;
 
-type ShellSnapshot = {
-  path: string;
-};
-
 type ShellSnapshotWrapOptions = {
   enabled?: boolean;
   command: string;
@@ -74,10 +69,9 @@ type ShellSnapshotWrapOptions = {
   env: Record<string, string | undefined>;
 };
 
-const snapshotCache = new Map<
-  string,
-  { createdAtMs: number; promise: Promise<ShellSnapshot | null> }
->();
+const snapshotCache = new LruCache<{ createdAtMs: number; promise: Promise<string | null> }>(
+  SNAPSHOT_CACHE_MAX_ENTRIES,
+);
 let cleanupPromise: Promise<void> | null = null;
 
 export async function maybeWrapCommandWithShellSnapshot(
@@ -93,11 +87,11 @@ export async function maybeWrapCommandWithShellSnapshot(
   }
 
   try {
-    const snapshot = await getOrCreateShellSnapshot(opts);
-    return snapshot
+    const snapshotPath = await getOrCreateShellSnapshot(opts);
+    return snapshotPath
       ? buildSnapshotWrappedCommand(
           opts.command,
-          snapshot.path,
+          snapshotPath,
           buildRuntimeEnvRestoreScript(opts.env),
         )
       : opts.command;
@@ -119,16 +113,14 @@ function isExecShellSnapshotDisabled(env: Record<string, string | undefined>): b
   return Boolean(value && SNAPSHOT_DISABLE_VALUES.has(value));
 }
 
-async function getOrCreateShellSnapshot(
-  opts: ShellSnapshotWrapOptions,
-): Promise<ShellSnapshot | null> {
+async function getOrCreateShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
   const key = buildSnapshotKey(opts);
   const cached = snapshotCache.get(key);
   const now = Date.now();
   if (cached && now - cached.createdAtMs < SNAPSHOT_REFRESH_MS) {
     return await cached.promise;
   }
-  const created = createShellSnapshot(opts, key, { forceRefresh: Boolean(cached) });
+  const created = createShellSnapshot(opts, key, Boolean(cached));
   snapshotCache.set(key, { createdAtMs: now, promise: created });
   return await created;
 }
@@ -200,8 +192,8 @@ function getTrustedShellHome(): string {
 async function createShellSnapshot(
   opts: ShellSnapshotWrapOptions,
   key: string,
-  options?: { forceRefresh?: boolean },
-): Promise<ShellSnapshot | null> {
+  forceRefresh: boolean,
+): Promise<string | null> {
   const snapshotDir = resolveShellSnapshotDir(process.env);
   await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
   cleanupPromise ??= cleanupStaleSnapshots(snapshotDir);
@@ -209,11 +201,11 @@ async function createShellSnapshot(
 
   const snapshotPath = path.join(snapshotDir, `${key}.sh`);
   if (
-    options?.forceRefresh !== true &&
+    !forceRefresh &&
     (await isFreshSnapshot(snapshotPath)) &&
     (await validateSnapshot(opts, snapshotPath))
   ) {
-    return { path: snapshotPath };
+    return snapshotPath;
   }
 
   const capture = await captureShellSnapshot(opts);
@@ -230,7 +222,7 @@ async function createShellSnapshot(
   }
   await fs.rename(tmpPath, snapshotPath);
   await fs.chmod(snapshotPath, 0o600);
-  return { path: snapshotPath };
+  return snapshotPath;
 }
 
 async function isFreshSnapshot(snapshotPath: string): Promise<boolean> {
@@ -251,7 +243,7 @@ async function validateSnapshot(
   } catch {
     return false;
   }
-  const result = await runShell({
+  const exitCode = await runShell({
     shell: opts.shell,
     shellArgs: opts.shellArgs,
     cwd: opts.cwd,
@@ -259,7 +251,7 @@ async function validateSnapshot(
     command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1`,
     timeoutMs: 2_000,
   });
-  return result.status === 0;
+  return exitCode === 0;
 }
 
 async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
@@ -275,40 +267,32 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
       const captureOutputPath = await workspace.writeText("snapshot.out", "");
       const captureCommand = [
         "{",
-        buildStartupSourceScript(shellName),
+        shellName === "zsh"
+          ? `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`
+          : ":",
         `printf '\\n%s\\n' ${shQuote(CAPTURE_MARKER)}`,
-        buildAliasCaptureScript(shellName),
+        shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true",
         "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
         `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
         `${shQuote(process.execPath)} -e ${shQuote(ENV_CAPTURE_NODE_SCRIPT)}`,
         `} > ${shQuote(captureOutputPath)}`,
       ].join("\n");
 
-      const result = await runShell({
+      const exitCode = await runShell({
         shell: opts.shell,
-        shellArgs: buildCaptureShellArgs(shellName, opts.shellArgs),
+        shellArgs: shellName === "bash" ? ["-i", "-c"] : ["-f", "-i", "-c"],
         cwd: opts.cwd,
         env: buildTrustedSnapshotCaptureEnv(opts.env),
         command: captureCommand,
         timeoutMs: 5_000,
       });
-      if (result.status !== 0) {
+      if (exitCode !== 0) {
         return null;
       }
       const stdout = await fs.readFile(captureOutputPath, "utf8");
       return buildSnapshotFile(stdout);
     },
   );
-}
-
-function buildCaptureShellArgs(shellName: string, shellArgs: string[]): string[] {
-  if (shellName === "bash") {
-    return ["-i", "-c"];
-  }
-  if (shellName === "zsh") {
-    return ["-f", "-i", "-c"];
-  }
-  return shellArgs;
 }
 
 function buildSnapshotCaptureEnv(
@@ -332,20 +316,6 @@ function buildTrustedSnapshotCaptureEnv(
     env.OPENCLAW_SHELL = "exec";
   }
   return env;
-}
-
-function buildStartupSourceScript(shellName: string): string {
-  if (shellName === "zsh") {
-    return `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`;
-  }
-  if (shellName === "bash") {
-    return ":";
-  }
-  return ":";
-}
-
-function buildAliasCaptureScript(shellName: string): string {
-  return shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true";
 }
 
 const ENV_CAPTURE_NODE_SCRIPT = `
@@ -372,7 +342,7 @@ function buildSnapshotFile(stdout: string): string | null {
     .split(/\r?\n/)
     .filter((line) => !line.includes(CAPTURE_MARKER) && !line.includes(ENV_MARKER))
     .join("\n");
-  if (containsSecretLikeShellState(shellState)) {
+  if (SECRET_SHELL_STATE_PATTERNS.some((pattern) => pattern.test(shellState))) {
     return null;
   }
   const exports = parseSafeEnvExports(stdout.slice(envIndex + ENV_MARKER.length).trim());
@@ -389,18 +359,9 @@ function buildSnapshotFile(stdout: string): string | null {
     .join("\n");
 }
 
-function containsSecretLikeShellState(shellState: string): boolean {
-  return SECRET_SHELL_STATE_PATTERNS.some((pattern) => pattern.test(shellState));
-}
-
 function parseSafeEnvExports(envJson: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(envJson);
-  } catch {
-    return "";
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const parsed = safeParseJsonRecord(envJson);
+  if (!parsed) {
     return "";
   }
   return Object.entries(parsed)
@@ -453,7 +414,7 @@ async function runShell(opts: {
   cwd: string;
   env: Record<string, string | undefined>;
   timeoutMs: number;
-}): Promise<{ status: number | null }> {
+}): Promise<number | null> {
   return await new Promise((resolve) => {
     const child = spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
       cwd: opts.cwd,
@@ -475,7 +436,7 @@ async function runShell(opts: {
         // Broker admission can outlive the capture deadline; cancel the pending child too.
         child.kill("SIGKILL");
       }
-      resolve({ status });
+      resolve(status);
     };
     child.once("spawn", () => {
       if (settled && child.pid) {

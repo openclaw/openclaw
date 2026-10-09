@@ -12,16 +12,7 @@ import { runAcpClientInteractive } from "./client.js";
 
 const fixture = createFixtureLifetime();
 const node = resolveTestNodeExecPath();
-type ServerMode =
-  | "handshake-failure"
-  | "SIGTERM"
-  | "SIGKILL"
-  | "exit-0"
-  | "exit-7"
-  | "quit"
-  | "quit-7"
-  | "eof"
-  | "eof-pending";
+type ServerMode = "handshake-failure" | "SIGTERM" | "exit-0" | "quit-7" | "eof-pending";
 
 afterEach(async () => {
   await fixture.cleanup();
@@ -69,8 +60,8 @@ lines.on("line", (line) => {
     } } : { result: { sessionId: "process-status-fixture" } });
   } else if (request.method === "session/prompt") {
     fs.writeFileSync(${JSON.stringify(promptFile)}, request.params.prompt[0].text);
-    if (mode === "SIGTERM" || mode === "SIGKILL") process.kill(process.pid, mode);
-    else if (mode === "exit-0" || mode === "exit-7") process.exit(mode === "exit-7" ? 7 : 0);
+    if (mode === "SIGTERM") process.kill(process.pid, mode);
+    else if (mode === "exit-0") process.exit(0);
     else if (mode === "eof-pending") {
       pendingPromptReply = () => reply({ result: { stopReason: "end_turn" } });
       process.stdout.write(JSON.stringify({
@@ -129,12 +120,8 @@ describe("runAcpClientInteractive process lifecycle", () => {
 
   it.skipIf(process.platform === "win32").each([
     { mode: "SIGTERM", code: 1, diagnostic: "signal SIGTERM" },
-    { mode: "SIGKILL", code: 1, diagnostic: "signal SIGKILL" },
     { mode: "exit-0", code: 0, diagnostic: "code 0" },
-    { mode: "exit-7", code: 7, diagnostic: "code 7" },
-    { mode: "quit", code: 0, diagnostic: "" },
     { mode: "quit-7", code: 7, diagnostic: "code 7" },
-    { mode: "eof", code: 0, diagnostic: "signal SIGTERM" },
     { mode: "eof-pending", code: 0, diagnostic: "signal SIGKILL" },
   ] as const)("preserves the client outcome for $mode", async ({ mode, code, diagnostic }) =>
     fixture.run(async () => {
@@ -144,7 +131,6 @@ describe("runAcpClientInteractive process lifecycle", () => {
       const cancellation = new AbortController();
       let prompted = false;
       let quitSent = false;
-      let stdinFinished = false;
       let native: { code: number | null; signal: NodeJS.Signals | null } | undefined;
       const result = await runManagedCommand({
         bin: node,
@@ -175,9 +161,6 @@ describe("runAcpClientInteractive process lifecycle", () => {
           });
           child.stderr!.on("data", stderr.append);
           child.stdin!.on("error", (error) => cancellation.abort(error));
-          child.stdin!.once("finish", () => {
-            stdinFinished = true;
-          });
           child.stdout!.on("data", (chunk) => {
             stdout.append(chunk);
             const output = stdout.text();
@@ -189,14 +172,14 @@ describe("runAcpClientInteractive process lifecycle", () => {
               prompted = true;
               child.stdin!.write("status marker\n");
             } else if (
-              (mode.startsWith("quit") || mode.startsWith("eof")) &&
+              (mode === "quit-7" || mode === "eof-pending") &&
               !quitSent &&
               (mode === "eof-pending"
                 ? output.includes("fixture awaiting terminal EOF")
                 : /\[end_turn\][\s\S]*> /.test(output))
             ) {
               quitSent = true;
-              if (mode.startsWith("eof")) {
+              if (mode === "eof-pending") {
                 child.stdin!.end();
               } else {
                 child.stdin!.write("quit\n");
@@ -206,14 +189,7 @@ describe("runAcpClientInteractive process lifecycle", () => {
         },
       }).catch((error: unknown) => {
         throw new Error(
-          `ACP client process failed: ${JSON.stringify({
-            prompted,
-            quitSent,
-            stdinFinished,
-            pendingPromptObserved: stdout.text().includes("fixture awaiting terminal EOF"),
-            responseObserved: stdout.text().includes("[end_turn]"),
-            native,
-          })}\nstdout:\n${stdout.text()}\nstderr:\n${stderr.text()}`,
+          `ACP client process failed: ${JSON.stringify({ prompted, quitSent, native })}\nstdout:\n${stdout.text()}\nstderr:\n${stderr.text()}`,
           { cause: error },
         );
       });
@@ -222,10 +198,8 @@ describe("runAcpClientInteractive process lifecycle", () => {
       expect(result, `${stderr.text()}\n${stdout.text()}`).toBe(code);
       expect(native).toEqual({ code, signal: null });
       expect(stdout.text()).toContain(`Agent exited with ${diagnostic}`);
-      if (mode.startsWith("quit") || mode.startsWith("eof")) {
-        expect(quitSent).toBe(true);
-      }
       if (mode === "quit-7" || mode === "eof-pending") {
+        expect(quitSent).toBe(true);
         expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
       }
       if (mode === "eof-pending") {

@@ -1,6 +1,3 @@
-// Run-history rendering for the Automations screen: the compact filter row
-// plus run entries, shared by the list view's Run history tab and the job
-// detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
@@ -23,8 +20,6 @@ registerCronEnglish();
 
 type CronRunsSectionProps = Pick<
   CronProps,
-  | "basePath"
-  | "agentId"
   | "runs"
   | "runsState"
   | "highlightedRunId"
@@ -89,22 +84,18 @@ function conditionEmptyHint(activity: NonNullable<CronRunsSectionProps["conditio
   return t(key, { count: String(activity.checkCount) });
 }
 
-function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
-  return [
-    { value: "ok", label: t("cron.runs.runStatusOk") },
-    { value: "error", label: t("cron.runs.runStatusError") },
-    { value: "skipped", label: t("cron.runs.runStatusSkipped") },
-  ];
-}
+const RUN_STATUS_LABELS = new Map<string, string>([
+  ["ok", "cron.runs.runStatusOk"],
+  ["error", "cron.runs.runStatusError"],
+  ["skipped", "cron.runs.runStatusSkipped"],
+]);
 
-function getRunDeliveryOptions(): Array<{ value: CronDeliveryStatus; label: string }> {
-  return [
-    { value: "delivered", label: t("cron.runs.deliveryDelivered") },
-    { value: "not-delivered", label: t("cron.runs.deliveryNotDelivered") },
-    { value: "unknown", label: t("cron.runs.deliveryUnknown") },
-    { value: "not-requested", label: t("cron.runs.deliveryNotRequested") },
-  ];
-}
+const RUN_DELIVERY_LABELS = new Map<string, string>([
+  ["delivered", "cron.runs.deliveryDelivered"],
+  ["not-delivered", "cron.runs.deliveryNotDelivered"],
+  ["unknown", "cron.runs.deliveryUnknown"],
+  ["not-requested", "cron.runs.deliveryNotRequested"],
+]);
 
 function toggleSelection<T extends string>(selected: T[], value: T, checked: boolean): T[] {
   const set = new Set(selected);
@@ -116,23 +107,13 @@ function toggleSelection<T extends string>(selected: T[], value: T, checked: boo
   return Array.from(set);
 }
 
-function summarizeSelection(selectedLabels: string[], allLabel: string) {
-  if (selectedLabels.length === 0) {
-    return allLabel;
-  }
-  if (selectedLabels.length <= 2) {
-    return selectedLabels.join(", ");
-  }
-  return `${selectedLabels[0]} +${selectedLabels.length - 1}`;
-}
-
 const FILTER_OPTION_PREFIX = "option:";
 const FILTER_COMMAND_PREFIX = "command:";
 
 function renderFilterDropdown(params: {
   id: string;
   title: string;
-  summary: string;
+  allLabel: string;
   options: Array<{ value: string; label: string }>;
   selected: string[];
   onToggle: (value: string, checked: boolean) => void;
@@ -141,13 +122,19 @@ function renderFilterDropdown(params: {
   const selectedLabels = params.options
     .filter((option) => params.selected.includes(option.value))
     .map((option) => option.label);
+  const summary =
+    selectedLabels.length === 0
+      ? params.allLabel
+      : selectedLabels.length <= 2
+        ? selectedLabels.join(", ")
+        : `${selectedLabels[0]} +${selectedLabels.length - 1}`;
   const accessibleSummary =
     selectedLabels.length > 2
-      ? `${params.summary} (${new Intl.ListFormat(i18n.getLocale(), {
+      ? `${summary} (${new Intl.ListFormat(i18n.getLocale(), {
           style: "long",
           type: "conjunction",
         }).format(selectedLabels)})`
-      : params.summary;
+      : summary;
   return html`
     <div class="cron-filter-dropdown" data-filter=${params.id}>
       <wa-dropdown
@@ -175,7 +162,7 @@ function renderFilterDropdown(params: {
           title=${params.title}
           aria-label=${`${params.title} ${accessibleSummary}`}
         >
-          <span>${params.summary}</span>
+          <span>${summary}</span>
           ${icon("chevronDown")}
         </button>
         ${params.options.map(
@@ -208,16 +195,6 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     props.runsQuery.trim().length > 0 ||
     props.runsStatuses.length > 0 ||
     props.runsDeliveryStatuses.length > 0;
-  const runStatusOptions = getRunStatusOptions();
-  const runDeliveryOptions = getRunDeliveryOptions();
-  const selectedStatusLabels = runStatusOptions
-    .filter((option) => props.runsStatuses.includes(option.value))
-    .map((option) => option.label);
-  const selectedDeliveryLabels = runDeliveryOptions
-    .filter((option) => props.runsDeliveryStatuses.includes(option.value))
-    .map((option) => option.label);
-  const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
-  const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
   const sortLabel =
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
@@ -239,8 +216,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
         ${renderFilterDropdown({
           id: "status",
           title: t("cron.runs.status"),
-          summary: statusSummary,
-          options: runStatusOptions,
+          allLabel: t("cron.runs.allStatuses"),
+          options: Array.from(RUN_STATUS_LABELS, ([value, key]) => ({ value, label: t(key) })),
           selected: props.runsStatuses,
           onToggle: (value, checked) => {
             const next = toggleSelection(props.runsStatuses, value as CronRunsStatusValue, checked);
@@ -253,8 +230,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
         ${renderFilterDropdown({
           id: "delivery",
           title: t("cron.runs.delivery"),
-          summary: deliverySummary,
-          options: runDeliveryOptions,
+          allLabel: t("cron.runs.allDelivery"),
+          options: Array.from(RUN_DELIVERY_LABELS, ([value, key]) => ({ value, label: t(key) })),
           selected: props.runsDeliveryStatuses,
           onToggle: (value, checked) => {
             const next = toggleSelection(
@@ -382,39 +359,19 @@ export function runStatusLabel(
     );
     return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
   }
-  switch (value) {
-    case "ok":
-      return t("cron.runs.runStatusOk");
-    case "error":
-      return t("cron.runs.runStatusError");
-    case "skipped":
-      return t("cron.runs.runStatusSkipped");
-    default:
-      return t("cron.runs.runStatusUnknown");
-  }
-}
-
-function runDeliveryLabel(value: string): string {
-  switch (value) {
-    case "delivered":
-      return t("cron.runs.deliveryDelivered");
-    case "not-delivered":
-      return t("cron.runs.deliveryNotDelivered");
-    case "not-requested":
-      return t("cron.runs.deliveryNotRequested");
-    default:
-      return t("cron.runs.deliveryUnknown");
-  }
+  return t(RUN_STATUS_LABELS.get(value) ?? "cron.runs.runStatusUnknown");
 }
 
 function renderRun(
   entry: CronRunLogEntry,
   formatTimestamp: ReturnType<typeof createMsFormatter>,
   highlightedRunId?: string | null,
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void,
+  onViewRunTranscript?: CronProps["onViewRunTranscript"],
 ) {
   const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
-  const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
+  const delivery = t(
+    RUN_DELIVERY_LABELS.get(entry.deliveryStatus ?? "not-requested") ?? "cron.runs.deliveryUnknown",
+  );
   const usage = entry.usage;
   const usageSummary =
     usage && typeof usage.total_tokens === "number"
@@ -469,10 +426,17 @@ function renderRun(
               : nothing
           }
           ${
-            entry.sessionKey
+            entry.runId || entry.runAtMs !== undefined || entry.sessionKey
               ? html`<div>
-                  <button class="btn btn--sm" @click=${() => onViewRunTranscript?.(entry)}>
-                    ${t("tasksPage.viewTranscript")}
+                  <button
+                    class="btn btn--sm"
+                    @click=${(event: MouseEvent) => {
+                      if (event.currentTarget instanceof HTMLButtonElement) {
+                        onViewRunTranscript?.(entry, event.currentTarget);
+                      }
+                    }}
+                  >
+                    ${t("cron.runEntry.viewTranscript")}
                   </button>
                 </div>`
               : nothing

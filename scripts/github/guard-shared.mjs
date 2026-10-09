@@ -5,6 +5,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
+export const SECURITY_REVIEW_CHECK_INTERVAL_MS = 30_000;
 
 const githubApiRetryStatuses = new Set([500, 502, 503, 504]);
 const githubApiRetryCodes = new Set([
@@ -48,9 +49,17 @@ export class GitHubStatusPublicationError extends Error {
   }
 }
 
+export class GitHubNoticePublicationError extends Error {
+  constructor(cause) {
+    super(cause.message, { cause });
+  }
+}
+
 export class GitHubDiffDataError extends Error {}
 
-export async function withSecurityReviewRecovery(evaluate) {
+export class GitHubReadTimeoutError extends Error {}
+
+export async function withSecurityReviewRecovery(evaluate, { checkCurrent } = {}) {
   const recorded = process.env[recoveryDeadlineEnv];
   const deadline = recorded === undefined ? Date.now() + securityReviewBudgetMs : Number(recorded);
   if (!Number.isSafeInteger(deadline) || deadline <= 0) {
@@ -59,16 +68,34 @@ export async function withSecurityReviewRecovery(evaluate) {
   if (recorded === undefined && process.env.GITHUB_ENV) {
     await appendFile(process.env.GITHUB_ENV, `${recoveryDeadlineEnv}=${deadline}\n`);
   }
+  let resumeAt = 0;
+  let checkDuringWait = false;
   for (let attempt = 0; ; attempt += 1) {
     try {
+      while (Date.now() < resumeAt) {
+        const remaining = resumeAt - Date.now();
+        await wait(
+          checkDuringWait ? Math.min(remaining, SECURITY_REVIEW_CHECK_INTERVAL_MS) : remaining,
+        );
+        if (checkDuringWait && Date.now() < resumeAt) {
+          await checkCurrent();
+        }
+      }
       return await evaluate();
     } catch (error) {
       const rateLimited = error instanceof GitHubRateLimitError;
       const inconsistentDiff = error instanceof GitHubDiffDataError;
-      if (!rateLimited && !inconsistentDiff && !(error instanceof GitHubStatusPublicationError)) {
+      const readTimedOut = error instanceof GitHubReadTimeoutError;
+      if (
+        !rateLimited &&
+        !inconsistentDiff &&
+        !readTimedOut &&
+        !(error instanceof GitHubNoticePublicationError) &&
+        !(error instanceof GitHubStatusPublicationError)
+      ) {
         throw error;
       }
-      // Do not resume a status write with stale authority after waiting. The
+      // Do not resume a write with stale authority or comment state. The
       // caller restarts from live PR, file, comment, role, and CI observations.
       const delay = rateLimited
         ? Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
@@ -86,9 +113,12 @@ export async function withSecurityReviewRecovery(evaluate) {
         );
       }
       console.warn(
-        `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff ? error.message : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
+        `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff || readTimedOut ? error.message : `GitHub ${error instanceof GitHubNoticePublicationError ? "notice" : "status"} publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
       );
-      await wait(delay);
+      // Never probe during server-directed quota backoff. A rate limit from a
+      // checkpoint joins this same recovery budget instead of starting a poller.
+      resumeAt = Date.now() + delay;
+      checkDuringWait = !rateLimited && Boolean(checkCurrent);
     }
   }
 }
@@ -224,6 +254,7 @@ export function createIssueMutationHelpers({
   owner,
   repo,
   labelNames,
+  recoverCommentWrites = false,
   warn = console.warn,
 }) {
   const ignoreUnavailableWritePermission = (action) => (error) => {
@@ -276,20 +307,29 @@ export function createIssueMutationHelpers({
       .catch(ignoreUnavailableWritePermission("comment deletion"));
   };
   const upsertComment = async (comment, body) => {
-    if (comment) {
+    try {
       return await api
-        .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ body }),
-        })
-        .catch(ignoreUnavailableWritePermission("comment update"));
+        .request(
+          comment
+            ? `/repos/${owner}/${repo}/issues/comments/${comment.id}`
+            : `${issuePath}/comments`,
+          {
+            method: comment ? "PATCH" : "POST",
+            body: JSON.stringify({ body }),
+          },
+        )
+        .catch(ignoreUnavailableWritePermission(comment ? "comment update" : "comment creation"));
+    } catch (error) {
+      // A failed POST may already exist. Only enforcement can restart from
+      // live comments; restarting autoscrub could repeat a cleanup mutation.
+      if (
+        recoverCommentWrites &&
+        (githubApiRetryStatuses.has(error?.status) || githubApiRetryCodes.has(error?.code))
+      ) {
+        throw new GitHubNoticePublicationError(error);
+      }
+      throw error;
     }
-    return await api
-      .request(`${issuePath}/comments`, {
-        method: "POST",
-        body: JSON.stringify({ body }),
-      })
-      .catch(ignoreUnavailableWritePermission("comment creation"));
   };
   return { removeLabelIfPresent, addLabelIfMissing, deleteCommentIfPresent, upsertComment };
 }
@@ -326,7 +366,11 @@ export async function readBoundedGitHubJson(
 }
 
 function timeoutError(path, method, timeoutMs) {
-  return new Error(`GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`);
+  const message = `GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`;
+  // An expired write may already have succeeded; only reads can restart review.
+  return method === "GET" || method === "HEAD"
+    ? new GitHubReadTimeoutError(message)
+    : new Error(message);
 }
 
 function combineAbortSignals(signals) {
@@ -353,6 +397,9 @@ export function createGitHubApi(token, options = {}) {
   };
   const request = async (path, requestOptions = {}) => {
     const method = (requestOptions.method ?? "GET").toUpperCase();
+    if (method === "GET" || method === "HEAD") {
+      await options.beforeRead?.(path);
+    }
     const timeoutController = new AbortController();
     const requestSignal = combineAbortSignals([requestOptions.signal, timeoutController.signal]);
     let timeout;
@@ -372,9 +419,18 @@ export function createGitHubApi(token, options = {}) {
             signal: requestSignal,
             headers: { ...baseHeaders, ...requestOptions.headers },
           });
+          if (response.ok) {
+            return response.status === 204
+              ? null
+              : await readBoundedGitHubJson(response, responseMaxBodyBytes, {
+                  signal: requestSignal,
+                  timeoutPromise,
+                });
+          }
         } catch (error) {
-          // Node fetch wraps transport failures in a TypeError with the socket
-          // or resolver error as its cause. Unknown failures must not be retried.
+          // Node fetch can report transport failures before headers or while
+          // reading the body. Both phases share the same read-only retry budget.
+          // Unknown failures, including malformed JSON, must not be retried.
           const code = error?.cause?.code ?? error?.code;
           if (
             (method === "GET" || method === "HEAD") &&
@@ -394,9 +450,6 @@ export function createGitHubApi(token, options = {}) {
             requestError.code = code;
           }
           throw requestError;
-        }
-        if (response.status === 204) {
-          return null;
         }
         if (!response.ok) {
           if (
@@ -431,10 +484,6 @@ export function createGitHubApi(token, options = {}) {
           error.status = response.status;
           throw error;
         }
-        return await readBoundedGitHubJson(response, responseMaxBodyBytes, {
-          signal: timeoutController.signal,
-          timeoutPromise,
-        });
       }
     })();
     operationPromise.catch(() => {});

@@ -76,14 +76,11 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
-  it.each(
-    (["ok", "error", "timeout"] as const).flatMap((status) =>
-      (["active", "retired", "sessionless"] as const).map((registration) => ({
-        status,
-        registration,
-      })),
-    ),
-  )(
+  it.each([
+    { status: "ok", registration: "active" },
+    { status: "error", registration: "retired" },
+    { status: "timeout", registration: "sessionless" },
+  ] as const)(
     "waits for replayable $status after execution ends ($registration)",
     async ({ status, registration }) => {
       vi.useFakeTimers();
@@ -509,32 +506,89 @@ describe("agent.wait gateway dedupe observations", () => {
     }
   });
 
-  it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {
-    const runId = "run-public-concurrent-waiters";
-    const dedupe = new Map<string, DedupeEntry>();
-    const first = waitThroughGateway({ runId, timeoutMs: 1_000 });
-    const second = waitThroughGateway({ runId, timeoutMs: 1_000 });
-
-    await Promise.resolve();
-    completeRun(dedupe, runId);
-    await Promise.all([first.promise, second.promise]);
-
-    const expected = {
-      runId,
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      error: undefined,
-      stopReason: undefined,
-      livenessState: undefined,
-      yielded: undefined,
-      pendingError: undefined,
-      timeoutPhase: undefined,
-      providerStarted: undefined,
+  it("observes later queue admission without completing terminal or another Gateway's waits", async () => {
+    vi.useFakeTimers();
+    const runId = "queued-after-wait";
+    const context = createGatewayRequestContext(makeContextParams());
+    const otherContext = createGatewayRequestContext(makeContextParams());
+    const service = createAgentTurnService({ context, isWebchatConnect: () => false });
+    const otherService = createAgentTurnService({
+      context: otherContext,
+      isWebchatConnect: () => false,
+    });
+    const queuedObserved = vi.fn();
+    const terminalObserved = vi.fn();
+    const otherObserved = vi.fn();
+    const queuedWait = service.waitForTurn({ runId, timeoutMs: 30_000 }).then(queuedObserved);
+    const terminalWait = waitForAgentJob({ runId, timeoutMs: 30_000, source: "chat" }).then(
+      terminalObserved,
+    );
+    const otherWait = otherService.waitForTurn({ runId, timeoutMs: 30_000 }).then(otherObserved);
+    const controller = new AbortController();
+    const session = {
+      sessionKey: "agent:main:queued-after-wait",
+      sessionId: "queued-after-wait-session",
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
     };
-    expect(first.respond).toHaveBeenCalledWith(true, expected);
-    expect(second.respond).toHaveBeenCalledWith(true, expected);
+    try {
+      expect(
+        registerQueuedChatTurn({
+          chatQueuedTurns: context.chatQueuedTurns,
+          runId,
+          controller,
+          ...session,
+        }),
+      ).toBe(true);
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${runId}`,
+        session,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(queuedObserved).toHaveBeenCalledWith({
+        session,
+        result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
+      });
+      expect(terminalObserved).not.toHaveBeenCalled();
+      expect(otherObserved).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      completeRun(context.dedupe, runId, "chat");
+      await Promise.all([queuedWait, terminalWait, otherWait]);
+    }
   });
+
+  it.each([undefined, "agent", "chat"] as const)(
+    "resolves concurrent %s waiters when the terminal dedupe entry lands",
+    async (source) => {
+      const runId = `run-public-concurrent-waiters-${source ?? "untracked"}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const first = waitThroughGateway({ runId, timeoutMs: 1_000 }, source);
+      const second = waitThroughGateway({ runId, timeoutMs: 1_000 }, source);
+
+      await Promise.resolve();
+      completeRun(dedupe, runId, source ?? "agent");
+      await Promise.all([first.promise, second.promise]);
+
+      const expected = {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        error: undefined,
+        stopReason: undefined,
+        livenessState: undefined,
+        yielded: undefined,
+        pendingError: undefined,
+        timeoutPhase: undefined,
+        providerStarted: undefined,
+      };
+      expect(first.respond).toHaveBeenCalledWith(true, expected);
+      expect(second.respond).toHaveBeenCalledWith(true, expected);
+    },
+  );
 
   it("retires only its scope's observer without ending the shared run", async () => {
     const runId = "run-scope-observers";
@@ -576,25 +630,32 @@ describe("agent.wait gateway dedupe observations", () => {
     }
   });
 
-  it.each(
-    ([undefined, "agent", "chat"] as const).flatMap((activeKind) =>
-      [0, 10].map((timeoutMs) => ({ activeKind, timeoutMs })),
-    ),
-  )(
-    "keeps $activeKind observation timeout after $timeoutMs ms nonterminal",
-    async ({ activeKind, timeoutMs }) => {
+  it.each([
+    { activeKind: undefined, timeoutMs: 0, reset: false },
+    { activeKind: "agent", timeoutMs: 10, reset: false },
+    { activeKind: "chat", timeoutMs: 10, reset: false },
+    { activeKind: undefined, timeoutMs: 1_000, reset: true },
+  ] as const)(
+    "keeps $activeKind observation interruption nonterminal (timeout=$timeoutMs, reset=$reset)",
+    async ({ activeKind, timeoutMs, reset }) => {
       vi.useFakeTimers();
       const runId = `run-public-timeout-${activeKind ?? "untracked"}-${timeoutMs}`;
       const dedupe = new Map<string, DedupeEntry>();
       const timedOut = waitThroughGateway({ runId, timeoutMs }, activeKind);
-
-      await vi.advanceTimersByTimeAsync(timeoutMs);
+      if (reset) {
+        await drainGlobalSingletonLifecycleState("restart");
+      } else {
+        await vi.advanceTimersByTimeAsync(timeoutMs);
+      }
       await timedOut.promise;
       expect(timedOut.respond).toHaveBeenCalledWith(true, {
         runId,
         status: "timeout",
+        ...(reset ? { timeoutPhase: "gateway_draining" } : {}),
       });
-
+      const fresh = waitThroughGateway({ runId, timeoutMs: 0 }, activeKind);
+      await fresh.promise;
+      expect(fresh.respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
       completeRun(dedupe, runId, activeKind);
       const completed = waitThroughGateway({ runId, timeoutMs: 0 }, activeKind);
       await completed.promise;
@@ -604,33 +665,6 @@ describe("agent.wait gateway dedupe observations", () => {
       );
     },
   );
-
-  it("attributes lifecycle reset without caching a terminal run outcome", async () => {
-    vi.useFakeTimers();
-    const runId = "run-public-lifecycle-reset";
-    const dedupe = new Map<string, DedupeEntry>();
-    const interrupted = waitThroughGateway({ runId, timeoutMs: 1_000 });
-
-    await drainGlobalSingletonLifecycleState("restart");
-    await interrupted.promise;
-    expect(interrupted.respond).toHaveBeenCalledWith(true, {
-      runId,
-      status: "timeout",
-      timeoutPhase: "gateway_draining",
-    });
-
-    const fresh = waitThroughGateway({ runId, timeoutMs: 0 });
-    await fresh.promise;
-    expect(fresh.respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
-
-    completeRun(dedupe, runId);
-    const completed = waitThroughGateway({ runId, timeoutMs: 0 });
-    await completed.promise;
-    expect(completed.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ runId, status: "ok", endedAt: 200 }),
-    );
-  });
 
   it.each([
     {

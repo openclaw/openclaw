@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderDialog, renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
@@ -55,8 +56,7 @@ export function matchesWorkboardCardScope(props: WorkboardProps, card: Workboard
       props.agentsList?.defaultId ?? props.defaultAgentId,
       props.scopeAgentId,
     ) &&
-    (props.showAgentFilter === false ||
-      matchesAgentFilter(card, props.agentsList, state.agentFilter))
+    (props.showAgentFilter === false || matchesAgentFilter(card, state.agentFilter))
   );
 }
 
@@ -354,14 +354,7 @@ function editPatch(
   if (draft.agentId !== KEEP_AGENT) {
     patch.agentId = draft.agentId;
   }
-  const labels = [
-    ...new Set(
-      draft.labels
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  ];
+  const labels = normalizeUniqueTrimmedStringList(draft.labels.split(","));
   switch (draft.labelMode) {
     case "keep":
       break;

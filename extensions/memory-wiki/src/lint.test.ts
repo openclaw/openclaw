@@ -129,6 +129,7 @@ describe("lintMemoryWikiVault", () => {
           "Scala generics inside a tilde-fenced block:\n\n" +
           "~~~scala\n" +
           "def handle(userId: String, request: Request[A]): Future[Option[User]] = ???\n" +
+          "[[not-a-link]]\n" +
           "~~~\n\n" +
           'Inline `[[ -z "$str" ]]` code must be skipped.\n\n' +
           "Outside code, [[real-missing-link]] must still be reported.\n",

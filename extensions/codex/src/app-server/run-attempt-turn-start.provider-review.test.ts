@@ -4,6 +4,7 @@ import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
 const recovery = vi.hoisted(() => ({
   kind: "compact" as "compact" | "overflow" | "image",
   clearImageBinding: vi.fn(),
+  clearBinding: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   embeddedAgentLog: { info: vi.fn(), warn: vi.fn() },
@@ -16,7 +17,7 @@ vi.mock("./attempt-results.js", () => ({
   buildCodexTurnStartFailureResult: vi.fn(),
   isInvalidCodexImagePayloadError: () => recovery.kind === "image",
 }));
-vi.mock("./attempt-startup.js", () => ({
+vi.mock("./thread-lifecycle-errors.js", () => ({
   isCodexContextRestartSelectionChangedError: () => false,
 }));
 vi.mock("./run-attempt-lifecycle.js", () => ({
@@ -28,8 +29,11 @@ vi.mock("./run-attempt-state.js", () => ({
   clearCodexBindingAfterInvalidImagePayload: recovery.clearImageBinding,
   shouldUseFreshCodexThreadAfterContextEngineOverflow: () => recovery.kind === "overflow",
 }));
-vi.mock("./session-binding.js", () => ({ assertCodexBindingMayBeReplaced: vi.fn() }));
-vi.mock("./transcript-mirror.js", () => ({
+vi.mock("./session-binding.js", () => ({
+  assertCodexBindingMayBeReplaced: vi.fn(),
+  clearCodexBindingForClient: recovery.clearBinding,
+}));
+vi.mock("./user-prompt-message.js", () => ({
   buildCodexUserPromptMessage: () => ({ role: "user", content: "reviewed continuation" }),
 }));
 vi.mock("./usage-limit-error.js", () => ({
@@ -46,7 +50,7 @@ function createFixture(acknowledged: boolean) {
   const originalError = new Error("native turn/start rejected");
   const startCodexTurn = vi.fn().mockRejectedValue(originalError);
   const waitForActiveNativeTurnCompletion = vi.fn().mockResolvedValue(true);
-  const mutateBinding = vi.fn().mockResolvedValue(true);
+  const mutateBinding = recovery.clearBinding.mockResolvedValue(true);
   const restartContextEngineCodexThread = vi
     .fn()
     .mockResolvedValue({ threadId: "replacement-thread" });
@@ -58,7 +62,6 @@ function createFixture(acknowledged: boolean) {
   // of this opaque marker; the separate transport tests exercise real issuance.
   const resources = {
     state,
-    markTrajectoryEndRecorded: vi.fn(),
     prompt: {
       turnState: { codexTurnPromptText: "reviewed continuation" },
       context: {
@@ -91,6 +94,7 @@ function createFixture(acknowledged: boolean) {
   const requestRuntime = {
     startCodexTurn,
     buildLlmInputEvent: vi.fn(),
+    buildLlmOutputEvent: vi.fn(),
     codexModelCallDiagnostics: { emitStarted: vi.fn(), emitError: vi.fn() },
   } as unknown as Parameters<typeof startCodexAttemptTurn>[3];
   return {

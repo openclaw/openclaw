@@ -1,4 +1,5 @@
 import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -10,11 +11,12 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
-  createOpenClawCodingToolsInternal,
+  createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
+import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
@@ -29,7 +31,8 @@ import {
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
+import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
   resolveSessionPermissionExecMode,
@@ -45,7 +48,7 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
-import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
@@ -54,29 +57,32 @@ import {
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
-  Parameters<typeof createOpenClawCodingToolsInternal>[0]
+  Parameters<typeof createOpenClawCodingToolsInternalAsync>[0]
 >;
 type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
 
 export async function prepareEmbeddedAttemptToolBase(params: {
   agentDir: string;
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   setup: EmbeddedAttemptSetup;
   markCoreToolStage: (name: string) => void;
   onYield: NonNullable<OpenClawCodingToolsOptions["onYield"]>;
   runAbortController: AbortController;
   runTrace: DiagnosticTraceContext;
   skillUsagePaths: SkillUsagePaths;
-  skillReadResources?: Parameters<typeof createOpenClawCodingToolsInternal>[1];
+  skillReadResources?: Parameters<typeof createOpenClawCodingToolsInternalAsync>[1];
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
   codeModeSkills: readonly CodeModeSkill[];
+  installedSkills?: OpenClawCodingToolsOptions["installedSkills"];
   reviewTranscript?: NonNullable<OpenClawCodingToolsOptions["exec"]>["reviewTranscript"];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const completionCheck = attempt.completionCheck;
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
@@ -152,14 +158,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
   const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
-  const nestedToolActivities: NestedToolActivity[] = [];
+  const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -167,9 +172,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
       (results) => {
-        if (results.some((result) => result.status === "rejected")) {
-          retiredCleanupFailed = true;
-        }
+        retiredCleanupFailed ||= results.some((result) => result.status === "rejected");
       },
     );
     retiringGenerations.add(settled);
@@ -192,7 +195,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,
-    messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    messageProvider: attempt.messageProvider ?? attempt.messageChannel,
     messageChannel: attempt.messageChannel,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
@@ -210,8 +213,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     ...buildConversationContext(),
     agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
     conversationToolPolicy: attempt.conversationToolPolicy,
-    isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-    promptMode: attempt.promptMode,
     sandboxToolPolicy: params.setup.sandbox?.tools,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
@@ -222,13 +223,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerTransport = resolveSessionPlacementComputer(
     attempt.admittedRunContext.operationalRunInstance,
   );
-  const computerAllowed =
-    shouldConstructTools &&
+  const allowsConversationTool = (name: string) =>
     projectConversationToolNames({
       capabilityProfile: runtimeCapabilityProfile,
-      toolNames: ["computer"],
+      toolNames: [name],
       warn: () => undefined,
     }).length === 1;
+  const computerAllowed = shouldConstructTools && allowsConversationTool("computer");
   const pairedNodeComputerUse = (
     await loadPairedComputerUseAvailabilityForSurface({
       computerAllowed,
@@ -266,102 +267,125 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       return replaySafetyOptions.declaredReplaySafe(candidate);
     },
   };
-  const constructTools = (
+  let webSearchUnconfigured = false;
+  const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
-    const constructedToolsRaw = !shouldConstructTools
-      ? []
-      : (() => {
-          const codingToolOptions: OpenClawCodingToolsOptions = {
-            agentId: params.setup.sessionAgentId,
-            ...buildConversationContext(),
-            exec: {
-              ...attempt.execOverrides,
-              ...(sessionPermissionPolicy
-                ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
-                : {}),
-              config: attempt.config,
-              elevated: attempt.bashElevated,
-              reviewTranscript: params.reviewTranscript,
-            },
-            sandbox: params.setup.sandbox,
-            stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
-            sessionPermissionPolicy,
-            channelContext: attempt.channelContext,
-            allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
-            operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
-            computerTransport,
-            pairedNodeComputerUse,
-            conversationRecall: attempt.conversationRecall,
-            oneShotCliRun: attempt.oneShotCliRun,
-            toolSearchCatalogRef,
-            codeModeSkills,
-            preparedModelRuntime: attempt.preparedModelRuntime,
-            requireWorkspaceOnly: attempt.requireWorkspaceOnly,
-            sessionReadScopeKey: attempt.sessionReadScopeKey,
-            sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
-            webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
-            githubPublicationAvailable: attempt.githubPublicationAvailable,
-            abortSignal,
-            skillWorkshop: {
-              env: attempt.skillWorkshopProposalEnv,
-              proposalOnly: attempt.skillWorkshopProposalOnly,
-              ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
-              ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
-              origin: attempt.skillWorkshopOrigin,
-              proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
-              proposalRevision: attempt.skillWorkshopProposalRevision,
-              libraryAuthoring: attempt.skillLibraryAuthoring,
-            },
-            modelCompat: extractModelCompat(attempt.model),
-            delegationCapability: attempt.delegationCapability,
-            modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
-              workspaceDir: params.setup.effectiveWorkspace,
-            }),
-            includeCoreTools: toolConstructionPlan.includeCoreTools,
-            includeToolSearchControls: toolSearchControlsEnabledForRun,
-            toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
-            toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
-            computerContextEpoch,
-            skillInstructionDeliveryCache,
-            registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
-            inboundEventKind: attempt.currentInboundEventKind,
-            disableMessageTool: attempt.disableMessageTool,
-            forceMessageTool: attempt.forceMessageTool,
-            enableHeartbeatTool: attempt.enableHeartbeatTool,
-            forceHeartbeatTool: attempt.forceHeartbeatTool,
-            inheritedToolAllowlistRef: inheritedToolAllowlist,
-            cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
-            cronCreatorToolAllowlistCaptureRef,
-            authProfileStore: attempt.authProfileStore,
-            recordToolPrepStage: params.markCoreToolStage,
-            onToolOutcome: attempt.onToolOutcome,
-            isTurnTainted: attempt.isTurnTainted,
-            allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-            skillUsagePaths: params.skillUsagePaths,
-            conversationCapabilityProfile: runtimeCapabilityProfile,
-            onYield: params.onYield,
-          };
-          const allTools = createOpenClawCodingToolsInternal(
-            codingToolOptions,
-            params.skillReadResources,
-          );
-          // The built-in harness retains its existing authoritative wrappers.
-          // Only plugin harnesses receive and require the projected host capability.
-          const boundTools = attempt.hostCapabilities
-            ? attempt.hostCapabilities.bindToolSurface(allTools)
-            : allTools;
-          params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-          const filteredTools = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
-            toolMeta: (tool) => getPluginToolMeta(tool),
-          });
-          params.markCoreToolStage("attempt:tools-allow");
-          return filteredTools;
-        })();
+    webSearchUnconfigured = false;
+    let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
+      [];
+    if (shouldConstructTools) {
+      const codingToolOptions: OpenClawCodingToolsOptions = {
+        agentId: params.setup.sessionAgentId,
+        ...buildConversationContext(),
+        exec: {
+          ...attempt.execOverrides,
+          ...(sessionPermissionPolicy
+            ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
+            : {}),
+          config: attempt.config,
+          elevated: attempt.bashElevated,
+          reviewTranscript: params.reviewTranscript,
+        },
+        sandbox: params.setup.sandbox,
+        stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
+        sessionPermissionPolicy,
+        channelContext: attempt.channelContext,
+        allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
+        operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
+        computerTransport,
+        pairedNodeComputerUse,
+        conversationRecall: attempt.conversationRecall,
+        memoryAudience: attempt.memoryAudience,
+        oneShotCliRun: attempt.oneShotCliRun,
+        toolSearchCatalogRef,
+        codeModeSkills,
+        installedSkills: params.installedSkills,
+        preparedModelRuntime: attempt.preparedModelRuntime,
+        requireWorkspaceOnly: attempt.requireWorkspaceOnly,
+        sessionReadScopeKey: attempt.sessionReadScopeKey,
+        sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
+        webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+        onWebSearchConfiguration: (configured) => {
+          webSearchUnconfigured =
+            !configured &&
+            allowsConversationTool("web_search") &&
+            resolveNativeWebSearchRoute({
+              ...buildConversationContext(),
+              agentId: params.setup.sessionAgentId,
+              webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+              sandboxToolPolicy: params.setup.sandbox?.tools,
+              authStore: attempt.authProfileStore,
+              pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
+            }).kind === "managed";
+        },
+        githubPublicationAvailable: attempt.githubPublicationAvailable,
+        abortSignal,
+        skillWorkshop: {
+          ...(attempt.skillWorkshopReviewOf ? { reviewOf: attempt.skillWorkshopReviewOf } : {}),
+          libraryAuthoring: attempt.skillLibraryAuthoring,
+        },
+        modelCompat: extractModelCompat(attempt.model),
+        delegationCapability: attempt.delegationCapability,
+        modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
+          workspaceDir: params.setup.effectiveWorkspace,
+        }),
+        includeCoreTools: toolConstructionPlan.includeCoreTools,
+        includeToolSearchControls: toolSearchControlsEnabledForRun,
+        toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
+        toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
+        computerContextEpoch,
+        skillInstructionDeliveryCache,
+        registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
+        inboundEventKind: attempt.currentInboundEventKind,
+        inputProvenance: attempt.inputProvenance,
+        disableMessageTool: attempt.disableMessageTool,
+        forceMessageTool: attempt.forceMessageTool,
+        enableHeartbeatTool: attempt.enableHeartbeatTool,
+        forceHeartbeatTool: attempt.forceHeartbeatTool,
+        inheritedToolAllowlistRef: inheritedToolAllowlist,
+        cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
+        cronCreatorToolAllowlistCaptureRef,
+        authProfileStore: attempt.authProfileStore,
+        recordToolPrepStage: params.markCoreToolStage,
+        onToolOutcome: attempt.onToolOutcome,
+        isTurnTainted: attempt.isTurnTainted,
+        allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
+        skillUsagePaths: params.skillUsagePaths,
+        conversationCapabilityProfile: runtimeCapabilityProfile,
+        onProgressCardPlanSaved: completionCheck
+          ? (unfinished) => {
+              completionCheck.unfinishedPlan = unfinished;
+            }
+          : undefined,
+        onYield: params.onYield,
+      };
+      const allTools = await createOpenClawCodingToolsInternalAsync(
+        codingToolOptions,
+        params.skillReadResources,
+        undefined,
+        undefined,
+        {
+          reader: getReplyOperationSessionReader(attempt.replyOperation),
+          assertCurrent: resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, abortSignal),
+        },
+      );
+      // The built-in harness retains its existing authoritative wrappers.
+      // Only plugin harnesses receive and require the projected host capability.
+      const boundTools = attempt.hostCapabilities
+        ? attempt.hostCapabilities.bindToolSurface(allTools)
+        : allTools;
+      params.markCoreToolStage("attempt:create-openclaw-coding-tools");
+      constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      });
+      params.markCoreToolStage("attempt:tools-allow");
+    }
     const toolsRaw = attempt.forceRestartSafeTools
       ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
       : constructedToolsRaw;
+    assertMemoryFlushPersistenceToolAvailable(toolsRaw, attempt.memoryFlushTools);
     if (attempt.forceRestartSafeTools) {
       log.info(
         `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
@@ -377,77 +401,98 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const baseExecOverrides = {
     ...(attempt.permissionChange?.baseExecOverrides ?? attempt.execOverrides),
   };
-  const toolsRaw = constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
-  runCleanups.push(async (reason) => {
+  const releaseTools = async (reason: string) => {
     toolAbortController.abort();
     retireToolGeneration(reason);
     await Promise.all(retiringGenerations);
     if (retiredCleanupFailed) {
       recordAgentCleanupFailure();
     }
-  });
-
-  return {
-    toolHookContext: {
-      agentId: params.setup.sessionAgentId,
-      config: attempt.config,
-      cwd: params.setup.effectiveCwd,
-      sessionKey: params.setup.sandboxSessionKey,
-      sessionId: attempt.sessionId,
-      runId: attempt.runId,
-      approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
-      channelId: attempt.currentChannelId,
-      trace: params.runTrace,
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: attempt.config,
-        agentId: params.setup.sessionAgentId,
-      }),
-      onToolOutcome: attempt.onToolOutcome,
-      allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-    },
-    get toolAbortSignal() {
-      return toolAbortSignal;
-    },
-    refreshPermissionMode: (mode: SessionPermissionMode | null, revokeApprovals: () => void) => {
-      // Revoke prepared calls before resolving approval waiters; their old
-      // signal must already be closed when an allowed decision wakes them.
-      toolAbortController.abort(createCodeModePermissionChangeReason());
-      revokeApprovals();
-      retireToolGeneration("cancel");
-      params.runAbortController.signal.throwIfAborted();
-      toolAbortController = new AbortController();
-      toolAbortSignal = AbortSignal.any([
-        params.runAbortController.signal,
-        toolAbortController.signal,
-      ]);
-      attempt.permissionMode = mode ?? undefined;
-      attempt.execOverrides = { ...baseExecOverrides };
-      const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
-      const nextTools = constructTools(policy, toolAbortSignal);
-      toolsRaw.splice(0, toolsRaw.length, ...nextTools);
-    },
-    codeModeControlsEnabledForRun,
-    codeModeSkills,
-    computerContextEpoch,
-    skillInstructionDeliveryCache,
-    cronCreatorToolAllowlist,
-    cronCreatorToolAllowlistCaptureRef,
-    effectiveToolsAllow,
-    forceDirectMessageTool,
-    requireExplicitMessageTarget,
-    inheritedToolAllowlist,
-    localModelLeanEnabled,
-    localModelLeanPreserveToolNames,
-    replaySafetyOptions,
-    runtimeCapabilityProfile,
-    runCleanups,
-    toolSearchCatalogRef,
-    toolSurfaceRuntime,
-    toolSearchConfig,
-    toolSearchControlsEnabledForRun,
-    toolSearchRuntimeConfig,
-    nestedToolActivities,
-    toolsEnabled,
-    toolsRaw,
   };
+
+  // Until preparation returns, the attempt cannot own these registered resources.
+  try {
+    const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
+    return {
+      toolHookContext: {
+        agentId: params.setup.sessionAgentId,
+        config: attempt.config,
+        cwd: params.setup.effectiveCwd,
+        sessionKey: params.setup.sandboxSessionKey,
+        sessionId: attempt.sessionId,
+        runId: attempt.runId,
+        approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
+        channelId: attempt.currentChannelId,
+        trace: params.runTrace,
+        loopDetection: resolveToolLoopDetectionConfig({
+          cfg: attempt.config,
+          agentId: params.setup.sessionAgentId,
+        }),
+        onToolOutcome: attempt.onToolOutcome,
+        allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
+      },
+      get toolAbortSignal() {
+        return toolAbortSignal;
+      },
+      refreshPermissionMode: async (
+        mode: SessionPermissionMode | null,
+        revokeApprovals: () => void,
+      ) => {
+        // Revoke prepared calls before resolving approval waiters; their old
+        // signal must already be closed when an allowed decision wakes them.
+        toolAbortController.abort(createCodeModePermissionChangeReason());
+        revokeApprovals();
+        retireToolGeneration("cancel");
+        params.runAbortController.signal.throwIfAborted();
+        toolAbortController = new AbortController();
+        toolAbortSignal = AbortSignal.any([
+          params.runAbortController.signal,
+          toolAbortController.signal,
+        ]);
+        attempt.permissionMode = mode ?? undefined;
+        attempt.execOverrides = { ...baseExecOverrides };
+        const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
+        const nextTools = await constructTools(policy, toolAbortSignal);
+        toolsRaw.splice(0, toolsRaw.length, ...nextTools);
+      },
+      get webSearchUnconfigured() {
+        return webSearchUnconfigured;
+      },
+      codeModeControlsEnabledForRun,
+      codeModeSkills,
+      computerContextEpoch,
+      skillInstructionDeliveryCache,
+      cronCreatorToolAllowlist,
+      cronCreatorToolAllowlistCaptureRef,
+      effectiveToolsAllow,
+      forceDirectMessageTool,
+      requireExplicitMessageTarget,
+      inheritedToolAllowlist,
+      localModelLeanEnabled,
+      localModelLeanPreserveToolNames,
+      replaySafetyOptions,
+      runtimeCapabilityProfile,
+      releaseTools,
+      toolSearchCatalogRef,
+      toolSurfaceRuntime,
+      toolSearchConfig,
+      toolSearchControlsEnabledForRun,
+      toolSearchRuntimeConfig,
+      nestedToolActivityState,
+      toolsEnabled,
+      toolsRaw,
+    };
+  } catch (error) {
+    try {
+      await runOwnedAgentCleanup({
+        ...attempt,
+        step: "embedded-tool-preparation",
+        cleanup: () => releaseTools("error"),
+        log,
+      });
+    } catch {
+      recordAgentCleanupFailure();
+    }
+    throw error;
+  }
 }

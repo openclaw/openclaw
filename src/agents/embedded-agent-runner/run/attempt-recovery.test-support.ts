@@ -36,6 +36,7 @@ export type TransportDropScenario = {
   lastToolError?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["lastToolError"];
   pluginHarnessOwnsTransport?: boolean;
   retryAvailable?: boolean;
+  retryConnectionErrors?: boolean;
   replaySafe?: boolean;
   fallbackConfigured?: boolean;
   providerRetryMaxDelayMs?: number;
@@ -136,25 +137,34 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { runId: "run:transport-drop", config: scenario.config } as Parameters<
-      typeof createEmbeddedRunFailoverRetryController
-    >[0]["runParams"],
-    provider,
-    modelId,
-    globalLane: "test",
-    agentDir: "/tmp/provider-recovery-test",
-    fallbackConfigured: scenario.fallbackConfigured ?? false,
-    profileFailureStore: { version: 1, profiles: {} },
-    getLastProfileId: () => undefined,
+    runInput: {
+      runParams: {
+        runId: "run:transport-drop",
+        config: scenario.config,
+        retryConnectionErrors: scenario.retryConnectionErrors,
+      } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runInput"]["runParams"],
+      globalLane: "test",
+      agentDir: "/tmp/provider-recovery-test",
+      fallbackConfigured: scenario.fallbackConfigured ?? false,
+    },
+    preparedRuntime: {
+      provider,
+      modelId,
+      profileFailureStore: { version: 1, profiles: {} },
+      snapshot: () => ({
+        lastProfileId: undefined,
+        pluginHarnessOwnsTransport: scenario.pluginHarnessOwnsTransport ?? false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: vi.fn(async () => false),
+    },
     getSessionId: () => "session:transport-drop",
-    harnessOwnsTransport: () => scenario.pluginHarnessOwnsTransport ?? false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile: vi.fn(async () => false),
   });
   if (scenario.retryAvailable === false) {
     failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
+  vi.spyOn(failoverRetryController, "advanceAuthProfile");
   vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
   const onAgentEvent = vi.fn();
   const recover = () =>
@@ -168,6 +178,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
           onAgentEvent,
         },
         resolvedSessionKey: "agent:main:transport-drop",
+        fallbackConfigured: scenario.fallbackConfigured ?? false,
+        suspendForFailure: vi.fn(),
         startedAtMs: Date.now(),
         laneController: { throwIfAborted: vi.fn() },
       },
@@ -176,6 +188,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         modelId,
         model: { id: modelId },
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
+        attemptedThinking: new Set(["off"]),
+        maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },
@@ -204,6 +218,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       runtimePlan: { auth: {} },
       sessionPromptState: {
         sessionFile: "/tmp/session.jsonl",
+        withSessionWriterContext: (run: () => Promise<unknown>) => run(),
+        recordOutputLimitNotice: vi.fn(async () => {}),
+        settleOwnedTranscriptProjection: vi.fn(async () => {}),
         markOwnedTranscriptRetry,
         continueFromCurrentTranscript,
       },

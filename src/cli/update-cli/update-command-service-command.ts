@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
@@ -130,8 +131,8 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
 // Candidate version/preservation guards reject older targets before repair, without retry.
 export async function runUpdatedInstallGatewayCommand(
   params: {
-    result: { root?: string; mode?: UpdateRunResult["mode"] };
-    opts: Pick<UpdateCommandOptions, "json" | "run">;
+    result: Partial<Pick<UpdateRunResult, "root" | "mode">>;
+    opts: Pick<UpdateCommandOptions, "run">;
     invocationEnv: NodeJS.ProcessEnv;
     serviceEnv?: NodeJS.ProcessEnv;
     serviceInstallEnv?: NodeJS.ProcessEnv | null;
@@ -143,6 +144,7 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    onGatewayStartAttempted?: () => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -166,17 +168,11 @@ export async function runUpdatedInstallGatewayCommand(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
     );
   }
-  const args = ["gateway", action];
-  if (installing) {
-    args.push("--force");
-    if (params.gatewayPort !== undefined) {
-      args.push("--port", String(params.gatewayPort));
-    }
-  } else {
-    // Update retries must not bypass the installer's backup and drift audit.
-    args.push("--preserve-definition");
+  // Update retries must not bypass the installer's backup and drift audit.
+  const args = ["gateway", action, installing ? "--force" : "--preserve-definition"];
+  if (installing && params.gatewayPort !== undefined) {
+    args.push("--port", String(params.gatewayPort));
   }
-  // Capture one structured child result in both outer output modes.
   args.push("--json");
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
   // The child manages this service from outside it. Captured Gateway markers
@@ -193,38 +189,8 @@ export async function runUpdatedInstallGatewayCommand(
   if (executor) {
     commandEnv.OPENCLAW_NO_RESPAWN = "1";
   }
-  params.signal?.throwIfAborted();
   assertCurrent();
-  const receiveInstallResult = (stdout: string) => {
-    const response = safeParseJsonRecord(stdout);
-    if (!installing || !response) {
-      return;
-    }
-    const warnings = Array.isArray(response.warnings)
-      ? response.warnings.filter((message): message is string => typeof message === "string")
-      : [];
-    if (warnings.length) {
-      params.onWarnings?.(warnings);
-    }
-    if (params.definitionRecovery) {
-      const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
-        response.definitionBackup,
-      );
-      const error = typeof response.error === "string" ? response.error : "";
-      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
-      if (backup.success && !recoveryFailed) {
-        params.definitionRecovery.backup = backup.data;
-        params.definitionRecovery.unverified = false;
-      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
-        params.definitionRecovery.preserved = true;
-        params.definitionRecovery.unverified = false;
-      } else {
-        params.onWarnings?.([
-          "Service definition backup receipt could not be verified; retained recovery data must be inspected before rollback.",
-        ]);
-      }
-    }
-  };
+
   const installTimeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
   if (run && !executor) {
     throw new UpdateCommandRecoveryPendingError(
@@ -277,6 +243,7 @@ export async function runUpdatedInstallGatewayCommand(
     bindChild?: (pid: number, argv?: readonly string[]) => void,
   ) => {
     const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
+    params.onGatewayStartAttempted?.();
     const result = await runCommandWithTimeout(argv, {
       // The complete owned env must not regain selectors removed during capture.
       baseEnv: {},
@@ -312,23 +279,40 @@ export async function runUpdatedInstallGatewayCommand(
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
-  params.signal?.throwIfAborted();
   assertCurrent();
-  const exited =
-    res.termination === "exit" &&
-    res.signal === null &&
-    !res.killed &&
-    res.cleanup !== "forced" &&
-    res.cleanup !== "uncertain";
+  const exited = res.termination === "exit" && res.signal === null && !res.killed;
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
-  if (complete) {
-    receiveInstallResult(res.stdout);
+  if (installing && response) {
+    const warnings = Array.isArray(response.warnings)
+      ? response.warnings.filter((message): message is string => typeof message === "string")
+      : [];
+    if (warnings.length) {
+      params.onWarnings?.(warnings);
+    }
+    if (params.definitionRecovery) {
+      const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
+        response.definitionBackup,
+      );
+      const error = typeof response.error === "string" ? response.error : "";
+      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
+      if (backup.success && !recoveryFailed) {
+        params.definitionRecovery.backup = backup.data;
+        params.definitionRecovery.unverified = false;
+      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
+        params.definitionRecovery.preserved = true;
+        params.definitionRecovery.unverified = false;
+      } else {
+        params.onWarnings?.([
+          "Service definition backup receipt could not be verified; retained recovery data must be inspected before rollback.",
+        ]);
+      }
+    }
   }
 
   const original = params.originalManagedServiceRuntime;
   if (installing && original && exited && complete) {
-    const receipt = response && safeParseJsonRecord(JSON.stringify(response.rebind));
+    const receipt = asOptionalRecord(response?.rebind);
     if (
       receipt?.before === original.definition.fingerprint &&
       typeof receipt.after === "string" &&
@@ -389,6 +373,7 @@ export async function restartRetainedUpdateGatewayService(params: {
   stdout: NodeJS.WritableStream;
   assertCurrent: () => void;
   revalidate: () => Promise<void>;
+  onGatewayStartAttempted?: () => void;
   signal?: AbortSignal;
 }): Promise<GatewayServiceRestartResult> {
   const env = { ...params.env };
@@ -401,6 +386,7 @@ export async function restartRetainedUpdateGatewayService(params: {
         stdout: params.stdout,
         env,
         beforeMutation: params.revalidate,
+        onRestartAttempted: params.onGatewayStartAttempted,
         assertCurrent: () => {
           assertNative();
           assertCurrent();

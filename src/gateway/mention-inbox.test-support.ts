@@ -1,12 +1,19 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import {
   validateMentionsListResult,
   type ErrorShape,
+  type MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import type { MentionCommittedInput, MentionInbox } from "./mention-inbox.types.js";
@@ -34,13 +41,14 @@ export async function withMentionInbox(
     try {
       await run(fixture);
     } finally {
-      fixture.dispose();
-      vi.useRealTimers();
+      await fixture.dispose();
     }
   });
 }
 
 async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const alice = ensureProfileForEmail("alice@mentions.example.test");
   const bob = ensureProfileForEmail("bob@mentions.example.test");
   const carol = ensureProfileForEmail("carol@mentions.example.test");
@@ -69,6 +77,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   const inboxes = new Set<MentionInbox>();
   const openInbox = (gatewayInstanceId = "mention-gateway") => {
     const inbox = createMentionInbox({
+      scheduler,
       gatewayInstanceId,
       getRuntimeConfig: () => cfg,
       getClients: () => clients,
@@ -115,6 +124,8 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     return response;
   }
   return {
+    clock,
+    scheduler,
     alice,
     bob,
     carol,
@@ -129,10 +140,9 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     push,
     setSession,
     openInbox,
-    dispose() {
-      for (const instance of inboxes) {
-        instance.dispose();
-      }
+    async dispose() {
+      await Promise.all([...inboxes].map((instance) => instance.dispose()));
+      await scheduler.stop();
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
       let committedSource = committedSources.get(sourceId);
@@ -144,7 +154,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
         };
         committedSources.set(sourceId, committedSource);
       }
-      target.recordCommittedInput({
+      return target.recordCommittedInputAsync({
         sourceId,
         committedSource,
         sessionKey: SESSION_KEY,
@@ -160,8 +170,35 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   };
 }
 
-export function readMentionInbox(inbox: MentionInbox, client: GatewayClient) {
-  const result = inbox.list(client);
+type InboxResult = Result<MentionsListResult, ErrorShape>;
+
+async function captureInboxResult(
+  operation: (publish: (result: InboxResult) => undefined) => Promise<void>,
+) {
+  let result: InboxResult | undefined;
+  await operation((value) => {
+    result = value;
+  });
+  if (!result) {
+    throw new Error("Mention Inbox did not publish a response");
+  }
+  return result;
+}
+
+export function listMentionInbox(inbox: MentionInbox, client: GatewayClient) {
+  return captureInboxResult((publish) => inbox.listAsync(client, publish));
+}
+
+export function dismissMentionInbox(
+  inbox: MentionInbox,
+  client: GatewayClient,
+  ids: readonly string[],
+) {
+  return captureInboxResult((publish) => inbox.dismissAsync(client, ids, publish));
+}
+
+export async function readMentionInbox(inbox: MentionInbox, client: GatewayClient) {
+  const result = await listMentionInbox(inbox, client);
   if (!result.ok) {
     throw new Error(result.error.message);
   }

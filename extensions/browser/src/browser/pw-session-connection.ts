@@ -1,8 +1,10 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   assertCdpEndpointAllowed,
@@ -11,8 +13,11 @@ import {
   isWebSocketUrl,
   redactCdpErrorText,
   stripCdpUrlCredentials,
+  type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
@@ -49,12 +54,6 @@ import {
 } from "./pw-session-state.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
-
-type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
-
-function resolveCdpConnectRetryDelayMs(attempt: number): number {
-  return 250 + attempt * 250;
-}
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
@@ -172,7 +171,7 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   if (!cur) {
     return null;
   }
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+  if (cur.onDisconnected) {
     cur.browser.off("disconnected", cur.onDisconnected);
   }
   return cur;
@@ -220,23 +219,14 @@ async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): P
 }
 
 async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Playwright adapter disconnect timed out.")),
-          PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
-        );
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(
+    task,
+    PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
+    () => {
+      throw new Error("Playwright adapter disconnect timed out.");
+    },
+    { ref: false },
+  );
 }
 
 /** Capture and retire only the adapter handles currently owned by one lifecycle transition. */
@@ -325,11 +315,6 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   };
 }
 
-/** Retire a scoped adapter immediately; its CDP disconnect may settle later. */
-export function retirePlaywrightBrowserConnection(opts: { cdpUrl: string }): boolean {
-  return retirePlaywrightBrowserConnectionExact(opts).retired;
-}
-
 export function evictStalePlaywrightBrowserConnection(
   cdpUrl: string,
   expectedBrowser?: Browser,
@@ -410,7 +395,7 @@ export async function connectBrowser(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
   relayReference?: RelayOperationReference,
-  engine?: "chromium" | "lightpanda",
+  engine?: BrowserEngineId,
 ): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const relay = getBorrowedRelayCdpAccess(normalized);
@@ -497,7 +482,7 @@ export async function connectBrowser(
                 headers,
                 lookup,
                 resolveWebSocketUrl,
-                ...(engine === "lightpanda" ? { engine } : {}),
+                ...(engine ? { engine } : {}),
               });
             }),
           );
@@ -528,7 +513,7 @@ export async function connectBrowser(
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (engine === "lightpanda") {
+        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
@@ -546,10 +531,7 @@ export async function connectBrowser(
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = resolveCdpConnectRetryDelayMs(attempt);
-        await new Promise((r) => {
-          setTimeout(r, delay);
-        });
+        await sleepWithAbort(250 + attempt * 250);
       }
     }
     const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
@@ -569,9 +551,7 @@ export async function connectBrowser(
 }
 
 export async function getAllPages(browser: Browser): Promise<Page[]> {
-  const contexts = browser.contexts();
-  const pages = contexts.flatMap((c) => c.pages());
-  return pages;
+  return browser.contexts().flatMap((context) => context.pages());
 }
 
 async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{
@@ -591,21 +571,12 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
     }),
   );
   for (const { page, targetId } of candidates) {
-    if (isBlockedPageRef(opts.cdpUrl, page)) {
-      blockedCount += 1;
-      continue;
-    }
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
-    if (!targetId) {
-      if (hasBlockedTargetsForCdpUrl(opts.cdpUrl)) {
-        blockedCount += 1;
-        continue;
-      }
-      accessible.push({ page, targetId: null });
-      continue;
-    }
-    if (isBlockedTarget(opts.cdpUrl, targetId)) {
+    if (
+      isBlockedPageRef(opts.cdpUrl, page) ||
+      (targetId ? isBlockedTarget(opts.cdpUrl, targetId) : hasBlockedTargetsForCdpUrl(opts.cdpUrl))
+    ) {
       blockedCount += 1;
       continue;
     }
@@ -640,12 +611,9 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
-  if (!opts.targetId) {
-    bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
-    return first.page;
-  }
-  const found = accessible.find((entry) => entry.targetId === opts.targetId);
+  const found = opts.targetId
+    ? accessible.find((entry) => entry.targetId === opts.targetId)
+    : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
     return found.page;

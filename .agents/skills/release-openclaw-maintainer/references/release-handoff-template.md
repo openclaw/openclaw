@@ -17,11 +17,18 @@ operator steering. Do not preserve superseded scope.
 - cut SHA: `<full sha>`
 - cut time: `<UTC timestamp>`
 - Code SHA: `<regular release full sha | not applicable>`
-- Tooling SHA: `<trusted workflow full sha>`
+- Candidate C: `<exact qualification target sha>`
+- Qualification Q: `<C for candidate-owned | original workflow SHA for historical route>`
+- Admission/verifier/publisher P: `<independent trusted full sha and ref>`
+- Qualification admission: `<P run/attempt and immutable descriptor | historical route>`
+- Retained request: `<private request path; original semantics preserved>`
 - Release SHA: `<same as Code SHA | notes-only descendant | exact extended-stable branch tip>`
 - tag: `v<version>`
+- main closeout SHA: `<exact merged closeout commit | pending>`
+- main closeout version: `<package.json version at that exact commit | pending>`
 - validation workflow ref: `<release-ci ref | canonical branch>`
 - publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
+- tooling tag: `<tag verified via gh api git/ref/tags | created by hand after ruleset warning>`
 - publication selection: `<normal/prepared route, npm dist-tag, package roster>`
 - publication inventory: `<exact surfaces>`
 - already-published plugin skips: `<none or package@version with metadata-only delta>`
@@ -39,8 +46,13 @@ operator steering. Do not preserve superseded scope.
 - candidate acceptance: `<green untagged-SHA evidence | pending>`
 - Plugin NPM Release: `<run id / URL or none>`
 - publish parent: `<run id / URL or none>`
+- publish parent dispatch count + failure classes: `<n dispatches; per run: stale child / approval / completion verify / ...>`
+- children approved (ids): `<npm child run ids approved via pending_deployments; ClawHub never manual>`
+- beta sync run: `<openclaw-npm-dist-tags sync_beta_to_stable run id or pending>`
 - Docker release/repair: `<run ids / tag / aliases or none>`
 - GitHub Release: `<public URL / non-Latest readback or none>`
+- GitHub release flipped at: `<UTC timestamp | by parent | by hand>`
+- macOS preflight/publish run ids: `<preflight run/attempt, publish run/attempt, appcast PR or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
 
@@ -74,22 +86,25 @@ reference for commands rather than redispatching the release parent.
 ## Phase
 
 - conceptual phase: `<beta-publish | postpublish-confidence | stable-publish>`
-- current input mapping: `<beta + no soak | published package + soak/focused groups | stable>`
+- current input mapping: `<beta + no soak (cannot qualify stable) | published package + soak/focused groups | explicit stable/full>`
 - completed: `<phases that stay complete>`
 - current: `<one phase>`
 - next action: `<one concrete action>`
 - roles: `<one operator | one transition watcher | zero or one current-failure investigator>`
-- retry budget: `<per-child failed-job reruns used: n/2 | then one diagnosis/fix/narrow retry, then reassess>`
-- wall-clock budget: `<stable on npm by cut time + 6h | elapsed h:mm | if exceeded: blocking lane and decision taken>`
+- retry budget: `<declared automatic wave used: n/1 | diagnosis/fix/narrow retry, then reassess>`
+- wall-clock objectives: `<seal by cut time + 20m, publish by + 1h | actual elapsed h:mm | blockers and next action>`
 
 ## Failure policy
 
 - confirmed product defect that a required lane blocks on (update/install
   path, publish bytes, or another required gate proven by diagnosis): fix the
   release branch, freeze a new Code SHA, and invalidate downstream product
-  evidence; any other failure keeps the Code SHA
-- flaky lane (fails twice on a test the candidate did not touch, no product
-  cause in the delta): record it, fix `main` in parallel, never re-cut
+  evidence
+- selected test failure: record the lead's real-blocker-or-flake decision and
+  its evidence. An untouched test or passing replay alone does not prove a
+  flake or a fix. A flake gets at most two recorded reruns on the same Release
+  SHA and a fix-in-parallel issue or PR on `main`; never re-cut, change
+  tooling, or start a new FRV for it
 - regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof
@@ -98,9 +113,11 @@ reference for commands rather than redispatching the release parent.
 - extended-stable branch change: land the approved product/changelog change or
   smallest frozen-target repair by PR, record its source/invariant, and replace
   all exact-head evidence
-- harness/tooling/provenance failure: keep the Code SHA, change the Tooling SHA
-  only when needed, and recover the smallest owning surface
-- infrastructure/credential failure: keep both SHAs and repair the external
+- qualification harness/contract failure: deliberately repair the candidate, freeze
+  a new C/Q, and replace affected evidence; never substitute newer main checks
+- P-only admission/verifier/publisher failure: keep C/Q and original artifacts,
+  repair independent trusted P only when needed, and record invalidated evidence
+- infrastructure/credential failure: keep C/Q/P and repair the external
   prerequisite
 - wrapper/monitor failure: record parent and child conclusions separately;
   parent cancellation leaves adopted children running until the operator

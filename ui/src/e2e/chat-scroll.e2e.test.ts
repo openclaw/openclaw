@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -65,7 +66,7 @@ suite.define(() => {
       if (!threadBounds) {
         throw new Error("Expected a visible transcript");
       }
-      const crash = Promise.withResolvers<never>();
+      const crash = createDeferred<never>();
       let rendererCrashed = false;
       const onCrash = () => {
         rendererCrashed = true;

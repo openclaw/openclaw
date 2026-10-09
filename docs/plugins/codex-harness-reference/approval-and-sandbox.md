@@ -10,6 +10,11 @@ sidebarTitle: "Approval and sandbox"
 
 The approval and sandbox posture of a Codex turn, and where native execution runs. Part of the [Codex harness reference](/plugins/codex-harness-reference); [Where each section moved](/plugins/codex-harness-reference#where-each-section-moved) lists every section.
 
+For native plugin/app tools, also follow the
+[app approval decision order](/plugins/codex-native-plugins#approval-decision-order).
+App admission, tool enablement, per-tool approval modes, and OpenClaw's
+elicitation response are separate from the general presets below.
+
 ## Approval and sandbox modes
 
 Local stdio app-server sessions default to YOLO mode:
@@ -63,10 +68,14 @@ are available.
 
 <Note>
 On Docker-backed OpenClaw sandbox hosts (`agents.defaults.sandbox.mode` set to
-a Docker backend), `openclaw doctor` probes whether the host allows the
-unprivileged user (and, when Docker sandbox network egress is disabled,
-network) namespaces that nested Codex `bwrap` needs for `workspace-write`
-shell execution inside the sandbox container. A failed probe usually surfaces
+a Docker backend), standalone `openclaw doctor` checks the user namespace with `unshare`.
+These Codex bwrap checks are omitted during `openclaw update`; run
+`openclaw doctor` after the update.
+When Docker sandbox network egress is disabled and a local Codex runtime is
+configured, it also runs the configured Codex binary's own `workspace-write`
+sandbox with network access disabled, exercising Bubblewrap's loopback setup.
+Unrecognized check failures are reported as unverified rather than as a
+namespace diagnosis. Namespace failures usually surface
 as `bwrap: setting up uid map: Permission denied` or
 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` on
 Ubuntu/AppArmor hosts. Fix the reported host namespace policy for the OpenClaw
@@ -82,7 +91,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.155.1` app-server.
+This preview path uses the pinned Codex `0.160.0` app-server.
 
 ```json5
 {

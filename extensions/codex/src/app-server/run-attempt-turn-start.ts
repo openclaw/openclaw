@@ -9,7 +9,6 @@ import {
   buildCodexTurnStartFailureResult,
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
-import { isCodexContextRestartSelectionChangedError } from "./attempt-startup.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -24,13 +23,14 @@ import type {
   prepareCodexAttemptTurnRequest,
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
-import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
+import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
+import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import {
   CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
+import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
   resources: CodexAttemptResources,
@@ -38,14 +38,12 @@ export async function startCodexAttemptTurn(
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
 ): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, turnState, systemPromptReport } = prompt;
-  const { runtime, historyState, hookContext, hookContextWindowFields, hookRunner } = context;
-  const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
-    runtime;
+  const { runtime, historyState, hookContext, hookRunner } = context;
+  const { connection, runtimeParams } = runtime;
   const {
     params,
-    usesSupervisionConnection,
     runAbortController,
     activeContextEngine,
     bindingStore,
@@ -56,7 +54,8 @@ export async function startCodexAttemptTurn(
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
-  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
+  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent } =
+    requestRuntime;
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
@@ -109,10 +108,12 @@ export async function startCodexAttemptTurn(
           "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
           { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
         );
-        const clearedBinding = await bindingStore.mutate(bindingIdentity, {
-          kind: "clear",
-          threadId: resourceState.thread.threadId,
-        });
+        const clearedBinding = await clearCodexBindingForClient(
+          bindingStore,
+          bindingIdentity,
+          resourceState.thread,
+          connection.authority,
+        );
         if (!clearedBinding) {
           embeddedAgentLog.warn(
             "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
@@ -120,36 +121,11 @@ export async function startCodexAttemptTurn(
           );
         } else {
           resourceState.thread = await resourceState.restartContextEngineCodexThread();
-          const retryBinding = bindingStore.read(bindingIdentity);
-          if (
-            retryBinding &&
-            retryBinding.threadId === resourceState.thread.threadId &&
-            retryBinding.contextEngine?.projection
-          ) {
-            await bindingStore.mutate(bindingIdentity, {
-              kind: "patch",
-              threadId: retryBinding.threadId,
-              patch: {
-                contextEngine: { ...retryBinding.contextEngine, projection: undefined },
-              },
-            });
-            embeddedAgentLog.info(
-              "codex app-server cleared stale context-engine projection after overflow retry",
-              {
-                threadId: resourceState.thread.threadId,
-                previousEpoch: retryBinding.contextEngine.projection.epoch,
-              },
-            );
-          }
           void emitCodexAppServerEvent(params, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: resourceState.thread.threadId },
           });
-          try {
-            started = await startCodexTurn();
-          } catch (retryError) {
-            turnStartError = retryError;
-          }
+          started = await startCodexTurn();
         }
       } catch (retrySetupError) {
         turnStartError = retrySetupError;
@@ -169,7 +145,13 @@ export async function startCodexAttemptTurn(
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
           bindingIdentity,
-          { phase: "turn_start", threadId: resourceState.thread.threadId, error: message },
+          {
+            phase: "turn_start",
+            threadId: resourceState.thread.threadId,
+            clientId: resourceState.thread.clientId,
+            error: message,
+          },
+          connection.authority,
           params.expectedSessionRuntimeOwnership,
         );
       }
@@ -184,25 +166,10 @@ export async function startCodexAttemptTurn(
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
-      markTrajectoryEndRecorded();
+      resourceState.trajectoryEndRecorded = true;
       runAgentHarnessLlmOutputHook({
         event: {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          provider: usesSupervisionConnection
-            ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-            : params.provider,
-          model: usesSupervisionConnection
-            ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-            : params.modelId,
-          ...hookContextWindowFields,
-          resolvedRef: usesSupervisionConnection
-            ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
-            : (params.runtimePlan?.observability.resolvedRef ??
-              `${params.provider}/${params.modelId}`),
-          ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
-            ? { harnessId: params.runtimePlan.observability.harnessId }
-            : {}),
+          ...buildLlmOutputEvent(),
           assistantTexts: [],
         },
         ctx: hookContext,
@@ -237,35 +204,27 @@ export async function startCodexAttemptTurn(
           authProfileId: startupAuthProfileId,
           rateLimits: usageLimitError.rateLimitsForProfile,
         });
-        return {
-          result: buildCodexTurnStartFailureResult({
-            params,
-            message: usageLimitError.message,
-            promptError: new CodexUsageLimitPromptError(usageLimitError.message),
-            messagesSnapshot,
-            systemPromptReport,
-          }),
+      } else if (!isCodexContextRestartSelectionChangedError(turnStartError)) {
+        throw turnStartError;
+      }
+      const result = buildCodexTurnStartFailureResult({
+        params,
+        message,
+        ...(usageLimitError
+          ? { promptError: new CodexUsageLimitPromptError(usageLimitError.message) }
+          : {}),
+        messagesSnapshot,
+        systemPromptReport,
+      });
+      if (!usageLimitError) {
+        result.codexAppServerFailure = {
+          kind: "client_closed_before_turn_completed",
+          transport: appServer.start.transport,
+          threadId: resourceState.thread.threadId,
+          replaySafe: true,
         };
       }
-      if (isCodexContextRestartSelectionChangedError(turnStartError)) {
-        return {
-          result: {
-            ...buildCodexTurnStartFailureResult({
-              params,
-              message,
-              messagesSnapshot,
-              systemPromptReport,
-            }),
-            codexAppServerFailure: {
-              kind: "client_closed_before_turn_completed" as const,
-              transport: appServer.start.transport,
-              threadId: resourceState.thread.threadId,
-              replaySafe: true,
-            },
-          },
-        };
-      }
-      throw turnStartError;
+      return { result };
     }
   }
   if (!started) {

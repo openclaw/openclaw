@@ -26,4 +26,5 @@ export type {
   SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";

@@ -60,7 +60,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   },
 }));
 vi.mock("../src/agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+  resolveRealtimeVoiceAgentContextInstructions: async () => "Agent context.",
 }));
 vi.mock("../src/gateway/talk/client-agent-consult.js", () => ({
   createTalkClientAgentConsultRunner: () => ({
@@ -111,20 +111,12 @@ describe("OpenAI browser Talk catalog defaults", () => {
       expected: "gpt-live-1",
     },
     { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
-    { label: "explicit Live", model: "gpt-live-1", camera: false, expected: "gpt-live-1" },
     {
       label: "Live launch over configured GA",
       model: "gpt-realtime-2.1",
       launchModel: "gpt-live-1",
       camera: false,
       expected: "gpt-live-1",
-    },
-    {
-      label: "GA launch over configured Live",
-      model: "gpt-live-1",
-      launchModel: "gpt-realtime-2.1",
-      camera: true,
-      expected: "gpt-realtime-2.1",
     },
     {
       label: "GA launch through a provider alias",
@@ -147,7 +139,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
           },
           talk: {
             agentId: "main",

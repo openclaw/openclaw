@@ -9,6 +9,13 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
+const OKF_LITERAL_LINK_EXAMPLES = [
+  "    [customers](/tables/customers.md)",
+  "> ```markdown\n> [customers](/tables/customers.md)\n> ```",
+  "``\n[customers](/tables/customers.md)\n``",
+  "- ```markdown\n  [customers](/tables/customers.md)\n  ```",
+];
+
 function getOnlyPagePath(paths: string[]): string {
   expect(paths).toHaveLength(1);
   const [pagePath] = paths;
@@ -74,6 +81,8 @@ Inline code keeps \`[customers](/tables/customers.md)\` unchanged.
 \`\`\`markdown
 [customers](/tables/customers.md)
 \`\`\`
+
+${OKF_LITERAL_LINK_EXAMPLES.join("\n\n")}
 
 External citation stays as [BigQuery](https://cloud.google.com/bigquery).
 `,
@@ -153,6 +162,9 @@ describe("importMemoryWikiOkfBundle", () => {
     expect(orders.body).toContain('"metric docs"');
     expect(orders.body).toContain("`[customers](/tables/customers.md)`");
     expect(orders.body).toContain("```markdown\n[customers](/tables/customers.md)\n```");
+    for (const example of OKF_LITERAL_LINK_EXAMPLES) {
+      expect(orders.body).toContain(example);
+    }
     expect(orders.body).toContain("https://cloud.google.com/bigquery");
 
     const okf = orders.frontmatter.okf as Record<string, unknown>;

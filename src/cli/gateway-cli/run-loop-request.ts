@@ -1,4 +1,5 @@
 import {
+  getGatewayInstallationReplacement,
   registerGatewayInstallationReplacementHandler,
   type GatewayInstallationReplacement,
 } from "../../gateway/stale-install.js";
@@ -35,7 +36,7 @@ export function registerGatewayRunInstallationReplacement(params: {
   let current = true;
   const release = registerGatewayInstallationReplacementHandler((fact) => {
     const accept = () => {
-      if (!current) {
+      if (!current || getGatewayInstallationReplacement() !== fact) {
         return;
       }
       const pending = params.waitForUpdates();

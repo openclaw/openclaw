@@ -6,6 +6,7 @@ import {
 import {
   runChannelIngressDeadLettersHealth,
   runAgentMemorySchemaHealth,
+  runCodexBwrapHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
@@ -15,6 +16,7 @@ import {
   runLegacyPluginSourceCapturesHealth,
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
+  runRetainedUpdateRuntimesHealth,
   runSandboxHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
@@ -63,15 +65,11 @@ export function resolveInitialDoctorHealthContributions(params: {
   runLegacyStateHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution[] {
   return [
-    createDoctorHealthContribution({
-      id: "doctor:write-config-migrations",
-      label: "Write config migrations",
+    createDoctorHealthContribution("doctor:write-config-migrations", "Write config migrations", {
       required: true,
       run: runInitialConfigWriteHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:agent-database-admission",
-      label: "Agent database admission",
+    createDoctorHealthContribution("doctor:agent-database-admission", "Agent database admission", {
       healthChecks: {
         description: "Agent databases with mismatched ownership are isolated until repaired.",
         async detect(ctx: DoctorHealthCheckContext) {
@@ -91,31 +89,23 @@ export function resolveInitialDoctorHealthContributions(params: {
         },
       },
     }),
-    createDoctorHealthContribution({
-      id: "doctor:node-runtime",
-      label: "Node runtime",
+    createDoctorHealthContribution("doctor:node-runtime", "Node runtime", {
       healthCheckIds: ["core/doctor/node-runtime"],
       async run(ctx) {
         const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
         await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
       },
     }),
-    createDoctorHealthContribution({
-      id: "doctor:gateway-config",
-      label: "Gateway config",
+    createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
       healthCheckIds: ["core/doctor/gateway-config"],
       run: params.runGatewayConfigHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:auth-profile-migration",
-      label: "Auth profile migration",
+    createDoctorHealthContribution("doctor:auth-profile-migration", "Auth profile migration", {
       updateWork: { kind: "startup" },
       run: params.runAuthProfileMigration,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:auth-profiles",
-      label: "Auth profiles",
-      updateWork: { kind: "inspection", scope: "agent" },
+    createDoctorHealthContribution("doctor:auth-profiles", "Auth profiles", {
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
         defaultEnabled: false,
@@ -126,53 +116,47 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: params.runAuthProfileHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:claude-cli",
-      label: "Claude CLI",
+    createDoctorHealthContribution("doctor:claude-cli", "Claude CLI", {
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:gateway-auth",
-      label: "Gateway auth",
+    createDoctorHealthContribution("doctor:gateway-auth", "Gateway auth", {
       healthCheckIds: ["core/doctor/gateway-auth"],
       run: params.runGatewayAuthHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:node-hosting-preconditions",
-      label: "Node hosting preconditions",
-      healthChecks: {
-        description: "Gateway config can authenticate and onboard node and worker hosts.",
-        async detect(ctx) {
-          const { collectNodeHostingPreconditionFindings } =
-            await import("../commands/doctor-node-hosting-preconditions.js");
-          return collectNodeHostingPreconditionFindings(ctx.cfg);
+    createDoctorHealthContribution(
+      "doctor:node-hosting-preconditions",
+      "Node hosting preconditions",
+      {
+        healthChecks: {
+          description: "Gateway config can authenticate and onboard node and worker hosts.",
+          async detect(ctx) {
+            const { collectNodeHostingPreconditionFindings } =
+              await import("../commands/doctor-node-hosting-preconditions.js");
+            return collectNodeHostingPreconditionFindings(ctx.cfg);
+          },
         },
       },
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:command-owner",
-      label: "Command owner",
+    ),
+    createDoctorHealthContribution("doctor:command-owner", "Command owner", {
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/command-owner"],
       run: runCommandOwnerHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:structured-health-repairs",
-      label: "Plugin health inspection and repair",
-      updateWork: { kind: "inspection", scope: "agent" },
-      run: params.runStructuredHealthRepairs,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:legacy-state",
-      label: "Legacy state",
+    createDoctorHealthContribution(
+      "doctor:structured-health-repairs",
+      "Plugin health inspection and repair",
+      {
+        updateWork: { kind: "inspection", scope: "agent", repairs: true },
+        run: params.runStructuredHealthRepairs,
+      },
+    ),
+    createDoctorHealthContribution("doctor:legacy-state", "Legacy state", {
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:session-transcripts",
-      label: "Session transcripts",
+    createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
       healthChecks: {
         description: "Legacy or branchy session transcript files are represented as findings.",
         defaultEnabled: false,
@@ -193,14 +177,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runSessionTranscriptsHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:agent-memory-schema",
-      label: "Agent memory schema",
-      run: runAgentMemorySchemaHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:legacy-plugin-manifests",
-      label: "Legacy plugin manifests",
+    createDoctorHealthContribution(
+      "doctor:agent-memory-schema",
+      "Agent memory schema",
+      runAgentMemorySchemaHealth,
+    ),
+    createDoctorHealthContribution("doctor:legacy-plugin-manifests", "Legacy plugin manifests", {
       healthChecks: {
         description: "Legacy plugin manifest capability keys are reported as findings.",
         defaultEnabled: false,
@@ -217,72 +199,77 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runLegacyPluginManifestHealth,
     }),
-    createDoctorHealthContribution({
-      // Stable v2026.8.1 exposed this --only selector. Retain its public identity,
-      // not the unsupported shared-root scan or its destructive repair advice.
-      id: "doctor:legacy-plugin-dependencies",
-      label: "Legacy plugin dependencies",
-      healthChecks: {
-        description: "Deprecated shared plugin dependency cleanup check.",
-        defaultEnabled: false,
-        async detect() {
-          return [
-            {
-              checkId: "core/doctor/legacy-plugin-dependencies",
-              severity: "info",
-              message:
-                "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
-            },
-          ];
+    createDoctorHealthContribution(
+      "doctor:legacy-plugin-dependencies",
+      "Legacy plugin dependencies",
+      {
+        // Stable v2026.8.1 exposed this --only selector. Retain its public identity,
+        // not the unsupported shared-root scan or its destructive repair advice.
+
+        healthChecks: {
+          description: "Deprecated shared plugin dependency cleanup check.",
+          defaultEnabled: false,
+          async detect() {
+            return [
+              {
+                checkId: "core/doctor/legacy-plugin-dependencies",
+                severity: "info",
+                message:
+                  "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
+              },
+            ];
+          },
         },
+        run: async () => {},
       },
-      run: async () => {},
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:stale-plugin-runtime-symlinks",
-      label: "Stale plugin runtime symlinks",
-      healthChecks: {
-        description: "Stale plugin-runtime symlinks are represented as findings.",
-        defaultEnabled: false,
-        async detect() {
-          const { collectStalePluginRuntimeSymlinkHealthFindings } =
-            await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
-          return collectStalePluginRuntimeSymlinkHealthFindings();
+    ),
+    createDoctorHealthContribution(
+      "doctor:stale-plugin-runtime-symlinks",
+      "Stale plugin runtime symlinks",
+      {
+        healthChecks: {
+          description: "Stale plugin-runtime symlinks are represented as findings.",
+          defaultEnabled: false,
+          async detect() {
+            const { collectStalePluginRuntimeSymlinkHealthFindings } =
+              await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+            return collectStalePluginRuntimeSymlinkHealthFindings();
+          },
         },
+        run: async () => {},
       },
-      run: async () => {},
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:release-configured-plugin-installs",
-      label: "Configured plugin repair",
-      healthChecks: {
-        id: "core/doctor/configured-plugin-installs",
-        description: "Configured plugin install records and package payloads are repairable.",
-        defaultEnabled: false,
-        async detect(ctx) {
-          const {
-            detectConfiguredPluginInstallHealthIssues,
-            configuredPluginInstallIssueToHealthFinding,
-          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
-          return (
-            await detectConfiguredPluginInstallHealthIssues({ cfg: ctx.cfg, env: process.env })
-          ).map(configuredPluginInstallIssueToHealthFinding);
+    ),
+    createDoctorHealthContribution(
+      "doctor:release-configured-plugin-installs",
+      "Configured plugin repair",
+      {
+        healthChecks: {
+          id: "core/doctor/configured-plugin-installs",
+          description: "Configured plugin install records and package payloads are repairable.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const {
+              detectConfiguredPluginInstallHealthIssues,
+              configuredPluginInstallIssueToHealthFinding,
+            } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+            return (
+              await detectConfiguredPluginInstallHealthIssues({ cfg: ctx.cfg, env: process.env })
+            ).map(configuredPluginInstallIssueToHealthFinding);
+          },
+          repair: legacyOwnedRepair(async (ctx) => {
+            const {
+              detectConfiguredPluginInstallHealthIssues,
+              configuredPluginInstallIssueToRepairEffect,
+            } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+            return (
+              await detectConfiguredPluginInstallHealthIssues({ cfg: ctx.cfg, env: process.env })
+            ).map(configuredPluginInstallIssueToRepairEffect);
+          }, "legacy doctor configured plugin install repair owns package mutation"),
         },
-        repair: legacyOwnedRepair(async (ctx) => {
-          const {
-            detectConfiguredPluginInstallHealthIssues,
-            configuredPluginInstallIssueToRepairEffect,
-          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
-          return (
-            await detectConfiguredPluginInstallHealthIssues({ cfg: ctx.cfg, env: process.env })
-          ).map(configuredPluginInstallIssueToRepairEffect);
-        }, "legacy doctor configured plugin install repair owns package mutation"),
+        run: runReleaseConfiguredPluginInstallsHealth,
       },
-      run: runReleaseConfiguredPluginInstallsHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:plugin-registry",
-      label: "Plugin registry",
+    ),
+    createDoctorHealthContribution("doctor:plugin-registry", "Plugin registry", {
       healthChecks: {
         description: "Plugin registry migration, stale shadow, and peer-link issues are findings.",
         defaultEnabled: false,
@@ -311,29 +298,46 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runPluginRegistryHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:legacy-plugin-source-captures",
-      label: "Legacy plugin captures",
+    createDoctorHealthContribution(
+      "doctor:legacy-plugin-source-captures",
+      "Legacy plugin captures",
+      {
+        updateWork: { kind: "startup" },
+        run: runLegacyPluginSourceCapturesHealth,
+      },
+    ),
+    createDoctorHealthContribution("doctor:retained-update-runtimes", "Updater runtimes", {
       updateWork: { kind: "startup" },
-      run: runLegacyPluginSourceCapturesHealth,
+      run: runRetainedUpdateRuntimesHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:ui-protocol-freshness",
-      label: "UI protocol freshness",
+    createDoctorHealthContribution(
+      "doctor:update-snapshots",
+      "Retained update database snapshots",
+      {
+        updateWork: { kind: "standalone" },
+        healthChecks: {
+          description:
+            "Retained npm update database snapshots need operator review before removal.",
+          defaultEnabled: true,
+          async detect(ctx) {
+            const { collectUpdateSnapshotHealthFindings } =
+              await import("../commands/doctor-update-snapshots.js");
+            return collectUpdateSnapshotHealthFindings(ctx.env);
+          },
+        },
+      },
+    ),
+    createDoctorHealthContribution("doctor:ui-protocol-freshness", "UI protocol freshness", {
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
       run: async () => {},
     }),
-    createDoctorHealthContribution({
-      id: "doctor:stale-runtime-build",
-      label: "Stale runtime build",
+    createDoctorHealthContribution("doctor:stale-runtime-build", "Stale runtime build", {
       healthCheckIds: ["core/doctor/stale-runtime-build"],
       // healthCheckIds only claims the check for structured selection, which runs
       // under --lint/--fix; a plain `openclaw doctor` needs this runner to report.
       run: runStaleRuntimeBuildHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:disk-space",
-      label: "Disk space",
+    createDoctorHealthContribution("doctor:disk-space", "Disk space", {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
@@ -345,9 +349,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runDiskSpaceHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:project-clone-shape",
-      label: "Project clones",
+    createDoctorHealthContribution("doctor:project-clone-shape", "Project clones", {
       updateWork: { kind: "standalone" },
       healthChecks: {
         description: "Partial and shallow registry-owned project clones need manual repair.",
@@ -363,21 +365,19 @@ export function resolveInitialDoctorHealthContributions(params: {
         await noteProjectCloneShape(ctx.cfg);
       },
     }),
-    createDoctorHealthContribution({
-      id: "doctor:db-bloat",
-      label: "SQLite database size",
+    createDoctorHealthContribution("doctor:db-bloat", "SQLite database size", {
       updateWork: { kind: "standalone" },
       run: runDatabaseBloatHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:channel-ingress-dead-letters",
-      label: "Channel ingress dead letters",
-      updateWork: { kind: "inspection", scope: "run" },
-      run: runChannelIngressDeadLettersHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:state-integrity",
-      label: "State integrity",
+    createDoctorHealthContribution(
+      "doctor:channel-ingress-dead-letters",
+      "Channel ingress dead letters",
+      {
+        updateWork: { kind: "inspection", scope: "run" },
+        run: runChannelIngressDeadLettersHealth,
+      },
+    ),
+    createDoctorHealthContribution("doctor:state-integrity", "State integrity", {
       healthChecks: {
         description: "State directory, config permission, and runtime state issues are findings.",
         defaultEnabled: false,
@@ -400,31 +400,29 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runStateIntegrityHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:codex-session-routes",
-      label: "Codex session routes",
+    createDoctorHealthContribution("doctor:codex-session-routes", "Codex session routes", {
       healthCheckIds: ["core/doctor/codex-session-routes"],
       run: runCodexSessionRouteHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:telegram-general-topic-conversations",
-      label: "Telegram General-topic conversations",
-      healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
-      run: runTelegramGeneralTopicConversationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-transcript-headers",
-      label: "Session transcript headers",
-      run: runSessionTranscriptHeadersHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-transcript-labels",
-      label: "Session transcript labels",
-      run: runSessionTranscriptLabelsHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-snapshots",
-      label: "Session snapshots",
+    createDoctorHealthContribution(
+      "doctor:telegram-general-topic-conversations",
+      "Telegram General-topic conversations",
+      {
+        healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
+        run: runTelegramGeneralTopicConversationHealth,
+      },
+    ),
+    createDoctorHealthContribution(
+      "doctor:session-transcript-headers",
+      "Session transcript headers",
+      runSessionTranscriptHeadersHealth,
+    ),
+    createDoctorHealthContribution(
+      "doctor:session-transcript-labels",
+      "Session transcript labels",
+      runSessionTranscriptLabelsHealth,
+    ),
+    createDoctorHealthContribution("doctor:session-snapshots", "Session snapshots", {
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description:
@@ -440,9 +438,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runSessionSnapshotsHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:config-audit-scrub",
-      label: "Config audit",
+    createDoctorHealthContribution("doctor:config-audit-scrub", "Config audit", {
       healthChecks: {
         description:
           "Historical config-audit argv redaction gaps are represented as structured findings.",
@@ -462,15 +458,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runConfigAuditScrubHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:legacy-cron",
-      label: "Legacy cron",
+    createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
       healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:sandbox",
-      label: "Sandbox",
+    createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
       healthChecks: {
         id: "core/doctor/sandbox/registry-files",
         description: "Legacy sandbox registry files are represented in SQLite registry storage.",
@@ -494,6 +486,10 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor sandbox contribution owns registry migration"),
       },
       run: runSandboxHealth,
+    }),
+    createDoctorHealthContribution("doctor:codex-bwrap", "Codex bwrap sandbox", {
+      updateWork: { kind: "standalone" },
+      run: runCodexBwrapHealth,
     }),
   ];
 }

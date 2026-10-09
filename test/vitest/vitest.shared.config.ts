@@ -1,4 +1,4 @@
-// Vitest shared config wires the shared test shard.
+// Threads inherit admission; forks also run this bootstrap in their own process.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -28,9 +29,7 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
 if (process.versions.bun) {
-  // Removal: delete this Vitest bootstrap after oven-sh/bun#42349 ships in supported Bun.
-  const { ensureSqliteLibrarySelected } = await import("../../src/infra/bun-sqlite-library.ts");
-  ensureSqliteLibrarySelected();
+  await import("./vitest.sqlite-preload.mts");
 }
 
 export type { LocalVitestScheduling };
@@ -50,7 +49,7 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
 const vitestConfigFiles = fs
   .readdirSync(path.join(repoRoot, "test", "vitest"), { withFileTypes: true })
-  .filter((entry) => entry.isFile() && /\.(?:mjs|ts)$/u.test(entry.name))
+  .filter((entry) => entry.isFile() && /\.(?:mjs|mts|ts)$/u.test(entry.name))
   .map((entry) => `test/vitest/${entry.name}`)
   .toSorted((left, right) => left.localeCompare(right));
 export function resolveRepoRootPath(value: string): string {
@@ -178,6 +177,11 @@ export const sharedVitestConfig = {
         replacement: "undici/index.js",
       },
       {
+        // Keep the installed WebSocket package and its mocks on one module identity in Bun.
+        find: /^ws$/u,
+        replacement: path.join(repoRoot, "node_modules", "ws", "wrapper.mjs"),
+      },
+      {
         find: "discord-api-types/v10",
         replacement: path.join(
           repoRoot,
@@ -275,6 +279,16 @@ export const sharedVitestConfig = {
           "gateway-protocol",
           "src",
           "gateway-error-details.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/restart-unavailable",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "restart-unavailable.ts",
         ),
       },
       {
@@ -476,6 +490,9 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("worker-runtime", "worker"),
+      sourcePackageAlias("worker-runtime", "lifecycle"),
+      sourcePackageAlias("worker-runtime"),
       sourcePackageAlias("session-url-contract", "parse"),
       sourcePackageAlias("session-url-contract", "session-key-normalization"),
       sourcePackageAlias("session-url-contract", "share-build"),
@@ -509,7 +526,12 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: workerConfig.pool,
     // Native imports keep the invocation owner's isolated source-cache policy.
-    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
+    execArgv: [
+      ...(process.versions.bun
+        ? resolveTestBunSourceArgs(repoRoot)
+        : ["--import", resolveTsxImport(repoRoot)]),
+      `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+    ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
@@ -538,7 +560,7 @@ export const sharedVitestConfig = {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
       ...vitestConfigFiles,
-      "test/vitest/**/*.{ts,mjs}",
+      "test/vitest/**/*.{ts,mts,mjs}",
     ].map(resolveRepoRootPath),
     include: [
       "src/**/*.test.ts",

@@ -19,12 +19,6 @@ export const defaultCliWatchdogClock: CliWatchdogClock = {
   },
 };
 
-type CliPluginWatchdog = {
-  noteOutput: () => void;
-  reset: () => void;
-  dispose: () => void;
-};
-
 export function createCliPluginWatchdog(
   params: {
     provider: string;
@@ -37,13 +31,14 @@ export function createCliPluginWatchdog(
     getActiveAskUserDeadline?: () => number | undefined;
     activeToolCount: () => number;
     backgroundTaskCount: () => number;
+    compactionActive: () => boolean;
     hasObservedActivity: () => boolean;
     hasReplayUnsafeActivity: () => boolean;
     onNoOutputTimeout: (error: FailoverError) => void;
     onOverallTimeout: () => void;
   },
   clock: CliWatchdogClock = defaultCliWatchdogClock,
-): CliPluginWatchdog {
+) {
   const noOutputTimeoutMs = params.noOutputTimeoutMs;
   const overallTimeoutMs = params.overallTimeoutMs;
   let lastOutputAtMs = clock.now();
@@ -124,6 +119,7 @@ export function createCliPluginWatchdog(
           observedActivity: params.hasObservedActivity(),
           activeToolCount: params.activeToolCount(),
           backgroundTaskCount: params.backgroundTaskCount(),
+          compactionActive: params.compactionActive(),
         },
         hasOutputText: false,
         useResume: params.useResume,

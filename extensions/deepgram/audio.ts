@@ -1,4 +1,3 @@
-// Deepgram plugin module implements audio behavior.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -7,11 +6,6 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
-
-function resolveModel(model?: string): string {
-  const trimmed = model?.trim();
-  return trimmed || DEFAULT_DEEPGRAM_AUDIO_MODEL;
-}
 
 function readDeepgramTranscript(payload: Record<string, unknown>): string | undefined {
   const results = asOptionalRecord(payload.results);
@@ -58,7 +52,7 @@ export async function transcribeDeepgramAudio(
     requireTranscriptionText,
   } = await import("openclaw/plugin-sdk/provider-http");
   const { isDeepgramFluxModel, transcribeDeepgramFluxAudio } = await import("./audio-flux.js");
-  const model = resolveModel(params.model);
+  const model = params.model?.trim() || DEFAULT_DEEPGRAM_AUDIO_MODEL;
   const flux = isDeepgramFluxModel(model);
   const requestConfig = resolveProviderHttpRequestConfigWithOriginTrust({
     baseUrl: params.baseUrl,

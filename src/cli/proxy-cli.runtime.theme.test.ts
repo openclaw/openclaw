@@ -1,5 +1,6 @@
 // Proxy CLI rich-theme coverage stays isolated because the theme mock must precede runtime import.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const { getRuntimeConfigMock, runProxyValidationMock } = vi.hoisted(() => ({
   getRuntimeConfigMock: vi.fn(),

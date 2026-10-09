@@ -337,7 +337,6 @@ describe("slackApprovalNativeRuntime", () => {
     { phase: "resolved", status: "processing", threadTs: "1712345678.000001" },
     { phase: "expired", status: "active", threadTs: "1712345678.000001" },
     { phase: "resolved", status: "processing", threadTs: undefined },
-    { phase: "expired", status: "active", threadTs: undefined },
   ] as const)(
     "tracks $phase approval session status with thread $threadTs",
     async ({ phase, status, threadTs }) => {

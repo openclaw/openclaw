@@ -2,6 +2,10 @@ import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js
 import { html, nothing, svg } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import { deviceIcons } from "../../components/icons-devices.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
@@ -24,9 +28,9 @@ import {
   defaultCloudOs,
   type DraftCloudProfile,
   type DraftEnvironment,
-  type DraftMachineOption,
-  type DraftOperatingSystem,
 } from "./discovery.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
+import { renderPickerLabel } from "./picker-label.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 
 registerNewSessionSetupEnglish();
@@ -41,9 +45,9 @@ type WhereChipState = Readonly<{
   label: string;
   devices: readonly DevicePlacementOption[];
   cloudProfiles: readonly DraftCloudProfile[];
-  cloudMachines: readonly DraftMachineOption[];
+  cloudMachines: readonly WorkerMachineOption[];
   selectedMachineId: string;
-  operatingSystems: readonly DraftOperatingSystem[];
+  operatingSystems: readonly WorkerOperatingSystem[];
   selectedOsId: string;
   autoDeviceDisabledReason?: string;
 }>;
@@ -92,35 +96,11 @@ export function resolveWhereChip(params: {
       autoDeviceDisabledReason,
     };
   }
-  if (params.deviceId) {
-    return {
-      kind: "device",
-      label: device?.label ?? params.deviceId,
-      cloudMachines: [],
-      selectedMachineId: "",
-      operatingSystems: [],
-      selectedOsId: "",
-      devices,
-      cloudProfiles: params.cloudProfiles,
-      autoDeviceDisabledReason,
-    };
-  }
-  if (params.autoDevice) {
-    return {
-      kind: "auto-device",
-      label: t("newSession.autoDevice"),
-      cloudMachines: [],
-      selectedMachineId: "",
-      operatingSystems: [],
-      selectedOsId: "",
-      devices,
-      cloudProfiles: params.cloudProfiles,
-      autoDeviceDisabledReason,
-    };
-  }
   return {
-    kind: "local",
-    label: t("newSession.local"),
+    kind: params.deviceId ? "device" : params.autoDevice ? "auto-device" : "local",
+    label: params.deviceId
+      ? (device?.label ?? params.deviceId)
+      : t(params.autoDevice ? "newSession.autoDevice" : "newSession.local"),
     cloudMachines: [],
     selectedMachineId: "",
     operatingSystems: [],
@@ -164,8 +144,32 @@ function renderEnvironmentSkeletons(section: "devices" | "cloud") {
   </div>`;
 }
 
+function renderEnvironmentHeading(
+  label: string,
+  action: "connect-machine" | "manage-cloud-workers",
+  disabled: boolean,
+  onAction: (() => void) | undefined,
+) {
+  return html`<div class="new-session-page__environment-heading new-session-page__devices-heading">
+    <span>${label}</span>
+    ${
+      onAction
+        ? html`<button
+            type="button"
+            class="new-session-page__connect-device"
+            data-action=${action}
+            aria-label=${t(action === "connect-machine" ? "newSession.connectMachine" : "newSession.manageCloudWorkers")}
+            ?disabled=${disabled}
+            @click=${onAction}
+          >
+            ${connectDeviceIcon}
+          </button>`
+        : nothing
+    }
+  </div>`;
+}
+
 export function renderWhereChip(params: {
-  idPrefix?: string;
   autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
@@ -269,36 +273,12 @@ export function renderWhereChip(params: {
         : "newSession.autoDeviceHint",
     );
   const busy = params.submitting || params.pendingPlacement;
-  const destinationDisabled = busy;
   const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
   const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
-  let cleanupScrollFade: (() => void) | undefined;
-  const bindScrollFade = (element: Element | undefined) => {
-    cleanupScrollFade?.();
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    const update = () => {
-      const overflow = element.scrollHeight - element.clientHeight;
-      element.toggleAttribute("data-fade-top", overflow > 1 && element.scrollTop > 1);
-      element.toggleAttribute("data-fade-bottom", overflow > 1 && element.scrollTop < overflow - 1);
-    };
-    const resize = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
-    resize?.observe(element);
-    const content = new MutationObserver(update);
-    content.observe(element, { childList: true, subtree: true, characterData: true });
-    element.addEventListener("scroll", update, { passive: true });
-    cleanupScrollFade = () => {
-      resize?.disconnect();
-      content.disconnect();
-      element.removeEventListener("scroll", update);
-    };
-    update();
-  };
   return html`
     <span class="new-session-page__select new-session-page__select--where">
       <button
-        id=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+        id="new-session-where-trigger"
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -319,52 +299,25 @@ export function renderWhereChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icon}</span>
-        <span class="new-session-page__trigger-label">${label}</span>
-        ${
-          configurationSummary
-            ? html`<span class="new-session-page__trigger-summary">${configurationSummary}</span>`
-            : nothing
-        }
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(icon, label, configurationSummary)}
       </button>
     </span>
     <wa-popover
       ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-      for=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+      for="new-session-where-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.target !== event.currentTarget) {
-          return;
-        }
+      @wa-show=${onOwnPopoverEvent((event) => {
         if (event.currentTarget instanceof WaPopover) {
           // Let the positioning owner recompute the scroll budget on open and resize.
           event.currentTarget.popup.autoSize = "vertical";
           event.currentTarget.popup.autoSizePadding = 8;
         }
         params.onPopoverShow();
-      }}
-      @wa-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverHide();
-        }
-      }}
-      @wa-after-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverAfterHide();
-        }
-      }}
+      })}
+      @wa-hide=${onOwnPopoverEvent(() => params.onPopoverHide())}
+      @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >
       <div class="new-session-page__environment-layout">
         <div class="new-session-page__picker-root new-session-page__environment-picker">
@@ -384,28 +337,15 @@ export function renderWhereChip(params: {
               }}
             />
           </label>
-          <div ${ref(bindScrollFade)} class="new-session-page__environment-list">
+          <div class="new-session-page__environment-list">
             ${
               showLocal || devices.length || showAuto
-                ? html`<div
-                    class="new-session-page__environment-heading new-session-page__devices-heading"
-                  >
-                    <span>${t("newSession.yourDevices")}</span>
-                    ${
-                      params.isAdmin
-                        ? html`<button
-                            type="button"
-                            class="new-session-page__connect-device"
-                            data-action="connect-machine"
-                            aria-label=${t("newSession.connectMachine")}
-                            ?disabled=${busy}
-                            @click=${params.onConnectMachine}
-                          >
-                            ${connectDeviceIcon}
-                          </button>`
-                        : nothing
-                    }
-                  </div>`
+                ? renderEnvironmentHeading(
+                    t("newSession.yourDevices"),
+                    "connect-machine",
+                    busy,
+                    params.isAdmin ? params.onConnectMachine : undefined,
+                  )
                 : nothing
             }
             ${
@@ -457,7 +397,7 @@ export function renderWhereChip(params: {
                       checked: params.state.kind === "local",
                       onSelect: () => params.onSelectDevice(""),
                     },
-                    destinationDisabled,
+                    busy,
                   )
                 : nothing
             }
@@ -488,32 +428,19 @@ export function renderWhereChip(params: {
                     title: device.disabledReason,
                     onSelect: () => params.onSelectDevice(device.deviceId),
                   },
-                  destinationDisabled,
+                  busy,
                 );
               },
             )}
             ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
             ${
               cloudProfiles.length || showMissingCloud || showCloudSkeletons
-                ? html`<div
-                    class="new-session-page__environment-heading new-session-page__devices-heading"
-                  >
-                    <span>${t("newSession.cloud")}</span>
-                    ${
-                      params.isAdmin && !showCloudSkeletons
-                        ? html`<button
-                            type="button"
-                            class="new-session-page__connect-device"
-                            data-action="manage-cloud-workers"
-                            aria-label=${t("newSession.manageCloudWorkers")}
-                            ?disabled=${busy}
-                            @click=${params.onManageCloudWorkers}
-                          >
-                            ${connectDeviceIcon}
-                          </button>`
-                        : nothing
-                    }
-                  </div>`
+                ? renderEnvironmentHeading(
+                    t("newSession.cloud"),
+                    "manage-cloud-workers",
+                    busy,
+                    params.isAdmin && !showCloudSkeletons ? params.onManageCloudWorkers : undefined,
+                  )
                 : nothing
             }
             ${renderCloudProfileMenuItems({
@@ -523,7 +450,7 @@ export function renderWhereChip(params: {
               selectedMachine: params.state.selectedMachineId,
               onSelectOs: params.onSelectCloudOs,
               onSelectMachine: params.onSelectCloudMachine,
-              submitting: destinationDisabled,
+              submitting: busy,
               compact: true,
               disabled: Boolean(params.cloudDisabledReason),
               disabledReason: params.cloudDisabledReason,
@@ -545,7 +472,7 @@ export function renderWhereChip(params: {
                       title: t("newSession.catalogUnavailable"),
                       onSelect: () => undefined,
                     },
-                    destinationDisabled,
+                    busy,
                   )
                 : nothing
             }

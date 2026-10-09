@@ -41,6 +41,7 @@ const policyPatches = [];
 const policyEvents = [];
 const heldPolicyReads = new Set();
 const policyWaiters = new Set();
+const attachmentReadyWaiters = new Set();
 let policyPhase = "permitted";
 let policyHistoryReads = 0;
 let partial = false;
@@ -146,6 +147,16 @@ function notifyPolicyWaiters() {
   policyWaiters.clear();
 }
 
+function notifyAttachmentReadyWaiters() {
+  if (!requests.some((request) => request.method === "node.pending.pull")) {
+    return;
+  }
+  for (const res of attachmentReadyWaiters) {
+    res.end(JSON.stringify({ ready: true }));
+  }
+  attachmentReadyWaiters.clear();
+}
+
 function publishPolicyChange() {
   let delivered = 0;
   for (const ws of wss.clients) {
@@ -205,7 +216,12 @@ const server = createServer((req, res) => {
     return;
   }
   const url = new URL(req.url, "http://127.0.0.1");
-  if (attachmentMode && url.pathname === document.url) {
+  if (attachmentMode && url.pathname === "/attachment-ready") {
+    attachmentReadyWaiters.add(res);
+    res.once("close", () => attachmentReadyWaiters.delete(res));
+    notifyAttachmentReadyWaiters();
+    return;
+  } else if (attachmentMode && url.pathname === document.url) {
     if (documentDenied || url.searchParams.get("mediaTicket") !== "synthetic-document-ticket") {
       res.writeHead(410);
       res.end(JSON.stringify({ error: "Synthetic document expired" }));
@@ -275,6 +291,7 @@ wss.on("connection", (ws) => {
       artifactId: params.artifactId,
       ...(guestModelPolicy ? { key: params.key } : {}),
     });
+    notifyAttachmentReadyWaiters();
     const reply = (payload) =>
       ws.send(JSON.stringify({ type: "res", id: req.id, ok: true, payload }));
     const fail = (message) =>
@@ -540,6 +557,10 @@ function stop() {
     res.destroy();
   }
   policyWaiters.clear();
+  for (const res of attachmentReadyWaiters) {
+    res.destroy();
+  }
+  attachmentReadyWaiters.clear();
   // close() waits for existing peers; a connected simulator must not keep this fixture alive.
   for (const ws of wss.clients) {
     ws.terminate();

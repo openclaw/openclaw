@@ -6,6 +6,7 @@ import {
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertNoRetiredStateFiles } from "../../infra/state-migrations.retired-files.js";
 import {
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
@@ -19,8 +20,11 @@ import {
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { repairMergedGatewayOwnerProfile } from "../../state/user-profiles-owner-migration.js";
 import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profiles-tailscale-migration.js";
-import { collectOpenAICodexAuthProfileStoreIdMap } from "../doctor-auth-flat-profiles.js";
-import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
+import {
+  collectOpenAICodexAuthProfileStoreIdMap,
+  maybeRepairLegacyAuthProfileStores,
+} from "../doctor-auth-flat-profiles.js";
+import { listReferencedLegacyOAuthSidecarPaths } from "../doctor-auth-legacy-paths.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { repairAuthProfileMigration } from "./auth-profile-repair.js";
@@ -48,7 +52,6 @@ import {
 } from "./shared/installed-plugin-id-recovery.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
-import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import {
@@ -93,6 +96,10 @@ export async function runDoctorRepairSequence(params: {
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
+  assertNoRetiredStateFiles(
+    "OAuth credential sidecars",
+    listReferencedLegacyOAuthSidecarPaths(env, state.candidate),
+  );
   await assertInstalledPluginIdRecoveryCurrent(
     state.candidate,
     params.installedPluginIdRecovery,
@@ -146,17 +153,10 @@ export async function runDoctorRepairSequence(params: {
     }
     appendNotes(warningNotes, mutation.warnings);
   };
-  type RepairStage = (config: DoctorConfigMutationState["candidate"]) =>
-    | {
-        config: DoctorConfigMutationState["candidate"];
-        changes: string[];
-        warnings?: string[];
-      }
-    | Promise<{
-        config: DoctorConfigMutationState["candidate"];
-        changes: string[];
-        warnings?: string[];
-      }>;
+  type RepairMutation = Parameters<typeof applyMutation>[0];
+  type RepairStage = (
+    config: DoctorConfigMutationState["candidate"],
+  ) => RepairMutation | Promise<RepairMutation>;
   const applyRepairStages = async (stages: readonly RepairStage[]): Promise<void> => {
     for (const repair of stages) {
       // Each descriptor consumes the previous repair's candidate; changing the
@@ -165,14 +165,15 @@ export async function runDoctorRepairSequence(params: {
     }
   };
 
-  const initialChannelRepairs = await runWithCurrentPluginMetadata(() =>
-    collectChannelDoctorRepairMutations({
-      cfg: state.candidate,
-      doctorFixCommand: params.doctorFixCommand,
-      env,
-    }),
-  );
-  for (const mutation of initialChannelRepairs) {
+  const collectCurrentChannelRepairs = () =>
+    runWithCurrentPluginMetadata(() =>
+      collectChannelDoctorRepairMutations({
+        cfg: state.candidate,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      }),
+    );
+  for (const mutation of await collectCurrentChannelRepairs()) {
     applyMutation(mutation);
   }
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
@@ -185,6 +186,13 @@ export async function runDoctorRepairSequence(params: {
     env,
     prompter: { shouldRepair: true },
   });
+  // Later auth diagnostics and session repairs consume only canonical credentials.
+  const authFieldRepair = await maybeRepairLegacyAuthProfileStores({
+    cfg: state.candidate,
+    env,
+    profileIdMap: new Map(),
+  });
+  appendRepairNotes(authFieldRepair);
   const codexRouteRepair = runWithCurrentPluginMetadata(() =>
     maybeRepairCodexRoutes({
       cfg: state.candidate,
@@ -234,19 +242,15 @@ export async function runDoctorRepairSequence(params: {
     pluginMetadataSnapshotState.inventoryChanged = true;
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
-    const currentScope = resolveCurrentPluginMetadataScope();
+    const currentScope = { ...resolveCurrentPluginMetadataScope(), env };
     pluginMetadataSnapshotState.current = runWithCurrentPluginMetadata(() =>
       resolveConfigWideDoctorPluginMetadataSnapshot({
         snapshot: loadPluginMetadataSnapshot({
-          config: currentScope.config,
-          env,
-          workspaceDir: currentScope.workspaceDir,
+          ...currentScope,
           // Later Doctor contributions reuse this cache owner. Carry the committed
           // records into it so registry refresh cannot restore the pre-repair base.
           index: loadInstalledPluginIndex({
-            config: currentScope.config,
-            env,
-            workspaceDir: currentScope.workspaceDir,
+            ...currentScope,
             installRecords: missingConfiguredPluginInstallRepair.records,
           }),
         }),
@@ -294,14 +298,7 @@ export async function runDoctorRepairSequence(params: {
       for (const mutation of channelCompatibilityMutations) {
         applyMutation(mutation);
       }
-      const channelRepairs = await runWithCurrentPluginMetadata(() =>
-        collectChannelDoctorRepairMutations({
-          cfg: state.candidate,
-          doctorFixCommand: params.doctorFixCommand,
-          env,
-        }),
-      );
-      for (const mutation of channelRepairs) {
+      for (const mutation of await collectCurrentChannelRepairs()) {
         applyMutation(mutation);
       }
     }
@@ -342,17 +339,10 @@ export async function runDoctorRepairSequence(params: {
   );
   appendNotes(warningNotes, emptyAllowlistWarnings);
 
-  await applyRepairStages([maybeRepairLegacyToolsBySenderKeys, maybeRepairExecSafeBinProfiles]);
+  await applyRepairStages([maybeRepairExecSafeBinProfiles]);
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(repairMergedGatewayOwnerProfile({ env, shouldRepair: true }));
   appendRepairNotes(await removeStalePluginRuntimeSymlinks());
-  const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
-    cfg: state.candidate,
-    prompter: { confirmAutoFix: async () => true },
-    emitNotes: false,
-    env,
-  });
-  appendRepairNotes(legacyOAuthSidecarRepair);
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,
@@ -388,7 +378,7 @@ export async function runDoctorRepairSequence(params: {
     warningNotes.push("Model retirement deferred until configured plugin installation converges.");
   }
   const authProfilesRepaired =
-    legacyOAuthSidecarRepair.changes.length > 0 ||
+    authFieldRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
     authRepair.storeChanges.length > 0;
 

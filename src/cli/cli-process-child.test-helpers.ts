@@ -5,10 +5,11 @@ import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { onTestFinished } from "vitest";
+import { onTestFinished, type TestContext } from "vitest";
 import {
   collectNodeDiagnosticReport,
   NODE_DIAGNOSTIC_REPORT_GRACE_MS as REPORT_GRACE_MS,
+  shouldEnableNodeDiagnosticReports,
 } from "../../scripts/lib/node-diagnostic-report.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -196,16 +197,17 @@ export async function runCliProcessChild(params: {
   input?: string;
   interact?: (child: ChildProcessWithoutNullStreams) => Promise<void> | void;
   onStdout?: (stdout: string) => void;
+  /** Concurrent callers bind diagnostic cleanup to their own test context. */
+  onTestFinished?: TestContext["onTestFinished"];
   timeoutMs?: number;
   maxBuffer?: number;
 }): Promise<CliProcessChildResult> {
   const timeoutMs = params.timeoutMs ?? CLI_PROCESS_DEADLOCK_GUARD_MS;
   const executable = params.nodeExecutable ?? process.execPath;
-  const supportsDiagnostics = process.platform !== "win32" && !process.versions.bun;
-  const reports = supportsDiagnostics ? createFixtureLifetime() : undefined;
+  const reports = shouldEnableNodeDiagnosticReports() ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
-    onTestFinished(async () => {
+    (params.onTestFinished ?? onTestFinished)(async () => {
       if (!unjoinedWork) {
         await reports.cleanup();
       }

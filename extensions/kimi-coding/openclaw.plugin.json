@@ -132,7 +132,7 @@
   "modelPricing": {
     "providers": {
       "kimi": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {
@@ -140,7 +140,7 @@
         }
       },
       "kimi-coding": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {

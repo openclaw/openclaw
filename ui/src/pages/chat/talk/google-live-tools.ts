@@ -9,7 +9,6 @@ import {
   type RealtimeTalkTransportContext,
 } from "./shared.ts";
 
-const GOOGLE_LIVE_MAX_PENDING_TOOL_CALLS = 1_024;
 const GOOGLE_LIVE_MAX_TOOL_CALL_IDS = 1_024;
 
 type GoogleLivePendingToolCall = {
@@ -30,8 +29,6 @@ type GoogleLiveToolOwnerOptions = {
   failConnection: (detail: string) => void;
   isDescribeViewActive: () => boolean;
   sendResult: (callId: string, name: string, result: unknown) => void;
-  sendControlSpeechMessage: (message: string) => void;
-  stopOutputForSuppressedControl: (result: unknown) => void;
 };
 
 export class GoogleLiveToolOwner {
@@ -75,14 +72,14 @@ export class GoogleLiveToolOwner {
       this.options.failConnection("Google Live tool-call session limit exceeded");
       return;
     }
-    if (this.pendingCalls.size >= GOOGLE_LIVE_MAX_PENDING_TOOL_CALLS) {
-      this.options.failConnection("Google Live pending tool-call limit exceeded");
-      return;
-    }
     this.seenCallIds.add(callId);
     this.pendingCalls.set(callId, { name, cancelled: false });
 
-    if (!this.isSupportedTool(name)) {
+    if (
+      name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
+      name !== REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME &&
+      name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+    ) {
       const message = `Tool "${name}" is not available in browser Talk`;
       if (!this.submitResult(callId, { error: message })) {
         return;
@@ -125,19 +122,23 @@ export class GoogleLiveToolOwner {
     }
   }
 
-  private isSupportedTool(name: string): boolean {
-    return (
-      name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME ||
-      name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME ||
-      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
-    );
-  }
-
   private async runAgentTool(name: string, callId: string, args: unknown): Promise<void> {
-    const abortController = this.startExecution(callId);
+    const abortController = new AbortController();
+    this.abortControllers.set(callId, abortController);
     try {
+      const { ctx } = this.options;
+      const activeContext: RealtimeTalkTransportContext = {
+        ...ctx,
+        callbacks: {
+          onStatus: (status, detail) => {
+            if (!this.options.isClosed()) {
+              ctx.callbacks.onStatus?.(status, detail);
+            }
+          },
+        },
+      };
       const params = {
-        ctx: this.createActiveContext(),
+        ctx: activeContext,
         callId,
         args: args ?? {},
         signal: abortController.signal,
@@ -177,30 +178,6 @@ export class GoogleLiveToolOwner {
     });
   }
 
-  private createActiveContext(): RealtimeTalkTransportContext {
-    const { ctx } = this.options;
-    return {
-      ...ctx,
-      callbacks: {
-        onStatus: (status, detail) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onStatus?.(status, detail);
-          }
-        },
-        onTranscript: (entry) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onTranscript?.(entry);
-          }
-        },
-        onTalkEvent: (event) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onTalkEvent?.(event);
-          }
-        },
-      },
-    };
-  }
-
   private submitResult(callId: string, result: unknown): boolean {
     const call = this.pendingCalls.get(callId);
     if (!call || call.cancelled) {
@@ -214,12 +191,6 @@ export class GoogleLiveToolOwner {
     }
     this.pendingCalls.delete(callId);
     return true;
-  }
-
-  private startExecution(callId: string): AbortController {
-    const abortController = new AbortController();
-    this.abortControllers.set(callId, abortController);
-    return abortController;
   }
 
   private finishExecution(callId: string, abortController: AbortController): void {

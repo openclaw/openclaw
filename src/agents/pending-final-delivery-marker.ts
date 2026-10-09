@@ -1,5 +1,7 @@
 /** Persists restart-recoverable final delivery markers for agent runs. */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type { CommandOwnerAssertion } from "../auto-reply/command-owner-authority.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -10,10 +12,15 @@ import {
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
 } from "../auto-reply/reply/pending-final-delivery.js";
+import {
+  getRestartRecoveryTerminalDeliveryEvidence,
+  mergeRestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-state.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import { persistAgentSession } from "./command/attempt-execution.shared.js";
 
 type PersistPendingFinalDeliveryMarkerParams = {
   agentId: string;
@@ -27,6 +34,8 @@ type PersistPendingFinalDeliveryMarkerParams = {
   payloads: ReplyPayload[];
   deliveryContext?: DeliveryContext;
   runOwnedSessionId: string;
+  commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
+  assertCurrent?: () => void;
 };
 
 type PendingFinalDeliveryMarkerResult = {
@@ -46,11 +55,15 @@ export async function persistPendingFinalDeliveryMarker(
   const recoverableText = buildRecoverablePendingFinalDeliveryText(
     normalizePendingFinalRecoveryPayloads(params.payloads),
   );
+  const entry =
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined) ??
+    params.sessionEntry;
 
   if (
     !params.deliver ||
     !params.sessionStore ||
     !params.sessionKey ||
+    !entry ||
     params.suppressVisibleSessionEffects ||
     params.sessionReboundDuringRun ||
     isSubagentSessionKey(params.sessionKey) ||
@@ -66,61 +79,95 @@ export async function persistPendingFinalDeliveryMarker(
     };
   }
 
-  const entry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
-  if (!entry) {
-    return {
-      sessionEntry: params.sessionEntry,
-      pendingFinalDeliveryMarkerPersisted: false,
-      hasSendableFinalPayload,
-    };
-  }
-
+  params.assertCurrent?.();
+  const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
   const now = Date.now();
   const intentId = randomUUID();
   const deliveryId = randomUUID();
-  const persisted = await persistAgentSession({
+  const harnessCompletion = entry.restartRecoveryHarnessCompletion
+    ? structuredClone(entry.restartRecoveryHarnessCompletion)
+    : undefined;
+  const persisted = await applySessionEntryReplacements<SessionEntry | undefined>({
     agentId: params.agentId,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
+    sessionKeys: [sessionKey],
     storePath: params.storePath,
-    initialEntry: entry,
-    entry: {
-      ...entry,
-      pendingFinalDelivery: {
-        ...(recoverableText
-          ? { kind: "replayable" as const, text: recoverableText }
-          : { kind: "transport-only" as const }),
-        intentId,
-        deliveries: [{ id: deliveryId, state: "prepared" as const }],
-        createdAt: now,
-        context: params.deliveryContext,
-      },
-      updatedAt: now,
+    assertCommitAllowed: params.assertCurrent,
+    update: (entries) => {
+      const current = entries.find((candidate) => candidate.sessionKey === sessionKey)?.entry;
+      if (
+        !current ||
+        current.sessionId !== params.runOwnedSessionId ||
+        current.abortedLastRun === true ||
+        (harnessCompletion &&
+          (harnessCompletion.sessionId !== current.sessionId ||
+            harnessCompletion.lifecycleRevision !== current.lifecycleRevision ||
+            !isDeepStrictEqual(current.restartRecoveryHarnessCompletion, harnessCompletion)))
+      ) {
+        return { result: current };
+      }
+      const savedEvidence = harnessCompletion
+        ? getRestartRecoveryTerminalDeliveryEvidence(current, harnessCompletion.sourceRunId)
+        : undefined;
+      const next: SessionEntry = {
+        ...current,
+        pendingFinalDelivery: {
+          ...(recoverableText && params.commandOwnerReference === undefined
+            ? { kind: "replayable" as const, text: recoverableText }
+            : { kind: "transport-only" as const }),
+          intentId,
+          deliveries: [{ id: deliveryId, state: "prepared" as const }],
+          createdAt: now,
+          context: params.deliveryContext,
+        },
+        // A new capture cannot replace a receipt or assign its send facts to another claim.
+        // Preserve existing source evidence even when it cannot acknowledge this requester.
+        ...(harnessCompletion && !savedEvidence
+          ? {
+              restartRecoveryTerminalDeliveryEvidence: mergeRestartRecoveryTerminalDeliveryEvidence(
+                current.restartRecoveryTerminalDeliveryEvidence,
+                [
+                  {
+                    runId: harnessCompletion.sourceRunId,
+                    harnessCompletion,
+                    deliveryContext: params.deliveryContext,
+                    captured: true,
+                  },
+                ],
+              ),
+            }
+          : {}),
+        updatedAt: Math.max(current.updatedAt, now),
+      };
+      return { result: next, replacements: [{ sessionKey, entry: next }] };
     },
-    shouldPersist: (current) =>
-      current?.sessionId === params.runOwnedSessionId && current.abortedLastRun !== true,
   });
+  if (persisted) {
+    params.sessionStore[params.sessionKey] = persisted;
+  } else {
+    delete params.sessionStore[params.sessionKey];
+  }
   const markerPersisted = persisted?.pendingFinalDelivery?.intentId === intentId;
 
   if (markerPersisted) {
     for (const payload of sendablePayloads) {
       setReplyPayloadMetadata(payload, {
-        ...(entry.restartRecoveryHarnessCompletion
+        ...(harnessCompletion
           ? {
               sessionWriterDeliveryAuthority: {
                 ...getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
-                agentId: entry.restartRecoveryHarnessCompletion.requesterAgentId,
+                agentId: harnessCompletion.requesterAgentId,
                 expectedSessionId: params.runOwnedSessionId,
-                ...(entry.lifecycleRevision
-                  ? { expectedLifecycleRevision: entry.lifecycleRevision }
+                ...(harnessCompletion.lifecycleRevision
+                  ? { expectedLifecycleRevision: harnessCompletion.lifecycleRevision }
                   : {}),
                 sessionKey: params.sessionKey,
                 storePath: params.storePath,
-                harnessCompletion: structuredClone(entry.restartRecoveryHarnessCompletion),
+                harnessCompletion,
               },
             }
           : {}),
         pendingFinalDeliveryCompletion: {
+          commandOwnerReference: params.commandOwnerReference,
           agentId: params.agentId,
           deliveryId,
           intentId,

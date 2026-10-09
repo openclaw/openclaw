@@ -1,10 +1,10 @@
-import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
-  readNonBlankString as normalizeTtsSupplementSpokenText,
 } from "@openclaw/normalization-core/string-coerce";
-/** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
@@ -12,6 +12,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
+import type { CommandOwnerAssertion } from "./command-owner-authority.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
 
 export type {
@@ -20,7 +21,11 @@ export type {
   ReplyPayloadTtsSupplement,
 } from "../shared/reply-payload.types.js";
 
-export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+export type ReplyMediaFailureCode =
+  | "file-not-found"
+  | "unsupported-format"
+  | "delivery-failed"
+  | "invalid-reference";
 
 /** Adds the BTW question banner for channels that only accept plain text bodies. */
 export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
@@ -33,10 +38,9 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
     return payload.text;
   }
   const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
-  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+  return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
-/** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
   return hasReplyPayloadContent(payload, {
     extraContent:
@@ -44,7 +48,6 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   });
 }
 
-/** True when a payload should stay internal as reasoning-only output. */
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
@@ -61,10 +64,10 @@ export function readAskUserQuestionId(
   payload: Pick<ReplyPayload, "channelData">,
 ): string | undefined {
   const askUser = payload.channelData?.askUser;
-  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+  if (!isRecord(askUser)) {
     return undefined;
   }
-  const questionId = (askUser as { questionId?: unknown }).questionId;
+  const questionId = askUser.questionId;
   return typeof questionId === "string" && questionId ? questionId : undefined;
 }
 
@@ -81,16 +84,14 @@ export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
   const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     return undefined;
   }
-  const record = raw as Record<string, unknown>;
-  const setupCode = readNonBlankString(record.setupCode);
-  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  const setupCode = readNonBlankString(raw.setupCode);
+  const expiresAtMs = asPositiveFiniteNumber(raw.expiresAtMs);
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
 
-/** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
 
 export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
@@ -107,6 +108,8 @@ const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
+  "invalid-reference":
+    "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
 };
 
 function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
@@ -154,7 +157,7 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): ReplyPayloadTtsSupplement | undefined {
-  const spokenText = normalizeTtsSupplementSpokenText(payload.ttsSupplement?.spokenText);
+  const spokenText = readNonBlankString(payload.ttsSupplement?.spokenText);
   if (!spokenText || !hasReplyPayloadMedia(payload)) {
     return undefined;
   }
@@ -166,7 +169,6 @@ export function getReplyPayloadTtsSupplement(
   };
 }
 
-/** Returns true when the payload is a valid TTS supplement media payload. */
 export function isReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): boolean {
@@ -179,7 +181,7 @@ export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
   spokenText: string = payload.spokenText ?? payload.text ?? "",
   options?: { visibleTextAlreadyDelivered?: boolean },
 ): T {
-  const normalizedSpokenText = normalizeTtsSupplementSpokenText(spokenText);
+  const normalizedSpokenText = readNonBlankString(spokenText);
   if (!normalizedSpokenText) {
     return payload;
   }
@@ -233,6 +235,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** First index of this block's physical assistant message; each content item advances the index. */
+  assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
@@ -279,6 +283,7 @@ export type ReplyPayloadMetadata = {
   progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
+    commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
     agentId?: string;
     deliveryId: string;
     intentId: string;
@@ -304,6 +309,8 @@ export type ReplyPayloadMetadata = {
    * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /** An independently delivered message does not complete the active turn's answer. */
+  independentDeliveryIntentId?: string;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
@@ -325,10 +332,14 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Payload preparation generated this provider error; it is not an authored answer. */
   terminalProviderError?: true;
+  /** Model fallback uses observed failure facts, never the displayed wording. */
+  providerFailure?: { reason: FailoverReason | null; rawError?: string };
   /** The warning owner observed this tool failure; presentation text is not evidence. */
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Host label or status about the run (truncation, restart, compaction); not the answer. */
+  hostNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -343,7 +354,6 @@ const replyPayloadMetadata = resolveGlobalSingleton(
   () => new WeakMap<object, ReplyPayloadMetadata>(),
 );
 
-/** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(
   payload: T,
   metadata: ReplyPayloadMetadata,
@@ -353,9 +363,24 @@ export function setReplyPayloadMetadata<T extends object>(
   return payload;
 }
 
-/** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Records attachment failures after the ones the payload already carries. */
+export function addReplyPayloadMediaFailures<T extends object>(
+  payload: T,
+  failures: readonly ReplyMediaFailure[] | undefined,
+): T {
+  if (!failures?.length) {
+    return payload;
+  }
+  return setReplyPayloadMetadata(payload, {
+    assistantMediaFailures: [
+      ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []),
+      ...failures,
+    ],
+  });
 }
 
 /** Exact source occurrence represented by one emitted block reply. */
@@ -447,12 +472,10 @@ export function isReplyPayloadSessionWriterDeliveryAuthorized(
   );
 }
 
-/** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
-/** Copies internal payload metadata when cloning or transforming payload objects. */
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
@@ -469,7 +492,8 @@ export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {
   const markPayload = (payload: ReplyPayload): ReplyPayload =>
-    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+    setReplyPayloadMetadata(payload, {
+      deliverDespiteSourceReplySuppression: true,
       commandReply: true,
     });
   if (!reply) {
@@ -499,10 +523,20 @@ export function isReplyPayloadStatusNotice(
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }
 
+/** Host-generated errors, warnings, status lines and run labels; never the model's answer. */
+export function isHostNoticePayload(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    isReplyPayloadStatusNotice(payload) ||
+    getReplyPayloadMetadata(payload)?.hostNotice === true
+  );
+}
+
 /** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */
 export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean => {
   const supplement = getReplyPayloadTtsSupplement(payload);
   return (
+    getReplyPayloadMetadata(payload)?.independentDeliveryIntentId === undefined &&
     payload.isReasoning !== true &&
     payload.isCommentary !== true &&
     (!isReplyPayloadStatusNotice(payload) ||

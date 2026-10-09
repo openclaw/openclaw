@@ -4,7 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { getComposerTextarea, inputDraft, renderChatView } from "./chat-view.test-helpers.ts";
+import {
+  getComposerTextarea,
+  inputDraft,
+  renderChatView,
+  stubAnimationFrames,
+} from "./chat-view.test-helpers.ts";
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -19,6 +24,59 @@ afterEach(() => {
 });
 
 describe("chat composer sizing", () => {
+  beforeEach(() => vi.spyOn(CSS, "supports").mockReturnValue(false));
+
+  it("settles native overflow without synchronous input layout reads", async () => {
+    const flushFrames = stubAnimationFrames();
+    vi.mocked(CSS.supports).mockReturnValue(true);
+    const container = renderChatView({});
+    const textarea = getComposerTextarea(container);
+    const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+    document.body.append(container);
+    await Promise.resolve();
+    flushFrames();
+    let scrollHeight = 200;
+    Object.defineProperty(textarea, "clientHeight", { configurable: true, value: 150 });
+    let textareaLayoutReads = 0;
+    let transcriptLayoutReads = 0;
+    Object.defineProperty(textarea, "scrollHeight", {
+      configurable: true,
+      get: () => {
+        textareaLayoutReads += 1;
+        return scrollHeight;
+      },
+    });
+    Object.defineProperty(thread, "scrollHeight", {
+      configurable: true,
+      get: () => {
+        transcriptLayoutReads += 1;
+        return 200;
+      },
+    });
+    textarea.style.height = "42px";
+
+    textarea.value = "responsive draft";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect({ textareaLayoutReads, transcriptLayoutReads }).toEqual({
+      textareaLayoutReads: 0,
+      transcriptLayoutReads: 0,
+    });
+    expect(textarea.style.height).toBe("");
+    flushFrames();
+    expect(textarea.style.overflowY).toBe("auto");
+
+    scrollHeight = 42;
+    Object.defineProperty(textarea, "clientHeight", { configurable: true, value: 42 });
+    textarea.value = "Short draft";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flushFrames();
+    expect(textarea.style.overflowY).toBe("hidden");
+    expect(textarea.hasAttribute("data-scroll-fade-bottom")).toBe(false);
+    render(html``, container);
+    container.remove();
+  });
+
   it.each(["end", "history"] as const)(
     "only publishes composer viewport changes while reading at %s",
     (position) => {
@@ -51,7 +109,11 @@ describe("chat composer sizing", () => {
         },
       });
       const onTranscriptScroll = vi.fn();
-      const unsubscribe = subscribeTranscriptScroll(thread, onTranscriptScroll);
+      const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
+        if (observation.type === "resize") {
+          onTranscriptScroll(observation);
+        }
+      });
       onTestFinished(() => {
         unsubscribe();
         render(html``, container);
@@ -59,13 +121,22 @@ describe("chat composer sizing", () => {
 
       inputDraft(container, "Short draft edited");
       expect(onTranscriptScroll).not.toHaveBeenCalled();
+      expect(textarea.style.height).toBe("42px");
+      expect(textarea.style.overflowY).toBe("hidden");
 
       draftHeight = 180;
       inputDraft(container, "A long draft\n".repeat(10));
+      expect(textarea.style.height).toBe("150px");
+      expect(textarea.style.overflowY).toBe("auto");
       expect(thread.clientHeight).toBe(450);
       expect(thread.scrollTop).toBe(position === "end" ? 750 : 100);
       expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
         type: "resize",
+        viewport: {
+          clientHeight: 450,
+          scrollHeight: 1200,
+          scrollTop: position === "end" ? 750 : 100,
+        },
         ...(position === "end" ? { scrollCorrection: { before: 642, after: 750 } } : {}),
       });
       onTranscriptScroll.mockClear();
@@ -81,6 +152,7 @@ describe("chat composer sizing", () => {
         expect(thread.scrollTop).toBe(750);
         expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
           type: "resize",
+          viewport: { clientHeight: 450, scrollHeight: 1200, scrollTop: 750 },
           scrollCorrection: { before: 746, after: 750 },
         });
         onTranscriptScroll.mockClear();
@@ -92,6 +164,11 @@ describe("chat composer sizing", () => {
       expect(thread.scrollTop).toBe(position === "end" ? 642 : 100);
       expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
         type: "resize",
+        viewport: {
+          clientHeight: 558,
+          scrollHeight: 1200,
+          scrollTop: position === "end" ? 642 : 100,
+        },
         ...(position === "end" ? { scrollCorrection: { before: 750, after: 642 } } : {}),
       });
     },
@@ -111,30 +188,6 @@ describe("chat composer sizing", () => {
     expect(textarea.style.height).toBe("150px");
     expect(textarea.style.overflowY).toBe("auto");
     container.remove();
-  });
-
-  it("shows the textarea scrollbar only when the draft overflows", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    textarea.value = "A long draft";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
   });
 
   it("resizes the draft when responsive layout changes the textarea width", () => {
@@ -165,17 +218,9 @@ describe("chat composer sizing", () => {
     let width = 320;
     let scrollHeight = 42;
     let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      left: 0,
-      right: width,
-      top: 0,
-      width,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }));
+    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, width, clientHeight),
+    );
 
     const container = renderChatView({});
     const textarea = getComposerTextarea(container);

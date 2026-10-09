@@ -6,6 +6,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import {
   collectSidebarSessionChildKeys,
+  isAcknowledgeableHiddenRun,
   resolveSidebarSessionParentKey,
 } from "./app-sidebar-session-parent.ts";
 import {
@@ -26,6 +27,7 @@ function summarizeChildren(
   let failedChildCount = 0;
   let queuedChildCount = 0;
   let workspaceConflictCount = 0;
+  const unreadHiddenRuns: SidebarRecentSession[] = [];
   for (const child of children) {
     if (onlySubagents && !isSubagentSessionKey(child.key)) {
       continue;
@@ -53,6 +55,12 @@ function summarizeChildren(
     workspaceConflictCount += onlySubagents
       ? (child.ownWorkspaceConflictCount ?? 0) + (descendants?.workspaceConflictCount ?? 0)
       : (child.workspaceConflictCount ?? 0);
+    if (onlySubagents) {
+      if (isAcknowledgeableHiddenRun(child)) {
+        unreadHiddenRuns.push(child);
+      }
+      unreadHiddenRuns.push(...(descendants?.unreadHiddenRuns ?? []));
+    }
   }
   return {
     attention: summarizeSidebarSessionAttention([...childAttention, ...unloadedAttention]),
@@ -61,6 +69,8 @@ function summarizeChildren(
     failedChildCount,
     queuedChildCount,
     workspaceConflictCount,
+    // Hidden runs have no row to open, so their parent acknowledges them.
+    ...(onlySubagents ? { unreadHiddenRuns } : {}),
   };
 }
 
@@ -75,6 +85,7 @@ export function projectSessionTree(params: {
   mainSessionKeys?: ReadonlySet<string>;
   rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
+  isChildSessionVisible?: (parentKey: string, childKey: string, row?: GatewaySessionRow) => boolean;
   resolveAttention: (row: Pick<GatewaySessionRow, "key" | "agentId">) => SidebarSessionAttention;
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
@@ -102,7 +113,9 @@ export function projectSessionTree(params: {
       row.archived === true
         ? []
         : (childKeysByParent.get(normalizeDefaultMainSessionAliasForUi(row.key)) ?? []).filter(
-            (key) => !hasRootCategory(rowsByKey.get(key)),
+            (key) =>
+              !hasRootCategory(rowsByKey.get(key)) &&
+              (params.isChildSessionVisible?.(row.key, key, rowsByKey.get(key)) ?? true),
           );
     const ownsAncestor = !ancestors.has(row.key);
     ancestors.add(row.key);

@@ -1,7 +1,7 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page, Request, Response, Route } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
@@ -36,20 +36,8 @@ function classifyBrowserDocumentNavigationRequest(
     frameResolutionFailed = true;
   }
 
-  try {
-    if (request.isNavigationRequest()) {
-      return kind;
-    }
-  } catch {
-    // Fall through to the resource-type check.
-  }
-
-  try {
-    if (request.resourceType() === "document") {
-      return kind;
-    }
-  } catch {
-    // Fall through to the unresolved-frame result below.
+  if (request.isNavigationRequest() || request.resourceType() === "document") {
+    return kind;
   }
   // Match the previous two-step classifier: known non-doc requests fall
   // through, while an unresolved frame remains guarded as a subframe.
@@ -137,27 +125,13 @@ export async function assertPageNavigationCompletedSafely(
   }
 }
 
-async function continueRouteSafely(route: Route): Promise<void> {
+async function resumeRouteSafely(route: Route, method: "continue" | "fallback"): Promise<void> {
   try {
-    await route.continue();
+    await route[method]();
   } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Route is already handled")) {
-      return;
+    if (!(err instanceof Error && err.message.includes("Route is already handled"))) {
+      throw err;
     }
-    throw err;
-  }
-}
-
-async function fallbackRouteSafely(route: Route): Promise<void> {
-  try {
-    await route.fallback();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Route is already handled")) {
-      return;
-    }
-    throw err;
   }
 }
 
@@ -172,12 +146,8 @@ async function removePageNavigationRequestGuard(
   } catch (err) {
     // A closed page owns no remaining route. Preserve close-triggering actions,
     // but surface cleanup failures while the page is still usable.
-    try {
-      if (page.isClosed()) {
-        return undefined;
-      }
-    } catch {
-      // Keep the original cleanup failure when page state is unavailable.
+    if (page.isClosed()) {
+      return undefined;
     }
     return err;
   }
@@ -306,7 +276,7 @@ export async function withPageNavigationRequestGuard<T>(
   const handleRoute = async (route: Route, request: Request) => {
     if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
       try {
-        await fallbackRouteSafely(route);
+        await resumeRouteSafely(route, "fallback");
       } catch (err) {
         recordGuardError(err);
         await stopGuardedRoute(route, false, err);
@@ -331,7 +301,7 @@ export async function withPageNavigationRequestGuard<T>(
       return;
     }
     try {
-      await fallbackRouteSafely(route);
+      await resumeRouteSafely(route, "fallback");
     } catch (err) {
       recordGuardError(err);
       await stopGuardedRoute(route, true, err);
@@ -442,7 +412,7 @@ export async function gotoPageWithNavigationGuard(
     }
     const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
     if (!requestKind) {
-      await continueRouteSafely(route);
+      await resumeRouteSafely(route, "continue");
       return;
     }
     try {
@@ -460,7 +430,7 @@ export async function gotoPageWithNavigationGuard(
       }
       throw err;
     }
-    await continueRouteSafely(route);
+    await resumeRouteSafely(route, "continue");
   };
 
   try {
@@ -505,5 +475,3 @@ export async function gotoPageWithNavigationGuard(
   }
   return response;
 }
-
-/** Resolve a browser snapshot ref into a Playwright locator. */

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import {
   type WorkerAdmissionHandshake,
@@ -9,30 +8,33 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
 import { normalizeScpRemotePath } from "../../infra/scp-host.js";
-import { redactSensitiveText } from "../../logging/redact.js";
-import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
+import type { WorkerSshEndpoint } from "../../plugins/types.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
-  runCommandWithTimeout,
-  type CommandOptions,
-  type SpawnResult,
-} from "../../process/exec.js";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
-import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_MANIFEST_VERSION,
+} from "../../shared/worker-bundle-hash.js";
+import {
+  commandFailure,
+  isSuccess,
+  matchesCommandFailure,
+  runSshScript,
+  type WorkerBootstrapCommandRunner,
+} from "./bootstrap-command.js";
+import { bundleTransferTimeoutMs, DEFAULT_BOOTSTRAP_TIMEOUT_MS } from "./bootstrap-timeouts.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
   runWorkerSshCandidates,
   workerSshCommandOptions,
   workerSshOptions,
-  workerSshRemoteCommand,
+  type WorkerSshIdentityResolver,
 } from "./ssh.js";
 
 const BOOTSTRAP_ROOT = ".openclaw-worker";
 const BOOTSTRAP_RECEIPT = "bootstrap-receipt.json";
-const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 10 * 60_000;
-const BUNDLE_TRANSFER_MIN_THROUGHPUT_BYTES_PER_SECOND = 125_000;
-const BUNDLE_TRANSFER_TIMEOUT_MAX_MS = 60 * 60_000;
-const BOOTSTRAP_OPERATION_HEADROOM_MS = 5 * 60_000;
 const NODE_MISSING_EXIT_CODE = 42;
 const NPM_MISSING_EXIT_CODE = 43;
 const LOCK_TIMEOUT_EXIT_CODE = 44;
@@ -44,31 +46,6 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-
-// Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
-// The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
-function bundleTransferTimeoutMs(tarballBytes: number, floorMs: number): number {
-  if (!Number.isSafeInteger(tarballBytes) || tarballBytes < 0) {
-    throw new Error("Worker bundle artifact has an invalid tarball size");
-  }
-  return Math.min(
-    BUNDLE_TRANSFER_TIMEOUT_MAX_MS,
-    Math.max(
-      floorMs,
-      Math.ceil(tarballBytes / BUNDLE_TRANSFER_MIN_THROUGHPUT_BYTES_PER_SECOND) * 1000,
-    ),
-  );
-}
-
-/** Bounds the complete bootstrap lifecycle without preempting any permitted phase. */
-export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationArtifact): number {
-  const nonTransferTimeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS * 3;
-  const transferTimeoutMs =
-    artifact.install === "bundle"
-      ? bundleTransferTimeoutMs(artifact.tarballBytes, DEFAULT_BOOTSTRAP_TIMEOUT_MS)
-      : 0;
-  return nonTransferTimeoutMs + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
-}
 
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
 const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
@@ -105,16 +82,8 @@ try {
 const VERIFY_ARCHIVE_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 try {
-  const actual = crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex");
-  process.exit(actual === process.argv[2] ? 0 : 1);
-} catch {
-  process.exit(1);
-}`;
-
-const VERIFY_NPM_PACKAGE_JS = String.raw`const crypto = require("node:crypto");
-const fs = require("node:fs");
-try {
-  const actual = "sha512-" + crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64");
+  const npm = process.argv[3] === "npm";
+  const actual = (npm ? "sha512-" : "") + crypto.createHash(npm ? "sha512" : "sha256").update(fs.readFileSync(process.argv[1])).digest(npm ? "base64" : "hex");
   process.exit(actual === process.argv[2] ? 0 : 1);
 } catch {
   process.exit(1);
@@ -133,14 +102,23 @@ try {
   process.exit(1);
 }`;
 
-// Recompute the gateway's canonical file manifest before a receipt can attest to it.
+const WORKER_ARTIFACT_PATHS_JS = `const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
+const chunkPathPattern = ${WORKER_BUNDLE_CHUNK_PATH_PATTERN.toString()};`;
+
+const SELECT_NPM_WORKER_FILES_JS = String.raw`const fs = require("node:fs");
+const expected = "package/dist/worker-artifacts/" + process.argv[2] + ".tar.gz";
+const selected = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((entry) => entry === expected);
+if (selected.length !== 1) throw new Error("missing or duplicate packaged worker bundle archive");
+process.stdout.write(selected.join("\n") + "\n");`;
+
+// Recompute the gateway's canonical flat file manifest before a receipt can attest to it.
 const VERIFY_INSTALL_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.argv[1];
 const expected = process.argv[2];
 const install = process.argv[3];
-const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
+${WORKER_ARTIFACT_PATHS_JS}
 const entries = [];
 function fail(message) {
   throw new Error(message);
@@ -152,26 +130,14 @@ function assertRoot() {
   }
   fs.chmodSync(root, 0o700);
 }
-function assertDirectory(relative) {
-  const absolute = path.join(root, ...relative.split("/"));
-  const stats = fs.lstatSync(absolute);
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    fail("unsafe worker directory: " + relative);
-  }
-  fs.chmodSync(absolute, 0o700);
-}
 function addFile(relative) {
-  const parts = relative.split("/");
-  for (let index = 1; index < parts.length; index += 1) {
-    assertDirectory(parts.slice(0, index).join("/"));
-  }
-  const absolute = path.join(root, ...relative.split("/"));
+  const absolute = path.join(root, relative);
   const stats = fs.lstatSync(absolute);
   if (stats.isSymbolicLink() || !stats.isFile()) {
     fail("unsafe worker file: " + relative);
   }
   const contents = fs.readFileSync(absolute);
-  const mode = artifactPaths.includes(relative) || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
+  const mode = 0o700;
   fs.chmodSync(absolute, mode);
   entries.push({
     path: relative,
@@ -185,7 +151,9 @@ try {
   if (install === "npm" || install === "bundle") {
     const allowedPaths = new Set([...artifactPaths, "bootstrap-receipt.json"]);
     for (const name of fs.readdirSync(root)) {
-      if (!allowedPaths.has(name)) {
+      if (chunkPathPattern.test(name)) {
+        artifactPaths.push(name);
+      } else if (!allowedPaths.has(name)) {
         fail("unexpected worker bundle path: " + name);
       }
     }
@@ -206,6 +174,19 @@ try {
   process.exit(1);
 }`;
 
+const ENSURE_PRIVATE_DIRECTORY_SH = String.raw`ensure_private_directory() {
+  directory=$1
+  if [ -e "$directory" ] || [ -L "$directory" ]; then
+    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+      printf '%s\n' 'unsafe worker bootstrap directory' >&2
+      exit 2
+    fi
+  else
+    mkdir "$directory"
+  fi
+  chmod 700 "$directory"
+}`;
+
 const PREFLIGHT_SCRIPT = String.raw`set -eu
 umask 077
 hash=$1
@@ -224,18 +205,7 @@ if [ "${"${"}#operation_token}" -ne 64 ]; then
   exit 2
 fi
 
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker bootstrap directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
+${ENSURE_PRIVATE_DIRECTORY_SH}
 
 ensure_private_directory "$root"
 
@@ -295,18 +265,7 @@ lock=$lock_root/$hash
 locked=0
 lock_identity="$$:$(date +%s)"
 
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker bootstrap directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
+${ENSURE_PRIVATE_DIRECTORY_SH}
 
 ensure_private_directory "$root"
 ensure_private_directory "$lock_root"
@@ -345,6 +304,13 @@ read_lock_owner() {
   fi
 }
 
+remove_observed_lock() {
+  current_owner=$(read_lock_owner)
+  if [ "$current_owner" = "$owner" ]; then
+    if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
+  fi
+}
+
 attempt=0
 while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
   if receipt_matches; then
@@ -379,10 +345,7 @@ while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
     *) valid_owner=0 ;;
   esac
   if [ "$stale_owner" -eq 1 ]; then
-    current_owner=$(read_lock_owner)
-    if [ "$current_owner" = "$owner" ]; then
-      if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
-    fi
+    remove_observed_lock
     continue
   fi
   if [ "$valid_owner" -eq 1 ] && kill -0 "$owner_pid" 2>/dev/null; then
@@ -395,18 +358,12 @@ while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
     continue
   fi
   if [ "$valid_owner" -eq 1 ]; then
-    current_owner=$(read_lock_owner)
-    if [ "$current_owner" = "$owner" ]; then
-      if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
-    fi
+    remove_observed_lock
     continue
   fi
   attempt=$((attempt + 1))
   if [ "$valid_owner" -eq 0 ] && [ "$attempt" -ge 5 ]; then
-    current_owner=$(read_lock_owner)
-    if [ "$current_owner" = "$owner" ]; then
-      if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
-    fi
+    remove_observed_lock
     continue
   fi
   sleep 1
@@ -431,7 +388,7 @@ rm -rf "$staging"
 mkdir -p "$staging"
 case "$install" in
   bundle)
-    if ! node -e '${VERIFY_ARCHIVE_JS}' "$upload" "$archive_sha256"; then
+    if ! node -e '${VERIFY_ARCHIVE_JS}' "$upload" "$archive_sha256" "$install"; then
       printf '%s\n' 'worker bundle archive digest mismatch' >&2
       exit 2
     fi
@@ -446,13 +403,17 @@ case "$install" in
     npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
     package_archive=$(node -e '${READ_NPM_PACK_FILENAME_JS}' "$npm_pack_json")
     package_archive=$staging/$package_archive
-    if ! node -e '${VERIFY_NPM_PACKAGE_JS}' "$package_archive" "$package_integrity"; then
+    if ! node -e '${VERIFY_ARCHIVE_JS}' "$package_archive" "$package_integrity" "$install"; then
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
-    tar -xzf "$package_archive" -C "$staging" --strip-components=3 \
-      ${WORKER_BUNDLE_ARTIFACT_PATHS.map((entry) => `package/dist/worker/${entry}`).join(" ")}
-    rm -f "$npm_pack_json" "$package_archive"
+    tar -tzf "$package_archive" > "$staging/npm-members.txt"
+    node -e '${SELECT_NPM_WORKER_FILES_JS}' "$staging/npm-members.txt" "$hash" > "$staging/npm-worker-files.txt"
+    tar -xzf "$package_archive" -C "$staging" --strip-components=3 -T "$staging/npm-worker-files.txt"
+    worker_archive=$staging/$hash.tar.gz
+    tar -xzf "$worker_archive" -C "$staging"
+    rm -f "$worker_archive"
+    rm -f "$npm_pack_json" "$package_archive" "$staging/npm-members.txt" "$staging/npm-worker-files.txt"
     ;;
   *)
     printf '%s\n' 'invalid worker install channel' >&2
@@ -471,13 +432,6 @@ mv "$staging" "$install_dir"
 finish_with_receipt
 `;
 
-type ResolvedWorkerSshIdentity = WorkerSshIdentity;
-
-type WorkerBootstrapCommandRunner = (
-  argv: string[],
-  options: CommandOptions,
-) => Promise<SpawnResult>;
-
 type WorkerBootstrapRequest = {
   ssh: WorkerSshEndpoint;
   artifact: WorkerInstallationArtifact;
@@ -487,7 +441,7 @@ type WorkerBootstrapRequest = {
 };
 
 type WorkerBootstrapDependencies = {
-  resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
+  resolveIdentity: WorkerSshIdentityResolver;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -550,56 +504,6 @@ function parseReceiptJson(
     throw new Error("Worker bootstrap receipt does not match the requested artifact");
   }
   return parsed;
-}
-
-function commandFailure(phase: string, result: SpawnResult): Error {
-  const output = truncateUtf16Safe(
-    redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
-      mode: "tools",
-    }).replace(/\s+/gu, " "),
-    512,
-  );
-  const status =
-    result.termination === "exit" ? `exit ${result.code ?? "unknown"}` : result.termination;
-  return new Error(`Worker bootstrap ${phase} failed (${status})${output ? `: ${output}` : ""}`);
-}
-
-function isSuccess(result: SpawnResult): boolean {
-  return result.termination === "exit" && result.code === 0;
-}
-
-async function runSshScript(params: {
-  prepared: PreparedWorkerSsh;
-  runCommand: WorkerBootstrapCommandRunner;
-  script: string;
-  scriptArgs: readonly string[];
-  timeoutMs: number;
-  port?: number;
-  signal?: AbortSignal;
-}): Promise<SpawnResult> {
-  return await params.runCommand(
-    [
-      "ssh",
-      ...workerSshOptions(params.prepared, { forwarding: "disabled" }),
-      "-a",
-      "-x",
-      "-T",
-      "-p",
-      String(params.port ?? params.prepared.port),
-      "--",
-      params.prepared.sshTarget,
-      workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),
-    ],
-    workerSshCommandOptions({
-      input: params.script,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-    }),
-  );
-}
-
-function workerUploadFilename(bundleHash: string, operationToken: string): string {
-  return `openclaw-upload-${bundleHash}.tgz.${operationToken}`;
 }
 
 const CLEANUP_UPLOAD_SCRIPT = String.raw`set -eu
@@ -669,20 +573,12 @@ function parsePreflight(
   expected: WorkerAdmissionHandshake,
   expectedUploadFilename: string,
 ): { action: "current"; receipt: WorkerAdmissionHandshake } | { action: "install"; path: string } {
-  if (
-    result.code === NODE_MISSING_EXIT_CODE ||
-    result.stderr.includes(NODE_MISSING_MARKER) ||
-    result.stdout.includes(NODE_MISSING_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_MISSING_EXIT_CODE, NODE_MISSING_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node.js on the leased host; install Node in the provider setup phase and retry",
     );
   }
-  if (
-    result.code === NODE_UNSUPPORTED_EXIT_CODE ||
-    result.stderr.includes(NODE_UNSUPPORTED_MARKER) ||
-    result.stdout.includes(NODE_UNSUPPORTED_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_UNSUPPORTED_EXIT_CODE, NODE_UNSUPPORTED_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
     );
@@ -720,16 +616,20 @@ export async function bootstrapWorker(
       : timeoutMs;
   const receipt = normalizeHandshake(artifact);
   const operationToken = createHash("sha256").update(request.operationId).digest("hex");
-  const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
+  const uploadFilename = `openclaw-upload-${receipt.bundleHash}.tgz.${operationToken}`;
   const run = dependencies.runCommand ?? runCommandWithTimeout;
   let needsUploadCleanup = false;
-  const runCommand: WorkerBootstrapCommandRunner = (argv, options) => {
+  const assertCurrent = () => {
+    dependencies.signal?.throwIfAborted();
     dependencies.assertCurrent?.();
+  };
+  const runCommand: WorkerBootstrapCommandRunner = (argv, options) => {
+    assertCurrent();
     needsUploadCleanup = true;
     return run(argv, options);
   };
-  dependencies.assertCurrent?.();
   const prepared = await prepareWorkerSsh({
+    assertCurrent,
     ssh: request.ssh,
     pinnedHostKey: request.pinnedHostKey,
     resolveIdentity: dependencies.resolveIdentity,
@@ -755,6 +655,7 @@ export async function bootstrapWorker(
           signal: dependencies.signal,
         }),
     );
+    assertCurrent();
     const preflight = parsePreflight(preflightResult, receipt, uploadFilename);
     if (preflight.action === "current") {
       // A validated current response already removed this operation's upload in preflight.
@@ -804,11 +705,8 @@ export async function bootstrapWorker(
         signal: dependencies.signal,
       }),
     );
-    if (
-      install.code === NPM_MISSING_EXIT_CODE ||
-      install.stderr.includes(NPM_MISSING_MARKER) ||
-      install.stdout.includes(NPM_MISSING_MARKER)
-    ) {
+    assertCurrent();
+    if (matchesCommandFailure(install, NPM_MISSING_EXIT_CODE, NPM_MISSING_MARKER)) {
       throw new Error(
         "Worker npm bootstrap requires npm on the leased host; use bundle install or provide npm in the provider setup phase",
       );
@@ -835,4 +733,3 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

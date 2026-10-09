@@ -4,6 +4,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
+import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
@@ -21,9 +23,10 @@ import {
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
+import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
@@ -48,11 +51,11 @@ export function createChatSendMessageInjectionStarter(params: {
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
   session: Pick<
     PreparedChatSendSession,
-    "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
+    "agentId" | "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
   >;
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: Pick<
-    ReturnType<typeof prepareChatSendUserTurn>,
+    Awaited<ReturnType<typeof prepareChatSendUserTurn>>,
     "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
   >;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
@@ -65,60 +68,90 @@ export function createChatSendMessageInjectionStarter(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
-  const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
+  const { agentId, cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
-  const assertCurrent =
-    params.assertCurrent || params.operatorAuthority
-      ? () => {
-          params.assertCurrent?.();
-          params.operatorAuthority?.assertCurrent();
-        }
-      : undefined;
-  return (): ReplyMessageInjectionAttempt | undefined => {
-    if (!params.target || isInternalTextSlashCommandTurn) {
+  const assertCurrent = () => {
+    params.abortSignal.throwIfAborted();
+    params.assertCurrent?.();
+    params.operatorAuthority?.assertCurrent();
+  };
+  return async (): Promise<ReplyMessageInjectionAttempt | undefined> => {
+    const target = params.target;
+    if (!target || isInternalTextSlashCommandTurn) {
       return undefined;
     }
-    assertCurrent?.();
-    // Preparation can outlive terminal delivery. Recheck before the backend
-    // takes this input; an unreadable receipt cannot authorize steering.
-    let fenceEntry = entry;
-    if (sessionKey) {
-      try {
-        fenceEntry =
-          loadSessionEntry({
+    assertCurrent();
+    const delivery = prepareSteeringDelivery({
+      agentId,
+      sessionKey,
+      storePath,
+      sessionId: entry?.sessionId,
+      sourceTurnId: normalizeOptionalString(target.sourceTurnId),
+      entry,
+      assertCurrent,
+    });
+    let admissionRefused = false;
+    const canAdmit = () => {
+      assertCurrent();
+      // Preparation can outlive terminal delivery. Recheck before the backend
+      // takes this input; an unreadable receipt cannot authorize steering.
+      let fenceEntry = entry;
+      if (sessionKey) {
+        try {
+          fenceEntry =
+            loadSessionEntry({
+              sessionKey,
+              storePath,
+              readConsistency: "latest",
+            }) ?? entry;
+        } catch (error: unknown) {
+          params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+            reason: "session-entry-unavailable",
+            runId: clientRunId,
+            activeRunId: target.runId,
             sessionKey,
-            storePath,
-            readConsistency: "latest",
-          }) ?? entry;
-      } catch (error: unknown) {
-        params.logGateway.warn(
-          `failed to reload session entry before steering fence on ${sessionKey}: ${String(error)}`,
-        );
-        return undefined;
+            error: String(error),
+          });
+          return false;
+        }
       }
-    }
-    // Terminal run ids are accumulated session history; compare the fence
-    // against the active source-turn identity (carried on the injection target
-    // by the owning registry, falling back to the entry's own claim source) so
-    // an unrelated earlier tombstone does not force a safe steer into
-    // follow-up mode.
-    const activeSourceTurnId =
-      normalizeOptionalString(params.target?.sourceTurnId) ??
-      normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
-      "";
-    if (
-      fenceEntry &&
-      isRestartRecoveryTerminalDeliveryFailClosed(
-        fenceEntry,
-        fenceEntry.sessionId,
-        activeSourceTurnId,
-      )
-    ) {
-      params.logGateway.warn(
-        `active run ${clientRunId} cannot own another terminal source-reply send on session ${sessionKey}; rejecting steer injection before queueing`,
-      );
-      return undefined;
-    }
+      // Terminal run ids are accumulated session history; compare the fence
+      // against the active source-turn identity (carried on the injection target
+      // by the owning registry, falling back to the entry's own claim source) so
+      // an unrelated earlier tombstone does not force a safe steer into
+      // follow-up mode.
+      const activeSourceTurnId =
+        normalizeOptionalString(target.sourceTurnId) ??
+        normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
+        "";
+      const blockReason = fenceEntry
+        ? resolveRestartRecoverySteeringBlockReason(
+            fenceEntry,
+            fenceEntry.sessionId,
+            activeSourceTurnId,
+          )
+        : undefined;
+      if (blockReason) {
+        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+          reason: blockReason,
+          runId: clientRunId,
+          activeRunId: target.runId,
+          sourceTurnId: activeSourceTurnId || undefined,
+          sourceTurnIdOrigin: target.sourceTurnId
+            ? "active-run"
+            : activeSourceTurnId
+              ? "recovery-claim"
+              : "unknown",
+          sessionKey,
+          sessionId: fenceEntry?.sessionId,
+          sessionStatus: fenceEntry?.status,
+          recoveryRunId: fenceEntry?.restartRecoveryDeliveryRunId,
+          recoverySourceTurnId: fenceEntry?.restartRecoveryDeliverySourceRunId,
+        });
+        return false;
+      }
+      return true;
+    };
     const { debounceMs } = resolveQueueSettings({
       cfg,
       channel: ctx.Provider,
@@ -156,8 +189,8 @@ export function createChatSendMessageInjectionStarter(params: {
       cfg,
       commandAuthorized: ctx.CommandAuthorized === true,
     });
-    const attempt = beginReplyMessageInjectionTarget(
-      params.target,
+    const attempt = await beginReplyMessageInjectionTarget(
+      target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
         : text,
@@ -168,7 +201,23 @@ export function createChatSendMessageInjectionStarter(params: {
           : {
               text: buildInboundUserContextPrefix(ctx, resolveEnvelopeFormatOptions(cfg), entry),
             },
-        assertCurrent,
+        canAdmit: () => {
+          admissionRefused = !canAdmit();
+          return !admissionRefused;
+        },
+        assertCurrent: params.assertCurrent || params.operatorAuthority ? assertCurrent : undefined,
+        toolAuthorityPreparation: bindPreparedToolAuthority(
+          bindWorkerToolPreparation({
+            authorityKind:
+              params.assertCurrent || params.operatorAuthority
+                ? ("source-bound" as const)
+                : ("run" as const),
+            assertCurrent,
+            compatAssertCurrent: assertCurrent,
+            prepareCurrent: delivery.prepareCurrent,
+          }),
+        ),
+        inboundAudio: hasInboundAudio(ctx),
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
@@ -197,7 +246,7 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
-    return attempt;
+    return admissionRefused ? undefined : attempt;
   };
 }
 
@@ -231,6 +280,20 @@ export async function settleChatSendPreAckMessageInjection(params: {
   return { status: "continue", attempt: undefined };
 }
 
+/** Pre-ACK steering is already owned; join it before fallible source preparation. */
+export async function settleChatSendMessageInjection(
+  attempt: ReplyMessageInjectionAttempt | undefined,
+): Promise<boolean> {
+  if (!attempt) {
+    return false;
+  }
+  const outcome = await attempt.outcome;
+  if (outcome.status === "failed") {
+    throw outcome.error;
+  }
+  return outcome.status !== "rejected";
+}
+
 /** Finish an accepted steer without entering reply dispatch, or return false for fallback. */
 export async function finalizeAcceptedChatSendMessageInjection(params: {
   attempt: ReplyMessageInjectionAttempt;
@@ -255,7 +318,6 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     attempt: params.attempt,
     target: params.target,
     inboundAudio: hasInboundAudio(finalizedCtx),
-    ...(progressRefresh ? { abortOnUnconfirmedTranscript: false as const } : {}),
   });
   if (finalization.status === "rejected") {
     // Rejection also covers withdrawing a canceled queued steer. Fallback
@@ -273,26 +335,12 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     finalizedCtx.MessageSidFirst ??
     finalizedCtx.MessageSidLast;
   const indeterminate =
-    finalization.status === "indeterminate"
-      ? finalization.outcome.errorMessage
-      : progressRefresh &&
-          finalization.status === "accepted" &&
-          finalization.outcome.result?.transcriptCommit === "unconfirmed"
-        ? finalization.outcome.result.errorMessage
-        : undefined;
-  const steerAborted = finalization.status === "accepted" && finalization.aborted;
+    finalization.status === "indeterminate" ? finalization.outcome.errorMessage : undefined;
   const outcomeReason = indeterminate
     ? progressRefresh
       ? "progress_refresh_receipt_unconfirmed"
       : "question_response_indeterminate"
-    : steerAborted
-      ? "reply_operation_aborted"
-      : "active_run_injected";
-  if (steerAborted) {
-    context.logGateway.warn(
-      `active run ${finalization.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
-    );
-  }
+    : "active_run_injected";
   await params.persistUserTurnTranscriptBestEffort();
   if (isDiagnosticsEnabled(cfg)) {
     logMessageReceived({
@@ -309,7 +357,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
-      outcome: indeterminate ? "error" : steerAborted ? "skipped" : "completed",
+      outcome: indeterminate ? "error" : "completed",
       reason: outcomeReason,
     });
   }
@@ -330,9 +378,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     startedAt: params.startedAt,
     terminal: indeterminate
       ? { outcome: "error", options: { reason: outcomeReason, error: indeterminate } }
-      : steerAborted
-        ? { outcome: "skipped", options: { reason: outcomeReason } }
-        : { outcome: "completed", options: { reason: outcomeReason } },
+      : { outcome: "completed", options: { reason: outcomeReason } },
   });
   const updatedAt = Date.now();
   if (entry) {

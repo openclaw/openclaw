@@ -1,4 +1,3 @@
-// Control UI helpers shared by config form node renderers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -7,17 +6,17 @@ import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import "../components/tooltip.ts";
-import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
+import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
-import type { ConfigSearchCriteria } from "./config-form.search.ts";
+import { setControlValidity } from "./config-form.scalar-edit.ts";
+import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
   hasSensitiveConfigData,
   hintForPath,
   pathKey as configPathKey,
-  redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { renderSettingsDefaultDescription, renderSettingsSegmented } from "./settings-ui.ts";
@@ -69,8 +68,38 @@ export type ConfigNodeRenderer = (
   params: ConfigNodeRenderParams,
 ) => TemplateResult | typeof nothing;
 
+export function configChildRenderOptions(params: ConfigNodeRenderParams) {
+  return {
+    hints: params.hints,
+    rawAvailable: params.rawAvailable,
+    maskSensitive: params.maskSensitive,
+    unsupported: params.unsupported,
+    disabled: params.disabled,
+    compact: params.compact,
+    commitOnBlur: params.commitOnBlur,
+    revealSensitive: params.revealSensitive,
+    isSensitivePathRevealed: params.isSensitivePathRevealed,
+    onToggleSensitivePath: params.onToggleSensitivePath,
+  };
+}
+
+export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
+  const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
+  const showLabel = params.showLabel ?? true;
+  return {
+    label,
+    help,
+    showLabel,
+    helpId:
+      params.descriptionId ??
+      (showLabel && help ? configFieldId(params.path, "description") : undefined),
+  };
+}
+
 type SensitiveRenderState = {
   isSensitive: boolean;
+  /** The path or hint marks the field sensitive, whether or not it holds a value yet. */
+  isSensitiveField: boolean;
   isMasked: boolean;
   isRedacted: boolean;
   isRevealed: boolean;
@@ -79,8 +108,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
-  return keys.length === 0;
+  return Object.keys(schema).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {
@@ -98,10 +126,6 @@ export function formatConfigValueText(value: unknown): string {
   return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
-export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
-  return { ...schema, default: value };
-}
-
 export function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -110,11 +134,10 @@ export function isSecretRefObject(value: unknown): value is {
   if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
+  if (typeof value.source !== "string" || typeof value.id !== "string") {
     return false;
   }
-  return candidate.provider === undefined || typeof candidate.provider === "string";
+  return value.provider === undefined || typeof value.provider === "string";
 }
 
 export function getSensitiveRenderState(params: {
@@ -134,16 +157,20 @@ export function getSensitiveRenderState(params: {
     isSensitive &&
     !sentinel &&
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
+  const isSensitiveField =
+    hintForPath(params.path, params.hints)?.sensitive ||
+    isSensitiveConfigPath(configPathKey(params.path));
   return {
     isSensitive,
+    isSensitiveField,
     isMasked:
       params.maskSensitive === true &&
       !params.revealSensitive &&
       !isRevealed &&
       (params.value === undefined || typeof params.value === "string") &&
-      (hintForPath(params.path, params.hints)?.sensitive ||
-        isSensitiveConfigPath(configPathKey(params.path)) ||
-        isSensitive),
+      // An env placeholder such as ${TOKEN} names a variable; it is not a secret to hide.
+      !(typeof params.value === "string" && isEnvPlaceholder(params.value)) &&
+      (isSensitiveField || isSensitive),
     isRedacted: isSensitive && !isRevealed,
     isRevealed,
     canReveal: isSensitive && !sentinel,
@@ -185,12 +212,15 @@ export function renderSensitiveToggleButton(params: {
 }
 
 /* Sensitive fields inset the reveal eye inside the field (settings-secret
- * pattern); non-sensitive fields render the bare control unchanged. */
+ * pattern); non-sensitive fields render the bare control unchanged. A field that
+ * gains its eye once it holds a value keeps the wrapper from the start: a changed
+ * template would replace the input and drop focus mid-typing. */
 export function wrapSensitiveControl(
   control: TemplateResult,
   toggle: TemplateResult | typeof nothing,
+  keepWrapper = false,
 ): TemplateResult {
-  if (toggle === nothing) {
+  if (toggle === nothing && !keepWrapper) {
     return control;
   }
   return html`<span class="settings-secret">${control}${toggle}</span>`;
@@ -273,18 +303,54 @@ export function renderFieldRow(params: {
   `;
 }
 
-export function renderCollectionDefaultDescription(
-  params: ConfigNodeRenderParams,
-  effectiveValue: unknown,
-): TemplateResult | typeof nothing {
-  const redacted = getSensitiveRenderState({
-    path: params.path,
-    value: effectiveValue,
-    hints: params.hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  }).isRedacted;
-  return redacted ? nothing : renderSchemaDefaultDescription(params.schema, params.value);
+export function renderCollectionRemoveButton(
+  label: string,
+  disabled: boolean,
+  remove: () => boolean,
+): TemplateResult {
+  return html`<openclaw-tooltip .content=${label}>
+    <button
+      type="button"
+      class="btn btn--icon"
+      style="width:28px;height:28px;padding:0;"
+      aria-label=${label}
+      ?disabled=${disabled}
+      @click=${(event: Event) => removeCollectionRow(event, remove)}
+    >
+      ${icons.trash}
+    </button>
+  </openclaw-tooltip>`;
+}
+
+/**
+ * Removes a collection row and keeps keyboard focus in its collection when the
+ * focused Remove control is retired: next surviving row, previous row, then Add.
+ */
+function removeCollectionRow(event: Event, remove: () => boolean) {
+  const control = event.currentTarget;
+  if (!(control instanceof HTMLButtonElement) || control !== document.activeElement) {
+    remove();
+    return;
+  }
+  const collection = control.closest(".cfg-array, .cfg-map");
+  const own = (selector: string) =>
+    Array.from(collection?.querySelectorAll<HTMLButtonElement>(selector) ?? []).filter(
+      (button) => button.closest(".cfg-array, .cfg-map") === collection,
+    );
+  const label = control.getAttribute("aria-label");
+  const rows = own("button").filter((button) => button.getAttribute("aria-label") === label);
+  const index = rows.indexOf(control);
+  const destinations = [rows[index + 1], rows[index - 1], own("button[aria-controls]")[0]];
+  if (!remove()) {
+    return;
+  }
+  // The owner rerenders before this microtask. Positional rows can keep the
+  // focused control for the next entry, so only a lost focus moves.
+  queueMicrotask(() => {
+    if (document.activeElement === document.body) {
+      destinations.find((button) => button?.isConnected && !button.disabled)?.focus();
+    }
+  });
 }
 
 export function renderSchemaDefaultDescription(
@@ -360,17 +426,8 @@ export function renderJsonTextareaControl(params: {
   const { path, fallback, sensitiveState, disabled, onPatch } = params;
   const errorId = configFieldId(path, "json-error");
   const describedBy = [params.descriptionId, errorId].filter(Boolean).join(" ");
-  const setValidity = (target: HTMLTextAreaElement, message: string) => {
-    const error = target
-      .closest(".cfg-json-editor")
-      ?.querySelector<HTMLElement>(".cfg-field__error");
-    target.setCustomValidity(message);
-    target.setAttribute("aria-invalid", String(Boolean(message)));
-    if (error) {
-      error.hidden = !message;
-      error.textContent = message;
-    }
-  };
+  const setValidity = (target: HTMLTextAreaElement, message: string) =>
+    setControlValidity(target, message, ".cfg-json-editor");
   const updateValidity = (target: HTMLTextAreaElement) => {
     let message = "";
     const raw = target.value.trim();
@@ -428,7 +485,7 @@ export function renderJsonTextareaControl(params: {
       aria-label=${params.ariaLabel}
       aria-describedby=${describedBy || nothing}
       aria-invalid="false"
-      placeholder=${sensitiveState.isRedacted ? redactedPlaceholder() : t("configForm.jsonValue")}
+      placeholder=${sensitiveState.isRedacted ? t("configForm.redactedPlaceholder") : t("configForm.jsonValue")}
       rows=${params.rows}
       .value=${renderedFallback}
       ?disabled=${disabled}

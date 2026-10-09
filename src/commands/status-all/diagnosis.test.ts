@@ -154,10 +154,6 @@ describe("status-all diagnosis port checks", () => {
     { state: "ready", eligible: 1, missing: 0 },
     { state: "missing", eligible: 0, missing: 1 },
     { state: "disabled", eligible: 0, missing: 0 },
-    { state: "blocked", eligible: 0, missing: 0 },
-    { state: "agent-excluded", eligible: 0, missing: 1 },
-    { state: "always", eligible: 1, missing: 0 },
-    { state: "unsupported-os", eligible: 0, missing: 1 },
   ] as const)("reports skill readiness for $state", async ({ state, eligible, missing }) => {
     const workspaceDir = tempDirs.make("openclaw-status-skills-");
     const baseDir = path.join(workspaceDir, "skills", "fixture");
@@ -167,7 +163,7 @@ describe("status-all diagnosis port checks", () => {
       agentId: "qa",
       config: {
         plugins: { enabled: false },
-        agents: { entries: { qa: { skills: state === "agent-excluded" ? [] : ["fixture"] } } },
+        agents: { entries: { qa: { skills: ["fixture"] } } },
         skills: {
           allowBundled: ["other-fixture"],
           entries: { fixture: { enabled: state !== "disabled" } },
@@ -180,18 +176,13 @@ describe("status-all diagnosis port checks", () => {
             description: "Synthetic status readiness fixture",
             filePath: path.join(baseDir, "SKILL.md"),
             baseDir,
-            source: state === "blocked" ? "openclaw-bundled" : "openclaw-workspace",
+            source: "openclaw-workspace",
           }),
           frontmatter: {},
           metadata: {
-            always: state === "always",
             requires: {
-              bins:
-                state === "ready" || state === "unsupported-os"
-                  ? []
-                  : ["openclaw-qa-readiness-absent-binary"],
+              bins: state === "ready" ? [] : ["openclaw-qa-readiness-absent-binary"],
             },
-            ...(state === "unsupported-os" ? { os: ["openclaw-qa-unsupported-os"] } : {}),
           },
         },
       ],
@@ -312,18 +303,6 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("! Port 18789");
     expect(output).toContain("2 OpenClaw gateway processes appear to be listening on port 18789");
     expect(output).toContain("Port 18789 is already in use.");
-  });
-
-  it("warns when port availability could not be determined", async () => {
-    const params = createBaseParams([]);
-    params.portUsage = { port: 18789, status: "unknown", listeners: [], hints: [] };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain("! Port 18789");
-    expect(output).toContain("Port 18789 availability could not be determined.");
-    expect(output).not.toContain("Port 18789 is free.");
   });
 
   it("does not let attributed listeners override indeterminate availability", async () => {

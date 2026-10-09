@@ -12,6 +12,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { stopProcessGroup } from "../stop-process-group.mjs";
 import { packNodeUpdateFixture } from "./package-fixtures.mjs";
 import { createNodeUpdateProofPlugin } from "./proof-plugin.mjs";
 
@@ -91,29 +92,8 @@ function start(label, executable, args, env, captureOutput = false) {
 }
 
 async function stop(processInfo) {
-  if (
-    !processInfo ||
-    processInfo.child.exitCode !== null ||
-    processInfo.child.signalCode !== null
-  ) {
-    return;
-  }
-  const child = processInfo.child;
-  const exited = once(child, "exit");
-  process.kill(-child.pid, "SIGTERM");
-  const deadline = setTimeout(() => {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch (error) {
-      if (error.code !== "ESRCH") {
-        throw error;
-      }
-    }
-  }, 15_000);
-  try {
-    await exited;
-  } finally {
-    clearTimeout(deadline);
+  if (processInfo) {
+    await stopProcessGroup(processInfo.child, { graceMs: 15_000 });
   }
 }
 
@@ -251,24 +231,29 @@ async function startNode(name, registryUrl, options = {}) {
   const plugin = options.plugin ?? proofPlugin;
   const env = options.sharedEnv
     ? { ...options.sharedEnv }
-    : writeConfig(name, {
-        nodeHost: {
-          autoUpdate: { enabled: options.enabled !== false },
-          browserProxy: { enabled: false },
-          skills: { enabled: false },
-        },
-        plugins: plugin.plugins,
-        tools: { exec: { mode: "full" } },
-        update: { channel: "stable", checkOnStart: options.checkOnStart !== false },
-      });
+    : writeConfig(
+        name,
+        options.defaultPlugins
+          ? { update: { channel: "stable" } }
+          : {
+              nodeHost: {
+                autoUpdate: { enabled: options.enabled !== false },
+                browserProxy: { enabled: false },
+                skills: { enabled: false },
+              },
+              plugins: plugin.plugins,
+              tools: { exec: { mode: "full" } },
+              update: { channel: "stable", checkOnStart: options.checkOnStart !== false },
+            },
+      );
   delete env.OPENCLAW_NO_AUTO_UPDATE;
   Object.assign(env, { OPENCLAW_GATEWAY_TOKEN: token, NPM_CONFIG_REGISTRY: registryUrl });
   if (options.noAutoEnv) {
     env.OPENCLAW_NO_AUTO_UPDATE = "1";
   }
-  const commands = [plugin.command, "system.which"].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  const commands = options.defaultPlugins
+    ? undefined
+    : [plugin.command, "system.which"].toSorted((left, right) => left.localeCompare(right));
   const args = [
     "node",
     "run",
@@ -280,8 +265,7 @@ async function startNode(name, registryUrl, options = {}) {
     name,
     "--node-id",
     `${name}-instance`,
-    "--commands",
-    commands.join(","),
+    ...(commands ? ["--commands", commands.join(",")] : []),
     "--no-tls",
     "--no-share-installed-apps",
   ];
@@ -299,14 +283,23 @@ async function startNode(name, registryUrl, options = {}) {
     }
     const connected = await nodeRow(name);
     assert(connected, `${name} is not paired and connected yet`);
-    assert.deepEqual(
-      connected.commands.toSorted((left, right) => left.localeCompare(right)),
-      commands,
-    );
+    if (options.defaultPlugins) {
+      // Gateway policy filters both status and pairing commands; the node logs its declaration.
+      const advertisedCommands = fs
+        .readFileSync(running.logPath, "utf8")
+        .match(/\[node-host\] advertised commands: (.*)/)?.[1]
+        .split(", ");
+      assert(advertisedCommands?.includes("file.stat"), `${name} did not advertise file.stat`);
+    } else {
+      assert.deepEqual(
+        connected.commands.toSorted((left, right) => left.localeCompare(right)),
+        commands,
+      );
+    }
     return connected;
   });
   const identity = await cli(`${name}-identity`, ["node", "identity"], env);
-  return { ...running, env, name, row, identity, commands, args };
+  return { ...running, env, name, row, identity, commands: commands ?? row.commands, args };
 }
 
 async function startGateway(name, sharedNodeState = false) {
@@ -677,6 +670,38 @@ try {
   assert(!fs.existsSync(`/proc/${legacyHostPid}`));
   assert(!fs.existsSync(`/proc/${retainedPid}`));
 
+  selectedVersion = versions[0];
+  metadataReleased = true;
+  const defaultPlugins = await startNode("node-default-plugins", proxyUrl, {
+    defaultPlugins: true,
+  });
+  const defaultUpdated = await waitFor(
+    "default-plugin node activates while idle",
+    async () => {
+      const row = await nodeRow(defaultPlugins.name);
+      return row?.version === versions[0] ? row : null;
+    },
+    900_000,
+    () => readNodeUpdateFailure(defaultPlugins.logPath),
+  );
+  assert.equal(defaultUpdated.nodeId, defaultPlugins.row.nodeId);
+  assert.deepEqual(
+    await cli("default-plugins-identity-after-update", ["node", "identity"], defaultPlugins.env),
+    defaultPlugins.identity,
+  );
+  assert(
+    fs
+      .readlinkSync(path.join(defaultPlugins.env.OPENCLAW_STATE_DIR, "node-runtime/current"))
+      .includes(`${versions[0]}-`),
+  );
+  record("default-plugins-idle-activation", {
+    before: defaultPlugins.row.version,
+    after: defaultUpdated.version,
+    sameNodeId: true,
+    sameIdentity: true,
+  });
+  await stop(defaultPlugins);
+
   for (const { name, options } of [
     { name: "node-optout", options: { enabled: false } },
     { name: "node-startup-optout", options: { checkOnStart: false } },
@@ -891,6 +916,7 @@ try {
       "legacy-plugin-retained-work-deferral",
       "legacy-plugin-missing-idle-hook-deferral",
       "idle-activation",
+      "default-plugins-idle-activation",
       "pairing-preserved",
       "launch-surface-preserved",
       "12-hour-cooldown",

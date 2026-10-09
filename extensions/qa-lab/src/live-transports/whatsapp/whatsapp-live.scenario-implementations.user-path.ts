@@ -1,164 +1,98 @@
-// QA Lab WhatsApp user-path action and inbound media scenarios.
 import { randomUUID } from "node:crypto";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
+import { waitForNoWhatsAppReply } from "./whatsapp-live.driver.js";
 import {
+  callWhatsAppGatewaySend,
+  writeWhatsAppQaWorkspaceFixture,
+} from "./whatsapp-live.gateway.js";
+import {
+  sendWhatsAppQaMediaAndObserve,
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
   WHATSAPP_QA_ONE_PIXEL_PNG,
-  assertWhatsAppMessageFromSutPhone,
-  callWhatsAppGatewaySend,
   createWhatsAppQaAudioOggOpusBuffer,
   createWhatsAppQaAudioWavBuffer,
   createWhatsAppQaPdfBuffer,
+} from "./whatsapp-live.media.js";
+import {
   matchesWhatsAppSutReactionToTrigger,
-  waitForNoWhatsAppReply,
+  requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
-  waitForWhatsAppScenarioSutMessage,
   waitForWhatsAppSutReactionToTrigger,
-  writeWhatsAppQaWorkspaceFixture,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
+import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
 
-export const whatsappQaAgentMessageActionReactScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    actions: true,
-  },
-  buildRun: () => {
-    const token = `WHATSAPP_QA_AGENT_REACT_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      afterSend: async (context) => {
-        const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
-          expectation: { emoji: "👍" },
-          timeoutMs: 60_000,
-        });
-        return `agent message reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
-      },
-      allowQuietWindowMessage: (message, context) =>
-        matchesWhatsAppSutReactionToTrigger(message, context, { emoji: "👍" }),
-      configMode: "allowlist",
-      expectReply: false,
-      input:
-        `React to this WhatsApp message with thumbs up for QA action check ${token}. ` +
-        "Do not send any visible text reply after the reaction.",
-      matchText: token,
-      quietWindowMs: 8_000,
-      target: "dm",
-    };
-  },
-};
-
-export const whatsappQaAgentMessageActionUploadFileScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    actions: true,
-  },
-  buildRun: () => {
-    const token = `WHATSAPP_QA_AGENT_UPLOAD_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      afterSend: async (context) => {
-        const media = await waitForScenarioObservedMessage(context, {
-          observedAfter: context.requestStartedAt,
-          timeoutMs: 60_000,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("image/") === true &&
-            message.text.includes(token),
-        });
-        return `agent upload-file media ${media.mediaType ?? "<unknown>"} observed`;
-      },
-      allowQuietWindowMessage: (message) =>
-        message.kind === "media" &&
-        message.mediaType?.startsWith("image/") === true &&
-        message.text.includes(token),
-      configMode: "allowlist",
-      expectReply: false,
-      input:
-        `Use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. ` +
-        "Do not send any visible text reply after the upload.",
-      matchText: token,
-      quietWindowMs: 8_000,
-      target: "dm",
-    };
-  },
-};
-
-export const whatsappQaGroupAgentMessageActionReactScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    actions: true,
-  },
-  requiresGroupJid: true,
-  buildRun: () => {
-    const token = `WHATSAPP_QA_GROUP_AGENT_REACT_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      afterSend: async (context) => {
-        const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
-          expectation: { emoji: "👍" },
-          timeoutMs: 60_000,
-        });
-        return `group agent message reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
-      },
-      allowQuietWindowMessage: (message, context) =>
-        matchesWhatsAppSutReactionToTrigger(message, context, { emoji: "👍" }),
-      configMode: "allowlist",
-      expectReply: false,
-      input:
-        `openclawqa react to this WhatsApp group message with thumbs up for QA action check ${token}. ` +
-        "Do not send any visible text reply after the reaction.",
-      matchText: token,
-      quietWindowMs: 8_000,
-      target: "group",
-    };
-  },
-};
-
-export const whatsappQaGroupAgentMessageActionUploadFileScenario: WhatsAppQaScenarioImplementation =
-  {
+function createWhatsAppAgentActionScenario(target: "dm" | "group", action: "react" | "upload") {
+  const group = target === "group";
+  return createWhatsAppMessageScenario({
     posture: "user-path",
-    configOverrides: {
-      actions: true,
-    },
-    requiresGroupJid: true,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_AGENT_UPLOAD_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterSend: async (context) => {
-          const media = await waitForWhatsAppScenarioSutMessage(context, {
-            observedAfter: context.requestStartedAt,
-            targetKind: "group",
-            timeoutMs: 60_000,
-            match: (message) =>
+    configOverrides: { actions: true },
+    ...(group ? { requiresGroupJid: true } : {}),
+    marker: `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_${action.toUpperCase()}`,
+    buildRun: (token) => ({
+      expectReply: false,
+      quietWindowMs: 8_000,
+      target,
+      ...(action === "react"
+        ? {
+            afterSend: async (context) => {
+              const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
+                expectation: { emoji: "👍" },
+                timeoutMs: 60_000,
+              });
+              return `${group ? "group " : ""}agent message reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
+            },
+            allowQuietWindowMessage: (message, context) =>
+              matchesWhatsAppSutReactionToTrigger(message, context, { emoji: "👍" }),
+            input:
+              `${group ? "openclawqa react" : "React"} to this WhatsApp ${group ? "group " : ""}message with thumbs up for QA action check ${token}. ` +
+              "Do not send any visible text reply after the reaction.",
+          }
+        : {
+            afterSend: async (context) => {
+              const media = await waitForScenarioObservedMessage(context, {
+                observedAfter: context.requestStartedAt,
+                timeoutMs: 60_000,
+                match: (message) =>
+                  message.kind === "media" &&
+                  message.hasMedia === true &&
+                  message.mediaType?.startsWith("image/") === true &&
+                  message.text.includes(token),
+              });
+              return `${group ? "group " : ""}agent upload-file media ${media.mediaType ?? "<unknown>"} observed`;
+            },
+            allowQuietWindowMessage: (message) =>
               message.kind === "media" &&
-              message.hasMedia === true &&
               message.mediaType?.startsWith("image/") === true &&
               message.text.includes(token),
-          });
-          return `group agent upload-file media ${media.mediaType ?? "<unknown>"} observed`;
-        },
-        allowQuietWindowMessage: (message) =>
-          message.kind === "media" &&
-          message.mediaType?.startsWith("image/") === true &&
-          message.text.includes(token),
-        configMode: "allowlist",
-        expectReply: false,
-        input:
-          `openclawqa use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. ` +
-          "Do not send any visible text reply after the upload.",
-        matchText: token,
-        quietWindowMs: 8_000,
-        target: "group",
-      };
-    },
-  };
+            input:
+              `${group ? "openclawqa use" : "Use"} the WhatsApp message tool upload-file action to send a PNG with caption ${token}. ` +
+              "Do not send any visible text reply after the upload.",
+          }),
+    }),
+  });
+}
 
-export const whatsappQaInboundReactionNoTriggerScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  buildRun: () => {
-    const token = `WHATSAPP_QA_INBOUND_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
+export const whatsappUserPathScenarios = {
+  whatsappQaAgentMessageActionReactScenario: createWhatsAppAgentActionScenario("dm", "react"),
+
+  whatsappQaGroupAgentMessageActionReactScenario: createWhatsAppAgentActionScenario(
+    "group",
+    "react",
+  ),
+
+  whatsappQaAgentMessageActionUploadFileScenario: createWhatsAppAgentActionScenario("dm", "upload"),
+
+  whatsappQaGroupAgentMessageActionUploadFileScenario: createWhatsAppAgentActionScenario(
+    "group",
+    "upload",
+  ),
+
+  whatsappQaInboundReactionNoTriggerScenario: createWhatsAppMessageScenario({
+    posture: "user-path",
+    marker: "WHATSAPP_QA_INBOUND_REACTION",
+    buildRun: (token) => ({
       afterReply: async (reply, context) => {
-        assertWhatsAppMessageFromSutPhone(reply, context);
         if (!reply.messageId) {
           throw new Error("WhatsApp SUT reply did not include a message id to react to.");
         }
@@ -175,24 +109,16 @@ export const whatsappQaInboundReactionNoTriggerScenario: WhatsAppQaScenarioImple
         });
         return "driver reaction to SUT message did not trigger a fresh reply";
       },
-      configMode: "allowlist",
-      expectReply: true,
       input: `Reply with only this exact marker before inbound reaction check: ${token}`,
-      matchText: token,
-      target: "dm",
-    };
-  },
-};
+    }),
+  }),
 
-export const whatsappQaReplyContextIsolationScenario: WhatsAppQaScenarioImplementation = {
-  posture: "direct-gateway",
-  buildRun: () => {
-    const token = `WHATSAPP_QA_REPLY_ISOLATION_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
+  whatsappQaReplyContextIsolationScenario: createWhatsAppMessageScenario({
+    posture: "direct-gateway",
+    marker: "WHATSAPP_QA_REPLY_ISOLATION",
+    buildRun: (token) => ({
       afterReply: async (_reply, context) => {
-        if (!context.sent.messageId) {
-          throw new Error("WhatsApp driver did not return a triggering message id.");
-        }
+        requireWhatsAppTriggerMessageId(context);
         const quotedStartedAt = new Date();
         await callWhatsAppGatewaySend(context, {
           label: "quoted",
@@ -232,60 +158,48 @@ export const whatsappQaReplyContextIsolationScenario: WhatsAppQaScenarioImplemen
         }
         return "quoted send and fresh send used independent reply context";
       },
-      configMode: "allowlist",
-      expectReply: true,
       input: `Reply with only this exact marker before reply isolation checks: ${token}`,
-      matchText: token,
-      target: "dm",
-    };
-  },
-};
+    }),
+  }),
 
-export const whatsappQaInboundImageCaptionScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  buildRun: () => {
-    const token = `WHATSAPP_QA_IMAGE_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      configMode: "allowlist",
-      expectReply: true,
+  whatsappQaInboundImageCaptionScenario: createWhatsAppMessageScenario({
+    posture: "user-path",
+    marker: "WHATSAPP_QA_IMAGE",
+    buildRun: (token) => ({
       input: `This image caption asks you to reply with only this exact marker: ${token}`,
-      matchText: token,
       sendMode: {
         fileName: "whatsapp-qa.png",
         kind: "media",
         mediaBuffer: WHATSAPP_QA_ONE_PIXEL_PNG,
         mediaType: "image/png",
       },
-      target: "dm",
-    };
-  },
-};
-
-export const whatsappQaAudioPreflightScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    audioPreflight: true,
-  },
-  buildRun: () => ({
-    configMode: "allowlist",
-    expectReply: true,
-    input: "",
-    matchText: WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
-    sendMode: {
-      fileName: "whatsapp-qa-audio.ogg",
-      kind: "media",
-      mediaBuffer: createWhatsAppQaAudioOggOpusBuffer(),
-      mediaType: WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
-    },
-    target: "dm",
+    }),
   }),
-};
 
-export const whatsappQaOutboundMediaMatrixScenario: WhatsAppQaScenarioImplementation = {
-  posture: "direct-gateway",
-  buildRun: () => {
-    const token = `WHATSAPP_QA_OUTBOUND_MEDIA_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
+  whatsappQaAudioPreflightScenario: {
+    posture: "user-path",
+    configOverrides: {
+      audioPreflight: true,
+    },
+    buildRun: () => ({
+      configMode: "allowlist",
+      expectReply: true,
+      input: "",
+      matchText: WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
+      sendMode: {
+        fileName: "whatsapp-qa-audio.ogg",
+        kind: "media",
+        mediaBuffer: createWhatsAppQaAudioOggOpusBuffer(),
+        mediaType: WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
+      },
+      target: "dm",
+    }),
+  },
+
+  whatsappQaOutboundMediaMatrixScenario: createWhatsAppMessageScenario({
+    posture: "direct-gateway",
+    marker: "WHATSAPP_QA_OUTBOUND_MEDIA",
+    buildRun: (token) => ({
       afterReply: async (_reply, context) => {
         const mediaRootToken = randomUUID().slice(0, 8);
         const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
@@ -301,55 +215,25 @@ export const whatsappQaOutboundMediaMatrixScenario: WhatsAppQaScenarioImplementa
           fileName: `whatsapp-qa-${mediaRootToken}.wav`,
         });
 
-        const imageStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "image",
           label: "image",
           mediaUrl: imagePath,
           message: `${token}_IMAGE`,
         });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: imageStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("image/") === true &&
-            message.text.includes(`${token}_IMAGE`),
-        });
 
-        const documentStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          forceDocument: true,
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "document",
           label: "document",
           mediaUrl: documentPath,
           message: `${token}_DOCUMENT`,
         });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: documentStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            (message.mediaType === "application/pdf" ||
-              message.mediaFileName?.endsWith(".pdf") === true) &&
-            message.text.includes(`${token}_DOCUMENT`),
-        });
 
-        const audioStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          asVoice: true,
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "audio",
           label: "audio",
           mediaUrl: audioPath,
           message: `${token}_AUDIO`,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: audioStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("audio/") === true,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: audioStartedAt,
-          match: (message) => message.text.includes(`${token}_AUDIO`),
         });
 
         const multiStartedAt = new Date();
@@ -372,11 +256,7 @@ export const whatsappQaOutboundMediaMatrixScenario: WhatsAppQaScenarioImplementa
         });
         return "gateway send delivered image, document, audio, and multi-media";
       },
-      configMode: "allowlist",
-      expectReply: true,
       input: `Reply with only this exact marker before outbound media checks: ${token}`,
-      matchText: token,
-      target: "dm",
-    };
-  },
-};
+    }),
+  }),
+} satisfies Record<string, WhatsAppQaScenarioImplementation>;

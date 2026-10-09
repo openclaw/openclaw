@@ -20,6 +20,21 @@ import {
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
 
+/** Provenance travels with the decision; consumers never infer it from log labels. */
+type ToolPolicySource = {
+  kind: "profile" | "config" | "session" | "runtime";
+  path?: string;
+  profile?: string;
+  alsoAllowPath?: string;
+};
+
+export type ConfiguredToolPolicySources = Partial<
+  Record<
+    "profile" | "providerProfile" | "global" | "globalProvider" | "agent" | "agentProvider",
+    ToolPolicySource
+  >
+>;
+
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
@@ -38,6 +53,7 @@ function rememberToolPolicyWarning(warning: string): boolean {
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
+  source?: ToolPolicySource;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
@@ -67,67 +83,65 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   groupPolicy?: ToolPolicyLike;
   senderPolicy?: ToolPolicyLike;
   agentId?: string;
+  sources?: ConfiguredToolPolicySources;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
   const profile = params.profile?.trim();
   const providerProfile = params.providerProfile?.trim();
   const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
-  return [
+  const steps: ToolPolicyPipelineStep[] = [
     {
       policy: params.profilePolicy,
+      source: params.sources?.profile,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
-      stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
-      unavailableCoreToolReason,
     },
     {
       policy: params.providerProfilePolicy,
+      source: params.sources?.providerProfile,
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
-      stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
-      unavailableCoreToolReason,
     },
     {
       policy: params.globalPolicy,
+      source: params.sources?.global,
       label: "tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
     },
     {
       policy: params.globalProviderPolicy,
+      source: params.sources?.globalProvider,
       label: "tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
     },
     {
       policy: params.agentPolicy,
+      source: params.sources?.agent,
       label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
     },
     {
       policy: params.agentProviderPolicy,
+      source: params.sources?.agentProvider,
       label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
     },
     {
       policy: params.groupPolicy,
+      source: { kind: "session" },
       label: "group tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
     },
     {
       policy: params.senderPolicy,
+      source: { kind: "session" },
       label: "tools.toolsBySender",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
     },
   ];
+  for (const step of steps) {
+    step.stripPluginOnlyAllowlist = true;
+    step.unavailableCoreToolReason = unavailableCoreToolReason;
+  }
+  return steps;
 }
 
 /** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */

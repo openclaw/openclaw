@@ -1,12 +1,36 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { captureExecRequestCancellation } from "../bash-process-control.js";
+import {
+  deleteSession,
+  getSession,
+  waitForExecSession,
+  type ProcessSession,
+} from "../bash-process-registry.js";
+import { createLazyExecTool } from "../lazy-exec-tool.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { acceptCompactionSuccessor } from "./compaction-successor.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
+import { claimAgentSessionWriter } from "./run/session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
@@ -91,38 +115,201 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
-  it("owns compaction continuation as an internal persisted prompt", async () => {
-    await using state = await createState();
-
-    state.activateCompactionContinuation("continue after compaction");
-
-    expect(state.activePrompt).toEqual({
-      override: "continue after compaction",
-      persisted: true,
-      internal: true,
+  it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
+    await using state = await createState({ prompt: "Task B: inspect the blue database." });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [],
     });
+    const completed = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "The blue database was inspected." }],
+    });
+    state.continueFromCurrentTranscript({ messages: [completed] });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [completed],
+    });
+    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("preserves exact internal prompt bytes when composing compaction continuation", async () => {
-    await using state = await createState();
-
-    state.activateInternalPrompt("  finish the reasoning exactly  ");
-    state.activateCompactionContinuation("continue after compaction");
-
-    expect(state.activePrompt).toEqual({
-      override: "  finish the reasoning exactly  \n\ncontinue after compaction",
-      persisted: true,
-      internal: true,
-    });
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  it.each([
+    { name: "moves command cancellation to an accepted compaction successor", replaced: false },
+    { name: "preserves command ownership when a replacement rejects compaction", replaced: true },
+  ])("$name", async ({ replaced }) => {
+    await withOpenClawTestState(
+      {
+        label: "exec-compaction-handoff",
+        scenario: "minimal",
+        env: { OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" },
+      },
+      async (fixture) => {
+        const target = {
+          agentId: "main",
+          sessionId: randomUUID(),
+          sessionKey: `agent:main:${randomUUID()}`,
+          storePath: path.join(fixture.agentDir(), "openclaw-agent.sqlite"),
+        };
+        await replaceSessionEntry(target, {
+          sessionId: target.sessionId,
+          lifecycleRevision: randomUUID(),
+          updatedAt: 1,
+        });
+        const runId = randomUUID();
+        const admission = prepareSystemAgentRunAdmission(
+          {},
+          runId,
+          target.agentId,
+          "exec-compaction",
+        );
+        const commands: ProcessSession[] = [];
+        const startCommand = async (commandRunId: string) => {
+          const tool = createLazyExecTool({
+            ...target,
+            runId: commandRunId,
+            cwd: fixture.workspaceDir,
+            scopeKey: target.sessionKey,
+            host: "gateway",
+            mode: "full",
+            ask: "off",
+            allowBackground: true,
+            notifyOnExit: false,
+            preparedStoreEnvironment: {},
+          });
+          const result = await tool.execute("compaction-command", {
+            command: `node -e "require('fs').watch('.', () => {})"`,
+            yieldMs: 10,
+            timeoutSeconds: 60,
+          });
+          const details = asOptionalRecord(result.details);
+          expect(details?.status).toBe("running");
+          if (typeof details?.sessionId !== "string") {
+            throw new Error("Expected a running command's process handle");
+          }
+          const command = expectDefined(getSession(details.sessionId), "running command");
+          commands.push(command);
+          return command;
+        };
+        try {
+          const previousRunId = randomUUID();
+          const unrelated = await withExecRequestTurn(
+            { identity: { ...target, runId: previousRunId } },
+            () => startCommand(previousRunId),
+          );
+          const admittedRunContext = await admission.admit("embedded");
+          const assertAdmittedActive = expectDefined(
+            resolveAdmittedRunActiveAssertion(admittedRunContext),
+            "live compaction admission",
+          );
+          const runParams: PreparedEmbeddedRunInput["runParams"] = {
+            ...BASE_RUN_PARAMS,
+            ...target,
+            admittedRunContext,
+            sessionFile: target.sessionKey,
+            sessionTarget: target,
+            workspaceDir: fixture.workspaceDir,
+            runId,
+          };
+          const writer = expectDefined(await claimAgentSessionWriter(runParams), "claimed writer");
+          runParams.sessionTarget = { ...target, ...writer };
+          const expectedEntry = expectDefined(loadSessionEntry(target), "original session writer");
+          await withExecRequestTurn({ identity: { ...target, runId } }, async () => {
+            await using state = await createEmbeddedRunSessionPromptState({
+              runParams,
+              sessionAgentId: target.agentId,
+              resolvedSessionKey: target.sessionKey,
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              onInterrupt: () => {},
+            });
+            const ordinary = await startCommand(runId);
+            const successorId = randomUUID();
+            const replacementId = randomUUID();
+            if (replaced) {
+              await replaceSessionEntry(target, {
+                ...expectedEntry,
+                sessionId: replacementId,
+                lifecycleRevision: randomUUID(),
+                activeWriterRunId: "replacement-run",
+              });
+            }
+            const acceptance = acceptCompactionSuccessor({
+              currentTarget: target,
+              currentSessionFile: state.sessionFile,
+              expectedEntry: {
+                sessionId: expectedEntry.sessionId,
+                lifecycleRevision: expectedEntry.lifecycleRevision,
+                activeWriterRunId: expectedEntry.activeWriterRunId,
+              },
+              assertActive: assertAdmittedActive,
+              result: {
+                ok: true,
+                compacted: true,
+                result: {
+                  summary: "Compacted request context",
+                  tokensBefore: 4_097,
+                  sessionTarget: { sessionId: successorId },
+                },
+              },
+              onCommitted: state.recordCommittedCompactionSuccessor,
+            });
+            if (replaced) {
+              await expect(acceptance).rejects.toBeInstanceOf(
+                SessionTranscriptWriterClaimReboundError,
+              );
+              expect(state.sessionId).toBe(target.sessionId);
+            } else {
+              const accepted = await acceptance;
+              state.notifyCompactionSessionAdopted(accepted.previousSessionId);
+              expect(state.sessionId).toBe(successorId);
+            }
+            const currentSessionId = replaced ? replacementId : successorId;
+            expect(loadSessionEntry(target)?.sessionId).toBe(currentSessionId);
+            const stopped = captureExecRequestCancellation({
+              sessionKey: target.sessionKey,
+              agentId: target.agentId,
+              sessionId: currentSessionId,
+            });
+            expect(stopped.cancel()).toBe(!replaced);
+            await stopped.settle();
+            if (replaced) {
+              expect(ordinary.exited).toBe(false);
+              expect(ordinary.cancellationRequested).not.toBe(true);
+            } else {
+              expect(ordinary).toMatchObject({ exited: true, exitReason: "manual-cancel" });
+              expect(ordinary.finalizationFailed).not.toBe(true);
+            }
+            // An older request sharing the original session is not this run's successor.
+            expect(unrelated.exited).toBe(false);
+            expect(unrelated.cancellationRequested).not.toBe(true);
+          });
+        } finally {
+          try {
+            for (const command of commands) {
+              getProcessSupervisor().cancel(command.id, "manual-cancel");
+            }
+            await Promise.all(commands.map(waitForExecSession));
+            for (const command of commands) {
+              deleteSession(command.id);
+            }
+          } finally {
+            admission.close();
+          }
+        }
+      },
+    );
   });
 
   it("keeps a compound internal prompt across a missing-assistant retry", async () => {
     await using state = await createState();
-    state.activateInternalPrompt("finish the reasoning");
+    state.activateInternalPrompt("  finish the reasoning exactly  ");
     state.activateCompactionContinuation("continue after compaction");
-    const activePrompt = { ...state.activePrompt };
+    const activePrompt = {
+      override: "  finish the reasoning exactly  \n\ncontinue after compaction",
+      persisted: true,
+      internal: true,
+    };
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
       lastAssistant: undefined,
@@ -130,18 +317,13 @@ describe("embedded run session prompt state", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
 
-    const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
+    const resolved = await resolveEmbeddedRunTerminal({
+      ...makeTerminalInput({
         attempt,
         attemptAssistant: undefined,
-        activePromptPersisted: state.activePrompt.persisted,
-        activateInternalPrompt: state.activateInternalPrompt,
-        activateCompactionContinuation: state.activateCompactionContinuation,
-        setSuppressNextUserMessagePersistence: (value) => {
-          state.suppressNextUserMessagePersistence = value;
-        },
       }),
-    );
+      sessionPromptState: state,
+    });
 
     expect(resolved).toEqual({ action: "retry" });
     expect(state.activePrompt).toEqual(activePrompt);
@@ -170,25 +352,15 @@ describe("embedded run session prompt state", () => {
       currentAttemptAssistant: compactionAssistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    const terminalInput = {
-      retryState,
-      activePromptPersisted: state.activePrompt.persisted,
-      activateInternalPrompt: state.activateInternalPrompt,
-      activateCompactionContinuation: state.activateCompactionContinuation,
-      clearCompactionContinuation: state.clearCompactionContinuation,
-      setSuppressNextUserMessagePersistence: (value: boolean) => {
-        state.suppressNextUserMessagePersistence = value;
-      },
-    };
-
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: compactionAttempt,
           attemptAssistant: compactionAssistant,
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const reasoningAssistant = buildEmbeddedRunnerAssistant({
@@ -207,22 +379,23 @@ describe("embedded run session prompt state", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: reasoningAttempt,
           attemptAssistant: reasoningAssistant,
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const emptyResponseAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "" }],
     });
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: makeEmbeddedRunnerAttempt({
             assistantTexts: [],
             lastAssistant: emptyResponseAssistant,
@@ -233,7 +406,8 @@ describe("embedded run session prompt state", () => {
             },
           }),
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const prompt = state.activePrompt.override ?? "";
@@ -267,19 +441,15 @@ describe("embedded run session prompt state", () => {
       });
 
       await expect(
-        resolveEmbeddedRunTerminal(
-          makeTerminalInput({
+        resolveEmbeddedRunTerminal({
+          ...makeTerminalInput({
             attempt,
             attemptAssistant: assistant,
             payloadsWithToolMedia: [{ text: "Visible draft." }],
             finalAssistantVisibleText: "Visible draft.",
-            activePromptPersisted: state.activePrompt.persisted,
-            activateInternalPrompt: state.activateInternalPrompt,
-            markOwnedTranscriptRetry: state.markOwnedTranscriptRetry,
-            activateCompactionContinuation: state.activateCompactionContinuation,
-            clearCompactionContinuation: state.clearCompactionContinuation,
           }),
-        ),
+          sessionPromptState: state,
+        }),
       ).resolves.toEqual({ action: "retry" });
 
       expect(state.activePrompt.override).toContain("Tighten the final wording.");
@@ -319,54 +489,18 @@ describe("embedded run session prompt state", () => {
     });
   });
 
-  it("settles projection maintenance only for an owned transcript retry", async () => {
-    const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
-    const waitForProjection = vi
-      .spyOn(reconcile, "waitForSessionTranscriptProjection")
-      .mockResolvedValue();
-    await using state = await createState();
-    const abortSignal = new AbortController().signal;
+  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
+    "keeps the original prompt for a raw model run retry (%o)",
+    async (rawRun) => {
+      await using state = await createState(rawRun);
 
-    try {
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
-      expect(waitForProjection).not.toHaveBeenCalled();
+      state.continueFromCurrentTranscript();
 
-      await state.prepareCompactedTranscriptRetry(assertActive);
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget, abortSignal);
-      expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget, abortSignal);
-
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
-      expect(waitForProjection).toHaveBeenCalledOnce();
-    } finally {
-      waitForProjection.mockRestore();
-    }
-  });
-
-  it("records canonical runtime persistence without mutating recorder lifecycle state", async () => {
-    const persistedMessage = makeUserMessage();
-    const persistApproved = vi.fn(async () => ({
-      admission: TEST_ADMISSION,
-      sessionFile: BASE_RUN_PARAMS.sessionFile,
-      sessionEntry: undefined,
-      messageId: "msg-user-1",
-      message: persistedMessage,
-    }));
-    const recorder = createRecorder({ persistApproved });
-    const onUserMessagePersisted = vi.fn();
-    await using state = await createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
-
-    state.onUserMessagePersisted(persistedMessage);
-    await state.waitForCurrentUserMessagePersistence();
-
-    expect(persistApproved).toHaveBeenCalledOnce();
-    expect(recorder.markRuntimePersistencePending).toHaveBeenCalledOnce();
-    expect(recorder.markRuntimePersisted).not.toHaveBeenCalled();
-    expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
-    expect(state.activePrompt.persisted).toBe(true);
-  });
+      // Raw runs load no transcript history, so a continuation prompt would drop the task.
+      expect(state.activePrompt.override).toBeUndefined();
+      expect(state.activePrompt.internal).toBe(false);
+    },
+  );
 
   it("continues from the transcript after compaction when the runtime persisted the user turn", async () => {
     const runtimeMessage = makeUserMessage();
@@ -501,18 +635,12 @@ describe("embedded run session prompt state", () => {
         expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
         expect(state.suppressNextUserMessagePersistence).toBe(true);
       }
+      expect(persistApproved).toHaveBeenCalledOnce();
+      expect(recorder.markRuntimePersistencePending).toHaveBeenCalledOnce();
+      expect(recorder.markRuntimePersisted).not.toHaveBeenCalled();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
     },
   );
-
-  it("does not suppress an original prompt that precheck compaction never persisted", async () => {
-    await using state = await createState();
-
-    await state.prepareCompactedTranscriptRetry(assertActive);
-
-    expect(state.activePrompt).toEqual({ persisted: false, internal: false });
-    expect(state.suppressNextUserMessagePersistence).toBe(false);
-  });
 
   it("keeps an internal reasoning continuation hidden across precheck compaction", async () => {
     const reasoningContinuation =

@@ -50,18 +50,6 @@ export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: strin
   }
 }
 
-type WorkspaceFileSnapshot =
-  | { type: "file"; mode: number; size: number; sha256: string }
-  | { type: "unsupported" };
-
-async function readWorkspaceFileSnapshot(
-  root: string,
-  entryPath: string,
-): Promise<WorkspaceFileSnapshot> {
-  const absolute = localPath(root, entryPath);
-  return await computeWorkspaceFileSnapshot(absolute, MAX_RECONCILIATION_FILE_BYTES, root);
-}
-
 export async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
   const absolute = localPath(root, entryPath);
   const stats = await fs.lstat(absolute).catch((error: unknown) => {
@@ -82,21 +70,35 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
   if (!stats.isFile()) {
     return { path: entryPath, type: "unsupported" };
   }
-  const snapshot = await readWorkspaceFileSnapshot(root, entryPath);
-  if (snapshot.type === "unsupported") {
-    return { path: entryPath, type: "unsupported" };
-  }
-  return {
-    path: entryPath,
-    type: "file",
-    mode: snapshot.mode,
-    size: snapshot.size,
-    sha256: snapshot.sha256,
-  };
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  );
+  return { path: entryPath, ...snapshot };
 }
 
-async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
-  return await computeWorkspaceFileSnapshot(absolute, MAX_RECONCILIATION_FILE_BYTES);
+async function fileEntryMatches(
+  absolute: string,
+  entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
+  root?: string,
+): Promise<boolean> {
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  ).catch((error: unknown) => {
+    if (error instanceof WorkerTaskError) {
+      throw error;
+    }
+    return undefined;
+  });
+  return (
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
+  );
 }
 
 export async function absoluteEntryMatches(
@@ -113,18 +115,7 @@ export async function absoluteEntryMatches(
   if (!stats.isFile() || stats.isSymbolicLink()) {
     return false;
   }
-  const snapshot = await readAbsoluteFileSnapshot(absolute).catch((error: unknown) => {
-    if (error instanceof WorkerTaskError) {
-      throw error;
-    }
-    return undefined;
-  });
-  return (
-    snapshot?.type === "file" &&
-    snapshot.mode === entry.mode &&
-    snapshot.size === entry.size &&
-    snapshot.sha256 === entry.sha256
-  );
+  return await fileEntryMatches(absolute, entry);
 }
 
 export async function entryMatches(
@@ -134,18 +125,7 @@ export async function entryMatches(
   if (entry.type === "symlink") {
     return await absoluteEntryMatches(localPath(root, entry.path), entry);
   }
-  const snapshot = await readWorkspaceFileSnapshot(root, entry.path).catch((error: unknown) => {
-    if (error instanceof WorkerTaskError) {
-      throw error;
-    }
-    return undefined;
-  });
-  return (
-    snapshot?.type === "file" &&
-    snapshot.mode === entry.mode &&
-    snapshot.size === entry.size &&
-    snapshot.sha256 === entry.sha256
-  );
+  return await fileEntryMatches(localPath(root, entry.path), entry, root);
 }
 
 export async function readWorkspaceTreeFile(params: {
@@ -192,67 +172,38 @@ export async function readWorkspaceTreeFile(params: {
   return blob.stdout;
 }
 
-export async function directoryContainsOnlyJournalPaths(
+export async function directoryContainsOnlyWorkspaceEntries(
   root: string,
   directory: string,
-  paths: ReadonlySet<string>,
-  directories: ReadonlySet<string>,
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
+  journal?: { paths: ReadonlySet<string>; directories: ReadonlySet<string> },
 ): Promise<boolean> {
+  let foundEntry = false;
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
     if (isManagedSandboxSkillsPath(child)) {
       return false;
     }
-    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
-      continue;
-    }
-    const stats = await fs.lstat(localPath(root, child));
-    if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (
-        !directories.has(child) &&
-        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
-      ) {
+    if (!isDerivedWorkspacePath(child, await isRetainedInput(child))) {
+      const stats = await fs.lstat(localPath(root, child));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        if (
+          !(await directoryContainsOnlyWorkspaceEntries(
+            root,
+            child,
+            isRetainedInput,
+            journal?.directories.has(child) ? journal : undefined,
+          ))
+        ) {
+          return false;
+        }
+      } else if (!journal?.paths.has(child)) {
         return false;
       }
-      if (
-        directories.has(child) &&
-        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories, isRetainedInput))
-      ) {
-        return false;
-      }
-    } else if (!paths.has(child)) {
-      return false;
     }
+    foundEntry = true;
   }
-  return true;
-}
-
-export async function directoryContainsOnlyDerivedWorkspaceEntries(
-  root: string,
-  directory: string,
-  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
-): Promise<boolean> {
-  const names = await fs.readdir(localPath(root, directory));
-  let foundDerivedEntry = false;
-  for (const name of names) {
-    const child = `${directory}/${name}`;
-    if (isManagedSandboxSkillsPath(child)) {
-      return false;
-    }
-    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
-      foundDerivedEntry = true;
-      continue;
-    }
-    const stats = await fs.lstat(localPath(root, child));
-    if (
-      !stats.isDirectory() ||
-      stats.isSymbolicLink() ||
-      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
-    ) {
-      return false;
-    }
-    foundDerivedEntry = true;
-  }
-  return foundDerivedEntry;
+  // Journal-owned directories may be empty; an unlisted directory must contain
+  // derived content before it can be treated as disposable residue.
+  return journal !== undefined || foundEntry;
 }

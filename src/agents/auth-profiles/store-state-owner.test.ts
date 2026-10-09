@@ -7,8 +7,10 @@ import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   graftActiveSecretsRuntimeAuthState,
-  restoreSecretsRuntimeSnapshotStateIfCurrent,
+  prepareSecretsRuntimeSnapshotRestoreState,
+  activateSecretsRuntimeSnapshotStateIfCurrent,
 } from "../../secrets/runtime-state.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
@@ -112,6 +114,7 @@ describe("explicit auth state ownership", () => {
           bookkeepingOwner === "mixed-live",
       );
       if (localBookkeeping) {
+        await closeOpenClawAgentDatabaseByPathAsync(first.agentPath);
         if (bookkeepingOwner === "cleared-local") {
           await updateAuthProfileStoreWithLock({
             stateDir: second.stateDir,
@@ -249,13 +252,15 @@ describe("explicit auth state ownership", () => {
         activateSecretsRuntimeSnapshotState({ ...prepared, refreshHandler: null });
       } else {
         expect(
-          restoreSecretsRuntimeSnapshotStateIfCurrent({
-            snapshot: baseline,
-            ownedSnapshot: owned,
-            expectedRevision: revision,
-            refreshContext: null,
-            refreshHandler: null,
-          }),
+          activateSecretsRuntimeSnapshotStateIfCurrent(
+            prepareSecretsRuntimeSnapshotRestoreState({
+              snapshot: baseline,
+              ownedSnapshot: owned,
+              expectedRevision: revision,
+              refreshContext: null,
+              refreshHandler: null,
+            })!,
+          ),
         ).toBe(true);
       }
       expect(snapshotAt(resolveAuthProfileDatabasePath(agentDir))?.profiles.shared).toEqual(
@@ -356,13 +361,15 @@ describe("explicit auth state ownership", () => {
     expect(snapshotAt(first.agentPath)).toBeUndefined();
     vi.stubEnv("OPENCLAW_STATE_DIR", second.stateDir);
     expect(
-      restoreSecretsRuntimeSnapshotStateIfCurrent({
-        snapshot: captured.baseline,
-        ownedSnapshot: captured.owned,
-        expectedRevision: captured.revision,
-        refreshContext: null,
-        refreshHandler: null,
-      }),
+      activateSecretsRuntimeSnapshotStateIfCurrent(
+        prepareSecretsRuntimeSnapshotRestoreState({
+          snapshot: captured.baseline,
+          ownedSnapshot: captured.owned,
+          expectedRevision: captured.revision,
+          refreshContext: null,
+          refreshHandler: null,
+        })!,
+      ),
     ).toBe(true);
     expect(snapshotAt(first.agentPath)?.profiles.shared).toEqual(apiKey("first"));
     await updateAuthProfileStoreWithLock({

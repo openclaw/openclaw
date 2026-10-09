@@ -161,23 +161,23 @@ export function createWorkerProjectPreparation(params: {
       preparedManifestRef: prepared.preparedManifestRef,
     });
   };
+  const preparationInput = preparation && {
+    preparationKey: preparation.key,
+    cacheKey: preparation.cacheKey,
+    setupRecipe: preparation.setupRecipe,
+    runSetupScript: preparation.runSetupScript,
+  };
+  const sourceInput = {
+    namespace: params.namespace,
+    seedKey,
+    baseCommit: params.project.baseCommit,
+  };
+  const scriptInput = {
+    ...sourceInput,
+    ...(preparationInput ? { preparation: preparationInput } : {}),
+  };
   const prepareSeed: ProjectPreparation["prepare"] = async (transport) => {
     requireCurrent();
-    const scriptInput = {
-      namespace: params.namespace,
-      seedKey,
-      baseCommit: params.project.baseCommit,
-      ...(preparation
-        ? {
-            preparation: {
-              preparationKey: preparation.key,
-              cacheKey: preparation.cacheKey,
-              setupRecipe: preparation.setupRecipe,
-              runSetupScript: preparation.runSetupScript,
-            },
-          }
-        : {}),
-    };
     const inspection: unknown = JSON.parse(
       await transport.runScript(createProjectSeedScript(scriptInput), signal),
     );
@@ -289,7 +289,16 @@ export function createWorkerProjectPreparation(params: {
       if (!isRecord(installed) || installed.ready !== true) {
         throw new Error("Project checkout was not verified before capture");
       }
-      return { seedKey, cacheHit: false };
+      return {
+        seedKey,
+        cacheHit: false,
+        ...(installed.preparedWorkspace !== undefined
+          ? {
+              preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
+              captureRequired: true,
+            }
+          : {}),
+      };
     } finally {
       await fsp.rm(temporaryRoot, { recursive: true, force: true });
     }
@@ -304,16 +313,14 @@ export function createWorkerProjectPreparation(params: {
       await params.revalidateRepositorySource(signal);
       requireCurrent();
     }
-    if (!preparation) {
-      const result = await prepareSeed(transport);
-      requireCurrent();
-      return result;
-    }
-    if (!transport.runScriptWithBudget) {
+    if (preparationInput && !transport.runScriptWithBudget) {
       throw new Error("Prepared workspaces require a provider command budget");
     }
     const result = await prepareSeed(transport);
     requireCurrent();
+    if (!preparationInput) {
+      return result;
+    }
     if (result.preparedWorkspace) {
       preparedWorkspace = result.preparedWorkspace;
       return result;
@@ -321,16 +328,11 @@ export function createWorkerProjectPreparation(params: {
     // Seed transfer can outlive its caller. Repository code starts only under
     // the current provisioning owner, and never runs in a later session's HOME.
     const prepared: unknown = JSON.parse(
-      await transport.runScriptWithBudget(
+      await transport.runScriptWithBudget!(
         (timeoutMs) =>
           createProjectSetupScript({
-            namespace: params.namespace,
-            seedKey,
-            preparationKey: preparation.key,
-            cacheKey: preparation.cacheKey,
-            baseCommit: params.project.baseCommit,
-            setupRecipe: preparation.setupRecipe,
-            runSetupScript: preparation.runSetupScript,
+            ...sourceInput,
+            ...preparationInput,
             timeoutMs,
             verifiedRetained,
           }),
@@ -348,7 +350,7 @@ export function createWorkerProjectPreparation(params: {
       baseCommit: params.project.baseCommit,
       ...("source" in params.project ? {} : { root: params.project.root }),
       ...(label !== undefined ? { label } : {}),
-      ...(preparation
+      ...(preparation && preparationInput
         ? {
             preparation: {
               key: preparation.key,
@@ -356,28 +358,13 @@ export function createWorkerProjectPreparation(params: {
               purpose: preparation.purpose,
               demandAtMs: preparation.demandAtMs,
             },
-          }
-        : {}),
-      ...(preparation
-        ? {
             inspectPreparedWorkspace: async (transport: {
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
             }) => {
               requireCurrent();
               const inspected: unknown = JSON.parse(
                 await transport.runScript(
-                  createProjectSetupScript(
-                    {
-                      namespace: params.namespace,
-                      seedKey,
-                      preparationKey: preparation.key,
-                      cacheKey: preparation.cacheKey,
-                      baseCommit: params.project.baseCommit,
-                      setupRecipe: preparation.setupRecipe,
-                      runSetupScript: preparation.runSetupScript,
-                    },
-                    true,
-                  ),
+                  createProjectSetupScript({ ...sourceInput, ...preparationInput }, true),
                   signal,
                 ),
               );

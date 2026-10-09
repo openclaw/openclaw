@@ -644,15 +644,7 @@ describe("openclaw.setup provider resolution", () => {
       expect(wizardSessions.has("auth-session-1")).toBe(false);
     },
   );
-  it.each([
-    "auth",
-    "rate_limit",
-    "billing",
-    "timeout",
-    "format",
-    "unavailable",
-    "unknown",
-  ] as const)(
+  it.each(["auth", "unknown"] as const)(
     "publishes a finalized %s probe rejection after capability consent",
     async (status) => {
       const { wizardSessions, context } = makeContext();

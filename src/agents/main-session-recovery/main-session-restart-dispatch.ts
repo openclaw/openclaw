@@ -9,16 +9,22 @@ import {
   applySessionEntryReplacements,
   loadExactSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
-import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
+import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
+import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
+import {
+  buildSubagentRestartRecoveryRoster,
+  SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
+} from "../subagents/subagent-restart-recovery-prompt.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../tool-outcome-instructions.js";
 import {
   runWithMainSessionRecoveryAdmission,
@@ -39,9 +45,9 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { dispatchRestartRecoveryWithinCapacity } from "./main-session-restart-dispatch-capacity.js";
 import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
 import {
+  dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
   probeRestartRecoveryTerminalStatus,
 } from "./main-session-restart-dispatch-start.js";
@@ -50,18 +56,13 @@ import {
   isRestartRecoveryDeliveryCurrent,
   resolveRestartRecoveryDeliveryContext,
 } from "./main-session-restart-recovery-delivery.js";
+import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
 
-const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
-  "Your previous turn was interrupted by a gateway restart while " +
-    "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
+  `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
     "Continue from the existing transcript: check the current state, recover interrupted work, " +
-    "and finish the task without asking the user to repeat the request. Interrupted subagents " +
-    "are not automatically relaunched. Inspect their saved results and current status; " +
-    "continue a retained child session or start a replacement when needed, after confirming " +
-    "the previous execution has stopped. Treat a tool result " +
-    "marked interrupted or missing as having an unknown outcome; verify what happened before " +
-    `repeating an action. ${TOOL_FAILURE_INSTRUCTION}`,
+    "and finish the task without asking the user to repeat the request. " +
+    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =
@@ -86,20 +87,18 @@ export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntr
 }
 
 function buildResumeMessage(
-  pendingFinalDeliveryText?: string | null,
+  pendingFinalDeliveryText: string,
   forceRestartSafeTools?: boolean,
+  childRecoveryRoster?: string,
 ): string {
-  const sanitizedPendingText =
-    typeof pendingFinalDeliveryText === "string"
-      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
-      : "";
-  const base = forceRestartSafeTools
+  const sanitizedPendingText = sanitizePendingFinalDeliveryText(pendingFinalDeliveryText);
+  const instructions = forceRestartSafeTools
     ? `${RESTART_RECOVERY_RESUME_MESSAGE}\n\n${RESTART_SAFE_TOOLS_NOTICE}`
     : RESTART_RECOVERY_RESUME_MESSAGE;
-  if (sanitizedPendingText) {
-    return `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
-  }
-  return base;
+  const base = childRecoveryRoster ? `${instructions}\n\n${childRecoveryRoster}` : instructions;
+  return sanitizedPendingText
+    ? `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`
+    : base;
 }
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
@@ -173,7 +172,6 @@ type ResumeMainSessionParams = {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-  recoveryCapacity?: Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0]["capacity"];
 };
 
 export async function resumeMainSession(
@@ -288,6 +286,8 @@ async function resumeMainSessionWithinAdmission(
     const restored = await commitMainSessionRecovery({
       command: {
         kind: "mark_admitted_recovery_interrupted",
+        cycleId: params.observation.cycleId,
+        attempt: params.recoveryAttempt,
         lifecycleGeneration,
         now: Date.now(),
         runId: recoveryRunId,
@@ -298,7 +298,7 @@ async function resumeMainSessionWithinAdmission(
       target,
     });
     return params.shouldContinue?.() !== false &&
-      restored.transition.kind === "applied" &&
+      (restored.transition.kind === "applied" || restored.transition.kind === "no_change") &&
       restored.entry &&
       restored.sessionKey
       ? {
@@ -367,7 +367,6 @@ async function resumeMainSessionWithinAdmission(
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
-          entry.status !== "running" ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
           normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
@@ -397,16 +396,31 @@ async function resumeMainSessionWithinAdmission(
       }
       const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
         current.abortedLastRun === true &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
         ? "failed"
         : "skipped";
     }
+    const requesterStorePath = await preparePhysicalSessionStorePath({
+      agentId: params.agentId,
+      sessionKey: dispatchSessionKey,
+      storePath: params.storePath,
+    });
     const agentParams: AgentRunRequest = {
       agentId: params.agentId,
-      message: buildResumeMessage(sanitizedPendingText, params.forceRestartSafeTools),
+      message: buildResumeMessage(
+        sanitizedPendingText,
+        params.forceRestartSafeTools,
+        buildSubagentRestartRecoveryRoster(
+          listSubagentRunsForRequester(dispatchSessionKey, {
+            requesterAgentId: params.agentId,
+            requesterSessionId: params.entry.sessionId,
+            requesterLifecycleRevision: params.entry.lifecycleRevision,
+            requesterStorePath,
+          }),
+        ),
+      ),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,
       internalRuntimeHandoffId: params.recoveryAdmission.handoffId,
@@ -448,25 +462,36 @@ async function resumeMainSessionWithinAdmission(
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
+    if (!params.recoveryAdmission.beginDispatch()) {
+      await rollbackReservation("cancel_reservation");
+      return "skipped";
+    }
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
-    const dispatchOutcome = await dispatchRestartRecoveryWithinCapacity({
+    const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
-      capacity: params.recoveryCapacity,
-      beginDispatch: params.recoveryAdmission.beginDispatch,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
+        ? {
+            restartRecoveryOperatorTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
+          throw new Error("Restart recovery admission is no longer current.");
+        }
+      },
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
       },
-      shouldContinue: () => params.shouldContinue?.() !== false,
     });
-    if (!dispatchOutcome) {
-      dispatchStarted = false;
-      await rollbackReservation("cancel_reservation");
-      return "skipped";
-    }
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);
     if (dispatchOutcome.kind === "failed") {

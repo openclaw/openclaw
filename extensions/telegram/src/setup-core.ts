@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Telegram plugin module implements setup core behavior.
 import {
   createEnvPatchedAccountSetupAdapter,
   patchChannelConfigForAccount,
@@ -12,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { isNumericTelegramSenderUserId } from "./allow-from.js";
+import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 const t = createSetupTranslator();
@@ -45,16 +44,16 @@ export function getTelegramUserIdHelpLines(): string[] {
   ];
 }
 
-function normalizeTelegramAllowFromInput(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^(telegram|tg):/i, "")
-    .trim();
+export function parseTelegramAllowFromId(raw: string): string | null {
+  const stripped = normalizeTelegramAllowFromEntry(raw);
+  return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
-export function parseTelegramAllowFromId(raw: string): string | null {
-  const stripped = normalizeTelegramAllowFromInput(raw);
-  return isNumericTelegramSenderUserId(stripped) ? stripped : null;
+export async function resolveTelegramAllowFromEntries({ entries }: { entries: string[] }) {
+  return entries.map((entry) => {
+    const id = parseTelegramAllowFromId(entry);
+    return { input: entry, resolved: Boolean(id), id };
+  });
 }
 
 export async function promptTelegramAllowFromForAccount(params: {
@@ -77,11 +76,7 @@ export async function promptTelegramAllowFromForAccount(params: {
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
-      }),
+    resolveEntries: resolveTelegramAllowFromEntries,
   });
   return patchChannelConfigForAccount({
     cfg: params.cfg,

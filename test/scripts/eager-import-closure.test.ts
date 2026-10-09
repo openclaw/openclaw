@@ -14,23 +14,83 @@ import {
 import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
+const wrapperInventory = "scripts/pr-lib/wrapper-components.txt";
+const inventoryCheck =
+  'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
+const wrapperFailure = (output: string) =>
+  `${output}\nCheck the inventory first: ${inventoryCheck}`;
 
-it("acquires and releases wrapper leases without the application command runtime", async () => {
+it("keeps packaged scripts closed over runtime imports", () => {
+  const files: string[] = JSON.parse(readFileSync("package.json", "utf8")).files;
+  const scripts = files.filter(
+    (file) => file.startsWith("scripts/") && !/\.d\.[cm]?ts$/.test(file),
+  );
+  const closure = collectRuntimeImportClosure(process.cwd(), scripts, {
+    includeDynamicImports: true,
+  });
+  expect(
+    closure.filter((file) => !files.includes(file)),
+    "Package lifecycle scripts must ship their guarded imports and transitive dependencies.",
+  ).toEqual([]);
+});
+
+it("keeps the PR wrapper inventory closed over runtime imports", () => {
+  const components = readFileSync(wrapperInventory, "utf8").trim().split("\n");
+  const stale = components.filter((file) => !existsSync(file)).toSorted();
+  // scripts/pr archives all of pr-lib implicitly. Other inventory entries also
+  // seed the graph: shell-launched helpers and workers are not ordinary imports.
+  const wrapperFiles = readdirSync("scripts/pr-lib", { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    ...wrapperFiles,
+    ...components.filter((file) => existsSync(file)),
+  ]);
+  const extracted = new Set(["scripts/pr", ...components]);
+  const missing = closure.filter(
+    (file) => !file.startsWith("scripts/pr-lib/") && !extracted.has(file),
+  );
+  const diagnostic = [
+    "The trusted-anchor PR wrapper extracts only scripts/pr, scripts/pr-lib, and its inventory.",
+    ...(missing.length
+      ? [
+          `Missing runtime imports:\n${missing.join("\n")}`,
+          `Add these lines to ${wrapperInventory}.`,
+        ]
+      : []),
+    // Existing non-imported assets may be loaded by path; only deleted paths
+    // are provably stale without changing the extraction contract.
+    ...(stale.length
+      ? [
+          `Stale paths (absent from the repository):\n${stale.join("\n")}`,
+          `Remove these lines from ${wrapperInventory}.`,
+        ]
+      : []),
+    `Run locally: ${inventoryCheck}`,
+  ].join("\n");
+  expect({ missing, stale }, diagnostic).toEqual({ missing: [], stale: [] });
+});
+
+it("acquires wrapper leases and manages templates without the application command runtime", async () => {
   const root = tempDirs.make("openclaw-pr-lease-bootstrap-");
   copyPrWrapperSources(root);
   linkPrWrapperDependencies(root);
   await prepareCopiedSourceModules(root, [
+    "src/agents/worktrees/allocation.ts",
+    "src/agents/worktrees/template-registry-async.ts",
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/openclaw-state.worker.ts",
     "src/state/openclaw-state-lease-worker.ts",
     "src/state/openclaw-state-lease-heartbeat.worker.ts",
+    "src/infra/gateway-state-owner-heartbeat.worker.ts",
     "src/infra/sqlite-store.worker.ts",
     "src/infra/sqlite-readonly-location.worker.ts",
   ]);
@@ -42,6 +102,11 @@ it("acquires and releases wrapper leases without the application command runtime
       "-e",
       `
         import assert from "node:assert/strict";
+        import { withWorktreeAllocationLease } from "./src/agents/worktrees/allocation.js";
+        import {
+          deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
+          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync,
+        } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
         import {
           closeOpenClawStateDatabaseAsync,
@@ -57,6 +122,24 @@ it("acquires and releases wrapper leases without the application command runtime
         for (let grant = 0; grant < 2; grant += 1) {
           await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         }
+        await withWorktreeAllocationLease({ env: process.env }, async ({ commitGuard: guard }) => {
+          const template = {
+            cacheKey: "wrapper-template", id: "generation-1",
+            repoRoot: process.cwd(), commonDir: process.cwd() + "/.git",
+            worktreeRoot: process.cwd() + "/worktrees", path: process.cwd() + "/template",
+            backend: "apfs", sourceCommit: "a".repeat(40), contentKey: "source",
+            status: "preparing", createdAt: 1, lastUsedAt: 1,
+          };
+          assert.equal(await hasTemplatesAsync(process.env), false);
+          await reserveTemplateAsync(process.env, template, guard);
+          assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
+          assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
+          assert.deepEqual(await listTemplatesAsync(process.env), [
+            { ...template, status: "ready", lastUsedAt: 2 },
+          ]);
+          assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
+          assert.equal(await hasTemplatesAsync(process.env), false);
+        });
         const database = openOpenClawStateDatabase({ env: process.env });
         const row = database.db.prepare(
           "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",
@@ -80,8 +163,8 @@ it("acquires and releases wrapper leases without the application command runtime
       },
     },
   );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain("LEASE_BOOTSTRAP_OK");
+  expect(result.status, wrapperFailure(result.stderr)).toBe(0);
+  expect(result.stdout, wrapperFailure(result.stderr)).toContain("LEASE_BOOTSTRAP_OK");
 });
 
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
@@ -109,7 +192,7 @@ it("resolves wrapper package exports and workspace aliases from the extracted de
     ],
     { encoding: "utf8" },
   );
-  expect(pinned.status, pinned.stderr).toBe(0);
+  expect(pinned.status, wrapperFailure(pinned.stderr)).toBe(0);
   const closure = collectRuntimeImportClosure(root, files, { validatePackages: true });
   expect(closure.filter((file) => file.startsWith("..") || !existsSync(join(root, file)))).toEqual(
     [],
@@ -125,7 +208,7 @@ it.each([
   const root = tempDirs.make("openclaw-eager-import-closure-");
   const entry = join(root, "entry.mts");
   writeFileSync(entry, `${source}\nconsole.log("entry executed");\n`);
-  const result = spawnSync(process.execPath, [entry], {
+  const result = spawnSync(resolveTestNodeExecPath(), [entry], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
@@ -200,8 +283,10 @@ itPosix.each(["empty", "legacy", "outdated"])(
       expect(locks.stdout).toBe("");
       return;
     }
-    expect(bootstrap.status, bootstrap.stderr).toBe(2);
-    expect(bootstrap.stdout).toContain("scripts/pr review-init <PR>");
+    expect(bootstrap.status, wrapperFailure(bootstrap.stderr)).toBe(2);
+    expect(bootstrap.stdout, wrapperFailure(bootstrap.stderr)).toContain(
+      "scripts/pr review-init <PR>",
+    );
     const provision = spawnSync(
       process.execPath,
       [
@@ -211,8 +296,10 @@ itPosix.each(["empty", "legacy", "outdated"])(
       ],
       { env, encoding: "utf8" },
     );
-    expect(provision.status, provision.stderr).toBe(1);
-    expect(provision.stderr).toContain("Usage: worktree-provision.mts");
+    expect(provision.status, wrapperFailure(provision.stderr)).toBe(1);
+    expect(provision.stderr, wrapperFailure(provision.stderr)).toContain(
+      "Usage: worktree-provision.mts",
+    );
 
     if (dependencies !== "legacy") {
       return;
@@ -222,8 +309,10 @@ itPosix.each(["empty", "legacy", "outdated"])(
       env,
       encoding: "utf8",
     });
-    expect(supervised.status, supervised.stderr).toBe(2);
-    expect(supervised.stdout).toContain("scripts/pr review-init <PR>");
+    expect(supervised.status, wrapperFailure(supervised.stderr)).toBe(2);
+    expect(supervised.stdout, wrapperFailure(supervised.stderr)).toContain(
+      "scripts/pr review-init <PR>",
+    );
   },
 );
 
@@ -312,9 +401,11 @@ itPosix.each([false, true])("launches a pre-helper anchor (manifest=%s)", (manif
     env,
     encoding: "utf8",
   });
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toContain("running wrapper code materialized from");
-  expect(result.stdout).toBe("legacy anchor loaded\n");
+  expect(result.status, wrapperFailure(result.stderr)).toBe(0);
+  expect(result.stderr, wrapperFailure(result.stderr)).toContain(
+    "running wrapper code materialized from",
+  );
+  expect(result.stdout, wrapperFailure(result.stderr)).toBe("legacy anchor loaded\n");
   expect(git(canonical, "for-each-ref", "refs/openclaw")).toBe("");
 });
 
@@ -340,25 +431,82 @@ it("captures lazy platform modules and their runtime dependencies without loadin
   );
 });
 
-it("keeps native update authority free of eager recovery reporting and handoff staging", () => {
-  const closure = collectRuntimeImportClosure(process.cwd(), [
-    "src/cli/update-cli/update-command-executor.ts",
-    "src/cli/update-cli/update-command-retained-service.ts",
-    "src/cli/daemon-cli/update-executor.ts",
-    "src/daemon/exec-file.ts",
+it("resolves runtime aliases and import/require conditions without following declarations", () => {
+  const root = tempDirs.make("openclaw-runtime-resolution-");
+  mkdirSync(join(root, "src"));
+  writeFileSync(
+    join(root, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        verbatimModuleSyntax: true,
+        paths: { "@fixture/*": ["./src/*.ts"] },
+      },
+    }),
+  );
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({
+      type: "module",
+      imports: { "#branch": { import: "./import.ts", require: "./require.ts" } },
+    }),
+  );
+  for (const [file, source] of Object.entries({
+    "entry.ts":
+      'import "@fixture/alias"; import "./native.js"; import "./common.cts"; require("#branch");',
+    "common.cts": 'export const load = () => import("#branch");',
+    launch: "#!/bin/sh\nexit 0\n",
+    "src/alias.ts": 'import type { Missing } from "./erased.js";',
+    "native.js": 'import "./native-dependency.js";',
+    "native.d.ts": 'export * from "./declaration-only.js";',
+    "native-dependency.ts": "export const native = true;",
+    "import.ts": "export const imported = true;",
+    "require.ts": "export const required = true;",
+  })) {
+    writeFileSync(join(root, file), source);
+  }
+
+  expect(
+    collectRuntimeImportClosure(root, ["entry.ts", "launch"], { includeDynamicImports: true }),
+  ).toEqual([
+    "common.cts",
+    "entry.ts",
+    "import.ts",
+    "launch",
+    "native-dependency.ts",
+    "native.js",
+    "require.ts",
+    "src/alias.ts",
   ]);
-  const deferredOwners = new Set([
-    "src/cli/update-cli/update-command-recovery.ts",
-    "src/cli/update-cli/update-command-result.ts",
-    "src/infra/update-managed-service-handoff.ts",
-  ]);
-  expect(closure.filter((file) => deferredOwners.has(file))).toEqual([]);
+  expect(collectRuntimeImportClosure(root, ["launch"])).toEqual(["launch"]);
+  writeFileSync(join(root, "native.js"), 'import "./missing.js";');
+  expect(() => collectRuntimeImportClosure(root, ["entry.ts"])).toThrow(
+    "native.js: unresolved ./missing.js",
+  );
 });
 
-it("keeps migrated finalization free of eager CLI registration", () => {
-  const closure = collectRuntimeImportClosure(process.cwd(), [
-    "src/infra/update-migrated-finalize.worker.ts",
-  ]);
-  const validationOnly = new Set(["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"]);
-  expect(closure.filter((file) => validationOnly.has(file))).toEqual([]);
+it.each([
+  {
+    name: "native update authority",
+    entrypoints: [
+      "src/cli/update-cli/update-command-executor.ts",
+      "src/cli/update-cli/update-command-retained-service.ts",
+      "src/cli/daemon-cli/update-executor.ts",
+      "src/daemon/exec-file.ts",
+    ],
+    deferredOwners: [
+      "src/cli/update-cli/update-command-recovery.ts",
+      "src/cli/update-cli/update-command-result.ts",
+      "src/infra/update-managed-service-handoff.ts",
+    ],
+  },
+  {
+    name: "migrated finalization",
+    entrypoints: ["src/infra/update-migrated-finalize.worker.ts"],
+    deferredOwners: ["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"],
+  },
+])("keeps $name free of eager validation imports", ({ entrypoints, deferredOwners }) => {
+  const closure = collectRuntimeImportClosure(process.cwd(), entrypoints);
+  expect(closure.filter((file) => deferredOwners.includes(file))).toEqual([]);
 });

@@ -10,17 +10,19 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
   openNodeSqliteDatabase,
+  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { aggregateDay, aggregateDays, itemKey } from "./aggregate.js";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { DAY_MS } from "./periods.js";
 import type {
   PeriodListEntry,
   PersonDay,
   ReportRun,
-  RunPeriod,
   StoredPeriod,
   TeamReportsOperations,
 } from "./store-contract.js";
@@ -31,7 +33,7 @@ import {
   summaryDocumentSchema,
   TEAM_REPORTS_SCHEMA_SQL,
 } from "./store-schema.js";
-import type { Period, ReportDocument, SummaryDocument } from "./types.js";
+import type { DiscordMessage, GithubItem, Period, ReportDocument } from "./types.js";
 
 // Bound each 12-column person-day insert to 768 parameters.
 const PERSON_DAY_INSERT_BATCH_SIZE = 64;
@@ -71,7 +73,16 @@ type RunRow = {
   stats_json: string | null;
   error: string | null;
 };
+type ActivityRow = {
+  source: "github" | "discord";
+  key: string;
+  at_ms: number;
+  sort_key: string;
+  actor: string;
+  data_json: string;
+};
 type ReportsDatabase = {
+  team_reports_activity: ActivityRow;
   team_reports_schema_migrations: { id: string; applied_at: number };
   team_reports_periods: PeriodRow;
   team_reports_person_days: PersonDayRow;
@@ -104,9 +115,120 @@ class TeamReportsDatabase {
     private readonly maintenance: ReturnType<typeof configureSqliteConnectionPragmas>,
   ) {
     this.query = getNodeSqliteKysely<ReportsDatabase>(db);
+    // Collection scratch belongs to this connection; restart/close discards it.
+    db.exec(`CREATE TEMP TABLE team_reports_activity (
+      source TEXT NOT NULL, key TEXT NOT NULL, at_ms INTEGER NOT NULL,
+      sort_key TEXT NOT NULL, actor TEXT NOT NULL, data_json TEXT NOT NULL,
+      PRIMARY KEY (source, key)
+    ) STRICT;`);
   }
 
-  upsertPeriod(value: Omit<StoredPeriod, "summary"> & { summary?: SummaryDocument | null }): void {
+  resetActivity(): void {
+    executeSqliteQuerySync(this.db, this.query.deleteFrom("team_reports_activity"));
+  }
+
+  appendActivity(input: TeamReportsOperations["appendActivity"]["input"]): void {
+    if (input.entries.length === 0) {
+      return;
+    }
+    if (input.entries.length > 100) {
+      throw new Error("Activity batch exceeds 100 entries");
+    }
+    const rows: ActivityRow[] =
+      input.source === "github"
+        ? input.entries.map(({ key, value }) => ({
+            source: input.source,
+            key,
+            at_ms: value.atMs,
+            sort_key: itemKey(value),
+            actor: value.actor,
+            data_json: JSON.stringify(value),
+          }))
+        : input.entries.map(({ key, value }) => ({
+            source: input.source,
+            key,
+            at_ms: value.atMs,
+            sort_key: value.channelId,
+            actor: value.authorId,
+            data_json: JSON.stringify(value),
+          }));
+    executeSqliteQuerySync(
+      this.db,
+      this.query
+        .insertInto("team_reports_activity")
+        .values(rows)
+        .onConflict((conflict) =>
+          conflict.columns(["source", "key"]).doUpdateSet((eb) => ({
+            at_ms: eb.ref("excluded.at_ms"),
+            sort_key: eb.ref("excluded.sort_key"),
+            actor: eb.ref("excluded.actor"),
+            data_json: eb.ref("excluded.data_json"),
+          })),
+        ),
+    );
+  }
+
+  private *activity<T extends GithubItem | DiscordMessage>(
+    source: "github" | "discord",
+  ): Generator<T> {
+    // Sort compact identities with the same JS collation as report evidence.
+    // Payloads (especially comment bodies) are decoded only 100 rows at a time.
+    const order = executeSqliteQuerySync(
+      this.db,
+      this.query
+        .selectFrom("team_reports_activity")
+        .select(["key", "at_ms", "sort_key", "actor"])
+        .where("source", "=", source)
+        .orderBy("key"),
+    ).rows;
+    order.sort(
+      (a, b) =>
+        b.at_ms - a.at_ms ||
+        a.sort_key.localeCompare(b.sort_key) ||
+        a.actor.localeCompare(b.actor) ||
+        a.key.localeCompare(b.key),
+    );
+    for (let offset = 0; offset < order.length; offset += 100) {
+      const keys = order.slice(offset, offset + 100).map((row) => row.key);
+      const rows = executeSqliteQuerySync(
+        this.db,
+        this.query
+          .selectFrom("team_reports_activity")
+          .select(["key", "data_json"])
+          .where("source", "=", source)
+          .where("key", "in", keys),
+      ).rows;
+      const data = new Map(rows.map((row) => [row.key, row.data_json]));
+      for (const key of keys) {
+        const json = data.get(key);
+        if (json === undefined) {
+          throw new Error("Collected activity disappeared before aggregation");
+        }
+        // SAFETY: appendActivity serializes this source's typed values in our connection-owned table.
+        yield JSON.parse(json) as T;
+      }
+    }
+  }
+
+  aggregateActivity(input: TeamReportsOperations["aggregateActivity"]["input"]): ReportDocument {
+    return aggregateDay({
+      ...input,
+      items: this.activity<GithubItem>("github"),
+      messages: this.activity<DiscordMessage>("discord"),
+    });
+  }
+
+  aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]): ReportDocument {
+    // Both metadata and payload passes must observe the same accepted daily reports.
+    return runSqliteDeferredTransactionSync(this.db, () =>
+      aggregateDays({
+        ...input,
+        days: () => this.dayReports(input.period.sinceMs, input.period.untilMs),
+      }),
+    );
+  }
+
+  upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]): void {
     const { report } = value;
     const dataJson = JSON.stringify(report);
     if (Buffer.byteLength(dataJson, "utf8") > MAX_REPORT_BYTES) {
@@ -198,13 +320,7 @@ class TeamReportsDatabase {
     );
   }
 
-  listPeriods(
-    options: {
-      period?: Period;
-      status?: "partial" | "closed";
-      limit?: number;
-    } = {},
-  ): PeriodListEntry[] {
+  listPeriods(options: TeamReportsOperations["listPeriods"]["input"] = {}): PeriodListEntry[] {
     let query = this.selectPeriods();
     if (options.period) {
       query = query.where("period", "=", options.period);
@@ -301,7 +417,11 @@ class TeamReportsDatabase {
   }
 
   getDayReports(sinceMs: number, untilMs: number): ReportDocument[] {
-    return executeSqliteQuerySync(
+    return [...this.dayReports(sinceMs, untilMs)];
+  }
+
+  private *dayReports(sinceMs: number, untilMs: number): Generator<ReportDocument> {
+    for (const row of iterateSqliteQuerySync(
       this.db,
       this.query
         .selectFrom("team_reports_periods")
@@ -310,12 +430,14 @@ class TeamReportsDatabase {
         .where("since_ms", ">=", sinceMs)
         .where("since_ms", "<", untilMs)
         .orderBy("since_ms", "asc"),
-    ).rows.map((row) => reportDocumentSchema.parse(JSON.parse(row.data_json)));
+    )) {
+      yield reportDocumentSchema.parse(JSON.parse(row.data_json));
+    }
   }
 
   listPersonDays(
     login: string,
-    options: { since?: string; until?: string; limit?: number } = {},
+    options: TeamReportsOperations["listPersonDays"]["input"]["options"] = {},
   ): PersonDay[] {
     let query = this.selectPersonDays()
       .where("login", "=", login.toLowerCase())
@@ -358,12 +480,7 @@ class TeamReportsDatabase {
       ]);
   }
 
-  startRun(run: {
-    id: string;
-    kind: ReportRun["kind"];
-    startedAtMs: number;
-    periods: RunPeriod[];
-  }): void {
+  startRun(run: TeamReportsOperations["startRun"]["input"]): void {
     executeSqliteQuerySync(
       this.db,
       this.query.insertInto("team_reports_runs").values({
@@ -379,15 +496,7 @@ class TeamReportsDatabase {
     );
   }
 
-  finishRun(
-    id: string,
-    result: {
-      finishedAtMs: number;
-      status: "ok" | "error";
-      stats?: Record<string, unknown>;
-      error?: string;
-    },
-  ): void {
+  finishRun(id: string, result: TeamReportsOperations["finishRun"]["input"]["result"]): void {
     const updated = executeSqliteQuerySync(
       this.db,
       this.query
@@ -408,7 +517,7 @@ class TeamReportsDatabase {
 
   listRuns(
     limit = 20,
-    filter: { kind?: ReportRun["kind"]; status?: ReportRun["status"] } = {},
+    filter: TeamReportsOperations["listRuns"]["input"]["filter"] = {},
   ): ReportRun[] {
     let query = this.query.selectFrom("team_reports_runs").selectAll();
     if (filter.kind) {
@@ -534,6 +643,14 @@ export function createSqliteWorkerBackend(_input: undefined, context: { database
   return {
     execute(command: SqliteWorkerCommand<TeamReportsOperations>) {
       switch (command.type) {
+        case "resetActivity":
+          return database.resetActivity();
+        case "appendActivity":
+          return database.appendActivity(command.input);
+        case "aggregateActivity":
+          return database.aggregateActivity(command.input);
+        case "aggregatePeriod":
+          return database.aggregatePeriod(command.input);
         case "upsertPeriod":
           return database.upsertPeriod(command.input);
         case "getPeriod":

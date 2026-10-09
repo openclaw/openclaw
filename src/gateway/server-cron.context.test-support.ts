@@ -18,6 +18,10 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -32,7 +36,9 @@ type GatewayCronContextTestHarness = {
   createCronConfig: (name: string) => OpenClawConfig;
   createCronService: (
     cfg: OpenClawConfig,
-    overrides?: Pick<Parameters<typeof buildGatewayCronService>[0], "resolveGatewayContext">,
+    overrides?: Partial<
+      Pick<Parameters<typeof buildGatewayCronService>[0], "resolveGatewayContext" | "scheduler">
+    >,
   ) => CronFixture;
   getCronState: (service: CronFixture) => CronServiceState;
   addAgentTurnJob: AddCronJob;
@@ -63,6 +69,7 @@ export function registerGatewayCronContextTests({
     const broker = await createBroker();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T01:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
     const cfg = createCronConfig("server-cron-scheduled-gateway-context");
     loadConfigMock.mockReturnValue(cfg);
     const gatewayContext = {
@@ -98,7 +105,10 @@ export function registerGatewayCronContextTests({
     });
 
     const state = runWithSpawnBroker(broker, () =>
-      createCronService(cfg, { resolveGatewayContext: () => gatewayContext }),
+      createCronService(cfg, {
+        scheduler: createTestGatewayScheduler(clock.clock),
+        resolveGatewayContext: () => gatewayContext,
+      }),
     );
     try {
       await state.cron.start();
@@ -145,8 +155,7 @@ export function registerGatewayCronContextTests({
       requestContextActive = false;
       await creatorWork.drain();
 
-      // Fake timers need the context that a native timer captures when armed.
-      await creatorScope.run(() => vi.advanceTimersByTimeAsync(60_000));
+      await creatorScope.run(() => clock.advanceBy(60_000));
       await ran.promise;
       await settled.promise;
 
@@ -192,6 +201,7 @@ export function registerGatewayCronContextTests({
   it("withholds a retired gateway context from a scheduled run", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T02:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
     // The process-wide context holder is not cleared on shutdown, so an
     // unfenced resolver would hand a queued run a retired context. No context
     // fails visibly; a retired one operates against a dead Gateway generation.
@@ -210,7 +220,10 @@ export function registerGatewayCronContextTests({
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = createCronService(cfg, { resolveGatewayContext: () => retiredContext });
+    const state = createCronService(cfg, {
+      scheduler: createTestGatewayScheduler(clock.clock),
+      resolveGatewayContext: () => retiredContext,
+    });
     try {
       await state.cron.start();
       await addAgentTurnJob(state, "retired-context", "run it", {
@@ -218,7 +231,7 @@ export function registerGatewayCronContextTests({
         schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
       });
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      await clock.advanceBy(60_000);
       await ran.promise;
 
       expect(observed).toBeUndefined();
@@ -231,6 +244,7 @@ export function registerGatewayCronContextTests({
   it("gives a scheduled heartbeat wake a resolvable gateway context", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T03:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
     // Main-session cron jobs and heartbeat monitors reach the agent through the
     // heartbeat adapter, which shares the isolated path's contextless defect.
     const cfg = createCronConfig("server-cron-heartbeat-gateway-context");
@@ -247,7 +261,10 @@ export function registerGatewayCronContextTests({
       return { status: "ran", durationMs: 1 };
     });
 
-    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
+    const state = createCronService(cfg, {
+      scheduler: createTestGatewayScheduler(clock.clock),
+      resolveGatewayContext: () => gatewayContext,
+    });
     try {
       await state.cron.start();
       await addSystemEventJob(state, "scheduled-heartbeat", "run it", {
@@ -256,7 +273,7 @@ export function registerGatewayCronContextTests({
         sessionTarget: "main",
         wakeMode: "now",
       });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await clock.advanceBy(60_000);
       await ran.promise;
 
       expect(observed).toBe(gatewayContext);

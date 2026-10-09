@@ -46,7 +46,7 @@ describe("restart startup progress", () => {
       });
       expect(result).toMatchObject(
         readyAtMs < 60_000
-          ? { healthy: true, waitOutcome: "healthy", elapsedMs: readyAtMs }
+          ? { outcome: "ready", healthy: true, waitOutcome: "healthy", elapsedMs: readyAtMs }
           : {
               healthy: false,
               waitOutcome: "still-starting",
@@ -149,28 +149,40 @@ describe("restart startup progress", () => {
       stopped: true,
       listenerPid: 9000,
       outcome: "stale-pids",
+      failureReason: /stale Gateway processes/,
     },
     {
       name: "running service with an unrelated listener",
       listenerPid: 9000,
       foreign: true,
       outcome: "timeout",
+      failureReason: /timed out/,
     },
     {
       name: "owned listener running the wrong version",
       listenerPid: 8000,
       expectedVersion: "candidate-version",
       outcome: "version-mismatch",
+      failureReason: /version did not match/,
     },
     {
       name: "owned listener running the wrong build",
       listenerPid: 8000,
       expectedBuildId: "candidate-build",
       outcome: "build-id-mismatch",
+      failureReason: /build did not match/,
     },
   ])(
     "does not let HTTP startup hide $name",
-    async ({ stopped, listenerPid, foreign, expectedVersion, expectedBuildId, outcome }) => {
+    async ({
+      stopped,
+      listenerPid,
+      foreign,
+      expectedVersion,
+      expectedBuildId,
+      outcome,
+      failureReason,
+    }) => {
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -203,6 +215,10 @@ describe("restart startup progress", () => {
         expectedBuildId,
       });
       expect(result).toMatchObject({ healthy: false, waitOutcome: outcome });
+      expect(
+        formatGatewayRestartFailure({ health: result, port: 18789, defaultTimeoutSeconds: 60 })
+          .failMessage,
+      ).toMatch(failureReason);
       if (stopped) {
         expect(result.staleGatewayPids).toEqual([9000]);
       }
@@ -307,7 +323,7 @@ describe("restart startup progress", () => {
       renew: true,
       renewUntilMs: 61_000,
       readyAtMs: 145_000,
-      expected: "timeout",
+      expected: "still-starting",
       elapsedMs: 130_000,
     },
     {
@@ -316,15 +332,17 @@ describe("restart startup progress", () => {
       foreignAfterMs: 90_000,
       releaseAtMs: 120_000,
       readyAtMs: 145_000,
-      expected: "timeout",
+      expected: "still-starting",
       elapsedMs: 130_000,
+      phase: "waiting for Gateway listener",
     },
     {
       name: "migration completion credited only once",
       renew: true,
       releaseAtMs: 120_000,
-      expected: "timeout",
+      expected: "still-starting",
       elapsedMs: 180_000,
+      phase: "waiting for Gateway listener",
     },
     {
       name: "migration poll failure without observed completion",
@@ -332,8 +350,9 @@ describe("restart startup progress", () => {
       renewUntilMs: 61_000,
       pollErrorAtMs: 120_000,
       readyAtMs: 145_000,
-      expected: "timeout",
+      expected: "still-starting",
       elapsedMs: 130_000,
+      phase: "waiting for Gateway listener",
     },
     {
       name: "migration completion at the five-minute cap",
@@ -364,10 +383,10 @@ describe("restart startup progress", () => {
       renew: true,
       renewUntilMs: 30_000,
       timeoutMs: 300_000,
-      expected: "timeout",
+      expected: "still-starting",
       elapsedMs: 300_000,
     },
-    { name: "stalled migration", renew: false, expected: "timeout", elapsedMs: 70_000 },
+    { name: "stalled migration", renew: false, expected: "still-starting", elapsedMs: 70_000 },
     {
       name: "replaced process",
       renew: true,
@@ -386,7 +405,7 @@ describe("restart startup progress", () => {
       name: "unrelated migration",
       renew: true,
       foreign: true,
-      expected: "timeout",
+      expected: "still-starting",
       elapsedMs: 60_000,
     },
   ])(
@@ -497,13 +516,12 @@ describe("restart startup progress", () => {
         defaultTimeoutSeconds: 60,
       });
       if (expected === "still-starting") {
-        expect(message.failMessage).toContain("still starting after 300s");
+        expect(message.failMessage).toContain(`still starting after ${elapsedMs / 1000}s`);
         expect(message.failMessage).toContain(phase ?? "startup migration");
         expect(message.failMessage).toContain("openclaw gateway status --deep");
-      } else if (expected === "timeout") {
-        expect(message.failMessage).toBe(
-          `Gateway restart timed out after ${elapsedMs / 1000}s waiting for health checks.`,
-        );
+      } else if (expected === "generation-changed") {
+        expect(message.failMessage).toMatch(/process generation changed/);
+        expect(message.failMessage).not.toContain("timed out");
       }
     },
   );
@@ -526,7 +544,11 @@ describe("restart startup progress", () => {
         port: 18789,
         requirePluginHealth: false,
       });
-      expect(health).toMatchObject({ healthy: false, waitOutcome: "timeout", elapsedMs });
+      expect(health).toMatchObject({
+        healthy: false,
+        waitOutcome: listenerPid === 8000 ? "timeout" : "still-starting",
+        elapsedMs,
+      });
     },
   );
 });

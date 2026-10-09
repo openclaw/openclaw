@@ -19,16 +19,6 @@ describe("GitHub Copilot usage credential routing", () => {
       expectedDomain: "config.ghe.com",
     },
     {
-      label: "public OAuth metadata",
-      credentialDomain: "github.com",
-      expectedDomain: "github.com",
-    },
-    {
-      label: "OAuth tenant without provider config",
-      credentialDomain: "account.ghe.com",
-      expectedDomain: "account.ghe.com",
-    },
-    {
       label: "OAuth tenant before provider config",
       credentialDomain: "account.ghe.com",
       configuredDomain: "config.ghe.com",

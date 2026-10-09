@@ -28,7 +28,7 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 | `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
 | `reply.profiler`      | Reply-stage profiler only                                 |
 | `codex.profiler`      | Codex app-server profiler only                            |
-| `health`              | Gateway health probe/account/binding debug details        |
+| `health`              | Gateway health check/account/binding debug details        |
 | `ingress.timing`      | Session load, model selection, and model catalog timings  |
 | `plugin.load-profile` | Synchronous plugin module-load timings                    |
 | `timeline`            | Structured JSONL timeline artifact (see below)            |
@@ -142,6 +142,9 @@ See [Environment variables](/help/environment) for where OpenClaw reads
 When `timeline` is enabled only from config, the earliest config-loading spans
 are missing because OpenClaw has not read config yet; subsequent startup spans
 are captured normally.
+
+Gateway client commands read timeline flags from source config without opening the shared
+state database. This also works when the Gateway is offline.
 
 `OPENCLAW_DIAGNOSTICS=1`, `=all`, and `=*` also enable the timeline, since they
 enable every flag. Prefer the scoped `timeline` flag when you only want the

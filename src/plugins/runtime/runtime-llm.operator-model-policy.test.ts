@@ -7,10 +7,21 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import * as profileReader from "../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
 
@@ -102,9 +113,64 @@ function completion() {
   });
 }
 
-function asOperator<T>(authority: AdmittedRunOperatorAuthority, run: () => Promise<T>) {
-  return withGatewayToolCallerIdentity(
-    { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
+type OperatorSource =
+  | "agent-tool"
+  | "request"
+  | "direct-tool"
+  | "unbound-operator"
+  | "missing-binding";
+
+function asOperator<T>(
+  authority: AdmittedRunOperatorAuthority,
+  run: () => Promise<T>,
+  source: OperatorSource = "agent-tool",
+) {
+  if (source === "agent-tool") {
+    return withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
+      run,
+    );
+  }
+  if (source === "request" || source === "missing-binding") {
+    return withPluginRuntimeGatewayRequestScope(
+      {
+        client:
+          source === "missing-binding"
+            ? createSyntheticPluginRuntimeClient({
+                operatorRoleActor: { kind: "operator", profileId: "model-reader" },
+                scopes: ["operator.write"],
+              })
+            : {
+                connect: {
+                  minProtocol: 1,
+                  maxProtocol: 1,
+                  client: {
+                    id: "openclaw-control-ui",
+                    version: "test",
+                    platform: "test",
+                    mode: "webchat",
+                  },
+                  role: "operator",
+                  scopes: ["operator.write"],
+                },
+                internal: { operatorRunAuthority: authority },
+              },
+        isWebchatConnect: () => source === "request",
+      },
+      run,
+    );
+  }
+  return withOperatorToolGatewayAuthority(
+    {
+      authenticatedUserProfile: {
+        profileId: authority.profileId,
+        displayName: "Model Reader",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      scopes: ["operator.write"],
+      ...(source === "direct-tool" ? { operatorRunAuthority: authority } : {}),
+    },
     run,
   );
 }
@@ -154,28 +220,94 @@ beforeEach(() => {
 });
 
 describe("operator model policy on plugin completions", () => {
-  it("reports a missing Gateway binding before preparing an operator completion", async () => {
-    await expect(
-      withWork(() =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            client: createSyntheticPluginRuntimeClient({
-              operatorRoleActor: { kind: "operator", profileId: "model-reader" },
-              scopes: ["operator.write"],
-            }),
-            isWebchatConnect: () => false,
+  it.each(["restricted model", "cancelled request", "replaced caller"] as const)(
+    "preserves the original scoped requester during profile preparation: %s",
+    async (scenario) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("completion-reader@example.test");
+        setUserProfileRole(profile.id, "reader");
+        const context = createContext();
+        context.getRuntimeConfig = () => ({
+          ...cfg,
+          gateway: {
+            roles: {
+              definitions: {
+                reader: {
+                  agents: [],
+                  sessions: { others: "none" },
+                  scopes: ["operator.write"],
+                  modelPolicy: { allow: ["test-provider/allowed"] },
+                },
+              },
+            },
           },
-          () => completion().complete(request("direct")),
-        ),
-      ),
-    ).rejects.toMatchObject({
-      name: "LlmCompleteError",
-      code: "LLM_COMPLETION_NOT_AUTHORIZED",
-      message: "Plugin model completion requires its current Gateway binding.",
-    });
-    expect(mocks.acquire).not.toHaveBeenCalled();
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
+        });
+        const started = createDeferredCore();
+        const resume = createDeferredCore();
+        const source = new AbortController();
+        let current = true;
+        const release = vi.fn();
+        const prepare = profileReader.prepareUserProfileIdentity;
+        const spy = vi
+          .spyOn(profileReader, "prepareUserProfileIdentity")
+          .mockImplementation(async (...args) => {
+            const prepared = await prepare(...args);
+            started.resolve();
+            await resume.promise;
+            return {
+              ...prepared,
+              release: () => {
+                release();
+                prepared.release();
+              },
+            };
+          });
+        mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
+        let scope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+        const pending = withWork(() =>
+          withPluginRuntimeGatewayRequestScope(
+            {
+              context,
+              client: createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] }),
+              signal: source.signal,
+              hasCurrentClientAuthority: () => current,
+              isWebchatConnect: () => true,
+            },
+            () => {
+              scope = getPluginRuntimeGatewayRequestScope();
+              return completion().complete(request("direct"));
+            },
+          ),
+        );
+        const rejected = expect(pending).rejects.toThrow(
+          scenario === "restricted model" ? "cannot use this model" : /authority|request ended/,
+        );
+        try {
+          await Promise.race([started.promise, pending]);
+          if (scenario === "cancelled request") {
+            source.abort(new Error("request ended"));
+            if (scope) {
+              scope.signal = new AbortController().signal;
+            }
+          } else if (scenario === "replaced caller") {
+            current = false;
+            if (scope) {
+              scope.hasCurrentClientAuthority = () => true;
+            }
+          }
+          resume.resolve();
+          await rejected;
+          expect(mocks.acquire).not.toHaveBeenCalled();
+          expect(mocks.complete).not.toHaveBeenCalled();
+          expect(release).toHaveBeenCalledOnce();
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([pending]);
+          spy.mockRestore();
+        }
+      });
+    },
+  );
 
   it.each(["restricted", "unrestricted"] as const)(
     "aborts only a removed in-flight model from an initially %s source",
@@ -268,7 +400,11 @@ describe("operator model policy on plugin completions", () => {
         expect(signals.get("model-b")?.aborted).toBe(false);
         expect(() => authority.assertCurrent()).not.toThrow();
         finishA.resolve();
-        await expect(first).rejects.toThrow("cannot use this model");
+        await expect(first).rejects.toMatchObject({
+          name: "LlmCompleteError",
+          code: "LLM_COMPLETION_NOT_AUTHORIZED",
+          message: expect.stringContaining("cannot use this model"),
+        });
         finishB.resolve();
         await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
       } finally {
@@ -281,62 +417,49 @@ describe("operator model policy on plugin completions", () => {
     },
   );
   it.each([
-    { mode: "direct", source: "agent-tool" },
-    { mode: "isolated", source: "request" },
-    { mode: "direct", source: "direct-tool" },
-    { mode: "isolated", source: "unbound-operator" },
+    { mode: "direct", source: "agent-tool", denial: "selected model" },
+    { mode: "isolated", source: "request", denial: "selected model" },
+    { mode: "direct", source: "direct-tool", denial: "selected model" },
+    { mode: "isolated", source: "unbound-operator", denial: "selected model" },
+    { mode: "direct", source: "missing-binding", denial: "missing binding" },
+    { mode: "direct", source: "agent-tool", denial: "prepared model" },
+    { mode: "direct", source: "agent-tool", denial: "retired requester" },
+    { mode: "isolated", source: "agent-tool", denial: "retired requester" },
   ] as const)(
-    "denies a resolved alias before $mode preparation from $source",
-    async ({ mode, source }) => {
-      mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
-      const authority = operator();
-      const invoke = () => completion().complete(request(mode));
+    "rejects $denial before $mode provider execution from $source",
+    async ({ mode, source, denial }) => {
+      if (denial === "selected model") {
+        mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
+      } else if (denial === "prepared model") {
+        mocks.acquire.mockResolvedValue({
+          ...preparedModel("blocked"),
+          selection: { ...selection, modelId: "blocked" },
+        });
+      }
+      const authority = operator(() => {
+        if (denial === "retired requester") {
+          throw new Error("requester retired");
+        }
+      });
       await expect(
-        withWork(() =>
-          source === "agent-tool"
-            ? asOperator(authority, invoke)
-            : source === "request"
-              ? withPluginRuntimeGatewayRequestScope(
-                  {
-                    client: {
-                      connect: {
-                        minProtocol: 1,
-                        maxProtocol: 1,
-                        client: {
-                          id: "openclaw-control-ui",
-                          version: "test",
-                          platform: "test",
-                          mode: "webchat",
-                        },
-                        role: "operator",
-                        scopes: ["operator.write"],
-                      },
-                      internal: { operatorRunAuthority: authority },
-                    },
-                    isWebchatConnect: () => true,
-                  },
-                  invoke,
-                )
-              : withOperatorToolGatewayAuthority(
-                  {
-                    authenticatedUserProfile: {
-                      profileId: authority.profileId,
-                      displayName: "Model Reader",
-                      hasAvatar: false,
-                      updatedAt: 1,
-                    },
-                    scopes: ["operator.write"],
-                    ...(source === "direct-tool" ? { operatorRunAuthority: authority } : {}),
-                  },
-                  invoke,
+        withWork(() => asOperator(authority, () => completion().complete(request(mode)), source)),
+      ).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+        message:
+          denial === "retired requester"
+            ? "requester retired"
+            : denial === "missing binding"
+              ? "Plugin model completion requires its current Gateway binding."
+              : expect.stringContaining(
+                  source === "unbound-operator"
+                    ? "requires original Gateway authority"
+                    : "cannot use this model",
                 ),
-        ),
-      ).rejects.toThrow(
-        source === "unbound-operator"
-          ? "requires original Gateway authority"
-          : "cannot use this model",
-      );
-      expect(mocks.acquire).not.toHaveBeenCalled();
+      });
+      if (denial !== "prepared model") {
+        expect(mocks.acquire).not.toHaveBeenCalled();
+      }
       expect(mocks.complete).not.toHaveBeenCalled();
       expect(mocks.isolated).not.toHaveBeenCalled();
     },
@@ -345,49 +468,22 @@ describe("operator model policy on plugin completions", () => {
   it.each(["direct", "isolated"] as const)(
     "allows a resolved alias on %s completion",
     async (mode) => {
+      if (mode === "direct") {
+        mocks.acquire.mockResolvedValue(preparedModel("provider-execution-id"));
+      }
       const authority = operator();
-      const invoke = () => completion().complete(request(mode));
       await expect(
         withWork(() =>
-          mode === "direct"
-            ? withOperatorToolGatewayAuthority(
-                {
-                  authenticatedUserProfile: {
-                    profileId: authority.profileId,
-                    displayName: "Model Reader",
-                    hasAvatar: false,
-                    updatedAt: 1,
-                  },
-                  scopes: ["operator.write"],
-                  operatorRunAuthority: authority,
-                },
-                invoke,
-              )
-            : asOperator(authority, invoke),
+          asOperator(
+            authority,
+            () => completion().complete(request(mode)),
+            mode === "direct" ? "direct-tool" : "agent-tool",
+          ),
         ),
       ).resolves.toMatchObject({ text: "Allowed answer." });
       expect(mode === "direct" ? mocks.complete : mocks.isolated).toHaveBeenCalledOnce();
     },
   );
-
-  it("checks the prepared logical model rather than the earlier selection", async () => {
-    mocks.acquire.mockResolvedValue({
-      ...preparedModel("blocked"),
-      selection: { ...selection, modelId: "blocked" },
-    });
-    await expect(
-      withWork(() => asOperator(operator(), () => completion().complete(request("direct")))),
-    ).rejects.toThrow("cannot use this model");
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
-  it("preserves a permitted logical model's provider transport mapping", async () => {
-    mocks.acquire.mockResolvedValue(preparedModel("provider-execution-id"));
-    await expect(
-      withWork(() => asOperator(operator(), () => completion().complete(request("direct")))),
-    ).resolves.toMatchObject({ text: "Allowed answer." });
-    expect(mocks.complete).toHaveBeenCalledOnce();
-  });
 
   it("keeps the host-bound context engine independent of the ambient requester", async () => {
     mocks.select.mockReturnValue({ ...selection, modelId: "system-model" });
@@ -418,42 +514,130 @@ describe("operator model policy on plugin completions", () => {
     expect(mocks.complete).toHaveBeenCalledOnce();
   });
 
-  it("rechecks a retired requester after model preparation", async () => {
-    const started = createDeferredCore();
-    const resume = createDeferredCore();
-    let active = true;
-    mocks.acquire.mockImplementation(async () => {
-      started.resolve();
-      await resume.promise;
-      return preparedModel();
-    });
-    const authority = operator(() => {
-      if (!active) {
-        throw new Error("requester retired");
-      }
-    });
-    const pending = withWork(() =>
-      asOperator(authority, () => completion().complete(request("direct"))),
-    );
-    await Promise.race([
-      started.promise,
-      pending.then(() => {
-        throw new Error("completion settled before model preparation started");
-      }),
-    ]);
-    active = false;
-    resume.resolve();
-    await expect(pending).rejects.toThrow("requester retired");
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
   it.each(["direct", "isolated"] as const)(
-    "retains the requester through %s cleanup after returning the answer",
+    "rechecks a retired requester after awaited %s work",
     async (mode) => {
-      const cleanup = createDeferredCore();
+      const started = createDeferredCore();
+      const resume = createDeferredCore();
+      let active = true;
       const release = vi.fn();
       const retain = vi.fn(() => release);
       if (mode === "direct") {
+        mocks.acquire.mockImplementation(async () => {
+          started.resolve();
+          await resume.promise;
+          return preparedModel();
+        });
+      } else {
+        mocks.isolated.mockImplementation(async (params) => {
+          started.resolve();
+          await resume.promise;
+          params.assertCurrent?.();
+          return {
+            text: "Allowed answer.",
+            provider: "test-provider",
+            model: "allowed",
+            owner: { kind: "harness", id: "test-harness" },
+          };
+        });
+      }
+      const authority = operator(() => {
+        if (!active) {
+          throw new Error("requester retired");
+        }
+      }, retain);
+      const pending = withWork(() =>
+        asOperator(authority, () => completion().complete(request(mode))),
+      );
+      await Promise.race([
+        started.promise,
+        pending.then(() => {
+          throw new Error("completion settled before work started");
+        }),
+      ]);
+      active = false;
+      resume.resolve();
+      await expect(pending).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+        message: "requester retired",
+      });
+      expect(mocks.complete).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
+    },
+  );
+
+  it.each(["direct", "isolated"] as const)(
+    "codes source revocation during %s work before the next guard",
+    async (mode) => {
+      const controller = new AbortController();
+      const revocation = new Error("source revoked");
+      const started = createDeferredCore();
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "model-reader",
+        scopes: ["operator.write"],
+        signal: controller.signal,
+        assertCurrent: () => {},
+      });
+      const waitForAbort = async (signal: AbortSignal | undefined) => {
+        if (!signal) {
+          throw new Error("operator signal missing");
+        }
+        started.resolve();
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(revocation), { once: true });
+        });
+      };
+      if (mode === "direct") {
+        mocks.acquire.mockImplementation(async (params) => {
+          await waitForAbort(params.signal);
+          return preparedModel();
+        });
+      } else {
+        mocks.isolated.mockImplementation(async (params) => {
+          await waitForAbort(params.abortSignal);
+          return {
+            text: "unreachable",
+            provider: "test-provider",
+            model: "allowed",
+            owner: { kind: "harness", id: "test-harness" },
+          };
+        });
+      }
+      const pending = withWork(() =>
+        asOperator(authority, () => completion().complete(request(mode))),
+      );
+      await Promise.race([started.promise, pending]);
+      controller.abort(revocation);
+      await expect(pending).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+      });
+      expect(mocks.complete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { mode: "direct", result: "answer" },
+    { mode: "isolated", result: "answer" },
+    { mode: "direct", result: "denial" },
+    { mode: "isolated", result: "denial" },
+  ] as const)(
+    "retains the requester through $mode cleanup after returning the $result",
+    async ({ mode, result }) => {
+      const cleanup = createDeferredCore();
+      const release = vi.fn();
+      const retain = vi.fn(() => release);
+      let active = true;
+      if (mode === "direct") {
+        if (result === "denial") {
+          mocks.complete.mockImplementation(async (params) => {
+            void trackAsyncWork(() => cleanup.promise);
+            active = false;
+            params.assertCurrent?.();
+            throw new Error("retired completion passed its guard");
+          });
+        }
         mocks.acquire.mockImplementation(async () => ({
           ...preparedModel(),
           async [Symbol.asyncDispose]() {
@@ -461,8 +645,12 @@ describe("operator model policy on plugin completions", () => {
           },
         }));
       } else {
-        mocks.isolated.mockImplementation(async () => {
+        mocks.isolated.mockImplementation(async (params) => {
           void trackAsyncWork(() => cleanup.promise);
+          if (result === "denial") {
+            active = false;
+            params.assertCurrent?.();
+          }
           return {
             text: "Allowed answer.",
             provider: "test-provider",
@@ -473,13 +661,24 @@ describe("operator model policy on plugin completions", () => {
       }
       const work = new AsyncWorkScope();
       try {
-        const result = await work.track(() =>
+        const pending = work.track(() =>
           asOperator(
-            operator(() => {}, retain),
+            operator(() => {
+              if (!active) {
+                throw new Error("requester retired");
+              }
+            }, retain),
             () => completion().complete(request(mode)),
           ),
         );
-        expect(result.text).toBe("Allowed answer.");
+        if (result === "answer") {
+          await expect(pending).resolves.toMatchObject({ text: "Allowed answer." });
+        } else {
+          await expect(pending).rejects.toMatchObject({
+            name: "LlmCompleteError",
+            code: "LLM_COMPLETION_NOT_AUTHORIZED",
+          });
+        }
         expect(retain).toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();
       } finally {

@@ -22,7 +22,7 @@ beforeEach(() => {
     bundledGeneratedAt: () => 100,
     readStoredCatalog: () => ({
       id: 1,
-      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
       bundle_json: JSON.stringify({
         schemaVersion: 1,
         generatedAt: 200,

@@ -12,6 +12,11 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import type { GatewayServer } from "./server.js";
 
+/** Claim a Gateway E2E port block; release it only after the Gateway bound to it has closed. */
+export async function acquireGatewayE2ePortBlock(): Promise<TestPortClaim> {
+  return await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+}
+
 export async function getGatewayTestPort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
@@ -84,7 +89,7 @@ let activeDispatcher:
   | undefined;
 
 /** Retain the exact loopback listener until the real Gateway transport adopts it. */
-export async function reserveGatewayTestListener(port = 0) {
+export async function reserveGatewayTestListener(port: number | TestPortClaim = 0) {
   const rejectEarlyConnection = (socket: Socket) => socket.destroy();
   const { claim, listener, releaseListener } = await reserveTestPortListener({
     offsets: [0, 1, 2, 3, 4],

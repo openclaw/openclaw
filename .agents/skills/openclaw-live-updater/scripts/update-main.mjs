@@ -22,7 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as defaultSleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { detectChangedScope } from "../../../../scripts/ci-changed-scope.mjs";
 import { isDirectRunUrl } from "../../../../scripts/lib/direct-run.mjs";
@@ -519,7 +519,7 @@ function applicableUrlRewrite(checkout, remoteUrl) {
   );
 }
 
-export function originMatches(remoteUrl) {
+function originMatches(remoteUrl) {
   return githubSlug(remoteUrl) === DEFAULT_EXPECTED_ORIGIN;
 }
 
@@ -550,7 +550,7 @@ function isAncestorCommit(checkout, ancestor, descendant = "HEAD") {
   }
 }
 
-export function classifyActions(
+function classifyActions(
   changedPaths,
   { buildProvenanceKnown, buildRequired, nodeModulesPresent },
 ) {
@@ -1524,7 +1524,10 @@ function readManagedGatewayLaunchAgent(checkout) {
 
 function inspectManagedGatewayDeployment(checkout) {
   if (process.platform !== "darwin") {
-    return null;
+    throw new UpdateInvariantError(
+      "unsupported_gateway_control_platform",
+      "live updater managed Gateway control requires macOS LaunchAgent inspection; Linux systemd installs must use the standard update CLI instead of this helper",
+    );
   }
   const home = process.env.HOME;
   if (!home || !existsSync(path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist"))) {
@@ -1784,7 +1787,7 @@ function verifyManagedGatewayRuntime(checkout, expectedSha) {
   return { commit: expectedSha, entrypoint: sourceEntrypoint, pid, port: deployment.port };
 }
 
-export function parseLaunchctlArguments(output) {
+function parseLaunchctlArguments(output) {
   const block = output.match(/\n\s*arguments = \{\n(?<body>[\s\S]*?)\n\s*\}/u)?.groups?.body;
   return block
     ? block
@@ -1983,29 +1986,16 @@ function defaultResumeGatewaySuspension(checkout, suspensionId, deployment) {
 }
 
 async function stopManagedGateway(runCommand, checkout, deployment) {
-  if (!deployment) {
-    await runUpdateCommand(
-      runCommand,
-      "gateway.stop",
-      process.execPath,
-      ["dist/index.js", "gateway", "stop"],
-      checkout,
-      {
-        phase: "gateway stop",
-        serviceState: "stopping",
-        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
-      },
-    );
-    return;
-  }
   await runUpdateCommand(
     runCommand,
-    "launchd.bootout",
-    "/bin/launchctl",
-    ["bootout", `gui/${process.getuid()}/${deployment.label}`],
+    deployment ? "launchd.bootout" : "gateway.stop",
+    deployment ? "/bin/launchctl" : process.execPath,
+    deployment
+      ? ["bootout", `gui/${process.getuid()}/${deployment.label}`]
+      : ["dist/index.js", "gateway", "stop"],
     checkout,
     {
-      phase: "Gateway LaunchAgent bootout",
+      phase: deployment ? "Gateway LaunchAgent bootout" : "gateway stop",
       serviceState: "stopping",
       timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
     },
@@ -2102,12 +2092,7 @@ function isTrustedSourceControlBuild(checkout, buildState, currentHead) {
   ) {
     return false;
   }
-  try {
-    git(checkout, ["merge-base", "--is-ancestor", commit, currentHead]);
-    return true;
-  } catch {
-    return false;
-  }
+  return isAncestorCommit(checkout, commit, currentHead);
 }
 
 function resolveGatewayControlDeployment(checkout, deployment, buildBefore, currentHead) {
@@ -2415,7 +2400,7 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
   const serviceTarget = `${domain}/${deployment.label}`;
   const waitForProcess = options.waitForProcess ?? waitForManagedGatewayProcess;
   const now = options.now ?? Date.now;
-  if (!options.startupTrace) {
+  const start = async () => {
     await runUpdateCommand(
       runCommand,
       "launchd.enable",
@@ -2436,7 +2421,10 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
       waitForProcess,
       options.sleep ?? defaultSleep,
     );
-    return { processStartedAt: timestampAt(now) };
+    return timestampAt(now);
+  };
+  if (!options.startupTrace) {
+    return { processStartedAt: await start() };
   }
 
   const readLaunchdEnvironment = options.readLaunchdEnvironment ?? readLaunchdEnvironmentVariable;
@@ -2458,27 +2446,7 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
     },
   );
   try {
-    await runUpdateCommand(
-      runCommand,
-      "launchd.enable",
-      "/bin/launchctl",
-      ["enable", serviceTarget],
-      checkout,
-      {
-        phase: "Gateway LaunchAgent enable",
-        serviceState: "stopped",
-        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
-      },
-    );
-    await bootstrapLaunchAgentAndWait(
-      runCommand,
-      checkout,
-      deployment,
-      domain,
-      waitForProcess,
-      options.sleep ?? defaultSleep,
-    );
-    processStartedAt = timestampAt(now);
+    processStartedAt = await start();
   } catch (error) {
     restartError = error;
   }
@@ -2670,7 +2638,7 @@ async function waitForManagedGatewayReadiness(
   );
 }
 
-export function isGatewayProbeResponse(route, payload) {
+function isGatewayProbeResponse(route, payload) {
   return route === "/readyz"
     ? payload?.ready === true
     : payload?.ok === true && payload.status === "live";
@@ -2748,21 +2716,15 @@ function markGatewayMilestones(timing, observation, observedAt, deepRpcUpperBoun
   if (!observation) {
     return;
   }
-  if (observation.listenerReady) {
-    recordGatewayTimestamp(
-      timing,
-      "listenerReadyAt",
-      deepRpcUpperBoundAt ?? observedAt,
-      deepRpcUpperBoundAt ? "no-later-than" : "observed",
-    );
-  }
-  if (observation.healthzReady) {
-    recordGatewayTimestamp(
-      timing,
-      "healthzReadyAt",
-      deepRpcUpperBoundAt ?? observedAt,
-      deepRpcUpperBoundAt ? "no-later-than" : "observed",
-    );
+  for (const key of ["listenerReady", "healthzReady"]) {
+    if (observation[key]) {
+      recordGatewayTimestamp(
+        timing,
+        `${key}At`,
+        deepRpcUpperBoundAt ?? observedAt,
+        deepRpcUpperBoundAt ? "no-later-than" : "observed",
+      );
+    }
   }
   if (observation.readyzReady) {
     recordGatewayTimestamp(timing, "readyzReadyAt", observedAt);
@@ -2801,16 +2763,14 @@ async function readGatewayHealth(runCommand, checkout, deployment) {
       ["health", "--verbose", "--json"],
       deployment,
     );
-    let healthSummary;
     try {
-      healthSummary = JSON.parse(healthOutput);
+      return JSON.parse(healthOutput);
     } catch (error) {
       throw new UpdateInvariantError(
         "gateway_health_invalid",
         `Gateway health probe did not return JSON: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return healthSummary;
   }
   await runUpdateCommand(
     runCommand,
@@ -2839,10 +2799,6 @@ async function verifyGateway(runCommand, checkout, expectedSha, deployment = nul
     deepRpcReadyAt,
     healthSummary: await readGatewayHealth(runCommand, checkout, deployment),
   };
-}
-
-function defaultSleep(ms) {
-  return delay(ms);
 }
 
 /**
@@ -3113,7 +3069,7 @@ function readManagedPluginSourceRoots(checkout, deployment) {
   }
 }
 
-export function resolveManagedPluginSourceRoots(report) {
+function resolveManagedPluginSourceRoots(report) {
   if (!Array.isArray(report?.plugins)) {
     return null;
   }
@@ -3131,7 +3087,7 @@ export function resolveManagedPluginSourceRoots(report) {
  * @param {string} checkout
  * @param {GatewayDeploymentRef | null | undefined} deployment
  */
-export function resolveManagedGatewaySourceRoot(checkout, deployment) {
+function resolveManagedGatewaySourceRoot(checkout, deployment) {
   return typeof deployment?.entrypoint === "string" && deployment.entrypoint.length > 0
     ? path.dirname(path.resolve(deployment.entrypoint))
     : path.join(realpathSync(checkout), "dist");
@@ -3243,7 +3199,7 @@ function finalizeGatewayTiming(timing) {
   };
 }
 
-export function findExactMacTarget(processes, executable) {
+function findExactMacTarget(processes, executable) {
   const target = processes
     .split("\n")
     .map((line) => line.trim().match(/^(\d+)\s+(.+)$/u))
@@ -3252,7 +3208,7 @@ export function findExactMacTarget(processes, executable) {
 }
 
 async function defaultVerifyMacTarget(checkout) {
-  await delay(10_000);
+  await defaultSleep(10_000);
   const executable = path.join(checkout, "dist/OpenClaw.app/Contents/MacOS/OpenClaw");
   const processes = execFileSync(
     "ps",

@@ -36,6 +36,23 @@ function createContext(): PreparedCliRunContext {
   } as PreparedCliRunContext;
 }
 
+function createOutputDiagnostics(captureOutputMessages: (messages: unknown) => void) {
+  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type === "model.call.completed") {
+      captureOutputMessages(privateData.modelContent?.outputMessages);
+    }
+  });
+  const diagnostics = expectDefined(
+    createClaudeCliModelCallDiagnostics({
+      context: createContext(),
+      prompt: "hello",
+      transport: "stdio",
+    }),
+    "Claude CLI diagnostics",
+  );
+  return { diagnostics, stop };
+}
+
 describe("Claude CLI model-call diagnostics", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
@@ -128,19 +145,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("bounds serialized escaped content across many envelopes", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     for (let index = 0; index < 199; index += 1) {
@@ -157,19 +164,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("caps assistant envelope count and records truncation", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     for (let index = 0; index < 250; index += 1) {
@@ -185,19 +182,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("records truncation when the item budget ends inside an envelope", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     for (let index = 0; index < 197; index += 1) {
@@ -222,19 +209,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("keeps fallback response text when prior non-text envelopes fill the limit", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     for (let index = 0; index < 200; index += 1) {
@@ -253,19 +230,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("keeps fallback response text when non-text content fills the byte budget", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({
@@ -283,19 +250,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("keeps the fallback reserve after empty text content", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({ content: "" });
@@ -316,19 +273,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("bounds text probing after the capture budget is exhausted", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({
@@ -354,19 +301,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("counts the truncation marker within the output item limit", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({

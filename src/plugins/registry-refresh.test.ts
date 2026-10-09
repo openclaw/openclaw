@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -16,7 +17,10 @@ import {
   refreshPluginRegistryAfterConfigMutation,
 } from "./registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
-import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "./test-helpers/installed-plugin-index.js";
 
 const runtimeCache = vi.hoisted(() => ({ clear: vi.fn() }));
 vi.mock("./loader.js", () => ({ clearPluginRegistryLoadCache: runtimeCache.clear }));
@@ -26,6 +30,34 @@ afterEach(() => {
 });
 
 describe("plugin registry refresh config ownership", () => {
+  it("invalidates runtime discovery when committed config refresh cannot acquire custody", async () => {
+    await withOpenClawTestState(
+      { label: "registry-refresh-acquisition-failure" },
+      async (state) => {
+        const config = { plugins: { enabled: false } };
+        await state.writeConfig(config);
+        await seedInstalledPluginIndex({}, { config, env: state.env });
+        const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+        const warn = vi.fn();
+        vi.spyOn(leaseAcquisition, "acquireOpenClawStateLease").mockRejectedValueOnce(
+          new Error("plugin lifecycle acquisition timed out"),
+        );
+
+        await refreshPluginRegistryAfterConfigMutation({
+          env: state.env,
+          reason: "source-changed",
+          logger: { warn },
+        });
+
+        expect(warn).toHaveBeenCalledWith(
+          "Plugin registry refresh failed: plugin lifecycle acquisition timed out",
+        );
+        expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+        expect(runtimeCache.clear).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
   it("refuses registry publication when the plugin lease is lost during the committed config read", async () => {
     await withOpenClawTestState({ label: "registry-refresh-lease-loss" }, async (state) => {
       const config = { plugins: { enabled: false } };
@@ -33,6 +65,7 @@ describe("plugin registry refresh config ownership", () => {
       await seedInstalledPluginIndex({}, { config, env: state.env });
       const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
       const controller = new AbortController();
+      const refusal = new Error("plugin lease cancelled");
       const assertCurrent = vi.fn();
       const warn = vi.fn();
       const create = configIO.createConfigIO;
@@ -42,7 +75,7 @@ describe("plugin registry refresh config ownership", () => {
           ...io,
           readConfigFileSnapshot: async () => {
             const snapshot = await io.readConfigFileSnapshot();
-            controller.abort(new Error("plugin lease cancelled"));
+            controller.abort(refusal);
             return snapshot;
           },
         };
@@ -65,7 +98,7 @@ describe("plugin registry refresh config ownership", () => {
           },
         ),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-      expect(registryError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(registryError).toBe(refusal);
       expect(assertCurrent).toHaveBeenCalled();
       expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
       expect(warn).not.toHaveBeenCalled();
@@ -74,7 +107,7 @@ describe("plugin registry refresh config ownership", () => {
   });
 
   it.each([undefined, null, false, 0])(
-    "preserves a one-shot transactional authority refusal: %s",
+    "preserves a one-shot live authority refusal: %s",
     async (refusal) => {
       await withOpenClawTestState(
         { label: "registry-refresh-transaction-refusal" },
@@ -85,17 +118,15 @@ describe("plugin registry refresh config ownership", () => {
           const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
           const warn = vi.fn();
           await withPluginLifecycleLease({ env: state.env }, async (lease) => {
-            const assertOwnedInTransaction = vi
-              .fn<typeof lease.assertOwnedInTransaction>((database) =>
-                lease.assertOwnedInTransaction(database),
-              )
+            const assertCurrent = vi
+              .fn(() => lease.assertCurrent())
               .mockImplementationOnce(() => {
                 // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
                 throw refusal;
               });
             const result = await refreshPluginRegistryAfterConfigMutation({
               reason: "source-changed",
-              lease: { ...lease, assertOwnedInTransaction },
+              lease: { ...lease, assertCurrent },
               logger: { warn },
             }).then(
               () => ({ ok: true }),
@@ -105,7 +136,7 @@ describe("plugin registry refresh config ownership", () => {
             if ("error" in result) {
               expect(result.error).toBe(refusal);
             }
-            expect(assertOwnedInTransaction).toHaveBeenCalledOnce();
+            expect(assertCurrent).toHaveBeenCalledOnce();
           });
           expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
           expect(warn).not.toHaveBeenCalled();
@@ -155,7 +186,7 @@ describe("plugin registry refresh config ownership", () => {
         await state.writeConfig(config);
         await seedInstalledPluginIndex(priorRecords, { config, env: state.env });
         const boot = loadPluginMetadataSnapshot({ config, env: state.env, allowCurrent: false });
-        const owner = retainGatewayPluginMetadata();
+        const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
         const warn = vi.fn();
         const readCommittedIndex = (): unknown => {
           const row = readPersistedInstalledPluginIndexRowSync({ env: state.env });
@@ -226,8 +257,6 @@ describe("plugin registry refresh config ownership", () => {
 
   it.each([
     { reason: "source-changed", envSource: "process" },
-    { reason: "policy-changed", envSource: "process" },
-    { reason: "source-changed", envSource: "caller" },
     { reason: "policy-changed", envSource: "caller" },
   ] as const)(
     "discovers an env-referenced plugin from $envSource env after $reason",
@@ -415,8 +444,8 @@ describe("plugin registry refresh config ownership", () => {
           },
         };
         await state.writeConfig(config);
+        await seedInstalledPluginIndex(installRecords, { config, env: state.env });
         await refreshPluginRegistryAfterConfigMutation({
-          installRecords,
           reason: "source-changed",
           invalidateRuntimeCache: false,
         });

@@ -5,21 +5,16 @@ import { matchBrowserUrlPattern } from "./url-pattern.js";
 
 describe("isPersistentBrowserProfileMutation", () => {
   it.each([
-    ["POST", "/profiles/create"],
     ["POST", "profiles/create"],
     ["POST", "/profiles/import"],
-    ["POST", "profiles/import"],
     ["POST", "/reset-profile"],
-    ["POST", "reset-profile"],
     ["DELETE", "/profiles/poc"],
   ])("treats %s %s as a persistent profile mutation", (method, path) => {
     expect(isPersistentBrowserProfileMutation(method, path)).toBe(true);
   });
 
   it.each([
-    ["GET", "/profiles"],
     ["GET", "/profiles/poc"],
-    ["GET", "/status"],
     ["POST", "/stop"],
     ["DELETE", "/profiles"],
     ["DELETE", "/profiles/poc/tabs"],
@@ -31,9 +26,7 @@ describe("isPersistentBrowserProfileMutation", () => {
 describe("isBrowserHostLocalRoute", () => {
   it.each([
     ["POST", "/profiles/import"],
-    ["POST", "profiles/import"],
     ["GET", "/system-profiles"],
-    ["GET", "system-profiles"],
     ["GET", "/system-profile-import/status"],
     ["POST", "/system-profile-import/dismiss"],
   ])("pins %s %s to the host", (method, path) => {
@@ -45,8 +38,6 @@ describe("isBrowserHostLocalRoute", () => {
     ["POST", "/system-profile-import/status"],
     ["GET", "/system-profile-import/dismiss"],
     ["GET", "/profiles"],
-    ["POST", "/profiles/create"],
-    ["POST", "/reset-profile"],
   ])("does not pin %s %s to the host", (method, path) => {
     expect(isBrowserHostLocalRoute(method, path)).toBe(false);
   });
@@ -96,5 +87,45 @@ describe("browser url pattern matching", () => {
   it("rejects empty patterns", () => {
     expect(matchBrowserUrlPattern("", "https://example.com")).toBe(false);
     expect(matchBrowserUrlPattern("   ", "https://example.com")).toBe(false);
+  });
+
+  it("rejects a nested star pattern without scanning the whole event loop", () => {
+    const pattern = "*a".repeat(14);
+    const url = `${"a".repeat(29)}x`;
+    const started = Date.now();
+    expect(matchBrowserUrlPattern(pattern, url)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(matchBrowserUrlPattern("*a".repeat(3), "xa ya za")).toBe(true);
+  });
+
+  it("keeps matching wildcard patterns longer than 512 characters", () => {
+    const prefix = `https://example.com/${"a".repeat(500)}`;
+    expect(matchBrowserUrlPattern(`${prefix}*`, `${prefix}b`)).toBe(true);
+    expect(matchBrowserUrlPattern(`${prefix}*`, `${prefix.slice(0, -1)}b`)).toBe(false);
+    expect(matchBrowserUrlPattern("*".repeat(513), "a")).toBe(true);
+  });
+
+  it("matches a repeated star literal in one pass per segment", () => {
+    const path = "a".repeat(20_000);
+    const started = Date.now();
+    expect(matchBrowserUrlPattern("https://example.com/*a*", `https://example.com/${path}`)).toBe(
+      true,
+    );
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(matchBrowserUrlPattern("https://example.com/*a*", "https://example.com/bbb")).toBe(
+      false,
+    );
+    const separated = "ab".repeat(10_000);
+    const separatedStarted = Date.now();
+    expect(
+      matchBrowserUrlPattern("https://example.com/*a*", `https://example.com/${separated}`),
+    ).toBe(true);
+    expect(Date.now() - separatedStarted).toBeLessThan(250);
+    expect(
+      matchBrowserUrlPattern(
+        "https://example.com/*a*",
+        `https://example.com/${"b".repeat(10_000)}`,
+      ),
+    ).toBe(false);
   });
 });

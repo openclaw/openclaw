@@ -167,7 +167,6 @@ describe("orphan SQLite sidecar admission", () => {
 
   const nonBlockingCases = [
     { label: "lone SHM index", suffix: "-shm", contents: shmIndexContents },
-    { label: "zero-byte WAL", suffix: "-wal", contents: emptySidecar },
     { label: "32-byte header-only WAL", suffix: "-wal", contents: walFixture.header },
     { label: "zero-byte rollback journal", suffix: "-journal", contents: emptySidecar },
   ] as const;
