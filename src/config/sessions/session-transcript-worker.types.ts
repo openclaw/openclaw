@@ -643,7 +643,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       SessionArchivePruningWorkerInput,
       PublishedSessionTranscriptArchive[]
     >;
-    readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
+    readColdMetadata: CancellableSessionHistoryReader<SessionColdMetadataWorkerInput>;
     readRuntimeTarget: SessionHistoryReader<
       SessionRuntimeTargetWorkerInput,
       SessionTranscriptWorkerValues["session-runtime-target"]["target"]

@@ -9827,7 +9827,6 @@
 ["src/state/openclaw-state-read.worker.test.ts","./openclaw-agent-db-registry.read.js","8cd27050401d3a81f5b15192705a9fbb7bca41b3ebfd5c8f2ab3a66ad29743b8",1]
 ["src/state/openclaw-state-read.worker.test.ts","./openclaw-state-db-read-connection.js","d2e2237bad4db1311c373f9268de5af7c1b1dbb916bc18ec6feb96d8f23898d5",1]
 ["src/state/openclaw-state-worker-lease.test.ts","../infra/runtime-worker-url.js","bebf9644228500f007753d06be8fd1653cc5efd27e82e2633926c98b6cbad8c1",1]
-["src/state/openclaw-state-worker-lease.test.ts","../infra/sqlite-worker-store.js","a73d9f180350b48fe7fb53fb538f3d9b29aabecf481ec355113edb1ed56af891",1]
 ["src/state/openclaw-state-worker-lease.test.ts","./openclaw-state-db-cache.js","28fb3e6dabb5f7b6b50ebfedb211ad433731ab5e01a51c19febaabae4941cbc2",1]
 ["src/state/openclaw-state-worker-registry.test.ts","../agents/worktrees/dispatch.worker.js","b780ebc90f016c175baacee528fa77c1c3dbcea6f0ecc83c01ad124a99ca1814",1]
 ["src/state/openclaw-state-worker-registry.test.ts","../infra/push-apns-store.worker.js","96b414196c7c75f91d075f7eb610dca2a602348f78df96a172fa26ff823bc086",1]

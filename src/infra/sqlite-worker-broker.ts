@@ -2,6 +2,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners } from "../shared/listeners.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
@@ -160,6 +161,7 @@ export class SqliteWorkerBroker {
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
         () => this.openAdmitted<Operations>(snapshot, client),
+        snapshot.signal,
       )
       .catch((error: unknown) => {
         this.clients.delete(client);
@@ -172,6 +174,9 @@ export class SqliteWorkerBroker {
     client: object,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     const { maintenanceScope } = options;
+    const wait = <T>(pending: Promise<T>) =>
+      racePromiseWithAbortSignal(pending, options.signal, (signal) => signal.reason);
+    options.signal?.throwIfAborted();
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
       await prepareSqliteWorkerDatabaseAdmission(options);
@@ -193,18 +198,19 @@ export class SqliteWorkerBroker {
       return undefined;
     }
     const { modulePath, moduleUrl } = await resolveSqliteWorkerModuleUrl(options.moduleUrl);
+    options.signal?.throwIfAborted();
     options.assertCurrent?.();
     let actor = this.actors.get(key);
     if (actor?.retirementRequested) {
       if (actor.retirement) {
-        await actor.retirement;
+        await wait(actor.retirement);
         return this.openAdmitted(options, client);
       }
       throw new SqliteWorkerError("SQLite actor retirement must finish before reopening", "closed");
     }
     if (actor?.cleanupState === "pending") {
       if (actor.closing) {
-        await actor.closing;
+        await wait(actor.closing);
         return this.openAdmitted(options, client);
       }
       throw new SqliteWorkerError(
@@ -217,7 +223,7 @@ export class SqliteWorkerBroker {
         const unused = await this.lifecycle.consumeRuntimePreparation(options, moduleUrl);
         if (unused) {
           unused.pendingOpens -= 1;
-          await this.lifecycle.retireEmpty(unused);
+          await wait(this.lifecycle.retireEmpty(unused));
         }
         // Another opener won; reread identity and authority after retiring the unused carrier.
         return this.openAdmitted({ ...options, runtimePreparation: undefined }, client);
@@ -239,6 +245,7 @@ export class SqliteWorkerBroker {
       );
       try {
         options.assertCurrent?.();
+        options.signal?.throwIfAborted();
       } catch (error) {
         return this.lifecycle.rejectSlotAdmission(slot, error);
       }
@@ -468,15 +475,7 @@ export class SqliteWorkerBroker {
     return {
       fail: (reason, currentError, openOutcome, completed) =>
         this.fail(slot, reason, currentError, openOutcome, completed),
-      finish: (job, error, value, settlement, closeReceipt) => {
-        if (job.request.type === "close" && closeReceipt) {
-          const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
-          if (actor) {
-            actor.closeReceipt = closeReceipt;
-          }
-        }
-        this.finish(slot, job, error, value, settlement);
-      },
+      finish: (job, error, value, settlement) => this.finish(slot, job, error, value, settlement),
       dispatch: () => this.dispatch(slot),
     };
   }

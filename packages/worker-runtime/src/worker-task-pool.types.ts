@@ -108,6 +108,7 @@ type TaskOwner = {
 
 type WorkerHostExchange = {
   id: number;
+  name: string;
   pressure: AbortController;
   onConsumed?: () => void;
   sent: boolean;

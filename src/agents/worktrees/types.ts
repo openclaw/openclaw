@@ -90,6 +90,7 @@ export type WorktreeLeaseSet = {
 /** Explicit worker authority replaces the native guard, including predicate-only authority. */
 export type WorktreeWorkerAuthority = {
   leaseSet?: WorktreeLeaseSet;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
   predicates?: readonly WorktreeRegistryPredicate[];
 };

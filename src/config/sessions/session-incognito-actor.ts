@@ -487,7 +487,7 @@ export function createIncognitoSessionFacts(
               captureClaim: (sessionKey, facts) => claim(sessionKey, assertBorrowed, facts),
               authorize: (held) => held.authorize(authority, "commit"),
               operation,
-              execute: (command, observeFacts) =>
+              execute: (command, observeFacts, requestSignal) =>
                 perform(
                   authority,
                   command,
@@ -500,7 +500,9 @@ export function createIncognitoSessionFacts(
                     }
                     return result.value;
                   },
-                  signal,
+                  signal && requestSignal
+                    ? AbortSignal.any([signal, requestSignal])
+                    : (requestSignal ?? signal),
                 ),
               cleanup: (command) =>
                 perform(

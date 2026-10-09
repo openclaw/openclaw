@@ -37,8 +37,8 @@ import {
   isNativeOpenAIEndpoint,
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
-import { applyDirectCompletionsReasoningAndRouting } from "./openai-completions-direct-policy.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
+import { applyCompletionsReasoningAndRouting } from "./openai-completions-policy.js";
 import {
   applyCompletionsReplay,
   COMPLETIONS_REASONING_REPLAY_FIELDS,
@@ -498,41 +498,15 @@ export function buildOpenAICompletionsRequest(
       params.reasoning = { effort };
     }
   }
-  if (policy.mode === "direct") {
-    applyDirectCompletionsReasoningAndRouting(params, model, reasoning, compat);
-  } else {
-    let suppressScalarEffort = false;
-    if (model.reasoning) {
-      const enabled = thinkingEnabled ?? false;
-      if (compat.thinkingFormat === "qwen-chat-template") {
-        params.chat_template_kwargs = { enable_thinking: enabled };
-        suppressScalarEffort = true;
-      } else if (compat.thinkingFormat === "qwen") {
-        params.enable_thinking = enabled;
-        suppressScalarEffort = true;
-      } else if (compat.thinkingFormat === "together") {
-        params.reasoning = { enabled };
-        suppressScalarEffort = !enabled;
-      }
-    }
-    if (
-      !isOpenRouter &&
-      effort &&
-      model.reasoning &&
-      compat.supportsReasoningEffort &&
-      !suppressScalarEffort
-    ) {
-      params.reasoning_effort = effort;
-    }
-    if (compat.cacheControlFormat === "anthropic") {
-      applyCompletionsAnthropicCacheControl(
-        params,
-        cacheControl ?? null,
-        cacheOptOutIndexes,
-        markTools,
-        !managedCompat?.requiresStringContent,
-      );
-    }
+  applyCompletionsReasoningAndRouting(params, model, reasoning, compat, policy.mode);
+  if (policy.mode === "managed" && compat.cacheControlFormat === "anthropic") {
+    applyCompletionsAnthropicCacheControl(
+      params,
+      cacheControl ?? null,
+      cacheOptOutIndexes,
+      markTools,
+      !managedCompat?.requiresStringContent,
+    );
   }
   if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
     // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,

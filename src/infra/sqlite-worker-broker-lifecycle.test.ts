@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
@@ -229,6 +230,102 @@ describe("SQLite worker slots", () => {
     ).rejects.toThrow("opening revoked");
     expect(slots.size).toBe(0);
   });
+
+  it("cancels a slot waiter while the retiring worker keeps ownership until exit", async ({
+    signal,
+  }) => {
+    const { lifecycle, slots, workers, options, source, replyOwner } = runtimeFixture(false);
+    const slot = lifecycle.createSlot(options, false, replyOwner);
+    let retired = false;
+    const retirement = lifecycle.retire(slot).then(() => {
+      retired = true;
+    });
+    const cancel = new AbortController();
+    const waiting = lifecycle.acquireSlot(
+      { ...options, signal: cancel.signal },
+      source.moduleUrl,
+      { maxWorkers: 1, maxStores: 1 },
+      replyOwner,
+    );
+    const reason = new Error("opening deadline expired while previous worker retires");
+    const rejected = expect(waiting).rejects.toBe(reason);
+    cancel.abort(reason);
+    try {
+      await withinTest(rejected, signal);
+      expect(retired).toBe(false);
+      expect(workers).toHaveLength(1);
+      expect(workers[0]?.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      workers[0]?.emit("exit", 0);
+      await retirement;
+      await Promise.allSettled([waiting]);
+    }
+    expect(retired).toBe(true);
+    expect(workers).toHaveLength(1);
+    expect(slots.size).toBe(0);
+  });
+
+  it.for(["capacity-preemption", "invalid-preparation", "consumed-preemption"] as const)(
+    "cancels %s observation while prepared-runtime retirement retains the worker",
+    async (kind, { signal }) => {
+      const { lifecycle, close, slots, workers, options, source, replyOwner } =
+        runtimeFixture(false);
+      const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
+      assert(prepared);
+      const cancel = new AbortController();
+      const preemptorCancel = new AbortController();
+      const limits = { maxWorkers: 1, maxStores: 1 };
+      const pending: Promise<unknown>[] = [];
+      if (kind === "consumed-preemption") {
+        await close();
+        const preemptor = lifecycle.acquireSlot(
+          { ...options, signal: preemptorCancel.signal },
+          source.moduleUrl,
+          limits,
+          replyOwner,
+        );
+        pending.push(preemptor);
+        void preemptor.catch(() => {});
+      }
+      const waiting = lifecycle.acquireSlot(
+        {
+          ...options,
+          signal: cancel.signal,
+          ...(kind === "capacity-preemption" ? {} : { runtimePreparation: prepared }),
+        },
+        source.moduleUrl,
+        limits,
+        replyOwner,
+      );
+      pending.push(waiting);
+      const retirement = [...slots][0]?.retiring;
+      assert(retirement);
+      const retired = vi.fn();
+      void retirement.then(retired, retired);
+      const reason = new Error("prepared-runtime opening deadline expired");
+      const rejected = expect(waiting).rejects.toBe(reason);
+      cancel.abort(reason);
+      try {
+        await withinTest(rejected, signal);
+        expect(retired).not.toHaveBeenCalled();
+        expect(workers).toHaveLength(1);
+        expect(workers[0]?.terminate).toHaveBeenCalledOnce();
+        expect(slots.size).toBe(1);
+        expect(lifecycle.prepareRuntime(source, 1, replyOwner)).toBeUndefined();
+      } finally {
+        preemptorCancel.abort(reason);
+        workers[0]?.emit("exit", 0);
+        await Promise.allSettled(pending);
+        const remaining = [...slots].map((slot) => lifecycle.retire(slot));
+        workers.forEach((worker) => worker.emit("exit", 0));
+        await Promise.allSettled(remaining);
+        await prepared.release();
+      }
+      expect(retired).toHaveBeenCalledOnce();
+      expect(workers).toHaveLength(1);
+      expect(slots.size).toBe(0);
+    },
+  );
 
   it.each([
     { owned: false, revoked: false },

@@ -30,7 +30,7 @@ export async function readAcpSessionMetaForEntries(
     env?: NodeJS.ProcessEnv;
     databasePath?: string;
   },
-  options: { current?: true } = {},
+  options: { current?: true; signal?: AbortSignal } = {},
 ): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
