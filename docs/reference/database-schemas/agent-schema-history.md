@@ -72,10 +72,17 @@ need no post-write row reread or validity update.
 
 `session_canonical_validation_pending` remains a derived admission queue.
 Offline imports, Doctor repairs, and main-key policy changes explicitly queue
-affected keys and revoke the canonical receipt. Their owner must hold exclusive
-maintenance custody while the Gateway is stopped; other processes cannot write
+affected keys and revoke the canonical receipt. Gateway startup applies policy
+changes before readiness; external imports and repairs require exclusive
+maintenance custody while the Gateway is stopped. Other processes cannot write
 session tables alongside the Gateway. Live-authority checks remain with the
 existing effect and transaction owners.
+
+Doctor retains its backed-up orphan-window repair for both schemas 24 and 25
+before migration or the full migration backup. It validates the exact historical
+schema and removes only windows without a logical node, preserving their original
+history in the repair backup. Older media migrations use the same historical
+schema owner as the database upgrader.
 
 The migration checks the previous schema before retiring its triggers, seeds
 every existing node, and clears the persisted canonical receipt in the same

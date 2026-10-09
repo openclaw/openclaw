@@ -612,6 +612,7 @@ export function setCanonicalSqliteSessionMainKey(
   if (currentMainKey === canonicalMainKey) {
     return;
   }
+  markCanonicalSessionValidationPending(database);
   executeSqliteQuerySync(
     database.db,
     db
@@ -624,7 +625,6 @@ export function setCanonicalSqliteSessionMainKey(
         }),
       ),
   );
-  markCanonicalSessionValidationPending(database);
   const admission = readerAdmissions.get(database.db);
   if (admission) {
     revokeReaderContinuations(admission);

@@ -1,3 +1,4 @@
+import { constants } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -13,7 +14,10 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import {
+  markCanonicalSessionValidationPending,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import {
   compareAndCertifyCanonicalSessionValidationBatch,
   hasPendingCanonicalSessionValidation,
@@ -271,6 +275,36 @@ it.each([true, false])(
         updatedAt: 2,
         label: "after",
       });
+    });
+  },
+);
+
+it.each(["pending", "receipt"] as const)(
+  "does not publish an autocommit main-key change when %s invalidation fails",
+  async (blocked) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = { agentId: "main", env, sessionKey: "agent:main:policy" };
+      replaceSessionEntrySync(scope, { sessionId: "policy", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase(scope);
+      database.db.setAuthorizer((action, table, column) => {
+        const denied =
+          blocked === "pending"
+            ? action === constants.SQLITE_INSERT && table === "session_canonical_validation_pending"
+            : action === constants.SQLITE_UPDATE &&
+              table === "session_key_contract" &&
+              column === "canonical_ready";
+        return denied ? constants.SQLITE_DENY : constants.SQLITE_OK;
+      });
+      try {
+        expect(() => setCanonicalSqliteSessionMainKey(database, "changed-main")).toThrow(
+          /authoriz/u,
+        );
+      } finally {
+        database.db.setAuthorizer(null);
+      }
+      expect(
+        database.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
+      ).toEqual({ main_key: "main" });
     });
   },
 );
