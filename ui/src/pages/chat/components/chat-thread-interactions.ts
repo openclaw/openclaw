@@ -301,11 +301,10 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   }
   if (paneId) {
     transcriptStates.delete(paneId);
-    resetChatThreadState(paneId);
   } else {
     transcriptStates.clear();
-    resetChatThreadState();
   }
+  resetChatThreadState(paneId);
 }
 
 export function renderTranscriptSearch(

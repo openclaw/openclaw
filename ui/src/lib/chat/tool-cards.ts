@@ -58,9 +58,7 @@ function normalizeContent(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object",
-  );
+  return content.filter((entry): entry is Record<string, unknown> => readRecord(entry) !== null);
 }
 
 function coerceArgs(value: unknown): unknown {
@@ -82,10 +80,7 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (Array.isArray(item.content)) {
     const parts = item.content.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return [];
-      }
-      const text = (entry as { text?: unknown }).text;
+      const text = readRecord(entry)?.text;
       return typeof text === "string" ? [text] : [];
     });
     if (parts.length > 0) {
@@ -300,9 +295,8 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
   if (!isRecord(args)) {
     return undefined;
   }
-  const record = args;
   for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
-    const value = record[key];
+    const value = args[key];
     if (typeof value !== "string") {
       continue;
     }

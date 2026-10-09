@@ -816,10 +816,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     });
 
   const clearDynamicSlashCommandsRefreshTimer = () => {
-    if (!dynamicSlashCommandsRefreshTimer) {
-      return;
-    }
-    clearTimeout(dynamicSlashCommandsRefreshTimer);
+    clearTimeout(dynamicSlashCommandsRefreshTimer ?? undefined);
     dynamicSlashCommandsRefreshTimer = null;
   };
 
@@ -1007,9 +1004,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const stopStatusTimer = () => {
-    if (statusTimer) {
-      clearInterval(statusTimer);
-    }
+    clearInterval(statusTimer ?? undefined);
     statusTimer = null;
     statusIntervalMs = 0;
     waitingPhrase = null;
@@ -1037,10 +1032,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const stopStatusTimeout = () => {
-    if (!state.statusTimeout) {
-      return;
-    }
-    clearTimeout(state.statusTimeout);
+    clearTimeout(state.statusTimeout ?? undefined);
     state.statusTimeout = null;
   };
 
