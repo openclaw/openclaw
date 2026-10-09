@@ -638,4 +638,34 @@ describe("summary request input budget", () => {
       expect(result.error).toBeInstanceOf(SummaryOutputBudgetError);
     }
   });
+
+  it("does not retry an overflow after the caller cancels", async () => {
+    const controller = new AbortController();
+    const { streamFn: overflowing, prompts } = createCapturingStream(() => true);
+    const streamFn: StreamFn = (model, context, options) => {
+      controller.abort();
+      return overflowing(model, context, options);
+    };
+    const usage: unknown[] = [];
+    const result = await generateSummary(
+      createLongSession(200),
+      createModel(200_000, 64_000),
+      16_384,
+      undefined,
+      undefined,
+      controller.signal,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+      { internalUsageSink: (entry) => usage.push(entry) },
+    );
+
+    expect(prompts).toHaveLength(1);
+    expect(usage).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("aborted");
+    }
+  });
 });

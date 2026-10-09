@@ -162,6 +162,10 @@ export async function runSummarizationCompletion(
     if (response.stopReason === "aborted" || !isContextOverflow(response, model.contextWindow)) {
       break;
     }
+    // Caller cancellation is terminal; never start another request after it.
+    if (signal?.aborted) {
+      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
+    }
     if (shrink >= MAX_OVERFLOW_SHRINKS) {
       return budgetError();
     }
