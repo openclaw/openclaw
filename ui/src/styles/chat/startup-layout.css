@@ -29,7 +29,8 @@
 }
 
 .chat {
-  --chat-thread-max-width: 48rem;
+  --chat-thread-max-width: min(1280px, 100%);
+  --chat-message-max-width: 100%;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
   --chat-composer-side-inset: 36px;
