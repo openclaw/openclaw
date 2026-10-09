@@ -122,6 +122,77 @@ describe("Git checkout execution", () => {
     await expectRuntime(root, target);
   });
 
+  it.each(["untracked-main", "missing-main", "missing-origin"] as const)(
+    "uses the same detached Dev source policy during execution (%s)",
+    async (mode) => {
+      const target = await advanceRemote();
+      await git(root, "checkout", "--detach", beforeSha);
+      if (mode === "untracked-main") {
+        await git(root, "branch", "--unset-upstream", "main");
+      } else {
+        await git(root, "branch", "-D", "main");
+      }
+      // A lexically earlier, healthy fork must never take over the Dev default.
+      const other = path.join(directory, "other");
+      await git(directory, "clone", "--quiet", remote, other);
+      await git(other, "reset", "--hard", beforeSha);
+      await git(root, "remote", "add", "aaa-fork", other);
+      if (mode === "missing-origin") {
+        await git(root, "remote", "remove", "origin");
+        await git(root, "remote", "add", "another-fork", remote);
+      }
+      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const result = await update();
+      if (mode === "missing-origin") {
+        expect(result.status).not.toBe("ok");
+        expect(stopped).toBe(false);
+        expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+        expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+        await expectRuntime(root, beforeSha);
+      } else {
+        expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+        await expectRuntime(root, target);
+      }
+    },
+  );
+
+  it.each([
+    ["refs/heads/main", "refs/status/main", "refs/status/main"],
+    ["main", "refs/status/main", "refs/status/main"],
+    ["HEAD", "refs/status/main", "refs/status/main"],
+    ["", "refs/status/main", "refs/status/main"],
+    ["refs/heads/main", "remotes/team/fork/main", "refs/remotes/team/fork/main"],
+    ["refs/heads/main", "heads/saved", "refs/heads/saved"],
+    ["refs/heads/main", "tags/saved", "refs/tags/saved"],
+    ["refs/heads/main", "saved", "refs/heads/saved"],
+    ["refs/heads/*", "refs/remotes/team/fork/*", "refs/remotes/team/fork/release-$&"],
+  ])(
+    "keeps a pinned custom tracking target on its configured source (%s -> %s)",
+    async (sourceRef, destination, trackingRef) => {
+      const target = await advanceRemote();
+      if (sourceRef.includes("*")) {
+        await git(remote, "branch", trackingRef.slice(trackingRef.lastIndexOf("/") + 1), target);
+      }
+      await git(root, "remote", "rename", "origin", "team/fork");
+      await git(root, "config", "remote.team/fork.fetch", "+" + sourceRef + ":" + destination);
+      await git(root, "update-ref", "-d", "refs/remotes/team/fork/main");
+      await git(root, "checkout", "--detach", beforeSha);
+      await git(root, "branch", "-D", "main");
+      const other = path.join(directory, "other");
+      await git(directory, "clone", "--quiet", remote, other);
+      await git(other, "reset", "--hard", beforeSha);
+      await git(root, "remote", "add", "origin", other);
+      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const result = await update({
+        devTarget: { mode: "tracked", upstreamRef: trackingRef, upstreamSha: target },
+      });
+      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+      expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+      await expectRuntime(root, target);
+    },
+  );
+
   it("fails before activation when the authoritative remote is unavailable", async () => {
     await advanceRemote();
     await git(root, "remote", "add", "secondary", remote);
@@ -133,39 +204,6 @@ describe("Git checkout execution", () => {
     expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
     await expectRuntime(root, beforeSha);
   });
-
-  it.each(["exit", "timeout-zero", "output-limit-zero"] as const)(
-    "ignores stale refs after optional fetch %s failure",
-    async (failure) => {
-      const target = await advanceRemote();
-      await git(root, "remote", "add", "adead", path.join(directory, "unavailable"));
-      await git(root, "update-ref", "refs/remotes/adead/main", beforeSha);
-      await git(root, "checkout", "-b", "feature");
-      await git(root, "branch", "-D", "main");
-      const execute = runCommand;
-      if (failure !== "exit") {
-        runCommand = (argv, options) =>
-          argv.includes("fetch") && argv.includes("adead")
-            ? Promise.resolve({
-                code: 0,
-                stdout: "",
-                stderr: "remote transport incomplete",
-                ...(failure === "output-limit-zero"
-                  ? { outputLimitExceeded: true }
-                  : { killed: true, termination: "timeout" as const }),
-              })
-            : execute(argv, options);
-      }
-      const result = await update();
-      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
-      expect(result.steps.find((step) => step.name.endsWith(":adead"))?.advisory).toMatchObject({
-        kind: "recoverable-maintenance",
-        message: expect.stringContaining("Could not refresh optional target remote adead"),
-      });
-      expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
-      await expectRuntime(root, target);
-    },
-  );
 
   it.each(["exit", "signal", "timeout-zero", "output-limit-zero"] as const)(
     "settles optional tag discovery after %s",

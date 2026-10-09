@@ -23,10 +23,6 @@ export async function resolveStartupInstallStatus(
     }),
     readVerifiedGitUpdateReceipt(),
   ]);
-  const gitUpstreamFallback =
-    installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
-      ? { currentSha: installReceipt.sha, upstreamRef: installReceipt.upstreamRef }
-      : undefined;
   const timeoutMs = resolveGatewayStartupTiming().deadlineMs;
   const options = {
     root,
@@ -34,8 +30,9 @@ export async function resolveStartupInstallStatus(
     ...(fetchRemoteGit ? {} : { timeoutMs }),
     fetchGit: fetchRemoteGit,
     includeRegistry: false,
-    ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
-    ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
+    ...(installReceipt ? { gitSourceHint: installReceipt } : {}),
+    // Read-only admission must use the same live source policy as a remote refresh.
+    useDetachedDevUpstream: true,
   };
   for (let attempt = 0; ; attempt++) {
     let status: UpdateCheckResult | undefined;

@@ -1,6 +1,32 @@
 import Foundation
 
 extension GatewayProcessManager {
+    func canonicalUpdateResult(
+        for receipt: PostAppUpdateReceipt?,
+        generation: UInt64) -> CLIInstaller.CanonicalUpdateResult?
+    {
+        guard !self.isTerminating, generation == self.gatewayStartGeneration,
+              let receipt, receipt.coreUpdate == .legacyCanonical,
+              let stage = self.canonicalUpdateStage, stage.generation == generation,
+              stage.result.receipt.fromVersion == receipt.fromVersion,
+              stage.result.receipt.toVersion == receipt.toVersion,
+              stage.result.receipt.recordedAt == receipt.recordedAt,
+              stage.result.receipt.runtimeBuildID == receipt.runtimeBuildID
+        else { return nil }
+        // This operation's observed stage result is not runtime write authority.
+        // Start/stop generations, termination, and completed PostUpdate retire it.
+        return stage.result
+    }
+
+    func recordCanonicalUpdate(_ result: CLIInstaller.CanonicalUpdateResult, generation: UInt64) {
+        guard !self.isTerminating, generation == self.gatewayStartGeneration else { return }
+        self.canonicalUpdateStage = (generation, result)
+        if case let .superseded(receipt, version, compatible) = result {
+            self.appendLog("[gateway] canonical recovery for \(receipt.toVersion) superseded by \(version) " +
+                "(compatible: \(compatible)); package and CLI recovery state preserved.\n")
+        }
+    }
+
     struct BundledRuntimeUpdateResult {
         let activation: CLIInstaller.LocalGatewayActivation
         let generation: UInt64
@@ -34,7 +60,6 @@ extension GatewayProcessManager {
               self.isCurrentGatewayStart(generation)
         else { return }
         self.nodeMigrationAttempted = true
-        self.nodeMigrationNeedsCoreRepair = false
         do {
             guard let candidate = try await ManagedNodeGatewayMigration.candidate(
                 onboardingSeen: AppStateStore.shared.onboardingSeen,
@@ -73,8 +98,7 @@ extension GatewayProcessManager {
     private func recordNodeMigrationFailure(_ message: String) {
         self.nodeMigrationFailure = message
         guard let version = GatewayEnvironment.appVersionString() else { return }
-        let receipt = PostAppUpdateReceiptStore.pendingSetupRecovery() ??
-            PostAppUpdateReceiptStore.pending(currentVersion: version) ??
+        let receipt = PostAppUpdateReceiptStore.pending(currentVersion: version) ??
             PostAppUpdateReceipt(fromVersion: version, toVersion: version, recordedAt: Date())
         // Publish pending runtime work before startup drain waiters can resume notifications.
         PostAppUpdateReceiptStore.recordMigrationFailure(receipt: receipt)
@@ -84,7 +108,6 @@ extension GatewayProcessManager {
         _ candidate: ManagedNodeGatewayMigration.Candidate,
         generation: UInt64) async -> LaunchAgentEnableResult
     {
-        self.nodeMigrationNeedsCoreRepair = false
         do {
             guard let targetVersion = GatewayEnvironment.appVersionString() else {
                 throw GatewayHostingError(message: "The bundled Gateway version could not be read.")
@@ -117,23 +140,18 @@ extension GatewayProcessManager {
                     self.retainedServiceCLI = current.cli
                     self.storeHosting(.service)
                 },
+                canonicalUpdateCompleted: { self.recordCanonicalUpdate($0, generation: generation) },
                 statusHandler: { self.appendLog("[gateway] \($0)\n") })
+            let pending = PostAppUpdateReceiptStore.pending(currentVersion: targetVersion)
             let outcome = try await ManagedNodeGatewayMigration.run(
                 candidate: candidate,
                 targetVersion: targetVersion,
-                pendingSetupRecovery: PostAppUpdateReceiptStore.pendingSetupRecovery() ??
-                    PostAppUpdateReceiptStore.pending(currentVersion: targetVersion),
+                pendingSetupRecovery: self.canonicalUpdateResult(for: pending, generation: generation)?.receipt ?? pending,
                 operations: operations)
             guard self.isCurrentGatewayStart(generation) else { throw CancellationError() }
             switch outcome {
-            case .coreRepairRequired:
-                self.nodeMigrationNeedsCoreRepair = true
-                if candidate.snapshot == nil {
-                    let failure = "The managed Node update needs repair before resuming the Gateway. " +
-                        "Use Retry in the update window."
-                    if self.isCurrentGatewayStart(generation) { self.recordNodeMigrationFailure(failure) }
-                    return .failed(failure)
-                }
+            case .preservedNewerRuntime:
+                return .skipped
             case .versionUpdated:
                 self.nodeMigrationVersionUpdated = true
             case .migrated:
@@ -196,7 +214,6 @@ extension GatewayProcessManager {
             }
             self.nodeMigrationAttempted = true
             self.nodeMigrationFailure = nil
-            self.nodeMigrationNeedsCoreRepair = false
             self.nodeMigrationVersionUpdated = false
             self.nodeMigrationCompleted = false
             self.gatewayStartGeneration &+= 1
@@ -225,7 +242,6 @@ extension GatewayProcessManager {
         }
         self.nodeMigrationAttempted = false
         self.nodeMigrationFailure = nil
-        self.nodeMigrationNeedsCoreRepair = false
         self.nodeMigrationVersionUpdated = false
         self.nodeMigrationCompleted = false
         self.status = .stopped
@@ -380,6 +396,7 @@ extension GatewayProcessManager {
 
     func shutdownAppHostedGateway() async {
         self.isTerminating = true
+        self.canonicalUpdateStage = nil
         _ = try? await self.hostingChangeTask?.value
         // Already-admitted service writes and a pending pause settle before app exit.
         // Quitting otherwise leaves the always-on service alone.

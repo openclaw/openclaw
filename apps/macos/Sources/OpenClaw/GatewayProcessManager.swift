@@ -53,9 +53,9 @@ final class GatewayProcessManager {
     private(set) var existingGatewayDetails: String?
     var lastFailureReason: String?
     var nodeMigrationFailure: String?
-    var nodeMigrationNeedsCoreRepair = false
     var nodeMigrationVersionUpdated = false
     var nodeMigrationCompleted = false
+    @ObservationIgnored var canonicalUpdateStage: (generation: UInt64, result: CLIInstaller.CanonicalUpdateResult)?
     var nodeMigrationAttempted = false
     var retainedServiceCLI: GatewayLaunchAgentManager.InstalledServiceCLI? {
         didSet {
@@ -91,9 +91,8 @@ final class GatewayProcessManager {
     }
 
     var gatewayOperationShutdownTimeout: TimeInterval {
-        if let candidate = self.launchAgentEnableCurrentRequest?.nodeMigration {
-            return ManagedNodeGatewayMigration.shutdownTimeout(
-                candidate: candidate, targetVersion: GatewayEnvironment.appVersionString())
+        if self.launchAgentEnableCurrentRequest?.nodeMigration != nil {
+            return ManagedNodeGatewayMigration.shutdownTimeout
         }
         guard self.hostingChangeTask != nil || self.bundledUpdateTask != nil ||
             self.launchAgentEnableTask != nil || self.launchAgentDisableTask != nil
@@ -155,7 +154,9 @@ final class GatewayProcessManager {
     private var lastObservedGatewayPID: Int32?
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
-    var gatewayStartGeneration: UInt64 = 0
+    var gatewayStartGeneration: UInt64 = 0 {
+        didSet { self.canonicalUpdateStage = nil }
+    }
     var gatewayStartTask: Task<Void, Never>?
     private var gatewayStartTaskGeneration: UInt64?
     private var gatewayStartTaskID: UUID?
@@ -401,17 +402,6 @@ final class GatewayProcessManager {
         if let failure = self.nodeMigrationFailure {
             return .failed(failure)
         }
-        let pendingCoreWork = PostAppUpdateReceiptStore.pendingSetupRecovery() ??
-            PostAppUpdateReceiptStore.pending(currentVersion: GatewayEnvironment.appVersionString())
-        let retainsManagedNode = self.retainedServiceCLI?.prefix.first.map {
-            GatewayLaunchAgentManager.isManagedNode($0, stateDirectory: AppProfile.current.stateDirectoryURL())
-        } == true
-        if pendingCoreWork?.setupRecovery == true || retainsManagedNode,
-           ManagedNodeGatewayMigration.requiresCoreRepair(receipt: pendingCoreWork)
-        {
-            return .failed("The managed Node update needs repair before resuming the Gateway. " +
-                "Use Retry in the update window.")
-        }
         // App startup and onboarding can request persistence together. One drain owns all installs;
         // a second forced install would kill the first Gateway during startup migrations.
         let launchAgent: GatewayLaunchAgentManager.LoadedGatewayState?
@@ -621,7 +611,6 @@ final class GatewayProcessManager {
         }
         let hosting = self.gatewayHosting
         self.nodeMigrationFailure = nil
-        self.nodeMigrationNeedsCoreRepair = false
         self.nodeMigrationAttempted = false
         if !preservingActivationIntent { self.desiredActive = false }
         self.existingGatewayDetails = nil

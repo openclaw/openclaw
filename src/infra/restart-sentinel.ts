@@ -368,13 +368,26 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
     : null;
   const actualRoot = discoveredRoot ? resolveUpdateInstallRoot(discoveredRoot) : null;
 
-  return runRestartSentinelOperation(
+  const finalized = await runRestartSentinelOperation(
     {
       type: "restartSentinel.finalize",
       input: { expectedRevision: snapshot.revision, version, commit, expectedRoot, actualRoot },
     },
     context,
   );
+  if (finalized.installReceipt) {
+    try {
+      // History is optional; a fresh admitted write cannot undo the committed
+      // outcome, and its revision fence preserves any newer update.
+      await runRestartSentinelOperation(
+        { type: "restartSentinel.recordInstall", input: finalized.installReceipt },
+        context,
+      );
+    } catch (error) {
+      sentinelLog.warn(`Failed to record update install history: ${formatErrorMessage(error)}`);
+    }
+  }
+  return finalized.sentinel;
 }
 
 export async function markUpdateRestartSentinelFailure(

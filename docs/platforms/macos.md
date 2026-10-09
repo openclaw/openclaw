@@ -163,8 +163,21 @@ A failed coordinated update stays in its setup-style window with retry,
 [update guide](/install/updating), and Discord actions. Automatic repair never
 downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 
+Onboarded, update-enabled launches also check the app-owned runtime when the
+post-update receipt is missing, stale, or unreadable. Current runtime ownership
+and version determine the work; receipts preserve interrupted progress and
+notification deduplication. Pending welcome notifications wait for current
+runtime verification. Same-version reconciliation without an app-update receipt
+does not send another welcome.
+
+An interrupted update from an older Mac app may refer to its managed CLI package,
+not the currently selected Gateway or node service. The app verifies ownership
+and repairs that package before reconciling the selected runtime. A newer
+package is preserved without downgrading it; any separately needed service
+update still records its own recovery progress.
+
 After a successful update, the app finds the most recently human-used,
-top-level direct session and gives that agent a one-time update event. Heartbeat
+top-level direct webchat session and gives that agent a one-time update event. Heartbeat
 and cron activity do not affect this choice. The agent can then welcome you back
 from the conversation you were most likely using. In remote mode, a separately
 installed, app-managed node service retains its own runtime update and recovery

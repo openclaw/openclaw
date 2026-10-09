@@ -20,6 +20,11 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
+import {
+  readGitRefFetchTarget,
+  readGitUpdateFetchTarget,
+  type GitFetchTarget,
+} from "./update-git-metadata.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
@@ -403,12 +408,19 @@ export async function fetchGitUpdateTarget(params: {
   step: (name: string, argv: string[], cwd: string) => RunStepOptions;
   workStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
   steps: UpdateStepResult[];
-}): Promise<{ ok: boolean; refreshedRemotes: string[]; releaseRemote?: string }> {
+}): Promise<{
+  ok: boolean;
+  refreshedRemotes: string[];
+  releaseRemote?: string;
+  reason?: "tracked-upstream-invalid";
+  devSource?: GitFetchTarget & { revision?: string };
+}> {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
   const step = createGitStepFactory(root, targetStep);
   const work = createGitStepFactory(root, workStep);
   const refreshedRemotes: string[] = [];
-  const result = (ok: boolean) => ({ ok, refreshedRemotes });
+  let devSource: (GitFetchTarget & { revision?: string }) | null = null;
+  const result = (ok: boolean) => ({ ok, refreshedRemotes, ...(devSource ? { devSource } : {}) });
   if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
     // A pinned commit needs no remote freshness. Probe privately without allowing
     // promised-object hydration; the normal candidate/transfer owners still verify its contents.
@@ -475,21 +487,26 @@ export async function fetchGitUpdateTarget(params: {
         : remotes.length === 1
           ? remotes[0]
           : undefined;
-  // A configured tracking remote is authoritative even when its refs are cold.
-  // Unqualified explicit branches use origin; explicit tags resolve separately.
+  const readGit = async (...args: string[]) => {
+    const probe = await runStep(step("git-config-update-upstream", ...args));
+    return !isFailedUpdateStep(probe) ? (probe.stdoutTail?.trim() ?? "") : null;
+  };
+  devSource =
+    channel !== "dev" || devTarget?.mode === "detached"
+      ? null
+      : devTarget?.mode === "tracked"
+        ? await readGitRefFetchTarget(readGit, devTarget.upstreamRef, true)
+        : await readGitUpdateFetchTarget(readGit, DEV_BRANCH, true);
+  // Implicit Dev updates use the same live source as discovery. Only an explicit
+  // detached target may search for its requested object on other remotes.
   const authority =
     channel !== "dev"
       ? tagRemote
-      : devTarget
+      : devTarget?.mode === "detached"
         ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
-        : trackedRemote || undefined;
-  if (channel === "dev" && !devTarget && !authority) {
-    const main = await runStep(
-      step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
-    );
-    if (main.exitCode === 0) {
-      return result(true);
-    }
+        : devSource?.remote;
+  if (channel === "dev" && devTarget?.mode !== "detached" && !devSource) {
+    return devTarget ? { ...result(false), reason: "tracked-upstream-invalid" } : result(true);
   }
   const fetchRemotes = authority
     ? [authority]

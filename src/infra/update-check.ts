@@ -18,9 +18,10 @@ import {
 } from "./update-channels.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
-  readGitReceiptFetchTarget,
-  readGitBranchFetchTarget,
+  readGitUpdateFetchTarget,
+  resolveGitUpdateTrackingRef,
   resolveGitRepositoryMetadata,
+  type GitUpdateSourceHint,
 } from "./update-git-metadata.js";
 import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
@@ -344,7 +345,7 @@ async function checkGitUpdateStatus(params: {
   onGitProbeTimeout?: GitUpdateOptions["onGitProbeTimeout"];
   fetch?: boolean;
   useDetachedDevUpstream?: boolean;
-  upstreamFallback?: { currentSha: string; upstreamRef: string };
+  gitSourceHint?: GitUpdateSourceHint | null;
 }): Promise<GitUpdateStatus> {
   const timeoutMs = params.timeoutMs ?? (params.fetch ? UPDATE_NETWORK_TIMEOUT_MS : 6000);
   const root = path.resolve(params.root);
@@ -356,7 +357,7 @@ async function checkGitUpdateStatus(params: {
     });
   const readGit = async (...args: string[]) => {
     const result = await runGit(...args);
-    return result?.code === 0 ? result.stdout.trim() || null : null;
+    return result?.code === 0 ? result.stdout.trim() : null;
   };
 
   const base: GitUpdateStatus = {
@@ -382,34 +383,28 @@ async function checkGitUpdateStatus(params: {
     return { ...base, error };
   }
   const trackingBranch =
-    branch === "HEAD" ? (params.useDetachedDevUpstream ? DEV_BRANCH : null) : branch;
-  let tracking = trackingBranch ? await readGitBranchFetchTarget(readGit, trackingBranch) : null;
+    branch === "HEAD"
+      ? params.useDetachedDevUpstream || params.gitSourceHint?.upstreamRef
+        ? DEV_BRANCH
+        : null
+      : branch;
+  const fetchTarget = trackingBranch
+    ? await readGitUpdateFetchTarget(
+        readGit,
+        trackingBranch,
+        branch === "HEAD" && Boolean(params.useDetachedDevUpstream),
+        {
+          root,
+          sha,
+          receipt: params.gitSourceHint ?? null,
+          fetchRemote: Boolean(params.fetch),
+        },
+      )
+    : null;
 
   const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
 
-  const receiptUpstream =
-    !tracking &&
-    branch === "HEAD" &&
-    sha &&
-    params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
-      ? params.upstreamFallback.upstreamRef.trim() || null
-      : null;
-  const receiptTarget = receiptUpstream
-    ? await readGitReceiptFetchTarget(readGit, receiptUpstream, Boolean(params.fetch))
-    : null;
-  // A matching receipt owns the intended upstream even when it cannot resolve.
-  // Only an install with neither configured tracking nor receipt intent uses Dev's default.
-  if (
-    !tracking &&
-    !receiptUpstream &&
-    branch === "HEAD" &&
-    trackingBranch &&
-    (await readGit("remote", "get-url", "--", "origin"))
-  ) {
-    tracking = { remote: "origin", mergeRef: `refs/heads/${trackingBranch}` };
-  }
-  const fetchTarget = tracking ?? receiptTarget;
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
   let fetchOk: boolean | null = null;
   let fetchedCommit: string | null = null;
@@ -440,29 +435,17 @@ async function checkGitUpdateStatus(params: {
       fetchOk = fetched?.code === 0 && fetchedCommit !== null;
     }
   }
-  // Command-local defaults let Git resolve a fresh SHA-only Dev checkout's own
-  // mapping after fetch, without creating a branch or changing its configuration.
   const trackingRevision =
-    tracking && trackingBranch
-      ? await readGit(
-          "-c",
-          `branch.${trackingBranch}.remote=${tracking.remote}`,
-          "-c",
-          `branch.${trackingBranch}.merge=${tracking.mergeRef}`,
-          "rev-parse",
-          "--symbolic-full-name",
-          `${trackingBranch}@{upstream}`,
-        )
+    fetchTarget && trackingBranch
+      ? await resolveGitUpdateTrackingRef(readGit, trackingBranch, fetchTarget)
       : null;
-  const upstream = trackingRevision
-    ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
-    : receiptUpstream;
-  const upstreamSource = trackingRevision
-    ? ("tracking" as const)
-    : receiptUpstream
-      ? ("receipt" as const)
-      : undefined;
-  const upstreamRevision = `${trackingRevision ?? receiptTarget?.revision ?? upstream}^{commit}`;
+  const upstream =
+    fetchTarget?.upstreamSource === "receipt"
+      ? params.gitSourceHint?.upstreamRef?.trim() || null
+      : trackingRevision
+        ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
+        : null;
+  const upstreamRevision = `${trackingRevision}^{commit}`;
   let upstreamCommit =
     (!params.fetch || fetchOk === true) && upstream && sha
       ? await readGit("rev-parse", "--verify", upstreamRevision)
@@ -506,7 +489,7 @@ async function checkGitUpdateStatus(params: {
     tag,
     branch,
     upstream,
-    ...(upstreamSource ? { upstreamSource } : {}),
+    ...(fetchTarget ? { upstreamSource: fetchTarget.upstreamSource } : {}),
     upstreamSha: upstreamCommit,
     ...(await resolveGitRepositoryMetadata(readGit, fetchTarget)),
     commitAtMs,
@@ -629,7 +612,7 @@ export async function checkUpdateStatus(params: {
   onGitProbeTimeout?: GitUpdateOptions["onGitProbeTimeout"];
   fetchGit?: boolean;
   useDetachedDevUpstream?: boolean;
-  gitUpstreamFallback?: { currentSha: string; upstreamRef: string };
+  gitSourceHint?: GitUpdateSourceHint | null;
   includeRegistry?: boolean;
   registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
@@ -736,7 +719,7 @@ export async function checkUpdateStatus(params: {
           onGitProbeTimeout: params.onGitProbeTimeout,
           fetch: Boolean(params.fetchGit),
           useDetachedDevUpstream: params.useDetachedDevUpstream,
-          upstreamFallback: params.gitUpstreamFallback,
+          gitSourceHint: params.gitSourceHint,
         })
       : Promise.resolve(undefined),
     checkDepsStatus({ root, manager: packageManager }),

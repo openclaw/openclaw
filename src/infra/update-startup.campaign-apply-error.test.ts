@@ -154,7 +154,6 @@ describe("update campaign apply exception boundary", () => {
         tag: null,
         branch: "main",
         upstream: "origin/main",
-        upstreamSource: "tracking",
         upstreamSha: "upstream-sha",
         commitAtMs: null,
         dirty: false,

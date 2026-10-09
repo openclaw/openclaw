@@ -819,6 +819,52 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("keeps the verified update outcome when optional install history cannot be written", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const root = process.cwd();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        continuation: { kind: "agentTurn", message: "Continue after the update." },
+        stats: {
+          mode: "git",
+          root,
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "bbbbbbbb", version: "expected-version" },
+        },
+      });
+      const { db } = openOpenClawStateDatabase();
+      db.exec(`
+        CREATE TRIGGER reject_install_history BEFORE INSERT ON gateway_restart_sentinel
+        WHEN NEW.sentinel_key = 'latest-update-install'
+        BEGIN SELECT RAISE(ABORT, 'fixture install history unavailable'); END;
+      `);
+      try {
+        const finalized = await finalizeUpdateRestartSentinelRunningVersion(
+          "actual-version",
+          process.env,
+          "bbbbbbbb",
+          root,
+        );
+        expect(finalized).toMatchObject({
+          payload: {
+            status: "ok",
+            continuation: { kind: "agentTurn", message: "Continue after the update." },
+            stats: { after: { version: "actual-version", sha: "bbbbbbbb" } },
+          },
+        });
+        await expect(readRestartSentinel()).resolves.toEqual(finalized);
+        await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+        expect(mockWarn).toHaveBeenCalledWith(
+          "Failed to record update install history: fixture install history unavailable",
+        );
+      } finally {
+        db.exec("DROP TRIGGER reject_install_history");
+      }
+    });
+  });
+
   it("does not advance install time when a successful Git run keeps the same revision", async () => {
     await withRestartSentinelStateDir(async () => {
       await writeRestartSentinel({

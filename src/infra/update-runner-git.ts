@@ -381,7 +381,7 @@ export async function updateGitCheckout(params: {
         steps,
       });
       if (!fetched.ok) {
-        return { status: "error" as const, reason: "fetch-failed" };
+        return { status: "error" as const, reason: fetched.reason ?? "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
         await prepareGitMutation({
@@ -404,6 +404,7 @@ export async function updateGitCheckout(params: {
         channel,
         devTarget,
         refreshedRemotes: fetched.refreshedRemotes,
+        devSource: fetched.devSource,
         beforeSha,
         beforeRuntimeVerified: recovery.serviceRestartSafe,
         sourceRuntimePrepared: opts.sourceRuntimePrepared,
@@ -457,9 +458,7 @@ export async function updateGitCheckout(params: {
         return selected;
       }
       if (!publishedCandidate) {
-        const upstreamRef = selected.selectedDevUpstream
-          ? `refs/remotes/${selected.selectedDevUpstream}`
-          : undefined;
+        const upstreamRef = selected.selectedDevUpstream ?? undefined;
         const imported = await importCandidate(selected.candidateSha, upstreamRef);
         if (imported.status !== "ok") {
           return imported;

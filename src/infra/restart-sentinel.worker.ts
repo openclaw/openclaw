@@ -12,6 +12,7 @@ import {
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
+  type RestartSentinel,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 import {
@@ -213,7 +214,7 @@ export const restartSentinelOperations = {
         current.sentinel.revision !== input.expectedRevision ||
         current.sentinel.payload.kind !== "update"
       ) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
 
       const payload = current.sentinel.payload;
@@ -266,15 +267,24 @@ export const restartSentinelOperations = {
         ? writeRestartSentinelRowIfRevisionSync(db, payload, current.sentinel.revision)
         : current.sentinel;
       if (!finalized) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
-      // This receipt records the install fact proven by the running process. Post-install
-      // failures such as managed-service-handoff-failed keep the sentinel in error without
-      // erasing the upstream fallback for campaign-managed detached installs (#121634).
-      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
-        writeUpdateInstallReceiptRowSync(db, payload);
+      return {
+        sentinel: changed ? finalized : null,
+        installReceipt:
+          stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall
+            ? finalized
+            : null,
+      };
+    },
+  ),
+  "restartSentinel.recordInstall": transaction(
+    "restart-sentinel.record-install",
+    (db, receipt: RestartSentinel) => {
+      const current = readRestartSentinelRowSync(db);
+      if (current.kind === "valid" && current.sentinel.revision === receipt.revision) {
+        writeUpdateInstallReceiptRowSync(db, receipt.payload);
       }
-      return changed ? finalized : null;
     },
   ),
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

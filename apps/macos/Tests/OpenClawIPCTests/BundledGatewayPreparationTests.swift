@@ -15,7 +15,8 @@ struct BundledGatewayPreparationTests {
             home: URL,
             inferredLegacy: Bool = false,
             stateDirectory: URL? = nil,
-            nodeService: Bool = false) throws
+            nodeService: Bool = false,
+            updatedVersion: String = "2026.9.1") throws
         {
             let state = stateDirectory ?? (inferredLegacy ? AppProfile.current.stateDirectoryURL(homeDirectory: home) :
                 AppProfile.current.stateDirectoryURL())
@@ -60,14 +61,14 @@ struct BundledGatewayPreparationTests {
             done
             printf '%s\n' "$*" >> "$OPENCLAW_PREPARATION_FIXTURE_ROOT/updates"
             if [ -f "$OPENCLAW_PREPARATION_FIXTURE_ROOT/advance" ]; then
-              printf '%s\n' '2026.9.1' > "$OPENCLAW_PREPARATION_FIXTURE_ROOT/version"
+              printf '%s\n' '\(updatedVersion)' > "$OPENCLAW_PREPARATION_FIXTURE_ROOT/version"
             fi
             if [ -f "$OPENCLAW_PREPARATION_FIXTURE_ROOT/fail" ]; then
               printf '%s\n' '{"status":"error","reason":"fixture offline"}'
               exit 1
             fi
-            printf '%s\n' '2026.9.1' > "$OPENCLAW_PREPARATION_FIXTURE_ROOT/version"
-            printf '%s\n' '{"status":"ok","before":{"version":"2026.8.1"},"after":{"version":"2026.9.1"}}'
+            printf '%s\n' '\(updatedVersion)' > "$OPENCLAW_PREPARATION_FIXTURE_ROOT/version"
+            printf '%s\n' '{"status":"ok","before":{"version":"2026.8.1"},"after":{"version":"\(updatedVersion)"}}'
             """.write(to: node, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
             try PropertyListSerialization.data(
@@ -83,6 +84,99 @@ struct BundledGatewayPreparationTests {
         func remove() {
             try? FileManager.default.removeItem(at: self.root)
             try? FileManager.default.removeItem(at: self.nodeRoot)
+        }
+    }
+
+    @Test(arguments: ["dispatch", "migration-failure", "incomplete", "setup"], [false, true])
+    func `silent recovery transforms the new checkpoint without changing its CAS expectation`(
+        operation: String, foreign: Bool) throws
+    {
+        let name = "checkpoint-transition-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let expected = PostAppUpdateReceipt(
+            fromVersion: "2026.9.8", toVersion: "2026.9.9", recordedAt: .distantPast)
+        let other = PostAppUpdateReceipt(
+            fromVersion: "2026.9.9", toVersion: "2026.9.10", recordedAt: .distantFuture,
+            gatewayUpdateIncomplete: true, coreUpdate: .gateway)
+        let bytes = try JSONEncoder().encode(foreign ? other : expected)
+        defaults.set(bytes, forKey: postAppUpdateReceiptKey)
+        let updated: PostAppUpdateReceipt
+        switch operation {
+        case "setup":
+            updated = PostAppUpdateReceiptStore.recordSetupRecovery(
+                fromVersion: expected.fromVersion, toVersion: expected.toVersion, setupRecovery: true,
+                defaults: defaults, now: expected.recordedAt)
+        case "dispatch":
+            updated = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+                receipt: expected, owner: .node, setupRecovery: true, defaults: defaults)
+            #expect(updated.coreUpdate == .node)
+        case "migration-failure":
+            updated = PostAppUpdateReceiptStore.recordMigrationFailure(
+                receipt: expected, setupRecovery: true, defaults: defaults)
+        default:
+            updated = PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(
+                true, receipt: expected, setupRecovery: true, defaults: defaults)
+        }
+        #expect(updated.setupRecovery)
+        if foreign {
+            #expect(defaults.data(forKey: postAppUpdateReceiptKey) == bytes)
+        } else {
+            #expect(PostAppUpdateReceiptStore.pending(currentVersion: expected.toVersion, defaults: defaults) == updated)
+        }
+    }
+
+    @Test(arguments: ["future-setup", "other-owner"], [false, true])
+    func `foreign checkpoints never veto an update but changed live service authority does`(
+        storedProgress: String, replaceService: Bool) async throws
+    {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent("openclaw.json")
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: config)
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            env: ["OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [cliInstallPolicyKey: "exact", postAppUpdateReceiptKey: nil])
+        {
+            let fixture = try Fixture(home: home)
+            defer { fixture.remove() }
+            let cli = try #require(GatewayLaunchAgentManager.installedServiceCLI())
+            let foreign = PostAppUpdateReceipt(
+                fromVersion: "2026.8.1",
+                toVersion: storedProgress == "future-setup" ? "2026.9.2" : "2026.9.1",
+                recordedAt: .distantPast, gatewayUpdateIncomplete: true, coreUpdate: .node,
+                setupRecovery: storedProgress == "future-setup")
+            let bytes = try JSONEncoder().encode(foreign)
+            AppDefaults.standard.set(bytes, forKey: postAppUpdateReceiptKey)
+            var checkpoint = PostAppUpdateReceipt(
+                fromVersion: "2026.8.1", toVersion: "2026.9.1", recordedAt: Date())
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: "2026.9.1", restartGateway: false, installedCLI: cli,
+                onDispatch: {
+                    checkpoint = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+                        receipt: checkpoint, owner: .gateway)
+                    if replaceService { try Data("operator replacement".utf8).write(to: fixture.plist) }
+                }, statusHandler: { _ in })
+            if replaceService {
+                guard case .failure = outcome else {
+                    Issue.record("Changed live service authority must still prevent dispatch")
+                    return
+                }
+                #expect(try Data(contentsOf: fixture.plist) == Data("operator replacement".utf8))
+            } else {
+                #expect(outcome == .success(fromVersion: "2026.8.1", toVersion: "2026.9.1"))
+                checkpoint = PostAppUpdateReceiptStore.completeCoreRepair(receipt: checkpoint, owner: .gateway)
+                #expect(!checkpoint.coreUpdatePending)
+                checkpoint = PostAppUpdateReceiptStore.completeRuntimeVerification(receipt: checkpoint)
+                #expect(!checkpoint.gatewayUpdateIncomplete)
+                #expect(PostAppUpdateReceiptStore.setNotificationInFlight(true, receipt: checkpoint) == nil)
+                #expect(PostAppUpdateReceiptStore.finishNotification(receipt: checkpoint, retry: false) == .complete)
+                PostAppUpdateReceiptStore.clear(receipt: checkpoint)
+            }
+            #expect(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("updates").path) ==
+                !replaceService)
+            #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == bytes)
         }
     }
 
@@ -123,7 +217,7 @@ struct BundledGatewayPreparationTests {
                 let failed = await CLIInstaller.updateManaged(
                     targetVersion: target, restartGateway: false, installedCLI: cli,
                     onDispatch: {
-                        try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: notice, owner: owner)
+                        PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: notice, owner: owner)
                     },
                     statusHandler: { _ in })
                 guard case .failure = failed else { Issue.record("Expected interrupted core update")
@@ -137,7 +231,7 @@ struct BundledGatewayPreparationTests {
                 try #require(PostAppUpdateReceiptStore.pending(currentVersion: target))
             }
             #expect(!PostUpdateController.shouldRepairNodeMigration(
-                receipt: pending, migrationNeedsCoreRepair: false, migrationFailed: false))
+                receipt: pending, migrationFailed: false))
             let resolution = await PostUpdateController.resolveGatewayAction(
                 context: .init(
                     connectionMode: repairMode, bundledApp: true, usesSeededGateway: false,
@@ -152,11 +246,13 @@ struct BundledGatewayPreparationTests {
             let repaired = await CLIInstaller.updateManaged(
                 targetVersion: target, restartGateway: restart,
                 repair: resolution.action == .repair, installedCLI: resolution.installedCLI,
-                onDispatch: { try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: pending, owner: owner) },
+                onDispatch: { PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: pending, owner: owner) },
                 statusHandler: { _ in })
             #expect(repaired == .success(fromVersion: "2026.8.1", toVersion: target))
-            let completed = try #require(PostAppUpdateReceiptStore.completeCoreRepair(
-                currentVersion: target, owner: owner))
+            let completed = PostAppUpdateReceiptStore.completeCoreRepair(
+                receipt: try #require(PostAppUpdateReceiptStore.pending(
+                    currentVersion: target)),
+                owner: owner)
             let reroute = resolution.shouldResolveCurrentMode(after: pending.coreUpdate, currentMode: selectedMode)
             #expect(reroute == (scenario != "gateway-stays-local"))
             let commands = try String(contentsOf: fixture.root.appendingPathComponent("updates"), encoding: .utf8)
@@ -164,7 +260,7 @@ struct BundledGatewayPreparationTests {
             #expect(commands.last?.contains("--no-restart") == (scenario != "gateway-stays-local"))
             guard reroute else {
                 #expect(PostUpdateController.shouldRepairNodeMigration(
-                    receipt: pending, migrationNeedsCoreRepair: true, migrationFailed: false) == !fresh)
+                    receipt: pending, migrationFailed: true) == !fresh)
                 return
             }
             let selectedFixture = selectedMode == .local ? local : node
@@ -230,12 +326,15 @@ struct BundledGatewayPreparationTests {
                 let outcome = await CLIInstaller.updateManaged(
                     targetVersion: target, restartGateway: false, installedCLI: cli,
                     onDispatch: {
-                        try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: receipt, owner: .node)
+                        PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: receipt, owner: .node)
                     },
                     statusHandler: { _ in })
                 if scenario == "success" {
                     #expect(outcome == .success(fromVersion: "2026.8.1", toVersion: target))
-                    PostAppUpdateReceiptStore.completeCoreRepair(currentVersion: target, owner: .node)
+                    PostAppUpdateReceiptStore.completeCoreRepair(
+                        receipt: try #require(PostAppUpdateReceiptStore.pending(
+                            currentVersion: target)),
+                        owner: .node)
                 } else {
                     guard case .failure = outcome else { Issue.record("Expected core failure after version advance")
                         return
@@ -246,26 +345,26 @@ struct BundledGatewayPreparationTests {
                 currentVersion: target, onboardingSeen: true))
             if scenario == "foreign" {
                 #expect(PostAppUpdateReceiptStore.completeCoreRepair(
-                    currentVersion: target, owner: .gateway)?.coreUpdate == .node)
+                    receipt: try #require(PostAppUpdateReceiptStore.pending(
+                        currentVersion: target)),
+                    owner: .gateway).coreUpdate == .node)
                 let stale = PostAppUpdateReceipt(
                     fromVersion: "2026.8.1", toVersion: target, recordedAt: .distantPast)
-                #expect(throws: GatewayHostingError.self) {
-                    try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: stale, owner: .gateway)
-                }
+                let foreignBytes = AppDefaults.standard.data(forKey: postAppUpdateReceiptKey)
+                let independent = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: stale, owner: .gateway)
+                #expect(independent.coreUpdate == .gateway)
                 #expect(PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(
-                    true, receipt: stale).coreUpdate == .node)
-                #expect(PostAppUpdateReceiptStore.recordNotificationFailure(receipt: stale).coreUpdate == .node)
+                    true, receipt: stale).coreUpdate == .complete)
+                #expect(PostAppUpdateReceiptStore.recordNotificationFailure(receipt: stale).coreUpdate == .complete)
                 let notification = PostAppUpdateReceiptStore.setNotificationInFlight(true, receipt: stale)
                 #expect(notification == nil)
                 #expect(PostAppUpdateReceiptStore.pending(currentVersion: target)?.coreUpdate == .node)
-                #expect(PostAppUpdateReceiptStore.pending(currentVersion: target)?.notificationAttempts == 1)
+                #expect(PostAppUpdateReceiptStore.pending(currentVersion: target)?.notificationAttempts == 0)
                 #expect(!PostUpdateController.shouldRepairNodeMigration(
-                    receipt: reloaded, migrationNeedsCoreRepair: true, migrationFailed: false))
-                do {
-                    _ = try await CLIInstaller.prepareBundledGateway(
-                        targetVersion: target, restartGateway: false, statusHandler: { _ in })
-                    Issue.record("Local repair must not replace pending node core work")
-                } catch {}
+                    receipt: reloaded, migrationFailed: true))
+                _ = try await CLIInstaller.prepareBundledGateway(
+                    targetVersion: target, restartGateway: false, statusHandler: { _ in })
+                #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == foreignBytes)
                 #expect(PostAppUpdateReceiptStore.pending(currentVersion: target)?.coreUpdatePending == true)
                 #expect(!FileManager.default.fileExists(atPath: local.root.appendingPathComponent("updates").path))
                 return
@@ -284,20 +383,15 @@ struct BundledGatewayPreparationTests {
                 return await CLIInstaller.managedStatus(
                     expectedVersion: target, installedCLI: cli, usesBundledRuntime: false)
             }
-            let expected: PostUpdateGatewayAction = scenario == "legacy" ? .ownershipFailure :
-                (scenario == "success" ? .verify : .repair)
+            let expected: PostUpdateGatewayAction = scenario == "success" ? .verify : .repair
             #expect(resolution.action == expected)
-            if scenario == "legacy" {
-                #expect(!probed)
-                #expect(resolution.installedCLI == nil)
-            } else {
-                #expect(resolution.installedCLI?.prefix == cli.prefix)
-            }
+            #expect(probed)
+            #expect(resolution.installedCLI?.prefix == cli.prefix)
             #expect(PostAppUpdateReceiptStore.pending(currentVersion: target) == reloaded)
         }
     }
 
-    @Test(arguments: ["core-failure", "core-success", "equal-version", "runtime-failure"])
+    @Test(arguments: ["core-failure", "core-success", "equal-version", "runtime-failure", "superseded", "superseded-cached"])
     func `registered migration receipt keeps unfinished core work ahead of Bun`(_ scenario: String) async throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -325,7 +419,8 @@ struct BundledGatewayPreparationTests {
                 let fixture = try Fixture(home: home)
                 defer { fixture.remove() }
                 let target = "2026.9.1"
-                let versionUpdate = scenario.hasPrefix("core-")
+                let silentStartup = scenario.hasPrefix("superseded")
+                let versionUpdate = scenario.hasPrefix("core-") || silentStartup
                 if !versionUpdate {
                     try "\(target)\n".write(
                         to: fixture.root.appendingPathComponent("version"),
@@ -337,6 +432,11 @@ struct BundledGatewayPreparationTests {
                     try Data().write(to: fixture.root.appendingPathComponent("fail"))
                 }
                 PostAppUpdateReceiptStore.record(fromVersion: "2026.8.1", toVersion: target)
+                if silentStartup {
+                    PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+                        receipt: try #require(PostAppUpdateReceiptStore.pending(currentVersion: target)),
+                        owner: .legacyCanonical)
+                }
                 let cli = try #require(GatewayLaunchAgentManager.installedServiceCLI())
                 let candidate = try #require(try await ManagedNodeGatewayMigration.candidate(
                     onboardingSeen: true, installPolicy: "exact", retainedCLI: cli, allowNamedServiceRetry: true))
@@ -354,6 +454,12 @@ struct BundledGatewayPreparationTests {
                     },
                     setServiceHosting: { _ in runtimeActions.append("service") },
                     statusHandler: { _ in })
+                var canonicalCalls = 0
+                operations.repairCanonicalUpdate = { receipt in
+                    #expect(silentStartup)
+                    canonicalCalls += 1
+                    return .superseded(receipt, installedVersion: "2026.9.2", compatible: true)
+                }
                 operations.seed = { _ in
                     runtimeActions.append("seed")
                     return BundledRuntime(root: home.appendingPathComponent("unlaunched-runtime"))
@@ -364,11 +470,14 @@ struct BundledGatewayPreparationTests {
                     runtimeActions.append("node")
                 }
                 do {
+                    let checkpoint = try #require(PostAppUpdateReceiptStore.pending(currentVersion: target))
+                    let progress = scenario == "superseded-cached"
+                        ? CLIInstaller.CanonicalUpdateResult.superseded(
+                            checkpoint, installedVersion: "2026.9.2", compatible: true).receipt : checkpoint
                     let result = try await ManagedNodeGatewayMigration.run(
                         candidate: candidate, targetVersion: target,
-                        pendingSetupRecovery: PostAppUpdateReceiptStore.pending(currentVersion: target),
-                        operations: operations)
-                    if scenario == "core-success" {
+                        pendingSetupRecovery: progress, operations: operations)
+                    if scenario == "core-success" || silentStartup {
                         guard case .versionUpdated = result else { Issue.record("Registered update must stop on Node")
                             return
                         }
@@ -393,6 +502,21 @@ struct BundledGatewayPreparationTests {
                     encoding: .utf8))?
                     .split(separator: "\n") ?? []
                 #expect(updates.count == (versionUpdate ? 1 : 0))
+                if silentStartup {
+                    #expect(canonicalCalls == (scenario == "superseded-cached" ? 0 : 1))
+                    let saved = try #require(PostAppUpdateReceiptStore.pending(currentVersion: target))
+                    #expect(saved.setupRecovery)
+                    #expect(!saved.coreUpdatePending)
+                    #expect(saved.hasPendingRuntimeMigration)
+                    #expect(PostUpdateController.notificationContinuation(
+                        receipt: saved, runtimeVerification: .deferred, migrationOnlyLaunchCheck: false) == .waitForRuntime)
+                    let verified = PostAppUpdateReceiptStore.completeRuntimeVerification(receipt: saved)
+                    #expect(PostUpdateController.notificationContinuation(
+                        receipt: verified, runtimeVerification: .verified, migrationOnlyLaunchCheck: false) == .completeSilently)
+                    PostAppUpdateReceiptStore.clear(receipt: verified)
+                    #expect(PostAppUpdateReceiptStore.pending(currentVersion: target) == nil)
+                    return
+                }
                 if scenario == "core-failure" { #expect(runtimeActions.isEmpty) }
                 if scenario == "runtime-failure" { #expect(runtimeActions.suffix(2) == ["node", "health"]) }
                 if scenario == "equal-version" { return }
@@ -401,33 +525,30 @@ struct BundledGatewayPreparationTests {
                     currentVersion: target, onboardingSeen: true))
                 #expect(!reloaded.setupRecovery)
                 #expect(reloaded.coreUpdatePending == (scenario == "core-failure"))
-                for deferredRepair in [false, true] {
-                    let repairingMigration = PostUpdateController.shouldRepairNodeMigration(
-                        receipt: reloaded, migrationNeedsCoreRepair: deferredRepair,
-                        migrationFailed: !deferredRepair)
-                    #expect(repairingMigration == (scenario == "core-failure"))
-                    let context = try PostUpdateController.captureRuntimeContext(
-                        connectionMode: .remote, bundledApp: true, usesSeededGateway: false,
-                        repairingNodeMigration: repairingMigration)
-                    let resolution = await PostUpdateController.resolveGatewayAction(
-                        context: context, receipt: reloaded)
-                    {
-                        await CLIInstaller.managedStatus(
-                            expectedVersion: target, installedCLI: context.installedCLI, usesBundledRuntime: false)
-                    }
-                    #expect(resolution.connectionMode == (repairingMigration ? .local : .remote))
-                    if repairingMigration {
-                        #expect(resolution.installedCLI?.prefix == cli.prefix)
-                        #expect(resolution.action == .repair)
-                    } else {
-                        // No Mac node service exists in this fixture; completed local core work returns to it.
-                        #expect(resolution.installedCLI == nil)
-                        #expect(resolution.action == .none)
-                    }
+                let repairingMigration = PostUpdateController.shouldRepairNodeMigration(
+                    receipt: reloaded,
+                    migrationFailed: scenario == "core-failure" || scenario == "runtime-failure")
+                #expect(repairingMigration == (scenario == "core-failure"))
+                let context = try PostUpdateController.captureRuntimeContext(
+                    connectionMode: .remote, bundledApp: true, usesSeededGateway: false,
+                    repairingNodeMigration: repairingMigration)
+                let resolution = await PostUpdateController.resolveGatewayAction(
+                    context: context, receipt: reloaded)
+                {
+                    await CLIInstaller.managedStatus(
+                        expectedVersion: target, installedCLI: context.installedCLI, usesBundledRuntime: false)
+                }
+                #expect(resolution.connectionMode == (repairingMigration ? .local : .remote))
+                if repairingMigration {
+                    #expect(resolution.installedCLI?.prefix == cli.prefix)
+                    #expect(resolution.action == .repair)
+                } else {
+                    // No Mac node service exists in this fixture; completed local core work returns to it.
+                    #expect(resolution.installedCLI == nil)
+                    #expect(resolution.action == .none)
                 }
                 #expect(PostUpdateController.coreRepairAction(
-                    receipt: reloaded, migrationNeedsCoreRepair: false,
-                    migrationFailed: false, explicitRetry: true) == (scenario == "core-failure" ? .repair : .none))
+                    receipt: reloaded, migrationFailed: false, explicitRetry: true) == (scenario == "core-failure" ? .repair : .none))
                 #expect(reloaded.hasPendingRuntimeMigration == (scenario != "core-failure"))
                 if !reloaded.coreUpdatePending {
                     let context = try PostUpdateController.captureRuntimeContext(
@@ -445,14 +566,24 @@ struct BundledGatewayPreparationTests {
                 runtimeActions.removeAll()
                 let retryCandidate = try #require(try await ManagedNodeGatewayMigration.candidate(
                     onboardingSeen: true, installPolicy: "exact", retainedCLI: cli, allowNamedServiceRetry: true))
+                if scenario == "core-failure" {
+                    try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("fail"))
+                }
                 let retry = try await ManagedNodeGatewayMigration.run(
                     candidate: retryCandidate, targetVersion: target,
                     pendingSetupRecovery: reloaded, operations: operations)
                 if scenario == "core-failure" {
-                    guard case .coreRepairRequired = retry else { Issue.record("Bun overtook unfinished core work")
+                    guard case .versionUpdated = retry else {
+                        Issue.record("Same-version core repair must finish before the next runtime activation")
                         return
                     }
                     #expect(runtimeActions.isEmpty)
+                    let repaired = try String(
+                        contentsOf: fixture.root.appendingPathComponent("updates"), encoding: .utf8)
+                        .split(separator: "\n")
+                    #expect(repaired.count == 2)
+                    #expect(repaired.last?.contains("update repair") == true)
+                    #expect(PostAppUpdateReceiptStore.pending(currentVersion: target)?.coreUpdatePending == false)
                 } else {
                     guard case .migrated = retry else { Issue.record("Runtime-only work must not repeat core update")
                         return
@@ -820,7 +951,7 @@ struct BundledGatewayPreparationTests {
                 (scenario == "partial-ready" ? "2026.9.1\n" : "2026.8.1\n"))
             #expect(PostAppUpdateReceiptStore.pendingForLaunch(
                 currentVersion: "2026.9.1", currentRuntimeBuildID: "next-build", onboardingSeen: false) == nil)
-            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery()?.gatewayUpdateIncomplete == true)
+            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(currentVersion: "2026.9.1")?.gatewayUpdateIncomplete == true)
             try FileManager.default.removeItem(at: failure)
             let location = try await CLIInstaller.prepareBundledGateway(
                 targetVersion: "2026.9.1", restartGateway: scenario != "paused-retry", statusHandler: { _ in })
@@ -860,7 +991,7 @@ struct BundledGatewayPreparationTests {
             CLIInstaller.completeBundledSetup(
                 after: scenario == "paused-retry" ? .deferred : .ready,
                 currentVersion: "2026.9.1")
-            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery() == nil)
+            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(currentVersion: "2026.9.1") == nil)
             if scenario == "paused-retry" {
                 let relaunched = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
                     currentVersion: "2026.9.1", currentRuntimeBuildID: pendingRuntime.runtimeBuildID,
@@ -1027,9 +1158,9 @@ struct BundledGatewayPreparationTests {
                 try await CLIInstaller.prepareBundledGateway(
                     targetVersion: "2026.9.1", restartGateway: false, statusHandler: { _ in })
             }
-            let pending = try #require(PostAppUpdateReceiptStore.pendingSetupRecovery())
-            #expect(!PostUpdateController.allowsNodeMigration(paused: true, canActivate: false, receipt: pending))
-            #expect(!PostUpdateController.allowsNodeMigration(paused: false, canActivate: true, receipt: pending))
+            let pending = try #require(PostAppUpdateReceiptStore.pendingSetupRecovery(currentVersion: "2026.9.1"))
+            #expect(!PostUpdateController.allowsNodeMigration(paused: true, canActivate: false))
+            #expect(PostUpdateController.allowsNodeMigration(paused: false, canActivate: true))
             let context = try PostUpdateController.captureRuntimeContext(
                 connectionMode: .local, bundledApp: true, usesSeededGateway: false)
             #expect(!context.hasService)
@@ -1055,9 +1186,7 @@ struct BundledGatewayPreparationTests {
                 Issue.record("Failed core repair must remain retryable")
                 return
             }
-            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery() == pending)
-            #expect(!PostUpdateController.allowsNodeMigration(
-                paused: false, canActivate: true, receipt: PostAppUpdateReceiptStore.pendingSetupRecovery()))
+            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(currentVersion: "2026.9.1") == pending)
             try FileManager.default.removeItem(at: failure)
             let location = try await CLIInstaller.prepareBundledGateway(
                 targetVersion: "2026.9.1",
@@ -1075,9 +1204,9 @@ struct BundledGatewayPreparationTests {
                 after: .deferred, currentVersion: "2026.9.1")
             let pausedReceipt = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.9.1"))
             #expect(pausedReceipt.hasPendingRuntimeMigration)
-            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery() == nil)
+            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(currentVersion: "2026.9.1") == nil)
             #expect(!PostUpdateController.allowsNodeMigration(
-                paused: true, canActivate: false, receipt: pausedReceipt))
+                paused: true, canActivate: false))
             CLIInstaller.completeBundledSetup(
                 after: .ready, currentVersion: "2026.9.1")
             #expect(PostAppUpdateReceiptStore.pending(currentVersion: "2026.9.1") == nil)
@@ -1170,10 +1299,323 @@ struct BundledGatewayPreparationTests {
 
 extension AppStateIsolationTests {
     @Test(arguments: [
+        ("success", false), ("success", true), ("foreign-checkpoint", true),
+        ("wrapper-change", true), ("core-failure", true), ("newer-package", false), ("newer-package", true),
+        ("newer-incompatible", true), ("unusable", true), ("generation-change", true),
+        ("selected-failure", true), ("selected-foreign", true), ("retired-success", true), ("retired-foreign", true),
+        ("ready-gateway", true), ("ready-node", true),
+    ])
+    func `published canonical repair precedes remote runtime reconciliation`(
+        _ scenario: String, companionVerified: Bool) async throws
+    {
+        try #require(AppProfile.current.isActive)
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent("openclaw.json")
+        try Data(#"{"gateway":{"mode":"remote"}}"#.utf8).write(to: config)
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            env: ["OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [cliInstallPolicyKey: "exact", connectionModeKey: "remote", postAppUpdateReceiptKey: nil])
+        {
+            let state = AppProfile.current.stateDirectoryURL()
+            let wrapper = state.appendingPathComponent("bin/openclaw")
+            let alias = state.appendingPathComponent("tools/node")
+            try #require(!FileManager.default.fileExists(atPath: wrapper.path))
+            try #require(!FileManager.default.fileExists(atPath: alias.path))
+            let fixture = try BundledGatewayPreparationTests.Fixture(
+                home: home, inferredLegacy: true, stateDirectory: state, updatedVersion: "2026.9.9")
+            defer {
+                try? FileManager.default.removeItem(at: wrapper)
+                try? FileManager.default.removeItem(at: alias)
+                fixture.remove()
+            }
+            let entry = fixture.nodeRoot.appendingPathComponent("lib/node_modules/openclaw/dist/entry.js")
+            try FileManager.default.createDirectory(
+                at: entry.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: entry)
+            try FileManager.default.createDirectory(
+                at: wrapper.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            exec "\(alias.path)/bin/node" "\(entry.path)" "$@"
+
+            """.write(to: wrapper, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+            let version = switch scenario {
+            case "newer-package", "selected-failure", "selected-foreign": "2026.9.10"
+            case "newer-incompatible": "2027.1.0"
+            case "unusable": "not-a-version"
+            default: "2026.9.9"
+            }
+            let selectedUpdate = scenario.hasPrefix("selected-")
+            let selectedReady = scenario.hasPrefix("ready-")
+            let retiredCaller = scenario.hasPrefix("retired-")
+            let superseded = scenario == "newer-package" || scenario == "newer-incompatible" || selectedUpdate
+            try "\(version)\n".write(
+                to: fixture.root.appendingPathComponent("version"), atomically: true, encoding: .utf8)
+            if scenario == "core-failure" { try Data().write(to: fixture.root.appendingPathComponent("fail")) }
+            let serviceBefore = try Data(contentsOf: fixture.plist)
+            let previousRoot = ProcessInfo.processInfo.environment["OPENCLAW_PREPARATION_FIXTURE_ROOT"]
+            setenv("OPENCLAW_PREPARATION_FIXTURE_ROOT", fixture.root.path, 1)
+            defer {
+                if let previousRoot { setenv("OPENCLAW_PREPARATION_FIXTURE_ROOT", previousRoot, 1) }
+                else { unsetenv("OPENCLAW_PREPARATION_FIXTURE_ROOT") }
+            }
+            // Exactly the six fields emitted by v2026.9.9; no candidate-only fields.
+            let published = Data("""
+            {"fromVersion":"2026.9.8","toVersion":"2026.9.9","recordedAt":0,
+             "gatewayUpdateIncomplete":true,"notificationAttempts":0,"notificationInFlight":false}
+            """.utf8)
+            AppDefaults.standard.set(published, forKey: postAppUpdateReceiptKey)
+            let receipt = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.9.9"))
+            #expect(receipt.coreUpdate == .legacyCanonical)
+            let foreign = try JSONEncoder().encode(PostAppUpdateReceipt(
+                fromVersion: "2026.9.9", toVersion: "2026.9.10", recordedAt: .distantFuture,
+                gatewayUpdateIncomplete: true, coreUpdate: .node))
+            let manager = GatewayProcessManager()
+            manager.nodeMigrationCompleted = true
+            manager.nodeMigrationVersionUpdated = true
+            let generation = manager.gatewayStartGeneration
+            #expect(manager.canonicalUpdateResult(for: receipt, generation: generation) == nil)
+            var changed = false
+            var retired = false
+            let operations = ManagedNodeGatewayMigration.liveOperations(
+                checkCurrent: {
+                    guard manager.gatewayStartGeneration == generation else { throw CancellationError() }
+                }, verifyHealth: {}, setServiceHosting: { _ in },
+                canonicalUpdateCompleted: { manager.recordCanonicalUpdate($0, generation: generation) },
+                statusHandler: { _ in
+                    if retiredCaller, !retired,
+                       FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("updates").path)
+                    {
+                        retired = true
+                        if scenario == "retired-foreign" {
+                            AppDefaults.standard.set(foreign, forKey: postAppUpdateReceiptKey)
+                        }
+                        manager.gatewayStartGeneration &+= 1
+                    }
+                    guard !changed else { return }
+                    changed = true
+                    if scenario == "foreign-checkpoint" {
+                        AppDefaults.standard.set(foreign, forKey: postAppUpdateReceiptKey)
+                    } else if scenario == "wrapper-change" {
+                        do { try Data("#!/bin/sh\nexec /operator/openclaw \"$@\"\n".utf8).write(to: wrapper) }
+                        catch { Issue.record(error) }
+                    } else if scenario == "generation-change" {
+                        manager.gatewayStartGeneration &+= 1
+                    }
+                })
+            var resolvedRuntime = false
+            do {
+                let result = try await operations.repairCanonicalUpdate(receipt)
+                let completed = result.receipt
+                #expect(["success", "foreign-checkpoint"].contains(scenario) || superseded || selectedReady)
+                #expect(!completed.coreUpdatePending)
+                #expect(manager.canonicalUpdateResult(for: receipt, generation: generation)?.isSuperseded == superseded)
+                if superseded {
+                    guard case let .superseded(_, installed, compatible) = result else {
+                        Issue.record("A newer package supersedes the old intent; it was not repaired")
+                        return
+                    }
+                    #expect(installed == version)
+                    #expect(compatible == (scenario != "newer-incompatible"))
+                    #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == published)
+                    #expect(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion)?.coreUpdate == .legacyCanonical)
+                } else {
+                    guard case .repaired = result else { Issue.record("Expected actual canonical repair")
+                        return
+                    }
+                }
+                if selectedReady {
+                    let mode: AppState.ConnectionMode = scenario == "ready-node" ? .remote : .local
+                    let profile = AppProfile(environment: [:])
+                    if mode == .remote {
+                        let plist = home.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
+                        try PropertyListSerialization.data(fromPropertyList: [
+                            "ProgramArguments": fixture.cli.prefix + ["node", "run"],
+                            "EnvironmentVariables": ["OPENCLAW_PREPARATION_FIXTURE_ROOT": fixture.root.path],
+                        ], format: .xml, options: 0).write(to: plist)
+                        #expect(NodeServiceManager.installedServiceCLI() == nil)
+                    }
+                    let cli = try #require(mode == .remote
+                        ? NodeServiceManager.installedServiceCLI(profile: profile)
+                        : GatewayLaunchAgentManager.installedServiceCLI())
+                    let arguments = try #require(mode == .remote
+                        ? NodeServiceManager.launchdProgramArguments(profile: profile)
+                        : GatewayLaunchAgentManager.launchdProgramArguments())
+                    let context = PostUpdateRuntimeContext(
+                        connectionMode: mode, bundledApp: true, usesSeededGateway: false,
+                        hasService: !arguments.isEmpty, installedCLI: cli,
+                        ownsManagedRuntime: PostUpdateController.ownsManagedRuntime(
+                            connectionMode: mode, programArguments: arguments,
+                            gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+                            installPolicy: CLIInstallPolicy.storedPolicy(),
+                            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()))
+                    #expect(context.ownsManagedRuntime)
+                    #expect(completed.hasPendingRuntimeMigration)
+                    let resolution = await PostUpdateController.resolveGatewayAction(context: context, receipt: completed) {
+                        await CLIInstaller.managedStatus(
+                            expectedVersion: receipt.toVersion, installedCLI: cli, usesBundledRuntime: false)
+                    }
+                    #expect(resolution.action == .verify)
+                    #expect(resolution.needsManagedVerification)
+                    #expect(PostUpdateController.notificationContinuation(
+                        receipt: completed, runtimeVerification: .deferred, migrationOnlyLaunchCheck: false) == .waitForRuntime)
+                    #expect(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion) == completed)
+                    // Only the runtime-verification owner may now finish the checkpoint;
+                    // the selected process restart/health flow remains a native integration gate.
+                    let verified = PostAppUpdateReceiptStore.completeRuntimeVerification(receipt: completed)
+                    #expect(!verified.hasPendingRuntimeMigration)
+                    #expect(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion) == verified)
+                    #expect(PostUpdateController.notificationContinuation(
+                        receipt: verified, runtimeVerification: .verified, migrationOnlyLaunchCheck: false) == .notify)
+                    let commands = try String(contentsOf: fixture.root.appendingPathComponent("updates"), encoding: .utf8)
+                        .split(separator: "\n")
+                    #expect(commands.count == 1)
+                    #expect(commands.first?.contains("update repair") == true)
+                    #expect(commands.first?.contains("--no-restart") == true)
+                    return
+                }
+                if selectedUpdate {
+                    guard case let .superseded(checkpoint, _, _) = result else {
+                        Issue.record("Expected the original canonical checkpoint for the selected dispatch")
+                        return
+                    }
+                    let node = try BundledGatewayPreparationTests.Fixture(
+                        home: home, nodeService: true, updatedVersion: receipt.toVersion)
+                    defer { node.remove() }
+                    let serviceProfile = AppProfile(environment: [:])
+                    let cli = try #require(NodeServiceManager.installedServiceCLI(profile: serviceProfile))
+                    let arguments = try #require(NodeServiceManager.launchdProgramArguments(profile: serviceProfile))
+                    #expect(NodeServiceManager.installedServiceCLI() == nil)
+                    #expect(try !PostUpdateController.captureRuntimeContext(
+                        connectionMode: .remote, bundledApp: true, usesSeededGateway: false).hasService)
+                    try Data().write(to: node.root.appendingPathComponent("advance"))
+                    try Data().write(to: node.root.appendingPathComponent("fail"))
+                    if scenario == "selected-foreign" {
+                        AppDefaults.standard.set(foreign, forKey: postAppUpdateReceiptKey)
+                    }
+                    var dispatched = completed
+                    let failed = await CLIInstaller.updateManaged(
+                        targetVersion: receipt.toVersion, restartGateway: false, installedCLI: cli,
+                        onDispatch: {
+                            dispatched = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+                                receipt: checkpoint, owner: .node, setupRecovery: true)
+                        }, statusHandler: { _ in })
+                    guard case .failure = failed else { Issue.record("Expected failure after selected package advance")
+                        return
+                    }
+                    #expect(dispatched.coreUpdate == .node)
+                    #expect(dispatched.setupRecovery)
+                    #expect(try String(contentsOf: node.root.appendingPathComponent("version"), encoding: .utf8) ==
+                        "\(receipt.toVersion)\n")
+                    if scenario == "selected-foreign" {
+                        #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == foreign)
+                        return
+                    }
+                    let reloaded = try #require(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion))
+                    #expect(reloaded == dispatched)
+                    // Explicit default-profile capture exercises the service contract without
+                    // weakening the named-profile product guard asserted above.
+                    let context = PostUpdateRuntimeContext(
+                        connectionMode: .remote, bundledApp: true, usesSeededGateway: false,
+                        hasService: !arguments.isEmpty, installedCLI: cli,
+                        ownsManagedRuntime: PostUpdateController.ownsManagedRuntime(
+                            connectionMode: .remote, programArguments: arguments,
+                            gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+                            installPolicy: CLIInstallPolicy.storedPolicy(),
+                            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()))
+                    #expect(context.ownsManagedRuntime)
+                    let resolution = await PostUpdateController.resolveGatewayAction(context: context, receipt: reloaded) {
+                        await CLIInstaller.managedStatus(
+                            expectedVersion: receipt.toVersion, installedCLI: cli, usesBundledRuntime: false)
+                    }
+                    #expect(resolution.action == .repair)
+                    try FileManager.default.removeItem(at: node.root.appendingPathComponent("fail"))
+                    let repaired = await CLIInstaller.updateManaged(
+                        targetVersion: receipt.toVersion, restartGateway: false, repair: true, installedCLI: cli,
+                        onDispatch: {
+                            dispatched = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: reloaded, owner: .node)
+                        }, statusHandler: { _ in })
+                    guard case .success = repaired else { Issue.record("Expected same-version selected repair")
+                        return
+                    }
+                    let settled = PostAppUpdateReceiptStore.completeCoreRepair(receipt: dispatched, owner: .node)
+                    #expect(!settled.coreUpdatePending)
+                    #expect(settled.setupRecovery)
+                    let verified = PostAppUpdateReceiptStore.completeRuntimeVerification(receipt: settled)
+                    #expect(PostUpdateController.notificationContinuation(
+                        receipt: verified, runtimeVerification: .verified, migrationOnlyLaunchCheck: false) == .completeSilently)
+                    #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("updates").path))
+                    return
+                }
+                var context = try PostUpdateController.captureRuntimeContext(
+                    connectionMode: .remote, bundledApp: true, usesSeededGateway: companionVerified)
+                #expect(!context.hasService)
+                context.localCompanionVerified = companionVerified
+                resolvedRuntime = true
+                let resolution = await PostUpdateController.resolveGatewayAction(context: context, receipt: completed) {
+                    Issue.record("An absent node service must not be mistaken for the canonical package")
+                    return .missing(location: "fixture")
+                }
+                #expect(resolution.action == .none)
+                #expect(!resolution.prepareLocalCompanion)
+                #expect(PostUpdateController.notificationContinuation(
+                    receipt: completed, runtimeVerification: .deferred, migrationOnlyLaunchCheck: false) == .waitForRuntime)
+                if scenario == "foreign-checkpoint" || superseded {
+                    #expect(PostAppUpdateReceiptStore.setNotificationInFlight(true, receipt: completed) == nil)
+                    let verified = PostAppUpdateReceiptStore.completeRuntimeVerification(receipt: completed)
+                    #expect(PostUpdateController.notificationContinuation(
+                        receipt: verified, runtimeVerification: .verified, migrationOnlyLaunchCheck: true) == .completeSilently)
+                    PostAppUpdateReceiptStore.clear(receipt: verified)
+                    #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == (superseded ? published : foreign))
+                }
+                let otherReceipt = PostAppUpdateReceipt(
+                    fromVersion: receipt.fromVersion, toVersion: receipt.toVersion, recordedAt: .distantFuture,
+                    gatewayUpdateIncomplete: true, coreUpdate: .legacyCanonical)
+                #expect(manager.canonicalUpdateResult(for: otherReceipt, generation: generation) == nil)
+                manager.gatewayStartGeneration &+= 1
+                #expect(manager.canonicalUpdateResult(for: receipt, generation: generation) == nil)
+                #expect(manager.canonicalUpdateResult(for: receipt, generation: manager.gatewayStartGeneration) == nil)
+                manager.recordCanonicalUpdate(result, generation: generation)
+                #expect(manager.canonicalUpdateStage == nil)
+                manager.isTerminating = true
+                manager.recordCanonicalUpdate(result, generation: manager.gatewayStartGeneration)
+                #expect(manager.canonicalUpdateStage == nil)
+            } catch {
+                #expect(["wrapper-change", "core-failure", "unusable", "generation-change"].contains(scenario) || retiredCaller)
+                #expect(!resolvedRuntime)
+                #expect(manager.canonicalUpdateStage == nil)
+            }
+            let commands = (try? String(contentsOf: fixture.root.appendingPathComponent("updates"), encoding: .utf8))?
+                .split(separator: "\n") ?? []
+            let attempted = ["success", "foreign-checkpoint", "core-failure"].contains(scenario) || retiredCaller
+            #expect(commands.count == (attempted ? 1 : 0))
+            if attempted {
+                let command = try #require(commands.first)
+                #expect(command.contains("update repair"))
+                #expect(command.contains("--no-restart"))
+            }
+            if scenario == "wrapper-change" {
+                #expect(try String(contentsOf: wrapper, encoding: .utf8).contains("/operator/openclaw"))
+            }
+            if scenario == "retired-success" {
+                #expect(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion)?.coreUpdate == .complete)
+                #expect(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion)?.hasPendingRuntimeMigration == true)
+            } else if scenario == "retired-foreign" {
+                #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == foreign)
+            }
+            #expect(try Data(contentsOf: fixture.plist) == serviceBefore)
+        }
+    }
+
+    @Test(arguments: [
         "unchanged", "nil-policy", "absent-wrapper", "late-wrapper", "late-alias",
         "remote-no-service", "external-service", "beta-policy", "extended-stable", "operator-wrapper",
     ])
-    func `canonical receipt repair preserves wrapper authority through actual dispatch`(
+    func `canonical CLI repair preserves wrapper authority through actual dispatch`(
         _ scenario: String) async throws
     {
         try #require(AppProfile.current.isActive)
@@ -1257,37 +1699,13 @@ extension AppStateIsolationTests {
                     JSONSerialization.data(withJSONObject: published), forKey: postAppUpdateReceiptKey)
                 let receipt = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.9.1"))
                 #expect(receipt.coreUpdate == .legacyCanonical)
-                let context = try PostUpdateController.captureRuntimeContext(
-                    connectionMode: mode, bundledApp: true, usesSeededGateway: false)
-                if mode == .remote { #expect(!context.hasService) }
-                var probed = false
-                let resolution = await PostUpdateController.resolveGatewayAction(context: context, receipt: receipt) {
-                    probed = true
-                    return await CLIInstaller.managedStatus(expectedVersion: "2026.9.1", usesBundledRuntime: false)
-                }
                 let invalid = ["beta-policy", "extended-stable", "operator-wrapper"].contains(scenario)
-                if invalid {
-                    #expect(resolution.action == .ownershipFailure)
-                    #expect(!probed)
-                    #expect(PostAppUpdateReceiptStore.pending(currentVersion: "2026.9.1") == receipt)
-                    #expect(!FileManager.default
-                        .fileExists(atPath: fixture.root.appendingPathComponent("updates").path))
-                    return
-                }
-                #expect(resolution.action == .repair)
-                #expect(probed)
-                #expect(resolution.installedCLI == nil)
-                #expect(!resolution.prepareLocalCompanion)
-                let restart = resolution.shouldRestartGateway(connectionMode: mode, paused: false)
-                #expect(!restart)
-                guard resolution.action == .repair else { return }
                 var dispatched = false
                 let outcome = await CLIInstaller.updateManaged(
-                    targetVersion: "2026.9.1", restartGateway: restart, repair: true,
-                    installedCLI: resolution.installedCLI,
+                    targetVersion: "2026.9.1", restartGateway: false, repair: true,
                     onDispatch: {
                         dispatched = true
-                        try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+                        PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
                             receipt: receipt,
                             owner: .legacyCanonical)
                         if scenario == "late-wrapper" {
@@ -1298,9 +1716,9 @@ extension AppStateIsolationTests {
                             try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: replacement)
                         }
                     }, statusHandler: { _ in })
-                #expect(dispatched)
+                #expect(dispatched == !invalid)
                 #expect(try Data(contentsOf: fixture.plist) == serviceBefore)
-                if scenario.hasPrefix("late-") {
+                if invalid || scenario.hasPrefix("late-") {
                     guard case .failure = outcome
                     else { Issue.record("Replaced canonical authority must block the spawn")
                         return
@@ -1316,10 +1734,12 @@ extension AppStateIsolationTests {
                         encoding: .utf8)
                     #expect(command.contains("update repair"))
                     #expect(command.contains("--no-restart"))
-                    let completed = try #require(PostAppUpdateReceiptStore.completeCoreRepair(
-                        currentVersion: "2026.9.1", owner: .legacyCanonical))
+                    let completed = PostAppUpdateReceiptStore.completeCoreRepair(
+                        receipt: try #require(PostAppUpdateReceiptStore.pending(
+                            currentVersion: "2026.9.1")),
+                        owner: .legacyCanonical)
                     #expect(completed.coreUpdate == .complete)
-                    #expect(!completed.hasPendingRuntimeMigration)
+                    #expect(completed.hasPendingRuntimeMigration)
                     if ["remote-no-service", "external-service"].contains(scenario) {
                         let successorContext = try PostUpdateController.captureRuntimeContext(
                             connectionMode: mode, bundledApp: true, usesSeededGateway: false)
@@ -1329,7 +1749,7 @@ extension AppStateIsolationTests {
                             Issue.record("An absent or external selected service must not require a managed CLI probe")
                             return .missing(location: "fixture")
                         }
-                        #expect(successor.action == .none)
+                        #expect(successor.action == (scenario == "external-service" ? .ownershipFailure : .none))
                         #expect(!successor.prepareLocalCompanion)
                         #expect(!successor.needsManagedVerification)
                         #expect(try Data(contentsOf: fixture.plist) == serviceBefore)

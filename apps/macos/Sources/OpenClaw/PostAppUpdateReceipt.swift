@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum PostAppUpdateCoreUpdate: String, Codable, Sendable {
     case complete
@@ -7,7 +8,7 @@ enum PostAppUpdateCoreUpdate: String, Codable, Sendable {
     case legacyCanonical
 }
 
-struct PostAppUpdateReceipt: Codable, Equatable {
+struct PostAppUpdateReceipt: Codable, Equatable, Sendable {
     let fromVersion: String
     let toVersion: String
     let recordedAt: Date
@@ -21,7 +22,7 @@ struct PostAppUpdateReceipt: Codable, Equatable {
     fileprivate(set) var notificationAttempts: Int
     fileprivate(set) var notificationInFlight: Bool
     fileprivate(set) var runtimeBuildID: String?
-    let setupRecovery: Bool
+    fileprivate(set) var setupRecovery: Bool
 
     var hasPendingRuntimeMigration: Bool {
         !self.coreUpdatePending && (self.setupRecovery || self.gatewayUpdateIncomplete)
@@ -72,17 +73,12 @@ struct PostAppUpdateReceipt: Codable, Equatable {
 }
 
 enum PostAppUpdateReceiptStore {
-    enum RuntimeCompletion: Equatable {
-        case verified(PostAppUpdateReceipt)
-        case recovery(PostAppUpdateReceipt)
-    }
-
     enum NotificationCompletion: Equatable {
         case complete
         case retryScheduled(PostAppUpdateReceipt)
-        case recovery(PostAppUpdateReceipt)
     }
 
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "post-update.receipt")
     static let notificationRetryLimit = 2
     private static let lastLaunchedRuntimeBuildIDKey = "openclaw.lastLaunchedRuntimeBuildID"
 
@@ -135,11 +131,9 @@ enum PostAppUpdateReceiptStore {
         let previousBuildID = defaults.string(forKey: self.lastLaunchedRuntimeBuildIDKey)?.nonEmpty
         let receipt: PostAppUpdateReceipt?
         let previousReceipt = self.load(defaults: defaults)
-        if let previousReceipt, previousReceipt.toVersion != currentVersion,
-           !CLIInstallPrompter.isManagedUpgrade(found: previousReceipt.toVersion, required: currentVersion)
-        {
-            return nil
-        }
+        // A different app target is neither this launch's recovery state nor
+        // permission to replace its bytes. Live runtime reconciliation still runs.
+        if let previousReceipt, previousReceipt.toVersion != currentVersion { return nil }
         let setupRecovery = previousReceipt?.setupRecovery == true
         if !onboardingSeen || !allowsUpdateWorkflow {
             // Onboarding owns its recovery UI. Keep dispatched maintenance across relaunches,
@@ -184,36 +178,33 @@ enum PostAppUpdateReceiptStore {
         return receipt
     }
 
-    static func pendingSetupRecovery(defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt? {
-        guard let receipt = self.load(defaults: defaults), receipt.setupRecovery,
+    static func pendingSetupRecovery(
+        currentVersion: String?,
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt?
+    {
+        guard let receipt = self.pending(currentVersion: currentVersion, defaults: defaults), receipt.setupRecovery,
               receipt.coreUpdatePending else { return nil }
         return receipt
     }
 
+    @discardableResult
     static func recordSetupRecovery(
         fromVersion: String,
         toVersion: String,
         runtimeBuildID: String? = nil,
+        setupRecovery: Bool = false,
         defaults: UserDefaults = AppDefaults.standard,
-        now: Date = Date()) throws
+        now: Date = Date()) -> PostAppUpdateReceipt
     {
-        if let current = self.load(defaults: defaults), current.toVersion != toVersion {
-            guard !current.coreUpdatePending || current.coreUpdate == .gateway,
-                  CLIInstallPrompter.isManagedUpgrade(found: current.toVersion, required: toVersion)
-            else {
-                throw GatewayHostingError(message: "The recorded update must finish in its target app before setup.")
-            }
-            // Setup explicitly advances its target; delayed dispatch callbacks cannot retarget it.
-            self.record(fromVersion: current.toVersion, toVersion: toVersion, defaults: defaults, now: now)
-        }
-        let previous = self.pendingSetupRecovery(defaults: defaults)
-        let receipt = self.pending(currentVersion: toVersion, defaults: defaults) ?? PostAppUpdateReceipt(
-            fromVersion: previous?.fromVersion ?? fromVersion,
-            toVersion: toVersion,
-            recordedAt: previous?.recordedAt ?? now,
-            runtimeBuildID: runtimeBuildID,
-            setupRecovery: true)
-        try self.recordCoreUpdateDispatch(receipt: receipt, owner: .gateway, defaults: defaults)
+        let pending = self.pending(currentVersion: toVersion, defaults: defaults)
+        let receipt = pending?.coreUpdatePending != true || pending?.coreUpdate == .gateway ||
+            pending?.coreUpdate == .legacyCanonical
+            ? pending : nil
+        return self.recordCoreUpdateDispatch(
+            receipt: receipt ?? PostAppUpdateReceipt(
+                fromVersion: fromVersion, toVersion: toVersion, recordedAt: now,
+                runtimeBuildID: runtimeBuildID, setupRecovery: true),
+            owner: .gateway, setupRecovery: setupRecovery, defaults: defaults)
     }
 
     static func completeSetupRecovery(
@@ -228,37 +219,29 @@ enum PostAppUpdateReceiptStore {
     static func recordCoreUpdateDispatch(
         receipt: PostAppUpdateReceipt,
         owner: PostAppUpdateCoreUpdate,
-        defaults: UserDefaults = AppDefaults.standard) throws -> PostAppUpdateReceipt
+        setupRecovery: Bool = false,
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        // The caller may have awaited a probe since reading its receipt. Admission belongs to the store.
-        let current = self.load(defaults: defaults)
-        guard current == nil || current?.toVersion == receipt.toVersion else {
-            throw GatewayHostingError(message: "Another app update replaced this target; its recovery was preserved.")
-        }
-        guard owner != .complete,
-              current?.coreUpdatePending != true || current?.coreUpdate == owner
-        else {
-            throw GatewayHostingError(
-                message: "Another managed runtime update is incomplete. Finish it before updating this installation.")
-        }
-        let latest = current ?? receipt
+        // Live service and CLI executor ownership admit dispatch; this is only a checkpoint.
         let updated = self.setUpdateState(
-            incomplete: true, coreUpdate: owner, receipt: latest, defaults: defaults)
-        defaults.synchronize()
+            incomplete: true, coreUpdate: owner, receipt: receipt, setupRecovery: setupRecovery, defaults: defaults)
+        if !defaults.synchronize() {
+            self.logger.warning("Update checkpoint could not be synchronized; continuing the live update")
+        }
         return updated
     }
 
     @discardableResult
     static func completeCoreRepair(
-        currentVersion: String?,
+        receipt: PostAppUpdateReceipt,
         owner: PostAppUpdateCoreUpdate,
-        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt?
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        guard let receipt = self.pending(currentVersion: currentVersion, defaults: defaults) else { return nil }
         guard receipt.coreUpdate == owner else { return receipt }
-        // Published canonical repair owns package work; the current service is resolved afterward.
+        // Package success does not prove that the selected service restarted.
+        // Setup recovery already carries that pending runtime phase.
         return self.setUpdateState(
-            incomplete: !receipt.setupRecovery && owner != .legacyCanonical,
+            incomplete: !receipt.setupRecovery,
             coreUpdate: .complete,
             receipt: receipt,
             defaults: defaults)
@@ -267,11 +250,13 @@ enum PostAppUpdateReceiptStore {
     @discardableResult
     static func recordMigrationFailure(
         receipt: PostAppUpdateReceipt,
+        setupRecovery: Bool = false,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
         // A completed setup repair still awaits runtime health, but must not run core repair again.
-        let coreRepairCompleted = receipt.setupRecovery && !receipt.coreUpdatePending
-        return self.setGatewayUpdateIncomplete(!coreRepairCompleted, receipt: receipt, defaults: defaults)
+        let coreRepairCompleted = (receipt.setupRecovery || setupRecovery) && !receipt.coreUpdatePending
+        return self.setGatewayUpdateIncomplete(
+            !coreRepairCompleted, receipt: receipt, setupRecovery: setupRecovery, defaults: defaults)
     }
 
     private static func load(defaults: UserDefaults) -> PostAppUpdateReceipt? {
@@ -279,7 +264,11 @@ enum PostAppUpdateReceiptStore {
         return try? JSONDecoder().decode(PostAppUpdateReceipt.self, from: data)
     }
 
-    static func clear(defaults: UserDefaults = AppDefaults.standard) {
+    static func clear(
+        receipt: PostAppUpdateReceipt? = nil,
+        defaults: UserDefaults = AppDefaults.standard)
+    {
+        if let receipt, self.load(defaults: defaults) != receipt { return }
         defaults.removeObject(forKey: postAppUpdateReceiptKey)
     }
 
@@ -290,7 +279,7 @@ enum PostAppUpdateReceiptStore {
     {
         guard let current = self.load(defaults: defaults) else { return .complete }
         guard current == receipt, !current.coreUpdatePending, !current.hasPendingRuntimeMigration
-        else { return .recovery(current) }
+        else { return .complete }
         if retry {
             let updated = self.recordNotificationFailure(receipt: current, defaults: defaults)
             if updated.notificationAttempts < self.notificationRetryLimit { return .retryScheduled(updated) }
@@ -301,35 +290,44 @@ enum PostAppUpdateReceiptStore {
 
     static func completeRuntimeVerification(
         receipt: PostAppUpdateReceipt,
-        defaults: UserDefaults = AppDefaults.standard) -> RuntimeCompletion
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        let current = self.load(defaults: defaults) ?? receipt
-        guard current == receipt, !current.coreUpdatePending else { return .recovery(current) }
-        return .verified(self.setGatewayUpdateIncomplete(false, receipt: current, defaults: defaults))
+        var verified = receipt
+        verified.gatewayUpdateIncomplete = false
+        verified.coreUpdate = .complete
+        // Runtime health completes this operation, but only the core updater may
+        // settle a stored package checkpoint. Foreign progress remains untouched.
+        if !receipt.coreUpdatePending {
+            self.persistCheckpoint(verified, replacing: receipt, defaults: defaults)
+        }
+        return verified
     }
 
     @discardableResult
     static func setGatewayUpdateIncomplete(
         _ incomplete: Bool,
         receipt: PostAppUpdateReceipt,
+        setupRecovery: Bool = false,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        let current = self.load(defaults: defaults) ?? receipt
-        guard current.toVersion == receipt.toVersion else { return current }
-        return self.setUpdateState(
-            incomplete: incomplete, coreUpdate: current.coreUpdate, receipt: current, defaults: defaults)
+        self.setUpdateState(
+            incomplete: incomplete, coreUpdate: receipt.coreUpdate, receipt: receipt,
+            setupRecovery: setupRecovery, defaults: defaults)
     }
 
     private static func setUpdateState(
         incomplete: Bool,
         coreUpdate: PostAppUpdateCoreUpdate,
         receipt: PostAppUpdateReceipt,
+        setupRecovery: Bool = false,
         defaults: UserDefaults) -> PostAppUpdateReceipt
     {
         var updated = receipt
         updated.gatewayUpdateIncomplete = incomplete
         updated.coreUpdate = coreUpdate
-        self.persist(updated, defaults: defaults)
+        // Silence belongs to the new checkpoint, not the expected CAS snapshot.
+        updated.setupRecovery = receipt.setupRecovery || setupRecovery
+        self.persistCheckpoint(updated, replacing: receipt, defaults: defaults)
         return updated
     }
 
@@ -340,11 +338,9 @@ enum PostAppUpdateReceiptStore {
     {
         // One later-launch retry handles restart races. The bound prevents
         // permanent auth/schema errors from reopening this window forever.
-        let current = self.load(defaults: defaults) ?? receipt
-        guard current.toVersion == receipt.toVersion else { return current }
-        var updated = current
-        updated.notificationAttempts = min(current.notificationAttempts, self.notificationRetryLimit - 1) + 1
-        self.persist(updated, defaults: defaults)
+        var updated = receipt
+        updated.notificationAttempts = min(receipt.notificationAttempts, self.notificationRetryLimit - 1) + 1
+        self.persistCheckpoint(updated, replacing: receipt, defaults: defaults)
         return updated
     }
 
@@ -354,21 +350,39 @@ enum PostAppUpdateReceiptStore {
         receipt: PostAppUpdateReceipt,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt?
     {
-        let current = self.load(defaults: defaults) ?? receipt
-        guard current.toVersion == receipt.toVersion,
+        guard let current = self.load(defaults: defaults), current == receipt,
               !inFlight || (!current.coreUpdatePending && !current.hasPendingRuntimeMigration)
         else { return nil }
         var updated = current
         updated.notificationInFlight = inFlight
-        self.persist(updated, defaults: defaults)
+        guard self.persist(updated, defaults: defaults) else { return nil }
         // Cross the persistence boundary before the Gateway request. A crash
         // after enqueue must not replay this one-time welcome on next launch.
-        defaults.synchronize()
+        guard defaults.synchronize() else { return nil }
         return updated
     }
 
-    private static func persist(_ receipt: PostAppUpdateReceipt, defaults: UserDefaults) {
-        guard let data = try? JSONEncoder().encode(receipt) else { return }
+    private static func persistCheckpoint(
+        _ updated: PostAppUpdateReceipt, replacing receipt: PostAppUpdateReceipt, defaults: UserDefaults)
+    {
+        // Late callbacks preserve foreign bytes without importing their progress into
+        // this operation. The caller continues using its independently verified result.
+        guard self.load(defaults: defaults).map({
+            $0 == receipt && (!$0.coreUpdatePending || !updated.coreUpdatePending ||
+                $0.coreUpdate == .legacyCanonical || $0.coreUpdate == updated.coreUpdate)
+        }) ?? true else {
+            self.logger.warning("Update checkpoint changed; preserving it and continuing the live update")
+            return
+        }
+        if !self.persist(updated, defaults: defaults) {
+            self.logger.warning("Update checkpoint could not be saved; continuing the live update")
+        }
+    }
+
+    @discardableResult
+    private static func persist(_ receipt: PostAppUpdateReceipt, defaults: UserDefaults) -> Bool {
+        guard let data = try? JSONEncoder().encode(receipt) else { return false }
         defaults.set(data, forKey: postAppUpdateReceiptKey)
+        return defaults.data(forKey: postAppUpdateReceiptKey) == data
     }
 }

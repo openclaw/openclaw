@@ -9,17 +9,17 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
-import {
-  DEV_BRANCH,
-  resolveDevUpstreamRefs,
-  type UpdateChannel,
-} from "../../infra/update-channels.js";
+import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
 import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
 import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
+import {
+  readGitUpdateFetchTarget,
+  resolveGitUpdateTrackingRef,
+} from "../../infra/update-git-metadata.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {
   createGlobalInstallEnv,
@@ -196,53 +196,37 @@ async function listGitRemotes(
 }
 
 async function resolveCurrentRemoteBranchRevision(
-  params: GitInspectionParams & { candidate: string },
+  params: GitInspectionParams & { useDevDefault: boolean },
 ): Promise<RemoteRevisionResolution> {
-  const tracking = await runReadOnlyGitCommand({
-    ...params,
-    args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", params.candidate],
-  });
-  const trackingRef = tracking?.code === 0 ? tracking.stdout.trim() : "";
-  if (!trackingRef) {
+  const readGit = async (...args: string[]) => {
+    const result = await runReadOnlyGitCommand({ ...params, args });
+    return result?.code === 0 ? result.stdout.trim() || null : null;
+  };
+  const source = await readGitUpdateFetchTarget(readGit, DEV_BRANCH, params.useDevDefault);
+  if (!source) {
     return { status: "missing" };
   }
-  const remoteList = await listGitRemotes(params);
-  if (remoteList.metadataUnreadable) {
-    return { status: "unreadable", reason: remoteList.metadataUnreadable };
+  const trackingRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
+  const localRevision = trackingRef ? await readGit("rev-parse", trackingRef) : null;
+  if (source.remote === ".") {
+    return localRevision ? { status: "ok", revision: localRevision } : { status: "missing" };
   }
-  const remote = (remoteList.remotes ?? [])
-    .toSorted((left, right) => right.length - left.length)
-    .find((value) => trackingRef.startsWith(`${value}/`));
-  if (!remote) {
-    return {
-      status: "unreadable",
-      reason: `could not resolve remote ownership for ${params.candidate}`,
-    };
-  }
-  const branch = trackingRef.slice(remote.length + 1);
-  const remoteRef = `refs/heads/${branch}`;
-  const remoteResult = await runReadOnlyGitCommand({
-    ...params,
-    args: ["ls-remote", "--exit-code", remote, remoteRef],
-  });
-  const remoteRevision =
-    remoteResult?.code === 0 ? readExactRemoteRevision(remoteResult.stdout, remoteRef) : null;
+  const remoteLabel = `${source.remote}/${source.mergeRef.replace(/^refs\/heads\//u, "")}`;
+  const remoteResult = await readGit("ls-remote", "--exit-code", source.remote, source.mergeRef);
+  const remoteRevision = remoteResult
+    ? readExactRemoteRevision(remoteResult, source.mergeRef)
+    : null;
   if (!remoteRevision) {
     return {
       status: "unreadable",
-      reason: `could not inspect current remote target ${remote}/${branch}`,
+      reason: `could not inspect current remote target ${remoteLabel}`,
     };
   }
-  const local = await runReadOnlyGitCommand({
-    ...params,
-    args: ["rev-parse", params.candidate],
-  });
-  const localRevision = local?.code === 0 ? local.stdout.trim() : "";
   return localRevision === remoteRevision
     ? { status: "ok", revision: remoteRevision }
     : {
         status: "unreadable",
-        reason: `cached ${trackingRef} differs from current remote ${remote}/${branch}`,
+        reason: `cached ${trackingRef?.replace(/^refs\/remotes\//u, "") ?? "Git target"} differs from current remote ${remoteLabel}`,
         failureCode: "target-git-cache-stale",
       };
 }
@@ -352,26 +336,16 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     revision = selected;
   } else {
     const branch = await readBranchName(runTargetCommand, params.root, params.timeoutMs);
-    const needsCheckoutMain = branch !== DEV_BRANCH;
-    let remoteBranchRefs: string[] = [];
-    if (needsCheckoutMain) {
-      const { remotes = [] } = await listGitRemotes({ runCommand, ...params });
-      remoteBranchRefs = remotes.map((remote) => `refs/remotes/${remote}/${DEV_BRANCH}`);
-    }
-    for (const candidate of resolveDevUpstreamRefs(needsCheckoutMain, remoteBranchRefs)) {
-      const resolved = await resolveCurrentRemoteBranchRevision({
-        runCommand,
-        root: params.root,
-        timeoutMs: params.timeoutMs,
-        candidate,
-      });
-      if (resolved.status === "ok") {
-        revision = resolved.revision;
-        break;
-      }
-      if (resolved.status === "unreadable") {
-        return { metadataUnreadable: resolved.reason, failureCode: resolved.failureCode };
-      }
+    const resolved = await resolveCurrentRemoteBranchRevision({
+      runCommand,
+      root: params.root,
+      timeoutMs: params.timeoutMs,
+      useDevDefault: branch !== DEV_BRANCH,
+    });
+    if (resolved.status === "ok") {
+      revision = resolved.revision;
+    } else if (resolved.status === "unreadable") {
+      return { metadataUnreadable: resolved.reason, failureCode: resolved.failureCode };
     }
   }
   if (!revision) {

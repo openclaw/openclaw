@@ -73,6 +73,27 @@ displayed list previews up to five commits from the exact target installed even
 if `main` advances during the countdown. A manual
 `openclaw update --channel dev` still targets the current upstream `main`.
 
+Complete Git tracking configuration takes precedence for Dev source selection.
+For detached installations without tracking, Gateway checks also preserve an
+unambiguous saved custom upstream when its receipt matches the installation root
+and current commit. Missing, stale, malformed, excluded, or unresolvable hints do
+not veto the normal `origin/main` default. A network failure on a valid custom
+source reports an unavailable comparison rather than silently switching to origin.
+Without local `main` or `origin`, a sole configured remote remains a supported
+source for `main`. Multiple remotes without tracking are ambiguous; OpenClaw
+does not choose the first one.
+
+Receipt hints do not rewrite Git configuration. To make a custom source persistent
+across Gateway checks, standalone CLI status, previews, and manual updates, configure
+Git tracking explicitly. For an existing local `main` branch, use
+`git branch --set-upstream-to=<remote>/<branch> main`. For a detached installation
+without local `main`, set `branch.main.remote` and `branch.main.merge` with
+`git config`, using the remote name and full source ref such as `refs/heads/main`.
+Standalone CLI status and dry-run do not hydrate receipt-only hints. Automatic
+campaigns carry their selected source and pinned commit into execution.
+Saved install history also supplies the installation time when it matches the
+current checkout; failure to write that optional history does not fail an update.
+
 <Tip>
 To keep stable and dev in parallel, use two separate checkouts and point each gateway at its own.
 </Tip>

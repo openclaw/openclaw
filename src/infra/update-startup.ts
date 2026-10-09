@@ -537,11 +537,8 @@ async function runGatewayUpdateCheckOwned(
         reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
       });
     }
-    const hasTrackedDevUpstream =
-      (git.branch === DEV_BRANCH || git.branch === "HEAD") && git.upstreamSource === "tracking";
-    const hasReceiptBackedDetachedHead = git.branch === "HEAD" && git.upstreamSource === "receipt";
     const canRunTrackedDevCampaign =
-      (hasTrackedDevUpstream || hasReceiptBackedDetachedHead) && git.ahead === 0;
+      (git.branch === DEV_BRANCH || git.branch === "HEAD") && git.ahead === 0;
     if (shouldRunAutoUpdate && canRunTrackedDevCampaign) {
       if (!recentAttempt) {
         announceUpdate(target, "dev", "dev");

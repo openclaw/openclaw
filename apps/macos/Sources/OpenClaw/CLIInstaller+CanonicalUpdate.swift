@@ -64,4 +64,90 @@ extension CLIInstaller {
             selection: CLIInstallPolicy.managedUpdateSelection(),
             localGateway: !CommandResolver.connectionModeIsRemote())
     }
+
+    enum CanonicalUpdateResult: Sendable {
+        case notRequired(PostAppUpdateReceipt)
+        case repaired(PostAppUpdateReceipt)
+        case superseded(PostAppUpdateReceipt, installedVersion: String, compatible: Bool)
+
+        var receipt: PostAppUpdateReceipt {
+            switch self {
+            case let .notRequired(receipt), let .repaired(receipt):
+                return receipt
+            case let .superseded(receipt, _, _):
+                // Continue live reconciliation without replaying an obsolete notice or
+                // claiming core repair. Never acknowledge the CLI's recovery ledger here.
+                return PostAppUpdateReceipt(
+                    fromVersion: receipt.fromVersion, toVersion: receipt.toVersion, recordedAt: receipt.recordedAt,
+                    runtimeBuildID: receipt.runtimeBuildID, setupRecovery: true)
+            }
+        }
+
+        var isSuperseded: Bool {
+            if case .superseded = self { return true }
+            return false
+        }
+    }
+
+    static func repairCanonicalUpdateIfNeeded(
+        receipt: PostAppUpdateReceipt,
+        checkCurrent: @escaping @MainActor @Sendable () async throws -> Void,
+        statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async throws -> CanonicalUpdateResult
+    {
+        guard receipt.coreUpdate == .legacyCanonical else { return .notRequired(receipt) }
+        // Published incomplete receipts refer to install-cli's package, not whichever
+        // service is selected now. The receipt requests repair; live custody admits it.
+        let authority = try self.captureCanonicalUpdateAuthority(executable: self.managedExecutableLocation())
+        let checkAuthority: @MainActor @Sendable () async throws -> Void = {
+            try Task.checkCancellation()
+            try await checkCurrent()
+            try Task.checkCancellation()
+            if let error = authority.currentError() { throw GatewayHostingError(message: error) }
+        }
+        try await checkAuthority()
+        let status = await self.managedStatus(
+            expectedVersion: receipt.toVersion, installedCLI: authority.cli, usesBundledRuntime: false)
+        try await checkAuthority()
+        let repair: Bool
+        switch status {
+        case let .ready(_, version) where version == receipt.toVersion:
+            repair = true
+        case let .incompatible(_, found, _) where
+            CLIInstallPrompter.isManagedUpgrade(found: found, required: receipt.toVersion):
+            repair = false
+        case let .ready(_, found) where
+            CLIInstallPrompter.isManagedUpgrade(found: receipt.toVersion, required: found):
+            return .superseded(receipt, installedVersion: found, compatible: true)
+        case let .incompatible(_, found, _) where
+            CLIInstallPrompter.isManagedUpgrade(found: receipt.toVersion, required: found):
+            // A newer but incompatible install is not declared ready. Its selected
+            // runtime's compatibility owner still decides what can run; never downgrade it.
+            return .superseded(receipt, installedVersion: found, compatible: false)
+        default:
+            throw GatewayHostingError(message: status.message)
+        }
+        var progress = receipt
+        let outcome = await self.updateManaged(
+            targetVersion: receipt.toVersion,
+            restartGateway: false,
+            repair: repair,
+            checkCurrent: checkAuthority,
+            onDispatch: {
+                progress = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+                    receipt: progress, owner: .legacyCanonical)
+            },
+            statusHandler: statusHandler)
+        switch outcome {
+        case let .failure(message, details):
+            throw GatewayHostingError(message: [message, details].compactMap(\.self).joined(separator: " "))
+        case let .success(_, version):
+            guard version == receipt.toVersion else {
+                throw GatewayHostingError(
+                    message: String(localized: "The managed runtime does not match the updated Mac app."))
+            }
+            // Record observed package success even if its caller retired meanwhile.
+            // Callers recheck lifecycle before publishing stage facts or doing runtime work.
+            return .repaired(PostAppUpdateReceiptStore.completeCoreRepair(receipt: progress, owner: .legacyCanonical))
+        }
+    }
 }
