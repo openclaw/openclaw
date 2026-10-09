@@ -207,6 +207,8 @@ Git worktree registration, ordinary checkout removal, and source materialization
 
 Background Git maintenance and pack-index repair use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects.
 
+Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. Repository configuration and interactive operator shells are unchanged. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
+
 ## Capacity and disk space
 
 Creation and restoration enforce the [count and eviction policy](#capacity-and-eviction) before allocating files. Disk admission independently measures every affected volume.
@@ -220,6 +222,25 @@ Pack consolidation keeps promisor and ordinary packs separate. When a group has 
 On Linux, maintenance also removes up to 256 abandoned `tmp_pack_*` files per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
+
+If a fetch finds a ref tip in the commit graph but not in the object store,
+OpenClaw attempts one bounded repair before retrying. It prunes only origin
+tracking branches confirmed deleted upstream (unless the fetch explicitly uses
+`--no-prune`), preserving tracking refs required by local symbolic refs or
+worktree HEADs, then fetches missing ref and
+worktree-HEAD objects by ID with commit-graph lookup and automatic maintenance
+disabled. Local branches, tags, and worktree HEADs are never deleted. Repair is
+limited to 50,000 refs, 4,096 missing tips, and five minutes; healthy fetches do
+not scan repository health. Managed project refresh retains its isolated,
+URL-pinned transport during recovery.
+
+Repair may clear empty origin-tracking ref locks on supported local Linux
+filesystems when their unchanged inode timestamps prove they predate the current
+boot by at least one hour. Age alone cannot establish that a native Git lock has
+no live owner, so same-boot, nonempty, symlinked, and otherwise uncertain locks
+remain intact. Recovery logs its result and an actionable warning if missing
+objects or locks still prevent fetching. No configuration or state migration is
+required.
 
 The Git worker reuses a bounded set of successful commit-size estimates while it remains active. Object availability and free disk space are checked on every allocation. Git replacement refs disable reuse of the affected size estimates, and worker shutdown discards them.
 

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { readDatabase } from "./observations.mjs";
 import {
   assertWorkshopProposalsRetired,
   captureWorkshopLegacyState,
@@ -117,8 +118,7 @@ function hasMalformedWorkshopIndex(filename) {
 
 function inspectMalformedState(filename) {
   assert(hasMalformedWorkshopIndex(filename), "Legacy Workshop fixture is not malformed");
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
+  return readDatabase(filename, (database) => {
     database.enableDefensive?.(false);
     database.exec("PRAGMA writable_schema = ON;");
     const catalog = database
@@ -153,9 +153,7 @@ function inspectMalformedState(filename) {
       rootpage: index.rootpage,
       stateSha256: digest.digest("hex"),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
@@ -194,8 +192,7 @@ export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
 }
 
 function inspectPhysicalState(filename) {
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
+  return readDatabase(filename, (database) => {
     return {
       findings: database
         .prepare("PRAGMA integrity_check(2147483647)")
@@ -210,9 +207,7 @@ function inspectPhysicalState(filename) {
         .all()
         .map((row) => Object.assign({}, row)),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function seedPhysicalIndex(stateDir, artifactRoot, stage) {
@@ -601,8 +596,7 @@ function normalizeOutput(text) {
 }
 
 function assertRepairedState(stateDir, retired) {
-  const database = new DatabaseSync(databasePath(stateDir), { readOnly: true });
-  try {
+  readDatabase(databasePath(stateDir), (database) => {
     assert.equal(
       database.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(INDEX),
       undefined,
@@ -628,9 +622,7 @@ function assertRepairedState(stateDir, retired) {
         .map((row) => row.integrity_check),
       ["ok"],
     );
-  } finally {
-    database.close();
-  }
+  });
 }
 
 export function assertWorkshopUpdateRefusal(

@@ -214,6 +214,7 @@ export function renderUpdateRunReport(
     nextAction?: string;
     currentHealth?: UpdateRunReportHealth;
     mode?: UpdateRunResult["mode"] | "package";
+    markdownLimit?: number;
   } = {},
 ): UpdateRunReport {
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
@@ -277,7 +278,11 @@ export function renderUpdateRunReport(
       break;
   }
   headline = bounded(headline, 500);
-  const lines: string[] = [];
+  const markdownLimit = opts.markdownLimit ?? 1500;
+  const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
+  // Successful activation must not bury recovery constraints behind snapshot inventory.
+  // Failed runs keep their failure diagnostics ahead of warnings in the short report.
+  const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
   if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
     lines.push(formatUpdateRunCurrentHealth(currentHealth));
   }
@@ -364,8 +369,8 @@ export function renderUpdateRunReport(
       ),
     );
   }
-  for (const message of updateRunWarningMessages(run.steps, 3)) {
-    lines.push(`Warning: ${bounded(message, 500)}`);
+  if (run.status !== "succeeded") {
+    lines.push(...warnings);
   }
   const facts = run.verification;
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
@@ -469,13 +474,13 @@ export function renderUpdateRunReport(
     return {
       headline,
       lines: [...(next ? [next, ""] : []), ...details],
-      markdown: `${lead}\n${bounded(details.join("\n"), 1500 - lead.length - 1)}`,
+      markdown: `${lead}\n${bounded(details.join("\n"), markdownLimit - lead.length - 1)}`,
     };
   }
   lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
   const suffix = next ? `\n${bounded(next, 1100)}` : "";
-  return { headline, lines, markdown: `${bounded(body, 1500 - suffix.length)}${suffix}` };
+  return { headline, lines, markdown: `${bounded(body, markdownLimit - suffix.length)}${suffix}` };
 }
 
 /** Old CLI finalization paths still return runner results; all wording stays in the report. */

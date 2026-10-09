@@ -123,6 +123,10 @@ describe("private session source staging", () => {
     vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
       async (...args) => {
         const worker = await open(...args);
+        // Execution retention has no publication connection to fault or probe.
+        if (args[2].input === undefined) {
+          return worker;
+        }
         probeReleased.push(() =>
           worker.run(
             async () => "still admitted",

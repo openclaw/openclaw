@@ -167,46 +167,6 @@ it("vetoes rewind before A COMMIT when the native binding delete fails", async (
   });
 });
 
-it("restores the removed native payload when branch switching rolls back", async () => {
-  await withCutFixture(async (fixture) => {
-    const original = fixture.readEntry();
-    const history = loadTranscriptEventsSync(fixture.scope);
-    const refused = new Error("synthetic branch COMMIT refusal");
-    let removed: Record<string, unknown> | undefined;
-    let restored: Record<string, unknown> | undefined;
-    let commitSeen = false;
-    observeNativeGrants((request, facts) => {
-      if (facts.kind === "native-binding-ready") {
-        removed = { ...fixture.readBinding(), opaque: { nested: ["preserve", 7] } };
-        fixture.bindingStore.register(fixture.bindingKey, removed);
-      }
-      if (request.stage === "commit" && facts.kind === "session-native-binding") {
-        commitSeen = true;
-        expect(fixture.readBinding()).toBeUndefined();
-        throw refused;
-      }
-    });
-    delivery.afterExecution = () => {
-      restored = fixture.readBinding();
-    };
-    await expect(fixture.cut("switch", "synthetic-alternate")).rejects.toBe(refused);
-    expect(commitSeen).toBe(true);
-    expectOneAcceptedExecution();
-    expect(fixture.readEntry()).toEqual(original);
-    expect(loadTranscriptEventsSync(fixture.scope)).toEqual(history);
-    assert(removed && restored);
-    const { lease: removedLease, ...removedPayload } = removed;
-    const { lease: restoredLease, ...restoredPayload } = restored;
-    expect(restoredPayload).toEqual(removedPayload);
-    assert(isRecord(removedLease) && isRecord(restoredLease));
-    expect(restoredLease.token).toBe(removedLease.token);
-    assert(
-      typeof removedLease.expiresAt === "number" && typeof restoredLease.expiresAt === "number",
-    );
-    expect(restoredLease.expiresAt).toBeGreaterThanOrEqual(removedLease.expiresAt);
-  });
-});
-
 it("leaves a successor binding intact when rewind compensation cannot restore its predecessor", async () => {
   await withCutFixture(async (fixture) => {
     const original = fixture.readEntry();

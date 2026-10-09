@@ -11,6 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import {
   parseSqliteFileGeneration,
   readStableSqliteFileGeneration,
@@ -347,7 +348,10 @@ function readQuarantineSchemaVersion(database: DatabaseSync, storePath: string):
   const row = database.prepare("PRAGMA user_version").get() as
     | { user_version?: unknown }
     | undefined;
-  const userVersion = row?.user_version;
+  return parseQuarantineSchemaVersion(row?.user_version, storePath);
+}
+
+function parseQuarantineSchemaVersion(userVersion: unknown, storePath: string): number {
   if (typeof userVersion !== "number" || !Number.isInteger(userVersion)) {
     throw new Error(`OpenClaw quarantine store ${storePath} has an invalid schema version.`);
   }
@@ -426,7 +430,26 @@ function readQuarantineDecision(
   pathname: string,
   storePath: string,
 ): OpenClawDatabaseQuarantine | undefined {
-  const userVersion = readQuarantineSchemaVersion(database, storePath);
+  let row: Record<string, unknown> | undefined;
+  let queryFailure: { error: unknown } | undefined;
+  try {
+    // Wildcard selection accepts the released v1 row without a generation column.
+    row = database
+      .prepare(
+        `SELECT q.*, q.path AS quarantine_path, v.user_version
+         FROM pragma_user_version AS v
+         LEFT JOIN quarantined_databases AS q ON q.path = ? LIMIT 1`,
+      )
+      .get(path.resolve(pathname));
+  } catch (error) {
+    if (sqlitePrimaryResultCode(error) !== 1) {
+      throw error;
+    }
+    // Interrupted initialization can leave version zero without the decision table.
+    row = { user_version: readQuarantineSchemaVersion(database, storePath) };
+    queryFailure = { error };
+  }
+  const userVersion = parseQuarantineSchemaVersion(row?.user_version, storePath);
   if (userVersion === 0) {
     return undefined;
   }
@@ -435,37 +458,28 @@ function readQuarantineDecision(
       `OpenClaw quarantine store ${storePath} uses newer schema version ${userVersion}.`,
     );
   }
-  const generationColumn = userVersion >= 2 ? ", verified_generation" : "";
-  const row = database
-    .prepare(
-      `SELECT kind, reason, quarantined_at${generationColumn} FROM quarantined_databases WHERE path = ? LIMIT 1`,
-    )
-    .get(path.resolve(pathname)) as
-    | {
-        kind?: unknown;
-        quarantined_at?: unknown;
-        reason?: unknown;
-        verified_generation?: unknown;
-      }
-    | undefined;
-  if (!row) {
+  if (queryFailure) {
+    throw queryFailure.error;
+  }
+  if (!row || row.quarantine_path === null) {
     return undefined;
   }
+  const verifiedGenerationJson = userVersion >= 2 ? row.verified_generation : undefined;
   if (
     (row.kind !== "agent" && row.kind !== "state") ||
     typeof row.reason !== "string" ||
     typeof row.quarantined_at !== "number" ||
     !Number.isInteger(row.quarantined_at) ||
-    (row.verified_generation !== undefined &&
-      row.verified_generation !== null &&
-      typeof row.verified_generation !== "string")
+    (verifiedGenerationJson !== undefined &&
+      verifiedGenerationJson !== null &&
+      typeof verifiedGenerationJson !== "string")
   ) {
     throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
   }
-  if (typeof row.verified_generation === "string") {
+  if (typeof verifiedGenerationJson === "string") {
     let verifiedGeneration: SqliteFileGeneration;
     try {
-      verifiedGeneration = parseSqliteFileGeneration(row.verified_generation);
+      verifiedGeneration = parseSqliteFileGeneration(verifiedGenerationJson);
     } catch {
       throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
     }

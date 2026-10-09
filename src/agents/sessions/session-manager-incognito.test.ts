@@ -1,7 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -19,6 +18,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
@@ -75,11 +75,40 @@ async function create(name: string) {
   return target;
 }
 
+async function captureCommitRevocation(
+  message: string,
+  operation: (assertCurrent: () => void) => Promise<unknown>,
+): Promise<unknown> {
+  let current = true;
+  const original = workerAdmission.createSqliteWorkerOperationAdmission;
+  const spy = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      original((request, grant) => {
+        admit(request, grant);
+        if (request.stage === "commit") {
+          current = false;
+        }
+      }, attachment),
+    );
+  try {
+    await operation(() => {
+      if (!current) {
+        throw new Error(message);
+      }
+    });
+  } catch (error) {
+    return error;
+  } finally {
+    spy.mockRestore();
+  }
+  return undefined;
+}
+
 it("keeps manager reads and writes on the original actor outside its opening scope", async () => {
   const target = await create("retained-manager");
   const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const sql = observeMainThreadSql();
   try {
     const first = await manager.appendMessageAsync(makeUserMessage("retained owner", 1));
     assert(first);
@@ -117,11 +146,9 @@ it("keeps manager reads and writes on the original actor outside its opening sco
     await rewrite.commit(new Map([[first, replacement]]));
     await manager.reloadPersistedTranscriptAsync();
     expect(manager.buildSessionContext().messages).toMatchObject([{ content: "rewritten" }]);
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
+    sql.restore();
   }
 });
 
@@ -265,8 +292,7 @@ it("reads missing actor context as empty and rejects a row created during consum
     sessionId: "missing-context",
   };
   await withIncognitoSessionActor(actor, async () => {
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    const sql = observeMainThreadSql();
     try {
       expect(
         await SessionManager.readSessionContextAsync(target, (messages, header) => ({
@@ -306,11 +332,9 @@ it("reads missing actor context as empty and rejects a row created during consum
               });
         await expect(reading).rejects.toThrow("generation is no longer current");
       }
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
+      sql.expectIdle();
     } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
+      sql.restore();
     }
   });
 });
@@ -324,8 +348,7 @@ it("reads full context without caller SQL and retains its prefix across an await
         __openclaw: { upstreamUserText: "synthetic-private-native-text" },
       }),
     );
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    const sql = observeMainThreadSql();
     try {
       let retained: Iterable<unknown> | undefined;
       const messages = await SessionManager.readSessionContextAsync(
@@ -353,11 +376,9 @@ it("reads full context without caller SQL and retains its prefix across an await
           return [...context];
         }),
       ).resolves.toEqual(messages);
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
+      sql.expectIdle();
     } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
+      sql.restore();
     }
   });
 });
@@ -449,8 +470,7 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
     ...(await create("maintenance")),
     storePath: path.join(path.dirname(path.dirname(actor.path)), "sessions", "sessions.json"),
   };
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const sql = observeMainThreadSql();
   try {
     await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
@@ -510,11 +530,9 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
       expect(reopened.getBranch()).toEqual(manager.getBranch());
       expect(actor.sessions.readSharing(target.sessionKey)?.entry?.sessionId).toBe(branchedId);
     });
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
+    sql.restore();
   }
 });
 
@@ -570,44 +588,20 @@ it.each(["append", "persist"] as const)(
     await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
       await manager.appendCustomEntryAsync("before-revocation");
-      let current = true;
-      const original = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          original((request, grant) => {
-            admit(request, grant);
-            if (request.stage === "commit") {
-              current = false;
-            }
-          }, attachment),
-        );
-      let failure: unknown;
-      try {
-        await withSessionManagerWriteAssertion(
-          manager,
-          () => {
-            if (!current) {
-              throw new Error("retired after commit grant");
-            }
-          },
-          () =>
-            method === "append"
-              ? manager.appendCustomEntryAsync("committed-once")
-              : manager.persistAsync({
-                  type: "custom",
-                  id: "committed-once",
-                  parentId: null,
-                  timestamp: new Date().toISOString(),
-                  customType: "committed-once",
-                  data: {},
-                }),
-        );
-      } catch (error) {
-        failure = error;
-      } finally {
-        spy.mockRestore();
-      }
+      const failure = await captureCommitRevocation("retired after commit grant", (assertCurrent) =>
+        withSessionManagerWriteAssertion(manager, assertCurrent, () =>
+          method === "append"
+            ? manager.appendCustomEntryAsync("committed-once")
+            : manager.persistAsync({
+                type: "custom",
+                id: "committed-once",
+                parentId: null,
+                timestamp: new Date().toISOString(),
+                customType: "committed-once",
+                data: {},
+              }),
+        ),
+      );
       expect(failure).toBeInstanceOf(Error);
       expect(isRecordedModelFallbackStop(failure)).toBe(true);
       expect(() => manager.getEntries()).toThrow();
@@ -679,37 +673,15 @@ it.each(["registry", "pattern"] as const)(
 it("retains the static note message receipt after acknowledged actor authority loss", async () => {
   const target = await create("static-acknowledged");
   await withIncognitoSessionActor(actor, async () => {
-    let current = true;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          admit(request, grant);
-          if (request.stage === "commit") {
-            current = false;
-          }
-        }, attachment),
-      );
-    let failure: unknown;
-    try {
-      await withSessionTranscriptWriteAssertion(
-        target,
-        () => {
-          if (!current) {
-            throw new Error("static note authority retired after commit grant");
-          }
-        },
-        () =>
+    const failure = await captureCommitRevocation(
+      "static note authority retired after commit grant",
+      (assertCurrent) =>
+        withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
           appendSessionTranscriptNote(target, makeUserMessage("acknowledged static note", 1), {
             config: { logging: { redactPatterns: [] } },
           }),
-      );
-    } catch (error) {
-      failure = error;
-    } finally {
-      spy.mockRestore();
-    }
+        ),
+    );
     expect(failure).toBeInstanceOf(SessionTranscriptMessageCommittedError);
     assert(failure instanceof SessionTranscriptMessageCommittedError);
     expect(isRecordedModelFallbackStop(failure)).toBe(true);
@@ -738,34 +710,13 @@ it("keeps acknowledged rewrite content out of error diagnostics", async () => {
     const marker = "synthetic-incognito-private-receipt-content";
     const replacement = await rewrite.sessionManager.appendMessageAsync(makeUserMessage(marker, 2));
     assert(replacement);
-    let current = true;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          admit(request, grant);
-          if (request.stage === "commit") {
-            current = false;
-          }
-        }, attachment),
-      );
-    let failure: unknown;
-    try {
-      await withSessionManagerWriteAssertion(
-        manager,
-        () => {
-          if (!current) {
-            throw new Error("rewrite owner retired after commit grant");
-          }
-        },
-        () => rewrite.commit(new Map([[source, replacement]])),
-      );
-    } catch (error) {
-      failure = error;
-    } finally {
-      spy.mockRestore();
-    }
+    const failure = await captureCommitRevocation(
+      "rewrite owner retired after commit grant",
+      (assertCurrent) =>
+        withSessionManagerWriteAssertion(manager, assertCurrent, () =>
+          rewrite.commit(new Map([[source, replacement]])),
+        ),
+    );
     expect(failure).toBeInstanceOf(Error);
     expect(inspect(failure, { depth: null })).not.toContain(marker);
     expect(() => manager.getEntries()).toThrow();
@@ -880,8 +831,7 @@ it("refuses synchronous actor SDK access before SQL, view mutation, and tool-res
   assert(id);
   const before = structuredClone(manager.getEntries());
   const beforeTarget = manager.getSessionTarget();
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const sql = observeMainThreadSql();
   const read = vi.fn();
   const beforeWrite = vi.fn();
   const reject = (run: () => unknown, replacement: string) => {
@@ -928,11 +878,9 @@ it("refuses synchronous actor SDK access before SQL, view mutation, and tool-res
       );
     });
     expect(read).not.toHaveBeenCalled();
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
+    sql.restore();
   }
   await manager.appendCustomEntryAsync("still writable", {});
 });
