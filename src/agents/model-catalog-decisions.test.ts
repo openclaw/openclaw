@@ -696,6 +696,72 @@ describe("captured model decisions", () => {
     ).toMatchObject({ availability: false });
   });
 
+  describe("with a ChatGPT account listing", () => {
+    const chatgpt = {
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-access",
+      refresh: "synthetic-refresh",
+      expires: Date.now() + 60 * 60_000,
+    } as const;
+    const evaluate = (
+      outcome: { status: "ready"; listedModelIds: string[] } | { status: "unavailable" },
+      withApiKey: boolean,
+      id: string,
+    ) =>
+      createModelCatalogDecisions({
+        cfg: {},
+        agentId: "main",
+        workspaceDir: "/tmp/catalog-workspace",
+        snapshot: {
+          entries: [],
+          routeVariants: [],
+          providerOutcomes: [{ provider: "openai", ...outcome }],
+        },
+        metadataSnapshot: metadata,
+        preparedAuthStore: {
+          version: 1,
+          profiles: {
+            "openai:chatgpt": chatgpt,
+            ...(withApiKey
+              ? {
+                  "openai:platform": {
+                    type: "api_key",
+                    provider: "openai",
+                    key: "synthetic-key",
+                  } as const,
+                }
+              : {}),
+          },
+        },
+        routeResolverFactory: routeResolverFactory({
+          ...dualRoutes,
+          preferredAuthRequirement: "subscription",
+        }),
+      }).evaluateEntry({ provider: "openai", id }, undefined, "codex");
+    // The listing returned gpt-5.5 as a hidden row and did not return gpt-5.4-pro.
+    const ready = { status: "ready", listedModelIds: ["gpt-6-sol", "gpt-5.5"] } as const;
+
+    it("does not offer an unlisted dual-route model to a ChatGPT-only account", () => {
+      expect(evaluate(ready, false, "gpt-5.4-pro")).toMatchObject({ availability: false });
+      expect(evaluate(ready, false, "gpt-5.5")).toMatchObject({
+        availability: true,
+        selectedProfileId: "openai:chatgpt",
+      });
+    });
+
+    it.each([
+      ["an OpenAI API key is also stored", ready, true],
+      ["the listing is unavailable", { status: "unavailable" } as const, false],
+    ])("keeps the subscription route when %s", (_label, outcome, withApiKey) => {
+      expect(evaluate(outcome, withApiKey, "gpt-5.4-pro")).toMatchObject({
+        availability: true,
+        selectedProfileId: "openai:chatgpt",
+        selectedRoute: { authRequirement: "subscription" },
+      });
+    });
+  });
+
   it("distinguishes unknown choices from authoritative empty choices", async () => {
     expect(nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
     expect(nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);

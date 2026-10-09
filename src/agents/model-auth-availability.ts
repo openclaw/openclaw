@@ -3,7 +3,10 @@ import {
   findNormalizedProviderValue,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
-import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString as hasSecret,
+  normalizeLowercaseStringOrEmpty,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -123,6 +126,8 @@ type CreateModelAuthAvailabilityResolverParams = {
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
+  /** Ids a ready account listing returned, including hidden rows; absent when not listed. */
+  accountListedModelIds?: (provider: string) => ReadonlySet<string> | undefined;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -1108,6 +1113,36 @@ export function createModelAuthAvailabilityResolver(
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
+    const accountListedModelIds = params.accountListedModelIds?.(provider);
+    if (
+      accountListedModelIds &&
+      routeResolution.routes.length > 1 &&
+      routeAuthDecision.kind === "selected" &&
+      routeAuthDecision.selection.kind === "selected" &&
+      routeAuthDecision.selection.route.authRequirement === "subscription" &&
+      !accountListedModelIds.has(normalizeLowercaseStringOrEmpty(ref.modelId))
+    ) {
+      // The ready account listing did not return this dual-route id, so its subscription route
+      // is not entitled. A usable Platform credential keeps today's selection and preference.
+      const [firstPlatformRoute, ...restPlatformRoutes] = routeResolution.routes.filter(
+        (route) => route.authRequirement !== "subscription",
+      );
+      const platform = firstPlatformRoute
+        ? selectOpenAIModelRouteAuth({
+            resolution: { ...routeResolution, routes: [firstPlatformRoute, ...restPlatformRoutes] },
+            sourcePlan,
+            configuredAuthMode: automaticRouteAuthMode,
+          })
+        : undefined;
+      if (platform?.kind !== "selected" || platform.selection.kind !== "selected") {
+        return {
+          availability: false,
+          unavailableReason: "missing-auth",
+          routeResolution,
+          selectedRoute: routeAuthDecision.selection.route,
+        };
+      }
+    }
     // Past route success proves readiness; the current selector still owns billing preference.
     const preferredSelection =
       routeAuthDecision.kind === "selected" &&

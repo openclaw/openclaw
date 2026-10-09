@@ -15,4 +15,9 @@ export type ProviderCatalogOutcome = {
   }[];
   /** Optional successful discovery order for models already present in the catalog. */
   modelOrder?: readonly string[];
+  /**
+   * Every model id a successful account listing returned, including hidden rows.
+   * When present, subscription routes for other ids are not entitled for this account.
+   */
+  listedModelIds?: readonly string[];
 };

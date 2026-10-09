@@ -585,6 +585,15 @@ describe("buildOpenAIProvider", () => {
         "gpt-5.6-terra",
         "gpt-5.3-codex-spark",
       ]);
+      // Entitlement keeps hidden rows that the picker omits.
+      expect(result.outcomes?.[0]?.listedModelIds).toEqual([
+        "gpt-5.6-sol",
+        "gpt-5.5",
+        "gpt-5.6-terra",
+        "gpt-5.3-codex-spark",
+        "codex-auto-review",
+        "codex-internal-fallback",
+      ]);
       expect(openai?.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
         contextWindow: 372_000,
         compat: {

@@ -431,6 +431,13 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     const modelServiceTiers = readOpenAICodexServiceTiers(rows);
+    // Hidden rows are not shown, but the account remains entitled to them.
+    const listedModelIds = rows.flatMap((row) => {
+      const id =
+        catalogRuntime.readLiveModelCatalogStringField(row, "slug") ??
+        catalogRuntime.readLiveModelCatalogStringField(row, "id");
+      return id ? [id] : [];
+    });
     // A successful account-scoped response is authoritative even when all
     // rows are hidden; static hints must not invent subscription access.
     return {
@@ -444,6 +451,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
         provider: PROVIDER_ID,
         status: "ready",
         ...(modelServiceTiers.length ? { modelServiceTiers } : {}),
+        listedModelIds,
       },
     };
   } catch (error) {
