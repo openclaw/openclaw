@@ -23,8 +23,18 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
+  readSessionPendingInputWorkerReceipt,
+  resolveSessionPendingInputAppend,
+  runWithSessionPendingInputWorkerCustody,
+  type SessionPendingInputWorkerFacts,
+  type SessionPendingInputWorkerReceipt,
+} from "./session-accessor.sqlite-pending-inputs.js";
+import {
   findTranscriptEventInDatabase,
   readTranscriptIdentityByEventId,
+  readTranscriptEventRows,
+  readTranscriptSnapshot,
+  type SqliteTranscriptSnapshotState,
 } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -32,23 +42,47 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
+import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
+import {
+  readCommittedTranscriptMessageSequence,
+  rememberCommittedTranscriptMessageSequencesInTransaction,
+} from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
+  readTranscriptMessageByScopedIdempotencyKey,
+  replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import {
   assertLockedTranscriptWriteAllowed,
   assertNonMessageTranscriptEvent,
 } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import type {
+  LockedTranscriptMessageAppendOptions,
+  TranscriptMessageAppendResult,
+} from "./session-accessor.types.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  compactManualTranscript,
+  type ManualCompactInput,
+} from "./session-manual-compact.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
+import type { SessionSourcePredicate } from "./session-source-authority.js";
+import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 export type SessionMessageRewriteSelection = {
@@ -73,6 +107,30 @@ export type SessionMessageRewriteCommitted = {
 };
 
 export type SessionMessageRewriteOperations = {
+  "session.transcript.lock.cold": {
+    input: { scope: ResolvedTranscriptScope };
+    output: { archive: ReturnType<typeof readSessionColdTranscript> };
+  };
+  "session.transcript.lock.read": {
+    input: { scope: ResolvedTranscriptScope };
+    output: ReturnType<typeof readTranscriptSnapshot>;
+  };
+  "session.transcript.lock.prepare": {
+    input: LockedTranscriptTarget & { options: LockedMessageOptions };
+    output: ReturnType<typeof prepareLockedTranscriptAppend>;
+  };
+  "session.transcript.lock.facts": {
+    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[] };
+    output: ReturnType<typeof readTranscriptMirrorFacts>;
+  };
+  "session.transcript.lock.commit": {
+    input: LockedTranscriptMutation;
+    output: ReturnType<typeof commitLockedTranscript>;
+  };
+  "session.transcript.manualCompact": {
+    input: ManualCompactInput;
+    output: ReturnType<typeof compactManualTranscript>;
+  };
   "session.transcript.event.append": {
     input: { scope: ResolvedTranscriptScope; eventJson: string };
     output: ReturnType<typeof commitSessionTranscriptEvent>;
@@ -143,6 +201,20 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       switch (command.type) {
+        case "session.transcript.lock.cold":
+          return { archive: readSessionColdTranscript(database.db, command.input.scope.sessionId) };
+        case "session.transcript.lock.read":
+          return readTranscriptSnapshot(database, command.input.scope.sessionId);
+        case "session.transcript.lock.prepare":
+          return withLockedCustody(command.input, context, () =>
+            prepareLockedTranscriptAppend(command.input, database),
+          );
+        case "session.transcript.lock.facts":
+          return readTranscriptMirrorFacts(database, command.input.scope, command.input);
+        case "session.transcript.lock.commit":
+          return commitLockedTranscript(command.input, context);
+        case "session.transcript.manualCompact":
+          return compactManualTranscript(command.input, context);
         case "session.transcript.event.append":
           return commitSessionTranscriptEvent(command.input, context);
         case "session.transcript.correct":
@@ -162,6 +234,212 @@ export function bindSqliteWorkerBackend(
     },
     close() {},
   };
+}
+
+type LockedTranscriptTarget = {
+  scope: ResolvedTranscriptScope;
+  fence: SessionTranscriptWriteScope;
+  custody?: SessionPendingInputWorkerFacts;
+  relocation?: string;
+};
+type LockedMessageOptions = Omit<
+  LockedTranscriptMessageAppendOptions<unknown>,
+  | "config"
+  | "message"
+  | "beforeFreshMessageCommit"
+  | "prepareMessageAfterIdempotencyCheck"
+  | "prepareMessageAfterIdempotencyCheckAsync"
+> & {
+  message: { role?: "user"; idempotencyKey?: string } | null | undefined;
+};
+export type LockedTranscriptCommitted = {
+  kind: "session-transcript-locked";
+  result?: TranscriptMessageAppendResult<unknown>;
+  messageSeq?: number;
+  lifecycleRevision?: string;
+  custody?: SessionPendingInputWorkerReceipt;
+  authority?: SessionPendingInputAuthorityFacts;
+  projectionNeedsReconcile: boolean;
+  snapshot?: SqliteTranscriptSnapshotState;
+};
+type LockedTranscriptMutation = LockedTranscriptTarget & {
+  sources: SessionSourcePredicate[];
+  snapshot?: SqliteTranscriptSnapshotState;
+} & (
+    | { kind: "replace"; events: readonly TranscriptEvent[] }
+    | {
+        kind: "message";
+        options: LockedMessageOptions;
+        freshSources: SessionSourcePredicate[];
+        freshAuthorityPrepared: boolean;
+        sequenced: boolean;
+        preparedMessageJson: string | undefined;
+        preparation?: {
+          prepared: boolean;
+          version: SessionTranscriptContextVersion;
+        };
+      }
+  );
+
+function withLockedCustody<T>(
+  input: LockedTranscriptTarget,
+  context: AgentWorkerOperationContext,
+  run: () => T,
+): T {
+  return input.custody
+    ? runWithSessionPendingInputWorkerCustody(
+        input.custody,
+        input.relocation,
+        () =>
+          context.admit("transaction", {
+            kind: "session-transcript-lock-custody",
+            authority: input.custody!.preparedAuthority
+              ? readSessionPendingInputAuthorityFacts(
+                  context.open(),
+                  input.custody!.sessionKey,
+                  input.custody!.agentId,
+                )
+              : undefined,
+          }),
+        run,
+      ).value
+    : run();
+}
+
+function prepareLockedTranscriptAppend(
+  input: LockedTranscriptTarget & { options: LockedMessageOptions },
+  database: OpenClawAgentDatabase,
+) {
+  assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+  const key = readMessageIdempotencyKey(input.options.message);
+  return {
+    version: readTranscriptContextVersionInTransaction(database, input.scope.sessionId),
+    pending: Boolean(
+      resolveSessionPendingInputAppend(database, input.scope, input.options.message),
+    ),
+    existing:
+      key && input.options.idempotencyLookup !== "caller-checked"
+        ? readTranscriptMessageByScopedIdempotencyKey(
+            database,
+            input.scope,
+            key,
+            input.options.idempotencyLookup,
+          )
+        : undefined,
+  };
+}
+
+function commitLockedTranscript(
+  input: LockedTranscriptMutation,
+  context: AgentWorkerOperationContext,
+) {
+  return withLockedCustody(input, context, () =>
+    context.writeTransaction("session.transcript.locked-write", "Locked transcript", (database) => {
+      const assertSources = (fresh: boolean, sources: SessionSourcePredicate[]) =>
+        context.admit("transaction", {
+          kind: "session-transcript-lock-source",
+          fresh,
+          refusedSource: readRefusedSessionSource(database, sources),
+        });
+      assertSources(false, input.sources);
+      const entry = assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+      let projectionNeedsReconcile = false;
+      const projection = {
+        scheduleProjectionReconcile: false,
+        onProjectionReconcileNeeded: () => {
+          projectionNeedsReconcile = true;
+        },
+      };
+      const snapshotCurrent =
+        input.snapshot?.kind === "current" &&
+        isDeepStrictEqual(
+          input.snapshot.rows,
+          readTranscriptEventRows(database, input.scope.sessionId),
+        );
+      let result: TranscriptMessageAppendResult<unknown> | undefined;
+      let messageSeq: number | undefined;
+      if (input.kind === "message") {
+        const preparation = input.preparation;
+        const preparedMessage =
+          input.preparedMessageJson === undefined
+            ? undefined
+            : {
+                messageJson: input.preparedMessageJson,
+                persistedMessage: JSON.parse(input.preparedMessageJson),
+              };
+        result = appendTranscriptMessageInTransaction(
+          database,
+          input.scope,
+          {
+            ...input.options,
+            ...(preparation
+              ? {
+                  prepareMessageAfterIdempotencyCheck: () => {
+                    const current = readTranscriptContextVersionInTransaction(
+                      database,
+                      input.scope.sessionId,
+                    );
+                    if (
+                      !preparation.prepared ||
+                      current.generation !== preparation.version.generation ||
+                      current.rawSeq !== preparation.version.rawSeq ||
+                      current.updatedAt !== preparation.version.updatedAt
+                    ) {
+                      throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
+                    }
+                    return preparedMessage?.persistedMessage;
+                  },
+                }
+              : {}),
+            beforeFreshMessageCommit: () => {
+              if (!input.freshAuthorityPrepared) {
+                throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
+              }
+              assertSources(true, input.freshSources);
+            },
+          },
+          preparedMessage,
+          projection,
+        )?.result;
+        if (result && input.sequenced) {
+          rememberCommittedTranscriptMessageSequencesInTransaction(
+            database,
+            input.scope.sessionId,
+            [result],
+          );
+          messageSeq = readCommittedTranscriptMessageSequence(result);
+        }
+      } else {
+        if (input.snapshot && !snapshotCurrent) {
+          throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
+        }
+        replaceSqliteTranscriptEventsInTransaction(database, input.scope, input.events, projection);
+      }
+      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+      const candidate: LockedTranscriptCommitted = {
+        kind: "session-transcript-locked",
+        result,
+        messageSeq,
+        lifecycleRevision: entry?.lifecycleRevision,
+        custody: readSessionPendingInputWorkerReceipt(database),
+        authority: input.custody?.preparedAuthority
+          ? readSessionPendingInputAuthorityFacts(
+              database,
+              input.custody.sessionKey,
+              input.custody.agentId,
+            )
+          : undefined,
+        projectionNeedsReconcile,
+        snapshot:
+          input.snapshot || input.kind === "replace"
+            ? input.kind === "replace" || snapshotCurrent
+              ? { kind: "current", rows: readTranscriptEventRows(database, input.scope.sessionId) }
+              : { kind: "stale" }
+            : undefined,
+      };
+      return transferSessionEntryWorkerCandidate(database, context.admit, candidate);
+    }),
+  );
 }
 
 export type SessionTranscriptEventCommitted = {

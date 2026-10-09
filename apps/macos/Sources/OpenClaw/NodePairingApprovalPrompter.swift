@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
 import OSLog
@@ -209,15 +208,7 @@ final class NodePairingApprovalPrompter {
                 resolution=\(resolution.rawValue, privacy: .public)
                 """)
             self.queue.removeAll { $0 == req }
-            // Same coordination as handleResolved: while our own RPC is in
-            // flight the awaiting path reports the outcome, not this one.
-            if self.pendingLocalDecisionRequestIds.contains(req.requestId) {
-                self.echoedResolutionsByRequestId[req.requestId] = resolution
-            } else {
-                Task { @MainActor in
-                    await self.notify(resolution: resolution, request: req, via: "remote", source: source)
-                }
-            }
+            self.recordRemoteResolution(resolution, request: req, source: source)
         }
 
         self.syncCards()
@@ -249,31 +240,20 @@ final class NodePairingApprovalPrompter {
         guard let source = self.source else { return }
         switch push {
         case let .event(evt) where evt.event == "node.pair.requested":
-            guard let payload = evt.payload else { return }
-            do {
-                let req = try GatewayPayloadDecoding.decode(payload, as: PendingRequest.self)
-                source.invalidateList()
-                self.trustUnknownRequestIds.insert(req.requestId)
-                self.enqueue(req, source: source)
-                self.syncCards()
-                self.updateReconcileLoop()
-                // Refresh the paired list now so the card's "previously
-                // paired" trust signal reflects current gateway truth.
-                self.scheduleReconcileOnce(delayMs: 0, source: source)
-            } catch {
-                self.logger
-                    .error("failed to decode pairing request: \(error.localizedDescription, privacy: .public)")
-            }
+            guard let req: PendingRequest = PairingPromptSupport.decodeEventPayload(
+                evt.payload, context: "pairing request", logger: self.logger) else { return }
+            source.invalidateList()
+            self.trustUnknownRequestIds.insert(req.requestId)
+            self.enqueue(req, source: source)
+            self.syncCards()
+            self.updateReconcileLoop()
+            // Refresh the paired list now so the card's "previously
+            // paired" trust signal reflects current gateway truth.
+            self.scheduleReconcileOnce(delayMs: 0, source: source)
         case let .event(evt) where evt.event == "node.pair.resolved":
-            guard let payload = evt.payload else { return }
-            do {
-                let resolved = try GatewayPayloadDecoding.decode(payload, as: PairingResolvedEvent.self)
-                self.handleResolved(resolved, source: source)
-            } catch {
-                self.logger
-                    .error(
-                        "failed to decode pairing resolution: \(error.localizedDescription, privacy: .public)")
-            }
+            guard let resolved: PairingResolvedEvent = PairingPromptSupport.decodeEventPayload(
+                evt.payload, context: "pairing resolution", logger: self.logger) else { return }
+            self.handleResolved(resolved, source: source)
         case .snapshot:
             Task { await self.loadPendingRequestsFromGateway(source: source) }
         case .seqGap:
@@ -619,16 +599,22 @@ final class NodePairingApprovalPrompter {
         }
         self.queue.removeAll { $0.requestId == resolved.requestId }
         self.syncCards()
-        if self.pendingLocalDecisionRequestIds.contains(resolved.requestId) {
+        self.recordRemoteResolution(resolution, request: request, source: source)
+        self.updateReconcileLoop()
+    }
+
+    private func recordRemoteResolution(
+        _ resolution: PairingResolution, request: PendingRequest, source: PairingPromptSupport.Source)
+    {
+        if self.pendingLocalDecisionRequestIds.contains(request.requestId) {
             // Our own approve/reject RPC is still in flight; park the
             // authoritative outcome for that path to report exactly once.
-            self.echoedResolutionsByRequestId[resolved.requestId] = resolution
+            self.echoedResolutionsByRequestId[request.requestId] = resolution
         } else {
             Task { @MainActor in
                 await self.notify(resolution: resolution, request: request, via: "remote", source: source)
             }
         }
-        self.updateReconcileLoop()
     }
 }
 

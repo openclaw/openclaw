@@ -4,6 +4,10 @@ import { existsSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
+import { createPresenceRecipientProjection } from "../../gateway/presence-projection.js";
+import type { GatewayClient } from "../../gateway/server-methods/types.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import type {
   SqliteWorkerOperations,
   SqliteWorkerStore,
@@ -13,7 +17,10 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { withIncognitoSessionActor } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
@@ -28,7 +35,7 @@ import {
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import {
   addSessionMember,
-  listSessionMembersInWorker,
+  readSessionMembersInWorker,
   removeSessionMember,
 } from "./session-sharing-store.js";
 import { listSessionSuggestions } from "./session-suggestion-store.read.js";
@@ -74,6 +81,79 @@ async function fixture(name: string, source = authority) {
   } satisfies SessionCollaborationScope;
   return { scope, entry };
 }
+
+it("composes sharing, delivery, steering and presence from current actor facts without host SQL", async () => {
+  const { scope, entry: initial } = await fixture("authority-composition");
+  const sessionKey = scope.sessionKey;
+  const signal = new AbortController();
+  await withIncognitoSessionActor(
+    actor,
+    async () => {
+      const sql = observeMainThreadSql();
+      const facts = await prepareSessionMutationFacts({ cfg: {}, agentId: "main", sessionKey });
+      const delivery = await prepareSessionDeliveryGeneration({
+        agentId: "main",
+        storePath: actor.path,
+        sessionKey,
+        sessionId: initial.sessionId,
+        lifecycleRevision: initial.lifecycleRevision,
+      });
+      try {
+        const person = { text: "actor watcher", ts: 1, watchedSessions: [sessionKey] };
+        const project = createPresenceRecipientProjection({ cfg: {}, presence: [person] });
+        const client: GatewayClient = {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            role: "operator",
+            scopes: ["operator.admin"],
+            client: {
+              id: "openclaw-control-ui",
+              version: "test",
+              platform: "test",
+              mode: "webchat",
+            },
+          },
+        };
+        expect(facts.storageTarget.storePath).toBe(actor.path);
+        expect(facts.readCurrent({}).target.entry.sessionId).toBe(initial.sessionId);
+        expect(project(client)).toEqual([person]);
+        delivery.assertCurrent();
+        await actor.sessions.sideData(authority, {
+          type: "session.sharing.add",
+          input: { sessionKey, params: { identityId: "viewer", addedBy: "owner" } },
+        });
+        expect(facts.readCurrent({}).membership.has("viewer")).toBe(true);
+        delivery.assertCurrent();
+        const steering = prepareSteeringDelivery({
+          agentId: actor.agentId,
+          storePath: actor.path,
+          sessionKey,
+          sessionId: initial.sessionId,
+          assertCurrent: () => {},
+        });
+        await steering.prepareCurrent();
+        await replaceSessionEntry(
+          { agentId: actor.agentId, storePath: actor.path, sessionKey, env },
+          { ...initial, restartRecoveryDeliveryReceiptState: "delivered-terminal" },
+        );
+        await expect(steering.prepareCurrent()).rejects.toThrow("delivered-terminal");
+        signal.abort(new Error("authority revoked"));
+        expect(() => facts.readCurrent({})).toThrow("Session access facts are unavailable");
+        expect(() => delivery.assertCurrent()).toThrow(
+          "Session delivery generation is unavailable",
+        );
+        expect(() => project(client)).toThrow("authority revoked");
+        sql.expectIdle();
+      } finally {
+        delivery.release();
+        facts.release();
+        sql.restore();
+      }
+    },
+    signal.signal,
+  );
+});
 
 it("composes suggestion FIFO, claims, release and resolution without caller SQL", async () => {
   const { scope: explicitScope, entry } = await fixture("suggestions");
@@ -178,7 +258,7 @@ it.each(["members", "suggestions"] as const)(
         borrowed.sessions.withSharedState(async () => {
           const value =
             kind === "members"
-              ? await listSessionMembersInWorker(captured)
+              ? await readSessionMembersInWorker(captured)
               : await listSessionSuggestions(captured);
           disclosed(value);
         }),
@@ -267,7 +347,7 @@ it("publishes actor membership, owner, participant and category changes through 
   try {
     await withIncognitoSessionActor(actor, async () => {
       await addSessionMember(scope, { identityId: "alice", addedBy: "creator", addedAt: 1 });
-      expect(await listSessionMembersInWorker(scope)).toEqual([
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([
         { identityId: "alice", addedBy: "creator", addedAt: 1 },
       ]);
       await assignSessionOwnerInWorker(scope, {
@@ -284,7 +364,7 @@ it("publishes actor membership, owner, participant and category changes through 
       ).toBe("inserted");
       expect(await updateSessionGroupCategoriesInWorker({ scope, from: entry.category })).toBe(1);
       await removeSessionMember(scope, "alice");
-      expect(await listSessionMembersInWorker(scope)).toEqual([]);
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
       const current = await actor.sessions.read(authority, { sessionKey: scope.sessionKey });
       expect(current.entry).toMatchObject({ owner: { actor: { type: "human", id: "alice" } } });
       expect(current.entry?.category).toBeUndefined();
@@ -419,5 +499,6 @@ it("refuses a captured actor belonging to another physical store", async () => {
       },
       { authorId: "alice", text: "Must not be rerouted" },
     ),
-  ).rejects.toThrow("Collaboration target differs from its captured incognito actor");
+  ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
+  expect(await listSessionSuggestions(scope)).toEqual([]);
 });

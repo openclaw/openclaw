@@ -10,9 +10,11 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
-OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
-friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5 and GPT-6
+OpenClaw-assembled prompts (`gpt-5*` and `gpt-6*`, such as the default
+`gpt-6-astra`). The OpenAI plugin setting below controls the friendly style on
+OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series, and `codex-mini` model
+ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
@@ -124,6 +126,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       },
     }
     ```
+
+    ChatGPT Responses SSE turns may exceed 16 MiB in total. The parser bounds
+    each buffered event to 16 MiB of bytes before decoding or parsing it, and
+    cancels oversized events, including events without a closing delimiter.
 
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
@@ -398,6 +404,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       OpenAI does not get these headers, even though it is a native route)
     - Keep OpenAI-only request shaping (`service_tier`, `store`,
       reasoning-compat, prompt-cache hints)
+    - Send tool-bearing turns for reasoning models configured with
+      `openai-completions` on `api.openai.com` to `/v1/responses`, because
+      Chat Completions rejects function tools with reasoning for current GPT
+      models. Credentials, endpoint host, and proxy routes are unchanged.
 
     **Proxy/compatible routes:**
     - Use looser compat behavior

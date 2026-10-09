@@ -1,9 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -24,8 +21,6 @@ import type {
 } from "./runtime-types.js";
 import type {
   SessionAccessScope,
-  SessionEntryPatchContext,
-  SessionEntryPatchOptions,
   SessionEntrySummary,
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
@@ -38,9 +33,11 @@ import {
   applySessionEntryPatchInDatabase,
   replaceSessionEntryInDatabase,
 } from "./session-accessor.sqlite-entry-mutation.js";
-import { readSessionChildEntriesInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import {
-  readExactSessionEntryRowValidated,
+  readSessionChildEntriesInDatabase,
+  readSessionKeyBySessionIdInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
+import {
   readSessionEntryRow,
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
@@ -66,13 +63,19 @@ import {
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
-import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
+import {
+  mergeSessionEntryPatch,
+  reduceSessionEntryPatch,
+  type SessionEntryPatchOperation,
+} from "./session-entry-patch-operation.js";
 import { captureSessionEntryPatchSource } from "./session-entry-patch-source.js";
 import { patchSessionEntryInWorker } from "./session-entry-patch.js";
 import type {
   SessionEntryPatchGuard,
   SessionEntryPatchSelection,
+  SessionEntryUpdater,
+  SqliteSessionEntryPatchOptions,
 } from "./session-entry-patch.types.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -84,7 +87,7 @@ import {
 } from "./session-source-authority.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
+import { mergeSessionEntry } from "./types.js";
 
 export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
@@ -98,17 +101,6 @@ export {
   loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnlyInScope,
 } from "./session-accessor.sqlite-exact-read.js";
-
-// Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
-
-type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
-  /** Audited internal updaters: no nested writer admission; guards retain only host authority. */
-  workerGuard?: SessionEntryPatchGuard;
-  /** Recheck owner cancellation after async preparation, immediately before committing. */
-  shouldCommit?: () => boolean;
-  /** Synchronous owner bookkeeping after COMMIT, before identity observers can cancel the caller. */
-  onCommitted?: (entry: SessionEntry) => void;
-};
 
 /** Loads one session entry from the additive SQLite session store. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
@@ -154,19 +146,11 @@ export function resolveSessionKeyBySessionId(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
 ): string | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  // session_windows.session_id is the primary key; the indexed lookup cannot be ambiguous.
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getSessionKysely(database.db);
-    return executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_windows")
-        .select("session_key")
-        .where("session_id", "=", resolved.sessionId)
-        .limit(1),
-    );
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value?.session_key : undefined;
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionKeyBySessionIdInDatabase(database, resolved.sessionId),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
 }
 
 /** Lists session entries from the additive SQLite session store. */
@@ -204,18 +188,20 @@ export function listSessionTranscriptInstances(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, continuation, () => {
         const currentEntries =
-          options.sessionId !== undefined
-            ? {
-                get: (sessionKey: string) =>
-                  readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
-              }
+          options.sessionId !== undefined || options.sessionIds !== undefined
+            ? undefined
             : new Map(
                 listSqliteSessionEntriesFromDatabase(database, resolved, {
                   ...scope,
                   clone: false,
                 }).map(({ sessionKey, entry }) => [sessionKey, entry]),
               );
-        return listTranscriptInstancesFromDatabase({ currentEntries, database, options });
+        return listTranscriptInstancesFromDatabase({
+          currentEntries,
+          database,
+          options,
+          entryProjection: scope.projection,
+        });
       }),
     toDatabaseOptions(resolved),
   );
@@ -236,11 +222,14 @@ export async function upsertSessionEntryCore(
   patch: Partial<SessionEntry>,
   options: Pick<SqliteSessionEntryPatchOptions, "assertCommitAllowed" | "workerGuard"> = {},
 ): Promise<SessionEntry | null> {
-  return await patchSessionEntryCore(scope, () => patch, {
-    workerGuard: {},
-    ...options,
-    fallbackEntry: createFallbackSessionEntry(patch),
-  });
+  return await applySessionEntryOperation(
+    scope,
+    { kind: "fields", patch },
+    {
+      ...options,
+      fallbackEntry: createFallbackSessionEntry(patch),
+    },
+  );
 }
 
 /** Replaces one entry in the additive SQLite session store. */
@@ -248,11 +237,14 @@ export async function replaceSessionEntry(
   scope: SessionAccessScope,
   entry: SessionEntry,
 ): Promise<SessionEntry | null> {
-  return await patchSessionEntryCore(scope, () => entry, {
-    workerGuard: {},
-    fallbackEntry: entry,
-    replaceEntry: true,
-  });
+  return await applySessionEntryOperation(
+    scope,
+    { kind: "fields", patch: entry },
+    {
+      fallbackEntry: entry,
+      replaceEntry: true,
+    },
+  );
 }
 
 /** Replaces one entry synchronously for sync session runtimes. */
@@ -277,10 +269,22 @@ export function replaceSessionEntrySync(scope: SessionAccessScope, entry: Sessio
 /** Patches one entry in the additive SQLite session store. */
 export async function patchSessionEntryCore(
   scope: SessionAccessScope,
-  update: SqliteSessionEntrySnapshotPatchParams["update"],
+  update: SessionEntryUpdater,
   options: SqliteSessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryInScope(scope, update, options);
+}
+
+/** Internal fixed operations evaluate the authoritative row inside the writer command. */
+export async function applySessionEntryOperation(
+  scope: SessionAccessScope,
+  operation: SessionEntryPatchOperation,
+  options: SqliteSessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  return await patchSessionEntryInScope(scope, structuredClone(operation), {
+    workerGuard: {},
+    ...options,
+  });
 }
 
 async function patchSessionEntryInScope(
@@ -319,8 +323,27 @@ async function patchSessionEntryInScope(
 /** Patches one logical entry after validating its canonical lifecycle target. */
 export async function patchSessionEntryTarget(
   scope: SessionEntryTargetPatchScope,
-  update: SqliteSessionEntrySnapshotPatchParams["update"],
+  update: SessionEntryUpdater,
   options: SqliteSessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  return await patchSessionEntryTargetInScope(scope, update, options);
+}
+
+export async function applySessionEntryTargetOperation(
+  scope: SessionEntryTargetPatchScope,
+  operation: SessionEntryPatchOperation,
+  options: SqliteSessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  return await patchSessionEntryTargetInScope(scope, structuredClone(operation), {
+    workerGuard: {},
+    ...options,
+  });
+}
+
+async function patchSessionEntryTargetInScope(
+  scope: SessionEntryTargetPatchScope,
+  update: SqliteSessionEntrySnapshotPatchParams["update"],
+  options: SqliteSessionEntryPatchOptions,
 ): Promise<SessionEntry | null> {
   const source = scope.readSource;
   const resolved: ResolvedSqliteScope = source
@@ -368,13 +391,10 @@ type SqliteSessionEntrySnapshotPatchParams = {
   resolved: ResolvedSqliteScope;
   sessionKey: string;
   storePath: string;
-  update: (
-    entry: SessionEntry,
-    context: SessionEntryPatchContext,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+  update: SessionEntryUpdater | SessionEntryPatchOperation;
 };
 
-/** All entry patches prepare asynchronously, then revalidate and publish on one commit edge. */
+/** Callback and fixed-operation patches share source custody, FIFO, and commit publication. */
 async function patchSqliteSessionEntrySnapshot(
   params: SqliteSessionEntrySnapshotPatchParams,
 ): Promise<SessionEntry | null> {
@@ -392,44 +412,35 @@ async function patchSqliteSessionEntrySnapshot(
   } = captureSessionEntryPatchSource(params.resolved, sessionKey, captured);
   const prepare = async (prepared: SqliteLifecycleTargetSnapshot) => {
     const existing = prepared[0]?.entry;
+    if (
+      options.prepareIf?.kind === "live-model-switch-pending" &&
+      !existing?.liveModelSwitchPending
+    ) {
+      return undefined;
+    }
     const writeBase = existing ?? options.fallbackEntry;
     if (!writeBase) {
       return undefined;
     }
     let contextEntry = existing;
     let contextEntryBorrowed = true;
-    const patch = await params.update(structuredClone(writeBase), {
-      get existingEntry() {
-        if (contextEntryBorrowed) {
-          contextEntry = contextEntry ? structuredClone(contextEntry) : undefined;
-          contextEntryBorrowed = false;
-        }
-        return contextEntry;
-      },
-      set existingEntry(entry) {
-        contextEntry = entry;
-        contextEntryBorrowed = false;
-      },
-    });
-    // A fallback supplies identity, not an existing node's immutable creation policy.
-    const mergeBase = existing ? writeBase : undefined;
-    const creationPatch = !existing && patch ? { ...writeBase, ...patch } : patch;
-    const merged = !creationPatch
-      ? undefined
-      : options.replaceEntry
-        ? structuredClone(patch as SessionEntry)
-        : options.preserveActivity
-          ? mergeSessionEntryPreserveActivity(mergeBase, creationPatch)
-          : mergeSessionEntry(mergeBase, creationPatch);
-    const next = !merged
-      ? undefined
-      : options.replaceEntry
-        ? merged
-        : preserveSqliteSameKeySessionRolloverLineage({
-            next: merged,
-            previous: writeBase,
-            sessionKey,
+    const patch =
+      typeof params.update !== "function"
+        ? reduceSessionEntryPatch(params.update, writeBase)
+        : await params.update(structuredClone(writeBase), {
+            get existingEntry() {
+              if (contextEntryBorrowed) {
+                contextEntry = contextEntry ? structuredClone(contextEntry) : undefined;
+                contextEntryBorrowed = false;
+              }
+              return contextEntry;
+            },
+            set existingEntry(entry) {
+              contextEntry = entry;
+              contextEntryBorrowed = false;
+            },
           });
+    const next = mergeSessionEntryPatch({ ...options, existing, writeBase, patch, sessionKey });
     return {
       selection: params.selection,
       prepared,
@@ -442,6 +453,7 @@ async function patchSqliteSessionEntrySnapshot(
       providerReviewMutation: options.providerReviewMutation,
       shouldCommitIf: options.workerGuard?.shouldCommitIf,
       cliHistory: options.workerGuard?.cliHistory,
+      conversation: options.workerGuard?.conversation,
     };
   };
   const withDatabase = <T>(operation: () => T | Promise<T>) => {
@@ -484,6 +496,24 @@ async function patchSqliteSessionEntrySnapshot(
       assertCurrent: () => assertCurrent?.(),
       guard: options.workerGuard,
       preparedSource,
+      reduction:
+        typeof params.update === "function"
+          ? undefined
+          : {
+              operation: params.update,
+              selection: params.selection,
+              sessionKey,
+              operationLabel: params.operationLabel,
+              validateCanonicalKeys: params.validateCanonicalKeys,
+              fallbackEntry: options.fallbackEntry,
+              replaceEntry: options.replaceEntry,
+              preserveActivity: options.preserveActivity,
+              consumePendingReset: options.consumePendingReset,
+              providerReviewMutation: options.providerReviewMutation,
+              shouldCommitIf: options.workerGuard?.shouldCommitIf,
+              cliHistory: options.workerGuard?.cliHistory,
+              conversation: options.workerGuard?.conversation,
+            },
       prepare,
       onCommitted: options.onCommitted,
     }).then((result) => {
@@ -671,7 +701,9 @@ export async function updateSessionLastRoute(
 /** Internal callers retain their captured storage owner across route preparation. */
 export async function updateSessionLastRouteInScope(
   scope: SessionAccessScope & { databaseAgentId?: string },
-  params: Omit<Parameters<typeof updateSessionLastRoute>[0], "storePath" | "sessionKey">,
+  params: Omit<Parameters<typeof updateSessionLastRoute>[0], "storePath" | "sessionKey"> & {
+    workerGuard?: SessionEntryPatchGuard;
+  },
 ): Promise<SessionEntry | null> {
   if (params.ctx) {
     normalizeInternalTurnContext(params.ctx);
@@ -703,7 +735,7 @@ export async function updateSessionLastRouteInScope(
     {
       // Route updates must not refresh activity timestamps (#49515).
       preserveActivity: true,
-      workerGuard: {},
+      workerGuard: params.workerGuard ?? {},
       ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
       ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
     },

@@ -5,6 +5,7 @@ import {
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeOpus55ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   resolveClaudeSonnet55ModelIdentity,
   supportsClaude1MContext,
@@ -22,6 +23,7 @@ describe("supportsClaudeInHistorySystemMessages", () => {
     ["claude-opus-4-8", true],
     ["claude-sonnet-5", true],
     ["claude-sonnet-5-5", true],
+    ["claude-haiku-5-5", true],
     ["claude-fable-5", true],
     ["claude-fable-5-1", true],
     ["claude-mythos-5", true],
@@ -58,11 +60,34 @@ describe("bindsClaudeThinkingPrefix", () => {
     [{ id: "claude-fable-5-1", params: { canonicalModelId: "claude-opus-5" } }, false],
     [{ id: "claude-fable-5" }, false],
     [{ id: "claude-opus-5-5" }, true],
+    [{ id: "claude-haiku-5-5" }, true],
     [{ id: "claude-fable-5-10" }, false],
     [{ id: "claude-fable-5-2" }, false],
     [{}, false],
   ])("resolves %j to %s", (ref, expected) => {
     expect(bindsClaudeThinkingPrefix(ref)).toBe(expected);
+  });
+});
+
+describe("Claude Haiku 5.5 model contract", () => {
+  it.each([
+    ["haiku", "claude-haiku-5-5"],
+    ["haiku-5.5", "claude-haiku-5-5"],
+    ["us.anthropic.claude-haiku-5-5-v1:0", "claude-haiku-5-5-v1:0"],
+    ["claude-haiku-4-5", undefined],
+    ["claude-haiku-5-50", undefined],
+  ])("resolves %s without broadening the version boundary", (id, expected) => {
+    expect(resolveClaudeHaiku55ModelIdentity({ id })).toBe(expected);
+  });
+  it("uses optional adaptive thinking without Sonnet's between-tools mode", () => {
+    const ref = { id: "deployment", params: { canonicalModelId: "claude-haiku-5-5" } };
+    expect(supportsClaudeAdaptiveThinking(ref)).toBe(true);
+    expect(supportsClaude1MContext(ref)).toBe(true);
+    expect(requiresClaudeMandatoryAdaptiveThinking(ref)).toBe(false);
+    expect(requiresClaudeBetweenToolsThinking(ref)).toBe(false);
+    expect(supportsClaudeFastMode(ref)).toBe(false);
+    expect(supportsClaudeNativeXhighEffort(ref)).toBe(true);
+    expect(supportsClaudeNativeMaxEffort(ref)).toBe(true);
   });
 });
 

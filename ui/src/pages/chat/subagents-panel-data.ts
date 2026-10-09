@@ -17,7 +17,6 @@ import type {
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  isSubagentSessionKey,
   normalizeAgentId,
   resolveUiConversationIdentity,
   resolveUiSessionRowAgentId,
@@ -27,6 +26,7 @@ import { requestChatAbort } from "./chat-abort-request.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import { historySessionId, isHistoryCursor } from "./chat-history-snapshot.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { isSubagentsPanelSession } from "./chat-spawned-subagent.ts";
 import {
   readSubagentActivitySnapshot,
   readSubagentToolEvent,
@@ -289,22 +289,16 @@ export class SubagentsPanelData {
       this.nextOffset = result.nextOffset ?? null;
       const sampledAt = Date.now();
       const previous = new Map(this.sessions.map((row) => [row.key, row]));
-      this.sessions = result.sessions
-        .filter(
-          (row) =>
-            (row.classification === "subagent" || isSubagentSessionKey(row.key)) &&
-            !row.swarmGroupId?.trim(),
-        )
-        .map((row) => {
-          const held = previous.get(row.key);
-          const sameSample =
-            held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
-          return Object.assign({}, row, {
-            agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
-            runtimeSampledAt:
-              row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
-          });
+      this.sessions = result.sessions.filter(isSubagentsPanelSession).map((row) => {
+        const held = previous.get(row.key);
+        const sameSample =
+          held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
+        return Object.assign({}, row, {
+          agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
+          runtimeSampledAt:
+            row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
         });
+      });
       const keys = new Set(this.sessions.map((row) => row.key));
       for (const key of this.metrics.keys()) {
         if (!keys.has(key)) {

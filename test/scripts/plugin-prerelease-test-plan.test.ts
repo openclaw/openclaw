@@ -415,7 +415,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
-    expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
+    expect(fixtureServer).toContain(
+      "const versionPath = `${packagePath}/versions/${fixture.version}`;",
+    );
+    expect(fixtureServer).toContain("[`${versionPath}/artifact`, artifactResolverDetail]");
   });
 
   it("forwards validated frozen-target omissions to the selected shard adapters", () => {
@@ -911,6 +914,21 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           .filter((row) => row.task === "extensions-batch" && !row.requires_bun)
           .every((row) => row.test_runtime_policy === "node"),
       ).toBe(true);
+      const fileShardRows = matrix.include.filter((row) => row.task === "extension-file-shard");
+      expect(
+        fileShardRows.every(
+          (row) => !row.requires_bun && (row.test_runtime_policy ?? "node") === "node",
+        ),
+      ).toBe(true);
+      expect(fileShardRows).toContainEqual(
+        expect.objectContaining({
+          extensions_csv: "codex",
+          vitest_config: "test/vitest/vitest.extension-database-workers.config.ts",
+          includePatterns: expect.arrayContaining([
+            "extensions/codex/src/session-catalog-native-performance.test.ts",
+          ]),
+        }),
+      );
     }
   });
 

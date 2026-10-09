@@ -682,7 +682,7 @@ normalize_capture_for_play() {
   rm -f "$input_path"
 
   description="$(file "$output_path")"
-  if [[ "$description" != *"${SCREENSHOT_SIZE/x/x}"* || "$description" != *"JPEG image data"* ]]; then
+  if [[ "$description" != *"$SCREENSHOT_SIZE"* || "$description" != *"JPEG image data"* ]]; then
     echo "Invalid Google Play screenshot output: ${description}" >&2
     return 1
   fi

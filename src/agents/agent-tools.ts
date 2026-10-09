@@ -349,12 +349,14 @@ function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
+  const sessionEventToolsAllow: string[] = [];
   const wrapGatewayCaller = createCodingToolsGatewayCaller({
     options,
     agentId: executionAgentId,
     sessionKey: executionSessionKey,
     accountId: gatewayCaller.accountId,
     capabilityProfile,
+    sessionEventToolsAllow,
   });
   const pluginToolOptions = {
     ...options,
@@ -604,7 +606,7 @@ function* assembleOpenClawCodingTools(
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
-  return finalizeAgentTools({
+  const finalizedTools = finalizeAgentTools({
     ...options,
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
     wrapBeforeToolCallHook: preparedTools
@@ -614,7 +616,9 @@ function* assembleOpenClawCodingTools(
       : options?.wrapBeforeToolCallHook,
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
-  }).map(wrapGatewayCaller);
+  });
+  sessionEventToolsAllow.push(...finalizedTools.map((tool) => tool.name));
+  return finalizedTools.map(wrapGatewayCaller);
 }
 
 /** @deprecated Use createOpenClawCodingToolsInternalAsync for runtime construction. */
@@ -668,7 +672,10 @@ export async function createOpenClawCodingToolsInternalAsync(
 export function createOpenClawCodingTools(
   options?: Omit<
     OpenClawCodingToolsOptions,
-    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+    | "sessionReadScopeKey"
+    | "onProgressCardPlanSaved"
+    | "authProfileStoreSource"
+    | "onWebSearchConfiguration"
   >,
 ): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
@@ -678,7 +685,10 @@ export function createOpenClawCodingTools(
 export function createOpenClawCodingToolsAsync(
   options?: Omit<
     OpenClawCodingToolsOptions,
-    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+    | "sessionReadScopeKey"
+    | "onProgressCardPlanSaved"
+    | "authProfileStoreSource"
+    | "onWebSearchConfiguration"
   >,
 ): Promise<AnyAgentTool[]> {
   return createOpenClawCodingToolsInternalAsync(options);

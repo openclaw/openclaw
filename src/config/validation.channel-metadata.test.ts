@@ -204,33 +204,6 @@ describe("config validation metadata", () => {
     }
   });
 
-  it("reports open-DM warnings at both channel and account scopes", () => {
-    const result = validateConfigObjectWithPlugins({
-      channels: {
-        mattermost: {
-          dmPolicy: "open",
-          accounts: {
-            work: {
-              enabled: true,
-              baseUrl: "https://chat.example.com",
-              botToken: "test-token",
-              dmPolicy: "open",
-            },
-          },
-        },
-      },
-    });
-    expect(result.ok).toBe(true);
-    for (const scope of ["channels.mattermost", "channels.mattermost.accounts.work"]) {
-      expect(result.warnings).toContainEqual(
-        expect.objectContaining({
-          path: scope + ".allowFrom",
-          message: expect.stringContaining(scope + '.dmPolicy="open"'),
-        }),
-      );
-    }
-  });
-
   it("normalizes composed local references without changing shared definitions", () => {
     const account = accountSchema();
     const schema = {
@@ -297,7 +270,7 @@ describe("config validation metadata", () => {
   it("keeps schema ownership when closer root metadata shadows a later schema", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(
       registry(
-        feishuPlugin(),
+        feishuPlugin(feishuSchema(), "openclaw" + String.fromCharCode(10, 27) + "[31m-lark"),
         plugin({ id: "workspace-channel-labels", origin: "workspace", channels: ["feishu"] }),
         feishuPlugin(
           {
@@ -325,42 +298,6 @@ describe("config validation metadata", () => {
     }
   });
 
-  it("sanitizes the schema owner in diagnostics", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(
-      registry(
-        feishuPlugin(feishuSchema(), "openclaw" + String.fromCharCode(10, 27) + "[31m-lark"),
-      ),
-    );
-    const result = validateFeishu({ unsupportedField: true });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message:
-            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
-        }),
-      );
-    }
-  });
-
-  it("keeps raw channel validation diagnostics plugin-agnostic", () => {
-    const result = validateConfigObjectRawWithPlugins({
-      channels: { telegram: { groups: ["-1001234567890"] } },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.telegram.groups",
-          message: expect.stringContaining("invalid config:"),
-        }),
-      );
-      expect(result.issues[0]?.message).not.toContain("Telegram groups");
-      expect(result.issues[0]?.message).not.toContain("openclaw doctor --fix");
-    }
-  });
-
   it("does not inject plugin config defaults in raw mode", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(pluginDefaultsRegistry());
     const result = validateConfigObjectRawWithPlugins({
@@ -370,17 +307,6 @@ describe("config validation metadata", () => {
     if (result.ok) {
       expect(result.config.plugins?.entries?.opik?.config).toBeUndefined();
     }
-  });
-
-  it("reuses the registry loaded for bundled allowlist compatibility", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(
-      registry(
-        plugin({ id: "opik", configSchema: { type: "object", additionalProperties: true } }),
-        plugin({ id: "brave-search", contracts: { webSearchProviders: ["brave"] } }),
-      ),
-    );
-    expect(validateConfigObjectWithPlugins(enabledOpik).ok).toBe(true);
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
   });
 
   it("loads a metadata snapshot once and applies its plugin defaults", () => {

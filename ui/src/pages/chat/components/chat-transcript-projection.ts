@@ -1,5 +1,6 @@
-// Chat-item projection, expansion, reply hydration, and guarded row rendering.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -7,7 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
-import { messageRecoveryKey } from "../chat-message-recovery.ts";
+import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import {
@@ -214,7 +215,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       }
       const markdown =
         result?.ok && result.message && typeof result.message === "object"
-          ? extractTextCached(result.message)
+          ? (extractTextCached(result.message) ?? "")
           : null;
       setExpansionState(
         expandedAssistantMessages,
@@ -229,6 +230,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       sessionKey: props.sessionKey,
       ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
       messageId,
+      ...(props.messages.some(
+        (message) =>
+          resolveSourceMessageId(message) === messageId &&
+          asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.reason === "oversized",
+      )
+        ? { maxChars: CHAT_MESSAGE_MAX_CHARS }
+        : {}),
     }).then(completeLoad, () => completeLoad(null));
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
@@ -292,7 +300,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     waitingApproval: props.waitingApproval,
     waitingSubagents: subagentWait ?? undefined,
     runningSubagents: subagents.running,
-    onOpenSession: props.onOpenSession,
+    // Subagents the panel does not list still open as sessions, and have no list to show.
+    onOpenSubagent: (subagents.listed && props.onOpenSubagent) || props.onOpenSession,
+    onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;

@@ -46,6 +46,7 @@ suite.define(() => {
           key: "agent:main:implementation-child",
           sessionId: "implementation-child",
           kind: "direct",
+          classification: "subagent",
           label: "Backend implementation",
           spawnedBy: parent.key,
           parentSessionKey: parent.key,
@@ -151,6 +152,23 @@ suite.define(() => {
         await launchState.getByText("running", { exact: true }).waitFor();
         expect((await launchName.textContent())?.trim()).toBe("Backend implementation");
         expect(await launchRow.textContent()).not.toContain("Reply with the result only");
+        // The count leads to the list of them, beside the conversation.
+        const runningCount = indicator.getByRole("button", {
+          name: "1 subagent running",
+          exact: true,
+        });
+        const panel = activePane.locator("openclaw-chat-subagents-panel");
+        const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
+        const closePanel = async () => {
+          await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
+          await panel.waitFor({ state: "hidden" });
+        };
+        const panelTabHasFocus = () =>
+          activePane
+            .locator('[data-region-header="side"] wa-tab[active]')
+            .first()
+            .evaluate((element) => element.matches(":focus"));
+        const countHasFocus = () => runningCount.evaluate((element) => element.matches(":focus"));
         // Measure the phone layout itself, not the frame before the shell collapses.
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
@@ -158,6 +176,48 @@ suite.define(() => {
         expect(
           await indicator.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
+        // With no room beside the conversation the panel takes its place, and focus
+        // goes with it, also when this is the first side panel the page loads.
+        await activePane.locator(".sidebar-region--narrow").waitFor();
+        await runningCount.click();
+        await panelRow.waitFor();
+        expect(await indicator.isVisible()).toBe(false);
+        await expect.poll(panelTabHasFocus).toBe(true);
+        // A subagent opened there keeps its own header, with the way back to the list.
+        await panelRow.getByRole("button", { name: "Backend implementation", exact: true }).click();
+        const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
+        await backToList.click();
+        await panelRow.waitFor();
+        // Closing returns to the conversation and focus to the count, whether the
+        // side panel is closed or its last tab is.
+        await activePane
+          .locator('[data-region-header="side"]')
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await indicator.waitFor();
+        await expect.poll(countHasFocus).toBe(true);
+        await runningCount.click();
+        await expect.poll(panelTabHasFocus).toBe(true);
+        await closePanel();
+        await indicator.waitFor();
+        await expect.poll(countHasFocus).toBe(true);
+        // With room, the panel opens beside the conversation and leaves focus alone.
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
+        await runningCount.click();
+        await panelRow.waitFor();
+        expect(await indicator.isVisible()).toBe(true);
+        expect(await panelTabHasFocus()).toBe(false);
+        // The same open panel replaces the conversation while the pane is narrow,
+        // and sits beside it again afterwards: nothing about that is saved.
+        await page.setViewportSize({ width: 390, height: 900 });
+        await page.locator(".shell--mobile-nav").waitFor();
+        await indicator.waitFor({ state: "hidden" });
+        await panelRow.waitFor();
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await indicator.waitFor();
+        await panelRow.waitFor();
+        await closePanel();
         await page.setViewportSize({ width: 1280, height: 900 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
         const reportUsage = (usageRunId: string, outputTokens: number) =>
@@ -267,16 +327,26 @@ suite.define(() => {
           await indicator.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
         await page.setViewportSize({ width: 1280, height: 900 });
+        // Its name shows that subagent in the panel; the conversation stays where it was.
+        const selectedTitle = page.locator(
+          ".chat-pane-cache__pane--active .chat-pane__session-title-text",
+        );
+        const detailTitle = panel.locator(".chat-subagent-detail__title");
+        await childLink.click();
+        await expect.poll(() => detailTitle.textContent()).toBe("Backend implementation");
+        expect(await selectedTitle.textContent()).toBe("Build the implementation");
+        await childLink.waitFor();
+        await backToList.click();
+        await panelRow.waitFor();
+        await closePanel();
+        // Leaving the conversation and coming back restores the wait from a fresh roster.
         const childRosterQuery = { spawnedBy: parent.key, limit: 10_000 };
         await gateway.waitForRequest("sessions.list", { match: childRosterQuery });
         const childRosterReads = (await gateway.getRequests("sessions.list", childRosterQuery))
           .length;
         await gateway.deferNext("sessions.list", childRosterQuery);
-        await childLink.click();
-        const selectedTitle = page.locator(
-          ".chat-pane-cache__pane--active .chat-pane__session-title-text",
-        );
-        await expect.poll(() => selectedTitle.textContent()).toBe("Backend implementation");
+        await page.locator(".sidebar-new-session").first().click();
+        await childLink.waitFor({ state: "hidden" });
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
         await activePane.locator(".chat-working-indicator--subagents").waitFor();
@@ -468,12 +538,13 @@ suite.define(() => {
         );
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
-        // The finished subagent's row shows how long it took, and its name opens its session.
+        // The finished subagent's row shows how long it took, and its name shows it in the panel.
         await expect
           .poll(async () => (await launchState.textContent())?.trim())
           .toMatch(/^1m\s4s$/u);
         await launchName.click();
-        await expect.poll(() => selectedTitle.textContent()).toBe("Backend implementation");
+        await expect.poll(() => detailTitle.textContent()).toBe("Backend implementation");
+        expect(await selectedTitle.textContent()).toBe("Build the implementation");
       },
     );
   });

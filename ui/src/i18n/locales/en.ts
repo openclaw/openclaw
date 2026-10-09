@@ -1226,6 +1226,7 @@ export const en: TranslationMap & {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      learnedAlwaysOn: "Learned skill — archive in Workshop to hide",
       updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
@@ -1592,6 +1593,7 @@ export const en: TranslationMap & {
   agentTools: {},
   skillGroups: {
     workspace: "Workspace Skills",
+    learned: "Learned Skills",
     builtIn: "Built-in Skills",
     installed: "Installed Skills",
     extra: "Extra Skills",
@@ -1649,6 +1651,7 @@ export const en: TranslationMap & {
   },
   terminal: {
     title: "Terminal",
+    copiedToClipboard: "Copied to clipboard",
     toggle: "Toggle terminal",
     open: "Open terminal",
     openWindow: "Open terminal in new window",
@@ -1817,8 +1820,7 @@ export const en: TranslationMap & {
     cron: "Scheduled tasks and recurring agent runs.",
     skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
-    skillWorkshop:
-      "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+    skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
     cloudWorkers: "Profiles and machine sizes for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
@@ -2221,7 +2223,7 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      web: "Web",
+      web: "Web app",
       cli: "Command line",
       terminal: "Terminal",
       app: "App",
@@ -2264,7 +2266,10 @@ export const en: TranslationMap & {
     online: "Online",
     idle: "Idle",
     offline: "Offline",
-    unknownDevice: "Unknown device",
+    unknownConnection: "Unknown client",
+    connectionDetails: "Connection details · {count}",
+    connectionOne: "1 connection",
+    connectionMany: "{count} connections",
     lastInput: "Last input {time} ago",
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
@@ -3188,6 +3193,7 @@ export const en: TranslationMap & {
       cloudPublicationGuidance:
         "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
       dismiss: "Dismiss pull request #{number}",
+      dismissBranch: "Hide {branch} for this session",
       open: "Open",
       draft: "Draft",
       merged: "Merged",
@@ -3574,6 +3580,7 @@ export const en: TranslationMap & {
       disconnected: "Not connected. Try again after reconnecting.",
     },
     imageLightbox: {
+      actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
       position: "{current} / {total}",

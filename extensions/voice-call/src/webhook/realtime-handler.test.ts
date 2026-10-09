@@ -896,7 +896,8 @@ describe("RealtimeCallHandler path routing", () => {
     vi.useFakeTimers();
     callbacks?.onTranscript?.("user", "Are the basement", false);
     requestConsult(callbacks, "consult-call", "Are the basement lights on?");
-    requestConsult(callbacks, "consult-call-2", "Are the basement lights on?");
+    // Share a handler-level replay, not a different provider invocation.
+    requestConsult(callbacks, "consult-call", "Are the basement lights on?");
     expect(receivedPartialTranscript).toBeUndefined();
     await waitForRealtimeTest(() =>
       expect(submitToolResult).toHaveBeenCalledWith(
@@ -924,7 +925,7 @@ describe("RealtimeCallHandler path routing", () => {
 
     await waitForRealtimeTest(() =>
       expect(submitToolResult).toHaveBeenLastCalledWith(
-        "consult-call-2",
+        "consult-call",
         {
           text: "The basement lights are on.",
         },
@@ -1039,7 +1040,7 @@ describe("RealtimeCallHandler path routing", () => {
           await vi.advanceTimersByTimeAsync(200);
           expect(hostTool).toHaveBeenCalledOnce();
         }
-        const callIds = path === "general" ? ["host-tool"] : ["host-tool", "shared-host-tool"];
+        const callIds = path === "general" ? ["a"] : ["a", "b"];
         for (const callId of callIds) {
           provider.onToolCall?.({ itemId: callId, callId, name, args: { question } });
         }
@@ -1078,6 +1079,60 @@ describe("RealtimeCallHandler path routing", () => {
       }
     },
   );
+
+  it("keeps a different native request separate from a forced consult and preserves its retry", async () => {
+    const submitToolResult = vi.fn();
+    const sendUserMessage = vi.fn();
+    const { handler, start } = makeCallHarness(
+      { submitToolResult, sendUserMessage },
+      { config: { consultPolicy: "always" } },
+    );
+    const first = createDeferred<unknown>();
+    const consult = vi
+      .fn<Parameters<RealtimeCallHandler["registerToolHandler"]>[1]>()
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValue({ text: "Dataset B answer." });
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const { callbacks } = await start();
+    const questionA = "Read the complete annual report for Dataset A.";
+    const questionB = "Read the separate quarterly report for Dataset B.";
+    vi.useFakeTimers();
+    callbacks.onTranscript?.("user", questionA, true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(consult).toHaveBeenCalledOnce();
+
+    callbacks.onTranscript?.("user", questionB, true);
+    requestConsult(callbacks, "request-b", questionB);
+    await vi.advanceTimersByTimeAsync(0);
+    const busy = expect.objectContaining({ status: "busy", started: false, retryable: true });
+    expect(submitToolResult.mock.calls).toEqual([["request-b", busy, undefined]]);
+    expect(consult).toHaveBeenCalledOnce();
+
+    first.resolve({ text: "Dataset A answer." });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Dataset A answer."));
+    expect(submitToolResult.mock.calls).toEqual([["request-b", busy, undefined]]);
+    requestConsult(callbacks, "retry-b", "message");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(consult).toHaveBeenCalledTimes(2);
+    expect(consult.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ question: questionB }));
+    expect(submitToolResult).toHaveBeenLastCalledWith(
+      "retry-b",
+      { text: "Dataset B answer." },
+      undefined,
+    );
+    callbacks.onTranscript?.("user", "Check the independent Dataset C report.", true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(consult).toHaveBeenCalledTimes(3);
+    requestConsult(callbacks, "late-a", questionA);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(consult).toHaveBeenCalledTimes(3);
+    expect(submitToolResult).toHaveBeenLastCalledWith(
+      "late-a",
+      expect.objectContaining({ status: "already_delivered" }),
+      undefined,
+    );
+  });
 
   it("clears cancelled consult dedupe for a fresh provider session", async () => {
     let sessionHarness: RealtimeVoiceSessionHarness | undefined;

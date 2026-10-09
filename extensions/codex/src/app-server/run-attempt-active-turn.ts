@@ -315,10 +315,12 @@ export function activateCodexAttemptTurn(
       state.activeLocalProjections -= 1;
     }
   };
+  const isSteeringAvailable = () =>
+    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (!isSteeringAvailable()) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -508,10 +510,7 @@ export function activateCodexAttemptTurn(
   };
   const messageInjection = {
     version: 2 as const,
-    isAvailable: () =>
-      !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      !runAbortController.signal.aborted,
+    isAvailable: isSteeringAvailable,
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -630,9 +629,7 @@ export function activateCodexAttemptTurn(
             resourceState.turnRoute === route &&
             route?.signal.aborted === false &&
             turnRuntime.turnIdRef.current === activeTurnId &&
-            !state.completed &&
-            !state.terminalTurnNotificationQueued &&
-            !runAbortController.signal.aborted,
+            isSteeringAvailable(),
         );
       }
       params.replyOperation?.attachBackend(handle);

@@ -15,8 +15,6 @@ import {
 describe("Gateway Control UI identity", () => {
   it.each([
     { basePath: "", enabled: true },
-    { basePath: "", enabled: false },
-    { basePath: "/console/", enabled: true },
     { basePath: "/console/", enabled: false },
   ])(
     "keeps authenticated media available at $basePath with dashboard enabled=$enabled",

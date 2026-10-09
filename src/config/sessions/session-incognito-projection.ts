@@ -2,18 +2,52 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import {
+  captureIncognitoSessionBinding,
+  type IncognitoSessionBinding,
+} from "./session-incognito-binding.js";
 import type { IncognitoComputeTarget } from "./session-incognito-compute-contract.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
-import type { TranscriptProjectionRebuildOperations } from "./session-transcript-projection-publication.worker.js";
-import type { ProjectionPublisher } from "./session-transcript-projection-writer.js";
+import type {
+  ProjectionPublisher,
+  TranscriptProjectionRebuildOperations,
+} from "./session-transcript-projection-publication.worker.js";
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
 export type IncognitoProjectionBinding = {
   actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target?: IncognitoComputeTarget;
+  sharedBinding?: IncognitoSessionBinding;
 };
+
+/**
+ * Capture before scheduling; accepted publication outlives scheduler cancellation.
+ * @internal P7 inactive composition; retain the Knip production exception until atomic activation.
+ */
+export function captureIncognitoProjectionBinding(
+  database: OpenClawAgentDatabaseOptions & { assertCurrent?: () => void },
+): IncognitoProjectionBinding | undefined {
+  const binding = captureIncognitoSessionBinding({
+    ...database,
+    storePath: resolveOpenClawAgentSqlitePath(database),
+  });
+  if (!binding) {
+    return undefined;
+  }
+  binding.admissionSignal?.throwIfAborted();
+  return {
+    actor: binding.actor,
+    sharedBinding: binding,
+    authority: {
+      assertCurrent() {
+        database.assertCurrent?.();
+        binding.actor.assertReadable();
+      },
+    },
+  };
+}
 export type IncognitoProjectionSource = {
   sessionIds: string[];
   pending: boolean;

@@ -1,4 +1,3 @@
-/** LaunchAgent plist, environment-file, and atomic publication ownership. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -221,10 +220,16 @@ export async function readExistingLaunchAgentPlist(
 }
 
 type LaunchAgentFileState = NonNullable<Awaited<ReturnType<typeof readServiceFileState>>>;
-type LaunchAgentFilePublication = Awaited<ReturnType<typeof captureLaunchAgentFiles>>;
+type LaunchAgentFilePublication = Awaited<ReturnType<typeof captureLaunchAgentInstallFiles>>;
 
 /** Captured file identities bound rollback to this install's actual publications. */
-async function captureLaunchAgentFiles(paths: string[]) {
+export async function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
+  const label = resolveLaunchAgentLabel(env);
+  const paths = [
+    resolveLaunchAgentPlistPath(env),
+    resolveLaunchAgentEnvFilePath(env, label),
+    resolveLaunchAgentEnvWrapperPath(env, label),
+  ];
   const originals = new Map<
     string,
     { snapshot: LaunchAgentFileSnapshot | null; state: LaunchAgentFileState | null }
@@ -349,15 +354,6 @@ async function captureLaunchAgentFiles(paths: string[]) {
       return true;
     },
   };
-}
-
-export function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
-  const label = resolveLaunchAgentLabel(env);
-  return captureLaunchAgentFiles([
-    resolveLaunchAgentPlistPath(env),
-    resolveLaunchAgentEnvFilePath(env, label),
-    resolveLaunchAgentEnvWrapperPath(env, label),
-  ]);
 }
 
 async function publishLaunchAgentPlist(params: {

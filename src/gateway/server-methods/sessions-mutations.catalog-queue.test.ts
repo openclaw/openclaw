@@ -108,6 +108,82 @@ function patchRequest(context: GatewayRequestContext) {
     } as never);
 }
 
+test.each(["sessions.patch", "sessions.patchMany"] as const)(
+  "%s bounds a stalled catalog without committing and permits retry",
+  async (method) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const targets = (method === "sessions.patchMany" ? ["first", "second"] : ["first"]).map(
+        (name) => ({ key: `agent:main:catalog-deadline-${name}` }),
+      );
+      for (const { key } of targets) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key },
+          { sessionId: key, updatedAt: 1 },
+        );
+      }
+      const entries = () =>
+        targets.map(({ key }) => loadSessionEntry({ agentId: "main", sessionKey: key }));
+      const before = entries();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const context = patchContext(async () => {
+        entered.resolve();
+        await release.promise;
+        return [];
+      });
+      const respond = vi.fn();
+      const patch = { thinkingLevel: "low", pinned: true };
+      const params =
+        method === "sessions.patchMany" ? { targets, patch } : { ...targets[0], ...patch };
+      const invoke = () =>
+        sessionMutationHandlers[method]!({
+          req: { type: "req", id: "catalog-deadline", method, params },
+          params,
+          respond,
+          context,
+          client: null,
+          isWebchatConnect: () => false,
+        });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const pending = invoke();
+      try {
+        await Promise.race([entered.promise, pending]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        release.resolve();
+        await pending;
+        const unavailable = expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: true,
+          message: expect.stringMatching(/model catalog.*loading.*retry/i),
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          ...(method === "sessions.patchMany"
+            ? [
+                true,
+                {
+                  outcomes: targets.map(({ key }) => ({ key, ok: false, error: unavailable })),
+                },
+                undefined,
+              ]
+            : [false, undefined, unavailable]),
+        );
+        expect(entries()).toEqual(before);
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        await pending;
+      }
+      expect(entries()).toEqual(before);
+      respond.mockClear();
+      await invoke();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      for (const entry of entries()) {
+        expect(entry).toMatchObject({ thinkingLevel: "low", pinnedAt: expect.any(Number) });
+      }
+    });
+  },
+);
+
 test("catalog reload releases the agent writer while preserving same-session ordering", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const catalogKey = "agent:main:catalog-dependent";

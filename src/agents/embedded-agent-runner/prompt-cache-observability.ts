@@ -83,11 +83,9 @@ function fingerprintBlock(block: object): string {
   const nested: [string, unknown][] = [];
   for (const entry of Object.entries(block)) {
     const value = entry[1];
-    if (value === null || ["string", "number", "boolean", "undefined"].includes(typeof value)) {
-      primitives.push(entry);
-    } else {
-      nested.push(entry);
-    }
+    const primitive =
+      value === null || ["string", "number", "boolean", "undefined"].includes(typeof value);
+    (primitive ? primitives : nested).push(entry);
   }
   const previous = blockFingerprints.get(block);
   const unchanged =
@@ -141,12 +139,6 @@ const MAX_STABLE_CACHE_READ_RATIO = 0.95;
 
 function buildTrackerKey(params: PromptCacheIdentity): string {
   return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-}
-
-function setTracker(key: string, tracker: PromptCacheTracker): void {
-  trackers.delete(key);
-  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  trackers.set(key, tracker);
 }
 
 function diffSnapshots(
@@ -292,7 +284,7 @@ export function beginPromptCacheObservation(
   if (violation) {
     changes.push(violation);
   }
-  setTracker(key, {
+  const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
     history,
@@ -300,7 +292,10 @@ export function beginPromptCacheObservation(
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     pendingChanges: changes.length > 0 ? changes : null,
-  });
+  };
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
+  trackers.set(key, tracker);
   if (violation) {
     if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
       throw new Error(violation.detail);

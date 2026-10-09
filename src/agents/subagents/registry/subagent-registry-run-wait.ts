@@ -45,31 +45,6 @@ const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = isFastTestRuntimeEnv() ? 25 : 5_000;
 const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
-function resolveHardRunTimeoutEndedAt(
-  entry: SubagentRunRecord,
-  now: number,
-  observedStartedAt?: number,
-): number | undefined {
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry, observedStartedAt);
-  if (deadlineMs === undefined) {
-    return undefined;
-  }
-  return now + WAIT_TIMEOUT_DEADLINE_SKEW_MS >= deadlineMs ? deadlineMs : undefined;
-}
-
-function resolveWaitTimeoutMsForRun(
-  entry: SubagentRunRecord,
-  waitTimeoutMs: number,
-  now: number,
-): number {
-  const normalizedWaitTimeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
-  if (deadlineMs === undefined) {
-    return normalizedWaitTimeoutMs;
-  }
-  return Math.max(1, Math.min(normalizedWaitTimeoutMs, deadlineMs - now));
-}
-
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
   getRunsForChildSession: (
@@ -120,8 +95,8 @@ export abstract class SubagentWaitManager {
 
   private runSubagentCompletionWait = async (
     runId: string,
+    expectedEntry: SubagentRunRecord,
     waitTimeoutMs: number,
-    expectedEntry?: SubagentRunRecord,
     capWaitToStoredDeadline = false,
   ): Promise<void> => {
     // A current Gateway may observe historical execution; the wait itself owns this generation.
@@ -147,18 +122,23 @@ export abstract class SubagentWaitManager {
     };
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       this.options.scheduleSweep({ delayMs: 1_000 });
-      const scheduledEntry = entry;
       setTimeout(() => {
         const current = this.options.runs.get(runId);
         if (
           !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
           !current ||
-          !isSameSubagentRunOwner(current, scheduledEntry) ||
+          !isSameSubagentRunOwner(current, entry) ||
           typeof current.execution.endedAt === "number"
         ) {
           return;
         }
-        void this.waitForSubagentCompletion(runId, waitTimeoutMs, scheduledEntry, true);
+        try {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+        } catch {
+          // Closing the original store retires this retry, even if the run is still resident.
+          return;
+        }
+        void this.waitForSubagentCompletion(runId, entry, waitTimeoutMs, true);
       }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
       log.info(reason, {
         runId,
@@ -168,17 +148,19 @@ export abstract class SubagentWaitManager {
     };
     try {
       const entryBeforeWait = this.options.runs.get(runId);
-      if (
-        !entryBeforeWait ||
-        (expectedEntry && !isSameSubagentRunOwner(entryBeforeWait, expectedEntry))
-      ) {
+      if (!entryBeforeWait || !isSameSubagentRunOwner(entryBeforeWait, expectedEntry)) {
         return;
       }
       waitedEntry = entryBeforeWait;
       const waitStartedAt = Date.now();
-      const timeoutMs = capWaitToStoredDeadline
-        ? resolveWaitTimeoutMsForRun(entryBeforeWait, waitTimeoutMs, waitStartedAt)
-        : Math.max(1, Math.floor(waitTimeoutMs));
+      const normalizedWaitTimeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
+      const deadlineMs = capWaitToStoredDeadline
+        ? resolveSubagentRunDeadlineMs(entryBeforeWait)
+        : undefined;
+      const timeoutMs =
+        deadlineMs === undefined
+          ? normalizedWaitTimeoutMs
+          : Math.max(1, Math.min(normalizedWaitTimeoutMs, deadlineMs - waitStartedAt));
       const wait = await waitForAgentRun({
         runId,
         timeoutMs,
@@ -275,6 +257,20 @@ export abstract class SubagentWaitManager {
           ...(typeof endedAt === "number" ? { endedAt } : {}),
           ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}),
         });
+      const completeWithDeadline = (
+        startedAt: number | undefined,
+        endedAt: number | undefined,
+        now: number,
+        fallback: () => Promise<void>,
+      ) => {
+        const timeoutAt = resolveCompletionAfterHardRunDeadline({
+          entry,
+          observedStartedAt: startedAt,
+          observedEndedAt: endedAt,
+          now,
+        });
+        return timeoutAt === undefined ? fallback() : completeAsRunTimeout(timeoutAt, startedAt);
+      };
       if (waitStatus === "timeout") {
         const isTerminalWaitTimeout =
           typeof wait.endedAt === "number" ||
@@ -284,7 +280,11 @@ export abstract class SubagentWaitManager {
         // A plain agent.wait timeout has no terminal snapshot. For explicit
         // subagent run timeouts, the stored run deadline is the completion
         // contract so parent sessions are woken instead of retrying forever.
-        const hardRunTimeoutEndedAt = resolveHardRunTimeoutEndedAt(entry, now, observedStartedAt);
+        const hardDeadlineMs = resolveSubagentRunDeadlineMs(entry, observedStartedAt);
+        const hardRunTimeoutEndedAt =
+          hardDeadlineMs !== undefined && now + WAIT_TIMEOUT_DEADLINE_SKEW_MS >= hardDeadlineMs
+            ? hardDeadlineMs
+            : undefined;
         const completion = await this.options.resolveSubagentSessionCompletion({
           childSessionKey: entry.childSessionKey,
           childAgentId: entry.childAgentId,
@@ -296,37 +296,22 @@ export abstract class SubagentWaitManager {
         entry = currentEntry();
         if (completion) {
           const completionStartedAt = observedStartedAt ?? completion.startedAt;
-          const completionAfterDeadline = resolveCompletionAfterHardRunDeadline({
-            entry,
-            observedStartedAt: completionStartedAt,
-            observedEndedAt: completion.endedAt,
-            now,
-          });
-          if (completionAfterDeadline !== undefined) {
-            await completeAsRunTimeout(completionAfterDeadline, completionStartedAt);
-            return;
-          }
-          await complete({
-            endedAt: completion.endedAt,
-            outcome: completion.outcome,
-            reason: completion.reason,
-            startedAt: completionStartedAt,
-          });
+          await completeWithDeadline(completionStartedAt, completion.endedAt, now, () =>
+            complete({
+              endedAt: completion.endedAt,
+              outcome: completion.outcome,
+              reason: completion.reason,
+              startedAt: completionStartedAt,
+            }),
+          );
           return;
         }
         if (isTerminalWaitTimeout || hardRunTimeoutEndedAt !== undefined) {
-          let timeoutEndedAt =
+          const timeoutEndedAt =
             typeof wait.endedAt === "number" ? wait.endedAt : hardRunTimeoutEndedAt;
-          const timeoutAfterDeadline = resolveCompletionAfterHardRunDeadline({
-            entry,
-            observedStartedAt,
-            observedEndedAt: timeoutEndedAt,
-            now,
-          });
-          if (timeoutAfterDeadline !== undefined) {
-            timeoutEndedAt = timeoutAfterDeadline;
-          }
-          await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
+          await completeWithDeadline(observedStartedAt, timeoutEndedAt, now, () =>
+            completeAsRunTimeout(timeoutEndedAt, observedStartedAt),
+          );
           return;
         }
         if (observedStartedAt !== undefined) {
@@ -369,26 +354,18 @@ export abstract class SubagentWaitManager {
         );
         return;
       }
-      const completionAfterDeadline = resolveCompletionAfterHardRunDeadline({
-        entry,
-        observedStartedAt,
-        observedEndedAt: wait.endedAt,
-        now: Date.now(),
-      });
-      if (completionAfterDeadline !== undefined) {
-        await completeAsRunTimeout(completionAfterDeadline, observedStartedAt);
-        return;
-      }
-      const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
-      await complete({
-        endedAt,
-        outcome: withSubagentOutcomeTiming(observedCompletion.outcome, {
-          startedAt: observedStartedAt ?? entry.execution.startedAt,
+      await completeWithDeadline(observedStartedAt, wait.endedAt, Date.now(), () => {
+        const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
+        return complete({
           endedAt,
-        }),
-        reason: observedCompletion.reason,
-        startedAt: observedStartedAt,
-        terminalReply: wait.terminalReply,
+          outcome: withSubagentOutcomeTiming(observedCompletion.outcome, {
+            startedAt: observedStartedAt ?? entry.execution.startedAt,
+            endedAt,
+          }),
+          reason: observedCompletion.reason,
+          startedAt: observedStartedAt,
+          terminalReply: wait.terminalReply,
+        });
       });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
@@ -461,11 +438,14 @@ export abstract class SubagentWaitManager {
   // paths must start without inheriting its soon-to-be-disposed writer.
   readonly waitForSubagentCompletion = (
     runId: string,
-    waitTimeoutMs: number,
-    expectedEntry?: SubagentRunRecord,
+    expectedEntry: SubagentRunRecord,
+    waitTimeoutMs = this.options.resolveSubagentWaitTimeoutMs(
+      this.options.getRuntimeConfig(),
+      expectedEntry.runTimeoutSeconds,
+    ),
     capWaitToStoredDeadline = false,
   ): Promise<void> =>
     runWithoutOwnedSessionTranscriptWrites(() =>
-      this.runSubagentCompletionWait(runId, waitTimeoutMs, expectedEntry, capWaitToStoredDeadline),
+      this.runSubagentCompletionWait(runId, expectedEntry, waitTimeoutMs, capWaitToStoredDeadline),
     );
 }

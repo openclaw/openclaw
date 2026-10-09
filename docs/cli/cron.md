@@ -117,6 +117,8 @@ working directory.
 
 Agent-turn jobs default to the creating conversation when session context is available. Without a session key, including ordinary CLI calls and API calls that omit one, the target falls back to `isolated`.
 
+An isolated agent-turn job created from a conversation also captures that conversation's generation for delivery. With `announce` and no explicit or remembered external route, its final result is committed into that conversation while the run remains isolated. Ordinary CLI jobs without a creating session still need a resolvable channel route, webhook delivery, or `--no-deliver`.
+
 <AccordionGroup>
   <Accordion title="Session keys">
     - `main` binds to the agent's main session.
@@ -136,7 +138,7 @@ If session cleanup fails, the error is logged. A removal with no active run also
 
 ## Delivery
 
-`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will fail closed.
 
 If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
@@ -154,6 +156,8 @@ Isolated automation chat delivery is shared between the agent and the runner:
 - `announce` fallback-delivers the final reply only when the agent did not send directly to the resolved target.
 - `webhook` posts the finished payload to a URL.
 - `none` disables runner fallback delivery.
+
+For an isolated agent-turn job bound at creation to a routeless conversation, `announce` commits the final visible result there instead. WebChat shows it live and after reload, and retrying the commit does not duplicate it. A deleted or reset creating conversation records a delivery failure. Explicit channel, recipient, account, and thread settings keep normal channel resolution; `webhook` and `none` are unchanged. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
@@ -283,7 +287,17 @@ Isolated automation turns suppress stale acknowledgement-only replies. If the fi
 
 ### Silent token suppression
 
-If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses direct outbound delivery and the fallback queued summary path. Nothing is posted back to chat.
+For text-only isolated automation announcements, a reply that contains only the silent token (`NO_REPLY` or `no_reply`), or ends with a trailing silent token, suppresses direct outbound delivery and the fallback queued summary path. The preceding text is not delivered.
+
+For example, this final reply sends no chat message:
+
+```text
+Nothing actionable found today.
+
+NO_REPLY
+```
+
+Do not append `NO_REPLY` to a report that should reach the user. Mentioning the token within a sentence, such as `Use NO_REPLY when nothing actionable changed.`, does not trigger this rule. For media payloads, a silent caption can be removed while the media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 

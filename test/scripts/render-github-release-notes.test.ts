@@ -142,6 +142,48 @@ describe("GitHub release-note rendering", () => {
     },
   );
 
+  it("renders and verifies a pinned beta delta instead of cumulative stable notes", () => {
+    const rootDir = tempDirs.make("openclaw-beta-render-");
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: rootDir, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("config", "user.name", "Release Fixture");
+    git("config", "user.email", "release-fixture@openclaw.invalid");
+    git("config", "commit.gpgsign", "false");
+    const delta = `## ${tag.slice(1)}\n\n### Fixes\n\n- New beta-only fix.`;
+    writeFileSync(
+      join(rootDir, "CHANGELOG.md"),
+      `${delta}\n\n## ${version}\n\n- Cumulative stable feature.\n`,
+    );
+    splitChangelog({ rootDir });
+    git("add", ".");
+    git("commit", "-qm", "beta delta");
+    const ref = git("rev-parse", "HEAD");
+    writeFileSync(join(rootDir, `CHANGELOG/${tag.slice(1)}.md`), `${delta}\nUncommitted drift.\n`);
+    const render = (releaseTag: string, extra: string[] = []) =>
+      execFileSync(
+        process.execPath,
+        [
+          resolve("scripts/render-github-release-notes.mts"),
+          "--root",
+          rootDir,
+          "--ref",
+          ref,
+          "--tag",
+          releaseTag,
+          "--repository",
+          repository,
+          ...extra,
+        ],
+        { encoding: "utf8" },
+      );
+    expect(render(tag)).toBe(delta);
+    expect(render(`v${version}`)).toBe(`## ${version}\n\n- Cumulative stable feature.`);
+    const bodyPath = join(rootDir, "body.md");
+    writeFileSync(bodyPath, delta);
+    expect(render(tag, ["--version", tag.slice(1), "--verify-body", bodyPath])).toBe("");
+  });
+
   it("round-trips canonical contribution provenance and accepts published legacy lines", () => {
     const target = "a".repeat(40);
     const singular = formatContributionRecordProvenance({

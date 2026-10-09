@@ -88,14 +88,20 @@ a.activity-current-work__row:hover {
   min-width: 0;
 }
 
-.activity-current-work__title {
+.activity-current-work__title,
+.activity-feed__session-scope,
+.activity-feed__identity-copy h2,
+.activity-feed__identity-copy p {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .activity-current-work__agent,
-.activity-current-work__feedback {
+.activity-current-work__feedback,
+.activity-entry__text,
+.activity-entry__facts,
+.activity-entry__note {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -213,7 +219,10 @@ a.activity-current-work__row:hover {
   box-shadow: var(--focus-ring);
 }
 
-.activity-feed__selected-person {
+.activity-feed__selected-person,
+.activity-feed__git-label,
+.activity-feed__session-headline,
+.activity-feed__session-owner {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -371,7 +380,9 @@ a.activity-current-work__row:hover {
   justify-content: space-between;
 }
 
-.activity-pulse__heading svg {
+.activity-pulse__heading svg,
+.activity-live-filter-trigger svg,
+.activity-run-inspector-back svg {
   width: 16px;
   height: 16px;
 }
@@ -594,13 +605,6 @@ a.activity-current-work__row:hover {
   text-decoration: none;
 }
 
-.activity-feed__git-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__git-icon,
 .activity-feed__git-stale {
   display: inline-flex;
@@ -768,25 +772,11 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__session-scope {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__session-meta .agent-row-chip {
   font: inherit;
 }
 
 .activity-feed__session-source {
-  white-space: nowrap;
-}
-
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -843,13 +833,6 @@ a.activity-current-work__row:hover {
   min-width: 0;
 }
 
-.activity-feed__identity-copy h2,
-.activity-feed__identity-copy p {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__identity-copy h2 {
   font-size: var(--control-ui-text-lg);
 }
@@ -862,23 +845,35 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__devices {
+.activity-feed__connection-summary,
+.activity-feed__connections {
   display: grid;
-  gap: 2px;
-  margin-top: var(--space-4);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
 }
 
-.activity-feed__device {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: 5px 0;
+.activity-feed__connection-details {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__device-name {
+.activity-feed__connection-details summary {
+  padding-block: var(--space-3);
+  min-height: 44px;
+}
+
+.activity-feed__connection {
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+}
+
+.activity-feed__connection strong {
   color: var(--text);
   font-weight: 600;
 }
@@ -954,11 +949,6 @@ a.activity-current-work__row:hover {
   padding: 0;
 }
 
-.activity-live-filter-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
 .activity-live-filter-trigger.active {
   border-color: var(--accent);
   color: var(--accent);
@@ -1006,8 +996,6 @@ a.activity-current-work__row:hover {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
-
-/* ── Stream (escape hatch inside the settings group) ── */
 
 .activity-stream {
   min-height: 260px;
@@ -1117,16 +1105,6 @@ a.activity-current-work__row:hover {
   color: var(--text);
 }
 
-.activity-run-inspector-back svg {
-  width: 16px;
-  height: 16px;
-}
-
-.activity-entry__text {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 .activity-entry__meta {
   justify-content: flex-end;
   color: var(--muted);
@@ -1138,11 +1116,6 @@ a.activity-current-work__row:hover {
   display: grid;
   gap: var(--space-2);
   padding: 0 var(--space-4) var(--space-4) 42px;
-}
-
-.activity-entry__facts {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .activity-entry__preview {
@@ -1159,11 +1132,6 @@ a.activity-current-work__row:hover {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.activity-entry__note {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 @media (max-width: 768px) {

@@ -485,7 +485,7 @@ describe("sessions.patch", () => {
         // the handler's reentrant writer context.
         const lifecycleWrite = catalogEntered.promise.then(async () => {
           await patchSessionEntryCore(scope(keys[1]!), () => ({
-            status: "running",
+            startedAt: 2,
             lifecycleRunId: "batch-catalog-run",
           }));
           revoked = revokeFirst;
@@ -529,7 +529,7 @@ describe("sessions.patch", () => {
           }
           await lifecycleWrite;
           expect(loadSessionEntry(scope(keys[1]!))).toMatchObject({
-            status: "running",
+            startedAt: 2,
             lifecycleRunId: "batch-catalog-run",
           });
           catalogRelease.resolve();
@@ -559,7 +559,7 @@ describe("sessions.patch", () => {
             expect(loadSessionEntry(scope(keys[1]!))?.archivedAt).toBeUndefined();
           }
           expect(loadSessionEntry(scope(keys[1]!))).toMatchObject({
-            status: "running",
+            startedAt: 2,
             lifecycleRunId: "batch-catalog-run",
           });
         } finally {

@@ -13,17 +13,10 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { AgentCreationClaimWitness } from "./agent-creation-claim.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
-
-/** A retired owner refused new work; an admitted command's failure is never classified here. */
-export const AgentDatabaseExecutionAdmissionClosedError = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentDatabaseExecutionAdmissionClosedError"),
-  () => class AdmissionClosedError extends Error {},
-);
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
 export type AgentDatabaseFileExecutionIdentity = {
@@ -46,10 +39,8 @@ export type AgentDatabaseGenerationClaim = {
   assertCurrent(): void;
 };
 
-export type AgentDatabaseExecutionScope = Pick<
-  SqliteWorkerStore<AgentDatabaseOperations>,
-  "execute"
->;
+export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations>;
+export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execute">;
 
 export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;
@@ -60,13 +51,26 @@ export type OpenClawAgentDatabaseExecution = {
   captureGenerationClaim(): AgentDatabaseGenerationClaim;
   /** Reuse only a native generation whose preparation and registration publication settled. */
   capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
-  /** Initialize first-use storage through the same admitted native owner. */
-  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Reuse native preparation; host handle admission explicitly requests current schema proof. */
+  prepare(
+    source: AgentDatabaseRequestExecutionSource,
+    signal?: AbortSignal,
+    options?: { readmitSchema: true },
+  ): Promise<void>;
   /** Admit a write against existing storage; a missing store remains missing. */
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    options?: { retireNativeOnFailure: true },
+    options?:
+      | { retireNativeOnFailure: true; withAdmission?: never }
+      | {
+          retireNativeOnFailure?: never;
+          /** Track read admission; cancellation removes only a waiting host-queue task. */
+          withAdmission: <Result>(
+            run: () => Promise<Result>,
+            signal: AbortSignal,
+          ) => Promise<Result>;
+        },
   ): Promise<T | undefined>;
   /**
    * Join this reference's work; native cleanup failures remain with its resource owner.
@@ -79,6 +83,7 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly kind: "file";
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
+  readonly creationIdentity?: DatabasePathIdentity;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
@@ -99,6 +104,7 @@ export type AgentDatabaseNativeGeneration = {
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
     signal?: AbortSignal,
+    readmitSchema?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
@@ -150,6 +156,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "database.prepareWrite": { input: undefined; output: void };
+    "database.recordIntegrity": { input: undefined; output: boolean };
   };
 
 /** A request owner composes its retained admission with the native owner's validation. */

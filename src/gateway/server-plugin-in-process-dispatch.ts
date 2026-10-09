@@ -5,8 +5,17 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { isGatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
+import {
+  hasPreparedGatewayDeviceAuthority,
+  readGatewayDeviceRevocationGuard,
+} from "./device-revocation.js";
+import {
+  isInternalApprovalCommitGuard,
+  retainInternalApprovalCommitGuard,
+} from "./internal-approval-authority.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -314,8 +323,33 @@ export async function dispatchGatewayMethodInProcessRaw(
         }
         assertSource();
       },
+      {
+        preparedCheck: (assertSource) => {
+          throwIfGatewayDispatchAborted(method, options?.signal);
+          if (
+            !hasPreparedGatewayDeviceAuthority(resolved.client, resolved.hasCurrentClientAuthority)
+          ) {
+            throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+          }
+          assertSource();
+        },
+      },
     );
     const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+    const sessionMutationCommitGuard = composeSessionSourceAssertion([
+      resolved.assertContextCurrent,
+      resolved.assertInvocationCurrent,
+      assertExplicitRequestCurrent,
+    ]);
+    if (
+      isGatewayNativeApprovalMethod(method) &&
+      (!options?.sessionMutationCommitGuard ||
+        isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
+      (!resolved.hasCurrentClientAuthority ||
+        readGatewayDeviceRevocationGuard(resolved.hasCurrentClientAuthority))
+    ) {
+      retainInternalApprovalCommitGuard(sessionMutationCommitGuard);
+    }
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
       context: resolved.context,
@@ -332,11 +366,7 @@ export async function dispatchGatewayMethodInProcessRaw(
         resolved.assertContextCurrent,
         resolved.assertInvocationCurrent,
       ]),
-      sessionMutationCommitGuard: composeSessionSourceAssertion([
-        resolved.assertContextCurrent,
-        resolved.assertInvocationCurrent,
-        assertExplicitRequestCurrent,
-      ]),
+      sessionMutationCommitGuard,
       questionCallerRead: readQuestionDispatchCapability(options?.prepareDispatchCurrent)
         ?.callerRead,
       ...(assertCreatedInputSourceCurrent

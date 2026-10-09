@@ -155,7 +155,7 @@ function pushMemorySessionTranscriptIndexing(
     if (agentSessionMemory === undefined) {
       return;
     }
-    const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
+    const explicit = readMemorySessionSettings(memorySearch).explicit;
     const experimental = asNonArrayRecord(memorySearch?.experimental);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
@@ -181,54 +181,35 @@ function memorySearchSessionTranscriptIndexing(
   if (!isRecord(memorySearch)) {
     return undefined;
   }
-  const inherited = asNonArrayRecord(inheritedMemorySearch);
-  const enabled = readBoolean(memorySearch.enabled) ?? readBoolean(inherited.enabled) ?? true;
-  const experimental = asNonArrayRecord(memorySearch.experimental);
-  const inheritedExperimental = asNonArrayRecord(inherited.experimental);
-  const rememberAcrossConversations =
-    readBoolean(memorySearch.rememberAcrossConversations) ??
-    readBoolean(experimental.sessionMemory) ??
-    readBoolean(inherited.rememberAcrossConversations) ??
-    readBoolean(inheritedExperimental.sessionMemory);
-  const sourcesIncludeSessions =
-    memorySearchSourcesIncludeSessions(memorySearch) ??
-    memorySearchSourcesIncludeSessions(inherited) ??
-    false;
-  if (
-    rememberAcrossConversations === undefined &&
-    memorySearchSourcesIncludeSessions(memorySearch) === undefined &&
-    readBoolean(memorySearch.enabled) === undefined
-  ) {
+  const local = readMemorySessionSettings(memorySearch);
+  const inherited = readMemorySessionSettings(inheritedMemorySearch);
+  const rememberAcrossConversations = local.remember ?? inherited.remember;
+  if (rememberAcrossConversations === undefined && !local.explicit) {
     return undefined;
   }
-  if (!enabled) {
-    return false;
-  }
-  return rememberAcrossConversations === true && sourcesIncludeSessions;
-}
-
-function memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch: unknown): boolean {
-  if (!isRecord(memorySearch)) {
-    return false;
-  }
   return (
-    readBoolean(memorySearch.enabled) !== undefined ||
-    readBoolean(memorySearch.rememberAcrossConversations) !== undefined ||
-    readBoolean(
-      isRecord(memorySearch.experimental) ? memorySearch.experimental.sessionMemory : undefined,
-    ) !== undefined ||
-    memorySearchSourcesIncludeSessions(memorySearch) !== undefined
+    (local.enabled ?? inherited.enabled ?? true) &&
+    rememberAcrossConversations === true &&
+    (local.sessions ?? inherited.sessions ?? false)
   );
 }
 
-function memorySearchSourcesIncludeSessions(memorySearch: unknown): boolean | undefined {
-  if (!isRecord(memorySearch) || memorySearch.sources === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(memorySearch.sources)) {
-    return false;
-  }
-  return memorySearch.sources.includes("sessions");
+function readMemorySessionSettings(value: unknown) {
+  const search = asNonArrayRecord(value);
+  const enabled = readBoolean(search.enabled);
+  const remember =
+    readBoolean(search.rememberAcrossConversations) ??
+    readBoolean(asNonArrayRecord(search.experimental).sessionMemory);
+  const sessions =
+    search.sources === undefined
+      ? undefined
+      : Array.isArray(search.sources) && search.sources.includes("sessions");
+  return {
+    enabled,
+    remember,
+    sessions,
+    explicit: enabled !== undefined || remember !== undefined || sessions !== undefined,
+  };
 }
 
 function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
@@ -299,40 +280,20 @@ function isSecretInputPath(path: readonly string[]): boolean {
     return true;
   }
   return (
-    matchesConfigPath(path, ["models", "providers", "*", "headers", "*"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
-    isMediaConfiguredProviderRequestSecretPath(path) ||
-    matchesConfigPath(path, ["memory", "search", "remote", "headers", "*"]) ||
-    matchesConfigPath(path, [
-      "agents",
-      "entries",
-      "*",
-      "memory",
-      "search",
-      "remote",
-      "headers",
-      "*",
-    ]) ||
-    matchesConfigPath(path, [
-      "agents",
-      "list",
-      "#",
-      "memory",
-      "search",
-      "remote",
-      "headers",
-      "*",
-    ]) ||
-    matchesConfigPath(path, ["diagnostics", "otel", "headers", "*"])
-  );
-}
-
-function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): boolean {
-  return (
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "models", "#"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"])
+    [
+      ["models", "providers", "*", "headers", "*"],
+      ["memory", "search", "remote", "headers", "*"],
+      ["agents", "entries", "*", "memory", "search", "remote", "headers", "*"],
+      ["agents", "list", "#", "memory", "search", "remote", "headers", "*"],
+      ["diagnostics", "otel", "headers", "*"],
+    ].some((pattern) => matchesConfigPath(path, pattern)) ||
+    [
+      ["models", "providers", "*"],
+      ["tools", "media", "models", "#"],
+      ["tools", "media", "audio"],
+      ["tools", "media", "image"],
+      ["tools", "media", "video"],
+    ].some((prefix) => isConfiguredProviderRequestSecretPath(path, prefix))
   );
 }
 
@@ -340,25 +301,16 @@ function isConfiguredProviderRequestSecretPath(
   path: readonly string[],
   prefix: readonly string[],
 ): boolean {
-  if (path.length < prefix.length + 3) {
+  if (!matchesConfigPathPrefix(path, prefix) || path[prefix.length] !== "request") {
     return false;
   }
-  if (!matchesConfigPathPrefix(path, prefix)) {
-    return false;
-  }
-  const requestIndex = prefix.length;
-  if (path[requestIndex] !== "request") {
-    return false;
-  }
-  const suffix = path.slice(requestIndex + 1);
-  if (suffix.length === 2 && suffix[0] === "headers") {
-    return true;
-  }
-  if (suffix.length === 2 && suffix[0] === "auth" && isConfiguredProviderAuthSecretKey(suffix[1])) {
-    return true;
-  }
-  if (suffix.length === 2 && suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1])) {
-    return true;
+  const suffix = path.slice(prefix.length + 1);
+  if (suffix.length === 2) {
+    return (
+      suffix[0] === "headers" ||
+      (suffix[0] === "auth" && (suffix[1] === "token" || suffix[1] === "value")) ||
+      (suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1]))
+    );
   }
   return (
     suffix.length === 3 &&
@@ -390,10 +342,6 @@ function matchesConfigPath(path: readonly string[], pattern: readonly string[]):
 
 function isConfiguredProviderTlsSecretKey(key: string | undefined): boolean {
   return key === "ca" || key === "cert" || key === "key" || key === "passphrase";
-}
-
-function isConfiguredProviderAuthSecretKey(key: string | undefined): boolean {
-  return key === "token" || key === "value";
 }
 
 function isSecretInputKey(key: string): boolean {

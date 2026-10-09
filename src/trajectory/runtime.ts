@@ -33,13 +33,6 @@ type TrajectoryRuntimeInit = {
   workspaceDir?: string;
 };
 
-type TrajectoryRuntimeRecorder = {
-  enabled: true;
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-  describeFlushState: () => string | undefined;
-};
-
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
@@ -324,9 +317,7 @@ export function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export async function createTrajectoryRuntimeRecorder(
-  input: TrajectoryRuntimeInit,
-): Promise<TrajectoryRuntimeRecorder | null> {
+export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeInit) {
   const params = {
     ...input,
     env: { ...(input.env ?? process.env) },
@@ -360,8 +351,8 @@ export async function createTrajectoryRuntimeRecorder(
   let seq = 0;
 
   return {
-    enabled: true,
-    recordEvent: (type, data) => {
+    enabled: true as const,
+    recordEvent: (type: string, data?: Record<string, unknown>) => {
       const nextSeq = seq + 1;
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",

@@ -72,7 +72,8 @@ export async function waitForUpdateCandidateReadiness(
   let lastProgress: { milestone: string; completedAt: number } | undefined;
   let deadlineFailure: Error | undefined;
   let warned = false;
-  let warningPending = Promise.resolve();
+  // No warning means no async work to fence; each check may snapshot shared state.
+  let warningPending: Promise<void> | undefined;
   const recordProgress = (milestone: string, completedAt: number) => {
     if (milestones.has(milestone)) {
       return;
@@ -154,8 +155,10 @@ export async function waitForUpdateCandidateReadiness(
         while (true) {
           assertRunning();
           refreshDeadline();
-          await warningPending;
-          assertRunning();
+          if (warningPending) {
+            await warningPending;
+            assertRunning();
+          }
           if (Date.now() >= workDeadline) {
             if (lastProgress && (candidatePending || !proxy)) {
               throw new Error(
@@ -195,8 +198,10 @@ export async function waitForUpdateCandidateReadiness(
           }
           assertRunning();
           refreshDeadline();
-          await warningPending;
-          assertRunning();
+          if (warningPending) {
+            await warningPending;
+            assertRunning();
+          }
           if (ready && Date.now() < workDeadline) {
             params.capture(
               `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - params.started}ms)`,

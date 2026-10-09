@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Generates release dependency evidence artifacts and summaries.
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";

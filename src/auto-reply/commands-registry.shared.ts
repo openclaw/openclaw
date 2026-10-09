@@ -57,6 +57,14 @@ function defineCommandArgument(
   return { name, description, type: "string", ...options };
 }
 
+function choiceMenu(
+  name: string,
+  description: string,
+  choices: NonNullable<BuiltinCommandArgument["choices"]>,
+): Pick<BuiltinCommandOptions, "args" | "argsMenu"> {
+  return { args: [defineCommandArgument(name, description, { choices })], argsMenu: "auto" };
+}
+
 /** Defines a built-in command with its aliases and argument parsing defaults. */
 function defineBuiltinCommand(
   key: string,
@@ -89,6 +97,30 @@ function defineBuiltinCommand(
   };
 }
 
+function definePathCommand(
+  key: string,
+  description: string,
+  actions: string[],
+  pathDescription: string,
+  valueDescription?: string,
+  textAliases?: string[],
+): ChatCommandDefinition {
+  const args = [
+    defineCommandArgument("action", actions.join(" | "), { choices: actions }),
+    defineCommandArgument("path", pathDescription),
+  ];
+  if (valueDescription) {
+    args.push(defineCommandArgument("value", valueDescription, { captureRemaining: true }));
+  }
+  return defineBuiltinCommand(key, description, "management", "power", {
+    modelIndependent: "always",
+    textAliases,
+    args,
+    argsParsing: "none",
+    formatArgs: COMMAND_ARG_FORMATTERS[key],
+  });
+}
+
 /** Builds the built-in command list with context-aware thinking choices. */
 export function buildBuiltinChatCommands(
   params: { listThinkingLevels?: ListThinkingLevels } = {},
@@ -111,10 +143,7 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
       activeRunSafe: true,
       modelIndependent: "always",
-      args: [
-        defineCommandArgument("mode", "compact or verbose", { choices: ["compact", "verbose"] }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "compact or verbose", ["compact", "verbose"]),
     }),
     defineBuiltinCommand("skill", "Run a skill by name.", "tools", "standard", {
       modelIndependent: "no-args",
@@ -402,68 +431,38 @@ export function buildBuiltinChatCommands(
         args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
       },
     ),
-    defineBuiltinCommand("config", "Show or set config values.", "management", "power", {
-      modelIndependent: "always",
-      args: [
-        defineCommandArgument("action", "show | get | set | unset", {
-          choices: ["show", "get", "set", "unset"],
-        }),
-        defineCommandArgument("path", "Config path"),
-        defineCommandArgument("value", "Value for set", { captureRemaining: true }),
-      ],
-      argsParsing: "none",
-      formatArgs: COMMAND_ARG_FORMATTERS.config,
-    }),
-    defineBuiltinCommand("mcp", "Show or set OpenClaw MCP servers.", "management", "power", {
-      modelIndependent: "always",
-      args: [
-        defineCommandArgument("action", "show | get | set | unset", {
-          choices: ["show", "get", "set", "unset"],
-        }),
-        defineCommandArgument("path", "MCP server name"),
-        defineCommandArgument("value", "JSON config for set", { captureRemaining: true }),
-      ],
-      argsParsing: "none",
-      formatArgs: COMMAND_ARG_FORMATTERS.mcp,
-    }),
-    defineBuiltinCommand(
+    definePathCommand(
+      "config",
+      "Show or set config values.",
+      ["show", "get", "set", "unset"],
+      "Config path",
+      "Value for set",
+    ),
+    definePathCommand(
+      "mcp",
+      "Show or set OpenClaw MCP servers.",
+      ["show", "get", "set", "unset"],
+      "MCP server name",
+      "JSON config for set",
+    ),
+    definePathCommand(
       "plugins",
       "List, show, enable, or disable plugins.",
-      "management",
-      "power",
-      {
-        modelIndependent: "always",
-        textAliases: ["/plugins", "/plugin"],
-        args: [
-          defineCommandArgument("action", "list | show | get | enable | disable", {
-            choices: ["list", "show", "get", "enable", "disable"],
-          }),
-          defineCommandArgument("path", "Plugin id or name"),
-        ],
-        argsParsing: "none",
-        formatArgs: COMMAND_ARG_FORMATTERS.plugins,
-      },
+      ["list", "show", "get", "enable", "disable"],
+      "Plugin id or name",
+      undefined,
+      ["/plugins", "/plugin"],
     ),
-    defineBuiltinCommand("debug", "Set runtime debug overrides.", "management", "power", {
-      modelIndependent: "always",
-      args: [
-        defineCommandArgument("action", "show | reset | set | unset", {
-          choices: ["show", "reset", "set", "unset"],
-        }),
-        defineCommandArgument("path", "Debug path"),
-        defineCommandArgument("value", "Value for set", { captureRemaining: true }),
-      ],
-      argsParsing: "none",
-      formatArgs: COMMAND_ARG_FORMATTERS.debug,
-    }),
+    definePathCommand(
+      "debug",
+      "Set runtime debug overrides.",
+      ["show", "reset", "set", "unset"],
+      "Debug path",
+      "Value for set",
+    ),
     defineBuiltinCommand("usage", "Usage footer or cost summary.", "options", "standard", {
       modelIndependent: "always",
-      args: [
-        defineCommandArgument("mode", "off, tokens, full, or cost", {
-          choices: ["off", "tokens", "full", "cost"],
-        }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "off, tokens, full, or cost", ["off", "tokens", "full", "cost"]),
     }),
     defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
       activeRunSafe: true,
@@ -477,19 +476,11 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       modelIndependent: (args) => parseActivationCommand(`/activation ${args}`).hasCommand,
-      args: [
-        defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "mention or always", ["mention", "always"]),
     }),
     defineBuiltinCommand("send", "Set send policy.", "management", "power", {
       modelIndependent: (args) => parseSendPolicyCommandBody(`/send ${args}`).hasCommand,
-      args: [
-        defineCommandArgument("mode", "on, off, or inherit", {
-          choices: ["on", "off", "inherit"],
-        }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "on, off, or inherit", ["on", "off", "inherit"]),
     }),
     // Reset handlers must reach lifecycle cleanup before waiting on the work they interrupt.
     defineBuiltinCommand("reset", "Reset the current session.", "session", "essential", {
@@ -520,63 +511,48 @@ export function buildBuiltinChatCommands(
       modelIndependent: "always",
       textAliases: ["/think", "/thinking", "/t"],
       activeRunSafe: true,
-      args: [
-        defineCommandArgument("level", "Thinking level", {
-          choices: ({ provider, model, catalog, agentRuntime }) =>
-            listThinkingLevelChoices(provider, model, catalog, agentRuntime),
-        }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("level", "Thinking level", ({ provider, model, catalog, agentRuntime }) =>
+        listThinkingLevelChoices(provider, model, catalog, agentRuntime),
+      ),
     }),
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
       modelIndependent: "always",
       textAliases: ["/verbose", "/v"],
-      args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "on, off, or full", ["on", "off", "full"]),
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
       modelIndependent: "directive",
-      args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "on, off, or raw", ["on", "off", "raw"]),
     }),
     defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
       modelIndependent: "always",
-      args: [
-        defineCommandArgument("mode", "on, off, ultrafast, auto, default, or status", {
-          // Generic command menus have no authenticated account-tier facts for offering Ultrafast.
-          choices: ({ cfg, provider, model }) => [
-            "on",
-            "off",
-            {
-              value: "auto",
-              label: formatFastModeAutoLabel({
-                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
-              }),
-            },
-            "default",
-            "status",
-          ],
-        }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu(
+        "mode",
+        "on, off, ultrafast, auto, default, or status",
+        // Generic command menus have no authenticated account-tier facts for offering Ultrafast.
+        ({ cfg, provider, model }) => [
+          "on",
+          "off",
+          {
+            value: "auto",
+            label: formatFastModeAutoLabel({
+              fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
+            }),
+          },
+          "default",
+          "status",
+        ],
+      ),
     }),
     defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
       modelIndependent: "directive",
       textAliases: ["/reasoning", "/reason"],
-      args: [
-        defineCommandArgument("mode", "on, off, or stream", { choices: ["on", "off", "stream"] }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "on, off, or stream", ["on", "off", "stream"]),
     }),
     defineBuiltinCommand("elevated", "Toggle elevated mode.", "options", "power", {
       modelIndependent: "directive",
       textAliases: ["/elevated", "/elev"],
-      args: [
-        defineCommandArgument("mode", "on, off, ask, or full", {
-          choices: ["on", "off", "ask", "full"],
-        }),
-      ],
-      argsMenu: "auto",
+      ...choiceMenu("mode", "on, off, ask, or full", ["on", "off", "ask", "full"]),
     }),
     defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
       modelIndependent: "directive",

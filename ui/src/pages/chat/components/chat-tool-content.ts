@@ -78,8 +78,6 @@ function renderToolDataBlock(params: { label?: string; text: string }) {
   `;
 }
 
-// ── Key-value args display (generic tools) ──
-
 const KV_MAX_KEYS = 12;
 const KV_MAX_VALUE_CHARS = 400;
 

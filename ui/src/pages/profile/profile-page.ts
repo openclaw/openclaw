@@ -501,32 +501,30 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   override render() {
-    return this.heroAvatarLoader.withActiveRoutes(() => this.renderContent());
-  }
-
-  private renderContent() {
-    return html`
-      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
-        <div>
-          <h1 class="page-title">${titleForRoute("profile")}</h1>
-          <div class="page-subtitle">
-            ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
+    return this.heroAvatarLoader.withActiveRoutes(
+      () => html`
+        <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
+          <div>
+            <h1 class="page-title">${titleForRoute("profile")}</h1>
+            <div class="page-subtitle">
+              ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
+            </div>
           </div>
-        </div>
-        ${
-          this.connected
-            ? html`<button
-                class="btn profile-refresh"
-                ?disabled=${this.identityLoading || this.identityBusy !== null}
-                @click=${() => this.refreshManually()}
-              >
-                ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
-              </button>`
-            : nothing
-        }
-      </section>
-      ${renderSettingsWorkspace(this.renderBody())}
-    `;
+          ${
+            this.connected
+              ? html`<button
+                  class="btn profile-refresh"
+                  ?disabled=${this.identityLoading || this.identityBusy !== null}
+                  @click=${() => this.refreshManually()}
+                >
+                  ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
+                </button>`
+              : nothing
+          }
+        </section>
+        ${renderSettingsWorkspace(this.renderBody())}
+      `,
+    );
   }
 }
 

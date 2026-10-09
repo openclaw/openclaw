@@ -28,14 +28,15 @@ import {
 import { retireCodexAppServerSessionGeneration } from "./session-retirement.js";
 import * as sharedClient from "./shared-client.js";
 import {
-  resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   adaptCodexTestClientFactory,
   createInferenceReadyClientHarness,
   waitForHarnessRequest,
+  withoutCodexSkillDiscovery,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
@@ -162,7 +163,7 @@ describe("Codex app-server main thread cleanup", () => {
         pluginAppsFingerprint: expect.any(String),
       });
 
-      expect(requests.map((entry) => entry.method)).toEqual([
+      expect(withoutCodexSkillDiscovery(requests.map((entry) => entry.method))).toEqual([
         "config/read",
         "thread/start",
         "turn/start",
@@ -240,7 +241,7 @@ describe("Codex app-server main thread cleanup", () => {
     const userRequestMethods = () =>
       harness.writes
         .map((write) => (JSON.parse(write) as { method: string }).method)
-        .filter((method) => method !== "initialize" && method !== "initialized");
+        .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
     expect(userRequestMethods()).toEqual([
       "config/read",
       "configRequirements/read",
@@ -668,7 +669,7 @@ describe("Codex app-server main thread cleanup", () => {
           clientFactory,
         }),
       ).rejects.toThrow(error.message);
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
+      expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
         "config/read",
         "thread/start",
         "turn/start",
@@ -749,6 +750,7 @@ describe("Codex app-server main thread cleanup", () => {
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).toEqual([
         "initialize",
         "initialized",
+        "skills/list",
         "config/read",
         "account/read",
         "thread/start",
@@ -804,7 +806,7 @@ describe("Codex app-server main thread cleanup", () => {
         clientFactory,
       }),
     ).rejects.toBe(startupError);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
+    expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
       "config/read",
       "thread/start",
       "turn/start",

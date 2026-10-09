@@ -11,7 +11,7 @@ Docker is **optional**. Use it for an isolated, throwaway Gateway environment or
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
-Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+Hosting mutually untrusted users? Run a separate Gateway for each trust boundary, ideally under separate OS users or hosts. See [Security trust model](/gateway/security/trust-model).
 
 ## Prerequisites
 
@@ -272,11 +272,14 @@ confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
 files with your pre-upgrade backups while you still need the matching rollback.
 
 On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
-does not require an operator step. The migration owner publishes a complete,
-exclusive hardlink, syncs it before removing the old name, and can recover an
-interrupted source/claim pair without replacing another file. This preserves the
-source inode and exact bytes. The filesystem must support same-directory hardlinks
-and directory synchronization when native no-replace rename is unavailable.
+does not require an operator step in native `auto` mode when same-directory
+hardlinks are supported. fs-safe preserves the source inode and bytes through
+exclusive hardlink publication and unlink. Native `require` mode still refuses
+the unsupported primitive. Doctor recovers interrupted source/claim pairs without
+replacing another file. Its separate missing-addon/native-off compatibility path
+syncs the source and directory before removing the old name; native moves do not
+promise per-move crash durability. Archive hardening and durable recovery
+checkpoints remain owned by Doctor.
 SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
 
 Readiness remains false while the default or system agent database is refused,

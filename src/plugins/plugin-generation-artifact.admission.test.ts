@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -22,11 +23,15 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
+
 function observeNativeIo(filename: string) {
   const original = fs.statSync(filename);
   const readSync = fs.readSync;
   const readFileSync = fs.readFileSync;
-  const copyFileSync = fs.copyFileSync;
+  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
   const writeSync = fs.writeSync;
   const empty = () => ({ originalBytes: 0, capturedBytes: 0, wholeFileReads: 0, largestBuffer: 0 });
   let current: ReturnType<typeof empty> | undefined;
@@ -59,11 +64,12 @@ function observeNativeIo(filename: string) {
       }
       return result;
     }),
-    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
-      copyFileSync(from, to, mode);
+    vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+      const copied = copyRootFileSync(options);
       if (current) {
-        recordCopy(fs.statSync(to));
+        recordCopy(fs.fstatSync(copied.fd));
       }
+      return copied;
     }),
     vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
       const length = Reflect.apply(writeSync, fs, args);

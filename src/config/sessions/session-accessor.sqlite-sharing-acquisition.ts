@@ -33,7 +33,13 @@ export type PreparedSessionSharingRead = {
   acquisition?: SessionSharingAcquisition;
   generation?: {
     initiallyAbsent?: true;
-    current: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | null | undefined;
+    current:
+      | Pick<
+          SessionSharingEntry,
+          "sessionId" | "lifecycleRevision" | "permissionMode" | "toolOverrides"
+        >
+      | null
+      | undefined;
   };
 };
 
@@ -131,6 +137,9 @@ export function publishRetainedSessionGeneration(
     generation.current.lifecycleRevision !== entry.lifecycleRevision
   ) {
     generation.current = null;
+  } else {
+    // Same-generation policy changes must narrow retained execution before its next effect.
+    generation.current = entry;
   }
 }
 

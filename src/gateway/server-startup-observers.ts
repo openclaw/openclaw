@@ -18,23 +18,33 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 );
 
 /** Mark predecessors before channels admit work, independently of plugin registration. */
-export async function markGatewayStartupMainSessionOrphans(params: {
-  cfg: OpenClawConfig;
-  startupCheckedStorePaths: Set<string>;
-  startupTrace?: GatewayStartupTrace;
-  log: { warn: (message: string) => void };
-}): Promise<void> {
+export async function markGatewayStartupMainSessionOrphans(
+  params: {
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    isRestartRecoverySuppressed: () => boolean;
+    scheduler: { signal: AbortSignal };
+    startupTrace?: GatewayStartupTrace;
+    log: { warn: (message: string) => void };
+  },
+  startupCheckedStorePaths: Set<string>,
+): Promise<void> {
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
         params.startupTrace,
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
         markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.cfg,
-          startupCheckedStorePaths: params.startupCheckedStorePaths,
+          cfg: params.gatewayPluginConfigAtStart,
+          startupCheckedStorePaths,
         }),
       );
     } catch (err) {

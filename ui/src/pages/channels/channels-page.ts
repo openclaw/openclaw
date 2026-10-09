@@ -295,11 +295,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     });
   }
 
-  private resolveNostrAccountId(): string {
-    const accounts = this.context?.channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
-    return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
-  }
-
   private clearNostrForm() {
     this.nostrProfileFormState = null;
     this.nostrProfileAccountId = null;
@@ -327,12 +322,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!scope) {
       return null;
     }
+    const accounts = channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
     return {
       scope,
       gateway,
       channels,
       formAccountId: this.nostrProfileAccountId,
-      accountId: this.resolveNostrAccountId(),
+      accountId: this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default",
       authCandidates: resolveControlUiAuthCandidates({
         hello: gateway.snapshot.hello,
         settings: { token: gateway.connection.token },
@@ -362,24 +358,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
-  private changeNostrProfileField(field: keyof NostrProfile, value: string) {
+  private editNostrForm(
+    update: (form: NonNullable<NostrProfileFormState>) => NonNullable<NostrProfileFormState>,
+  ) {
     const form = this.nostrProfileFormState;
-    if (!form) {
-      return;
+    if (form) {
+      this.nostrProfileFormState = update(form);
     }
-    this.nostrProfileFormState = {
-      ...form,
-      values: { ...form.values, [field]: value },
-      fieldErrors: { ...form.fieldErrors, [field]: "" },
-    };
-  }
-
-  private toggleNostrProfileAdvanced() {
-    const form = this.nostrProfileFormState;
-    if (!form) {
-      return;
-    }
-    this.nostrProfileFormState = { ...form, showAdvanced: !form.showAdvanced };
   }
 
   private async updateNostrProfile(action: "save" | "import") {
@@ -539,12 +524,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!prompt) {
       return;
     }
+    const target = {
+      channel: prompt.request.channel,
+      accountId: prompt.request.accountId,
+      requestId: prompt.request.requestId,
+    };
     if (prompt.kind === "dismiss") {
-      const dismissed = await this.context.channels.dismissPairing({
-        channel: prompt.request.channel,
-        accountId: prompt.request.accountId,
-        requestId: prompt.request.requestId,
-      });
+      const dismissed = await this.context.channels.dismissPairing(target);
       if (dismissed && this.pairingPrompt === prompt) {
         this.pairingPrompt = null;
         this.pairingNotice = t("channels.pairing.dismissedNotice");
@@ -553,9 +539,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
 
     const result = await this.context.channels.approvePairing({
-      channel: prompt.request.channel,
-      accountId: prompt.request.accountId,
-      requestId: prompt.request.requestId,
+      ...target,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
     });
@@ -642,10 +626,16 @@ class ChannelsPage extends OpenClawLightDomElement {
           onConfigReload: () => void this.reloadChannelConfig(),
           onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
           onNostrProfileCancel: () => this.invalidateNostrForm(),
-          onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
+          onNostrProfileFieldChange: (field, value) =>
+            this.editNostrForm((form) => ({
+              ...form,
+              values: { ...form.values, [field]: value },
+              fieldErrors: { ...form.fieldErrors, [field]: "" },
+            })),
           onNostrProfileSave: () => void this.updateNostrProfile("save"),
           onNostrProfileImport: () => void this.updateNostrProfile("import"),
-          onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
+          onNostrProfileToggleAdvanced: () =>
+            this.editNostrForm((form) => ({ ...form, showAdvanced: !form.showAdvanced })),
         }),
       )}
     `;

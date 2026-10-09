@@ -91,6 +91,37 @@ async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
   await sessionsCommand(opts, defaultRuntime);
 }
 
+function localSessionsAction(
+  subcommand: string,
+  unsupportedOptions: readonly (keyof SessionsListCliOptions)[],
+  reason: string,
+  load: () => Promise<
+    (opts: SessionsListCliOptions, runtime: typeof defaultRuntime) => Promise<unknown>
+  >,
+) {
+  return async (opts: SessionsListCliOptions, command: Command): Promise<void> => {
+    const parentOpts = command.parent?.opts<SessionsListCliOptions>();
+    rejectUnsupportedSessionsParentOptions(subcommand, parentOpts, unsupportedOptions, reason);
+    await runCommandWithRuntime(defaultRuntime, async () => {
+      const run = await load();
+      await run(
+        {
+          ...opts,
+          store: opts.store ?? parentOpts?.store,
+          agent: opts.agent ?? parentOpts?.agent,
+          ...(!unsupportedOptions.includes("allAgents")
+            ? { allAgents: Boolean(opts.allAgents || parentOpts?.allAgents) }
+            : {}),
+          ...(!unsupportedOptions.includes("json")
+            ? { json: Boolean(opts.json || parentOpts?.json) }
+            : {}),
+        },
+        defaultRuntime,
+      );
+    });
+  };
+}
+
 function registerSessionsLifecycleCommand(
   sessionsCmd: Command,
   operation: "archive" | "delete",
@@ -288,8 +319,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   sessionsCmd
     .command("cleanup")
-    .description("Run session-store maintenance now")
-    .option("--store <path>", "Legacy session store selector path")
+    .description(
+      "Run session-store maintenance (local destructive cleanup requires offline ownership)",
+    )
+    .option("--store <path>", "Local store selector (destructive cleanup refuses live owners)")
     .option("--agent <id>", "Agent id to maintain (required for multiple explicit agents)")
     .option("--all-agents", "Run maintenance across all configured agents", false)
     .option("--dry-run", "Preview maintenance actions without writing", false)
@@ -324,63 +357,42 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
           [
             "openclaw sessions cleanup --enforce --store ./tmp/sessions.sqlite",
-            "Use a specific store.",
+            "Use an offline store inside OPENCLAW_STATE_DIR.",
           ],
         ])}`,
     )
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
-      rejectUnsupportedSessionsParentOptions(
+    .action(
+      localSessionsAction(
         "cleanup",
-        parentOpts,
         ["active", "limit", "verbose"],
         "session-list filters cannot scope session maintenance",
-      );
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { sessionsCleanupCommand } = await import("../../commands/sessions-cleanup.js");
-        await sessionsCleanupCommand(
-          {
-            ...opts,
-            store: (opts.store as string | undefined) ?? parentOpts?.store,
-            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-            json: Boolean(opts.json || parentOpts?.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
+        async () => (await import("../../commands/sessions-cleanup.js")).sessionsCleanupCommand,
+      ),
+    );
 
   sessionsCmd
     .command("tail")
     .description("Tail human-readable session trajectory progress")
-    .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
+    .option(
+      "--session-key <key>",
+      "Session key to tail (default: Gateway running sessions or latest activity)",
+    )
     .option("--tail <count>", "Number of existing trajectory events to show", "80")
     .option("--follow", "Continue following for new trajectory events", false)
-    .option("--store <path>", "Legacy session store selector path")
+    .option(
+      "--store <path>",
+      "Session store selector path (orders by activity without Gateway lookup)",
+    )
     .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
-      rejectUnsupportedSessionsParentOptions(
+    .action(
+      localSessionsAction(
         "tail",
-        parentOpts,
         ["json", "active", "limit", "verbose"],
         "trajectory tail emits human-readable progress and selects sessions separately",
-      );
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { sessionsTailCommand } = await import("../../commands/sessions-tail.js");
-        await sessionsTailCommand(
-          {
-            ...opts,
-            store: (opts.store as string | undefined) ?? parentOpts?.store,
-            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-          },
-          defaultRuntime,
-        );
-      });
-    });
+        async () => (await import("../../commands/sessions-tail.js")).sessionsTailCommand,
+      ),
+    );
 
   sessionsCmd
     .command("export-trajectory")
@@ -392,27 +404,14 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--agent <id>", "Agent id for resolving the default session store")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
-      rejectUnsupportedSessionsParentOptions(
+    .action(
+      localSessionsAction(
         "export-trajectory",
-        parentOpts,
         ["allAgents", "active", "limit", "verbose"],
         "trajectory export targets one session and cannot apply session-list filters",
-      );
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { exportTrajectoryCommand } = await import("../../commands/export-trajectory.js");
-        await exportTrajectoryCommand(
-          {
-            ...opts,
-            store: (opts.store as string | undefined) ?? parentOpts?.store,
-            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            json: Boolean(opts.json || parentOpts?.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
+        async () => (await import("../../commands/export-trajectory.js")).exportTrajectoryCommand,
+      ),
+    );
 
   registerSessionsLifecycleCommand(sessionsCmd, "archive");
   registerSessionsLifecycleCommand(sessionsCmd, "delete");

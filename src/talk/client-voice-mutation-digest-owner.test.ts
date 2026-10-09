@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { ClientVoiceMutationDigestOwner } from "./client-voice-mutation-digest-owner.js";
 
 async function flushMicrotasks(): Promise<void> {
@@ -9,6 +10,42 @@ async function flushMicrotasks(): Promise<void> {
 describe("client voice mutation digest owner", () => {
   beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
   afterEach(() => vi.useRealTimers());
+  it("drains the accepted retry prefix when a later intent loses admission", async () => {
+    let retrying = false;
+    const refused = new Error("second intent admission closed");
+    const releases: ReturnType<typeof vi.fn>[] = [];
+    const attempt = vi.fn(async () => retrying);
+    const owner = new ClientVoiceMutationDigestOwner<number>({
+      attempt,
+      warn: vi.fn(),
+      updateContext: (previous) => previous,
+      captureAttempt(context) {
+        if (retrying && context === 2) {
+          throw refused;
+        }
+        const release = vi.fn();
+        releases.push(release);
+        return { run: (run) => run(), release };
+      },
+    });
+    try {
+      owner.record({ agentId: "a", voiceSessionId: "first", context: 1 });
+      owner.record({ agentId: "a", voiceSessionId: "second", context: 2 });
+      await flushMicrotasks();
+      expect(owner.snapshot()).toMatchObject({ active: 0, retained: 2 });
+      retrying = true;
+      expect(() => owner.retryAgent("a", 0)).toThrow(refused);
+      await flushMicrotasks();
+      expect(attempt).toHaveBeenCalledTimes(3);
+      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+      expect(releases).toHaveLength(3);
+      for (const release of releases) {
+        expect(release).toHaveBeenCalledOnce();
+      }
+    } finally {
+      owner.clear();
+    }
+  });
   it("bounds retained identities, dedupes keys, and limits concurrency", async () => {
     const attempts: Array<{ id: string; completion: ReturnType<typeof createDeferred<boolean>> }> =
       [];
@@ -69,26 +106,113 @@ describe("client voice mutation digest owner", () => {
     expect(warn).toHaveBeenNthCalledWith(2, "voice mutation digest retry owner is full");
   });
 
-  it("retries once when a duplicate intent arrives during a failed active attempt", async () => {
-    const attempts: Array<ReturnType<typeof createDeferred<boolean>>> = [];
+  it.each([
+    { error: new Error("offline"), expectedAttempts: 2 },
+    { error: new SqliteWorkerError("lost acknowledgment", "outcome-unknown"), expectedAttempts: 1 },
+  ])(
+    "retries duplicate intent only after a known failure ($error)",
+    async ({ error, expectedAttempts }) => {
+      const attempts: Array<ReturnType<typeof createDeferred<boolean>>> = [];
+      const owner = new ClientVoiceMutationDigestOwner<number>({
+        warn: vi.fn(),
+        attempt: async () => {
+          const completion = createDeferred<boolean>();
+          attempts.push(completion);
+          return await completion.promise;
+        },
+      });
+
+      owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
+      owner.record({ agentId: "a", voiceSessionId: "v1", context: 2 });
+      attempts[0]?.reject(error);
+      await flushMicrotasks();
+      expect(attempts).toHaveLength(expectedAttempts);
+      attempts[1]?.resolve(true);
+      await flushMicrotasks();
+      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0 });
+    },
+  );
+
+  it("fences later lifecycle intents after an unknown outcome without retaining settlement", async () => {
+    const releases: Array<ReturnType<typeof vi.fn>> = [];
+    const attempt = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new SqliteWorkerError("lost acknowledgment", "outcome-unknown"))
+      .mockResolvedValue(true);
     const owner = new ClientVoiceMutationDigestOwner<number>({
       warn: vi.fn(),
-      attempt: async () => {
-        const completion = createDeferred<boolean>();
-        attempts.push(completion);
-        return await completion.promise;
+      attempt,
+      captureAttempt: () => {
+        const release = vi.fn();
+        releases.push(release);
+        return { run: (run) => run(), release };
       },
     });
-
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 2 });
-    attempts[0]?.reject(new Error("offline"));
+    const identity = { agentId: "a", voiceSessionId: "v1" };
+    owner.record({ ...identity, context: 1 });
     await flushMicrotasks();
-    expect(attempts).toHaveLength(2);
-    attempts[1]?.resolve(true);
+    owner.retry(identity);
     await flushMicrotasks();
-    expect(owner.snapshot().retained).toBe(0);
+    expect(releases).toHaveLength(2);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    owner.retry(identity);
+    owner.retryAgent("a", 2);
+    owner.record({ ...identity, context: 3 });
+    await flushMicrotasks();
+    expect(attempt).toHaveBeenCalledTimes(2);
+    expect(releases).toHaveLength(2);
+    owner.record({ agentId: "a", voiceSessionId: "v2", context: 1 });
+    await flushMicrotasks();
+    expect(attempt).toHaveBeenCalledTimes(3);
+    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+    owner.clear();
   });
+
+  it.each(["attempt limit", "expiry"] as const)(
+    "retains a confirmed-delivery fence after marker retry %s",
+    async (limit) => {
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      const attempt = vi.fn(async () => {
+        throw new Error("marker refused");
+      });
+      const owner = new ClientVoiceMutationDigestOwner<{ deliveredAt: number }>({
+        warn: vi.fn(),
+        attempt,
+        deliveryState: () => "confirmed",
+        captureAttempt: () => {
+          const release = vi.fn();
+          releases.push(release);
+          return { run: (run) => run(), release };
+        },
+      });
+      const identity = { agentId: "a", voiceSessionId: "v1" };
+      const context = { deliveredAt: 123 };
+      owner.record({ ...identity, context });
+      await flushMicrotasks();
+      if (limit === "attempt limit") {
+        for (let index = 0; index < 2; index += 1) {
+          owner.retry(identity);
+          await flushMicrotasks();
+        }
+      }
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      const attempts = attempt.mock.calls.length;
+      owner.record({ ...identity, context });
+      owner.retry(identity);
+      owner.retryAgent("a", context);
+      await flushMicrotasks();
+      expect(attempt).toHaveBeenCalledTimes(attempts);
+      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+      for (const release of releases) {
+        expect(release).toHaveBeenCalledOnce();
+      }
+      owner.clear();
+    },
+  );
 
   it("keeps an ignored abort request active until its real promise settles", async () => {
     const attempts: Array<{
@@ -149,6 +273,34 @@ describe("client voice mutation digest owner", () => {
     expect(warn).toHaveBeenCalledWith(
       "voice mutation digest identity exceeds the retry owner byte limit",
     );
+  });
+
+  it("releases queued acceptance on reset but joins active attempts until they settle", async () => {
+    const releases: Array<ReturnType<typeof vi.fn>> = [];
+    const attempts: Array<ReturnType<typeof createDeferred<boolean>>> = [];
+    const owner = new ClientVoiceMutationDigestOwner<number>({
+      warn: vi.fn(),
+      captureAttempt: () => {
+        const release = vi.fn();
+        releases.push(release);
+        return { run: (run) => run(), release };
+      },
+      attempt: async () => {
+        const completion = createDeferred<boolean>();
+        attempts.push(completion);
+        return completion.promise;
+      },
+    });
+    for (let index = 0; index < 3; index++) {
+      owner.record({ agentId: "main", voiceSessionId: String(index), context: index });
+    }
+    owner.clear();
+    expect(releases.map((release) => release.mock.calls.length)).toEqual([0, 0, 1]);
+    attempts[0]!.reject(new Error("unknown delivery outcome"));
+    attempts[1]!.resolve(true);
+    await flushMicrotasks();
+    expect(releases.map((release) => release.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 0 });
   });
 
   it("preserves older intents when aggregate identity bytes are full", async () => {

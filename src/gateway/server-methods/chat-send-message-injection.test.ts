@@ -16,7 +16,10 @@ import {
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { beginReplyMessageInjectionTarget as beginActualReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
+import {
+  beginReplyMessageInjectionTarget as beginActualReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt as finalizeActualReplyMessageInjectionAttempt,
+} from "../../auto-reply/reply/reply-run-registry.message-injection.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
   loadSessionEntry,
@@ -33,6 +36,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import {
@@ -113,7 +117,6 @@ function makeParams() {
 function makeFailClosedEntry() {
   return {
     sessionId: "session-1",
-    status: "running",
     restartRecoveryDeliveryRunId: "recovery-1",
     restartRecoveryDeliverySourceRunId: "source-1",
     restartRecoveryDeliveryReceiptState: "terminal-pending",
@@ -218,28 +221,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       }),
     );
   });
-
-  it("audits an unconfirmed-transcript steer abort as skipped, not completed", async () => {
-    vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
-      status: "accepted",
-      outcome: {
-        status: "accepted",
-        result: { transcriptCommit: "unconfirmed", errorMessage: "commit timeout" },
-      },
-      targetRunId: "run-1",
-      aborted: true,
-    });
-    await finalizeAcceptedChatSendMessageInjection(makeParams());
-
-    expect(logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "skipped", reason: "reply_operation_aborted" }),
-    );
-    expect(emitInboundMessageAuditTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminal: { outcome: "skipped", options: { reason: "reply_operation_aborted" } },
-      }),
-    );
-  });
 });
 
 describe("createChatSendMessageInjectionStarter admission fence", () => {
@@ -254,7 +235,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     "rechecks terminal admission after awaited projection: %s",
     async (change, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const initial = { sessionId: "session-1", status: "running" as const, updatedAt: 1 };
+        const initial = { sessionId: "session-1", updatedAt: 1 };
         const sessionKey = `agent:main:dashboard:projection-${change.replaceAll(" ", "-")}`;
         const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
         const scope = { agentId: "main", sessionKey, storePath };
@@ -384,7 +365,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // inbound falls back to follow-up dispatch (#128971).
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
       restartRecoveryDeliveryReceiptState: "delivered-terminal",
@@ -415,7 +395,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         sourceTurnIdOrigin: "active-run",
         sessionKey: "agent:main:dashboard:s",
         sessionId: "session-1",
-        sessionStatus: "running",
+        sessionStatus: undefined,
         recoveryRunId: "recovery-1",
         recoverySourceTurnId: "source-1",
       },
@@ -461,7 +441,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // fence must follow the latest state and allow the steer.
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       updatedAt: 2,
     } as never);
     const queuedAttempt = {
@@ -521,7 +500,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // prior source must not fence the active source into follow-up mode.
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryTerminalRunIds: ["source-old"],
       updatedAt: 2,
     } as never);
@@ -536,7 +514,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       },
     );
     const params = makeStarterParams({
-      entry: { sessionId: "session-1", status: "running", updatedAt: 1 } as never,
+      entry: { sessionId: "session-1", updatedAt: 1 } as never,
     });
     params.target = {
       ...expectDefined(params.target, "injection target"),
@@ -555,7 +533,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // would resolve to already-delivered, so the fence must reject.
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryTerminalRunIds: ["source-1"],
       updatedAt: 2,
     } as never);
@@ -574,6 +551,91 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
 });
 
 describe("gateway steer contract after the injection-start fence", () => {
+  it.each([false, true])(
+    "keeps work alive after an uncertain steer (statusOnly=%s)",
+    async (statusOnly) => {
+      const starter = makeStarterParams();
+      if (statusOnly) {
+        starter.turn.ctx.InputProvenance = {
+          kind: "internal_system",
+          sourceTool: "progress_card_refresh",
+        };
+      }
+      const operation = createReplyOperation({
+        sessionKey: starter.session.sessionKey!,
+        sessionId: "session-1",
+        resetTriggered: false,
+      });
+      onTestFinished(() => operation.complete());
+      const cancel = vi.fn();
+      operation.bindToolAuthoritySnapshot({
+        fingerprint: () => "steer-authority",
+        project: () => "steer-authority",
+      });
+      operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+      const errorMessage = "Steering receipt unavailable; do not replay this input.";
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          options?.onQueueAccepted?.(true);
+          return { transcriptCommit: "unconfirmed", errorMessage };
+        },
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "backing-run",
+        toolAuthorityFingerprint: "steer-authority",
+        cancel,
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      operation.setPhase("running");
+      starter.target = expectDefined(
+        replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key),
+        "active steering target",
+      );
+      vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
+        beginActualReplyMessageInjectionTarget,
+      );
+      vi.mocked(finalizeReplyMessageInjectionAttempt).mockImplementationOnce(
+        finalizeActualReplyMessageInjectionAttempt,
+      );
+      const attempt = expectDefined(
+        await createChatSendMessageInjectionStarter(starter)(),
+        "steering attempt",
+      );
+      await expect(attempt.outcome).resolves.toMatchObject({
+        status: "indeterminate",
+        errorMessage,
+      });
+      await expect(attempt.acceptance).resolves.toBe(true);
+      const params = makeParams();
+      params.ctx = starter.turn.ctx;
+      params.attempt = attempt;
+      params.target = starter.target;
+      params.context.chatRunState.hasAbortMarker = () => false;
+      await expect(finalizeAcceptedChatSendMessageInjection(params)).resolves.toBe(true);
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(operation.phase).toBe("running");
+      expect(params.persistUserTurnTranscriptBestEffort).toHaveBeenCalledOnce();
+      expect(broadcastChatError).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", errorMessage }),
+      );
+      expect(broadcastChatFinal).not.toHaveBeenCalled();
+      expect(params.context.logGateway.warn).not.toHaveBeenCalled();
+      expect(setGatewayDedupeEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: "chat:run-1",
+          entry: expect.objectContaining({
+            ok: statusOnly,
+            payload: expect.objectContaining({ status: statusOnly ? "accepted" : "error" }),
+          }),
+        }),
+      );
+    },
+  );
+
   it("routes a fail-closed inbound to follow-up dispatch exactly once, with no steer enqueued", async () => {
     // Mock-gateway contract: the pre-ACK path creates the starter, invokes
     // it after preparation, and hands the inbound to follow-up dispatch whenever
@@ -584,7 +646,6 @@ describe("gateway steer contract after the injection-start fence", () => {
     // second dispatch = inbound double delivery).
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
       restartRecoveryDeliveryReceiptState: "terminal-pending",
@@ -673,7 +734,6 @@ describe("createChatSendMessageInjectionStarter", () => {
     params.session.entry = {
       sessionId: "steer-test-session",
       updatedAt: 1,
-      status: "running",
       restartRecoveryDeliveryRunId: "active-recovery",
       restartRecoveryDeliverySourceRunId: "active-source",
     };

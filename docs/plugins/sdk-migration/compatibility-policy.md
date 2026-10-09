@@ -165,6 +165,21 @@ approval. This includes the callback-based `inbound-envelope` helpers and
 and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
 remain unchanged. No schema, stored data, retention, or update migration is required.
 
+### Progress card handoff
+
+`ReplyDispatchRuntimeInfo.adoptProgressContinuation(receipt)` from
+`openclaw/plugin-sdk/reply-runtime` is deprecated as of October 6, 2026. Editable
+progress adapters use `adoptProgressDraft(draft)` instead: they keep the card and
+its rendering, and the host pushes prepared items and retires the card once. See
+[progress card handoff](/plugins/sdk-channel-plugins/status-and-media#progress-card-handoff).
+
+The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until the
+next Plugin SDK major and explicit breaking-release approval. The host never
+offers it, so a published adapter that checks for it keeps ordinary waiting-reply
+delivery and the host never receives a receipt. Telegram, the only bundled
+adopter, uses the draft handoff. No schema, stored data, retention, or update
+migration is required.
+
 ### Watched-session harness context
 
 `buildWatchedSessionsHarnessContext` from
@@ -330,6 +345,20 @@ itself remains supported. The fallback stays until the next Plugin SDK major and
 explicit breaking-release approval. The compatibility registry records the
 migration without runtime warnings. Schemas, retained data, and update behavior
 are unchanged.
+
+### Agent execution preparation compatibility
+
+The execution object accepted by
+`openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore` retains the
+`prepare(source, signal?) => Promise<void>` contract published in
+`v2026.10.1-beta.1`. Existing callers and two-argument implementations remain
+supported. Ordinary preparation reuses a completed native generation; host
+admission can request current schema proof through an optional third argument.
+
+The `agent-execution-preparation-released-signature` compatibility record is
+active, with no deprecation warning or required migration. Breaking the released
+contract requires an explicitly approved Plugin SDK major release. Schemas,
+stored data, and update behavior are unchanged.
 
 ### ACP metadata binding compatibility
 

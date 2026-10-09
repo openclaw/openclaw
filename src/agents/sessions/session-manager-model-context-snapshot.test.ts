@@ -1,12 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as transcriptReaders from "../../config/sessions/session-transcript-execution-read.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { readGlobalSingleton } from "../../shared/global-singleton.js";
@@ -33,27 +32,23 @@ it("refuses full context after a rewrite between validation and acceptance", asy
     await source.appendMessageAsync(makeUserMessage("original", 1));
     const validated = createDeferred();
     const release = createDeferred();
-    // oxlint-disable-next-line typescript/unbound-method -- Forward the original pool receiver.
-    const run = WorkerTaskPoolCore.prototype.run;
-    const spy = vi.spyOn(WorkerTaskPoolCore.prototype, "run").mockImplementation(async function (
-      this: WorkerTaskPoolCore<unknown, unknown>,
-      input,
-      options,
-    ) {
-      const reply = await run.call(this, input, options);
-      if (
-        isRecord(reply) &&
-        reply.ok === true &&
-        isRecord(reply.value) &&
-        // Include the former reply so the regression exercises the pre-fix acceptance race.
-        ((isRecord(reply.value.facts) && reply.value.facts.contextValidated === true) ||
-          reply.value.kind === "context-messages-current")
-      ) {
-        validated.resolve();
-        await release.promise;
-      }
-      return reply;
-    });
+    const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
+    const spy = vi
+      .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+      .mockImplementation((params) => {
+        const readers = createReaders(params);
+        return {
+          ...readers,
+          readAnchors: async (input, signal) => {
+            const facts = await readers.readAnchors(input, signal);
+            if (facts.contextValidated === true) {
+              validated.resolve();
+              await release.promise;
+            }
+            return facts;
+          },
+        };
+      });
     const pending = SessionManager.readSessionContextAsync(target, (messages) => [...messages]);
     try {
       await awaitGateBeforeSettlement(
@@ -85,12 +80,13 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
     await source.appendMessageAsync(makeUserMessage("original", 1));
     const consuming = createDeferred();
     const release = createDeferred();
+    const disclose = vi.fn();
     let retained: Iterable<unknown> | undefined;
     const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
       retained = messages;
       consuming.resolve();
       await release.promise;
-      return [...messages];
+      return Array.from(messages, disclose);
     });
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     try {
@@ -102,6 +98,7 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
       closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       release.resolve();
       await expect(pending).rejects.toThrow(/revoked|closed|current|admission/i);
+      expect(disclose).not.toHaveBeenCalled();
       expect([...retained!]).toEqual([]);
     } finally {
       release.resolve();
@@ -202,10 +199,11 @@ it("reads full durable context through workers and preserves the deprecated sync
       exec.mockRestore();
     }
     await expect(
-      SessionManager.readSessionContextAsync(target, async () => {
+      SessionManager.readSessionContextAsync(target, async (messages) => {
         await manager.appendMessageAsync(makeUserMessage("changed", 2));
+        return [...messages];
       }),
-    ).rejects.toThrow("changed during context read");
+    ).resolves.toEqual(expected);
     const missing = { ...target, storePath: path.join(state.agentDir("main"), "absent.sqlite") };
     await expect(
       SessionManager.readSessionContextAsync(missing, () => "unreadable", {

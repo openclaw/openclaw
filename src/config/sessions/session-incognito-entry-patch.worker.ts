@@ -3,14 +3,12 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { applySessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
-import {
-  readRefusedSessionSource,
-  readSessionEntryPatchSnapshot,
-} from "./session-entry-patch.worker.js";
+import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import type {
   IncognitoEntryPatchOperations,
   IncognitoEntryPatchResult,
 } from "./session-incognito-entry-patch-contract.js";
+import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 
 export function createIncognitoEntryPatchWorker(
   database: OpenClawAgentDatabase,
@@ -53,7 +51,7 @@ export function createIncognitoEntryPatchWorker(
               options: {
                 consumePendingReset: input.consumePendingReset,
                 providerReviewMutation: input.providerReviewMutation,
-                workerGuard: { cliHistory: input.cliHistory },
+                workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
                 assertCommitAllowed() {
                   const refusedSource = readRefusedSessionSource(
                     database,

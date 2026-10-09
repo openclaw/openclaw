@@ -25,7 +25,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
 import {
-  prepareCurrentTurnReplayWitness,
+  prepareCurrentTurnReplaySelection,
   resolveCurrentTurnEntryId,
   sessionManagerPrepareCurrentTurnReplay,
 } from "./session-manager-current-turn.js";
@@ -230,10 +230,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     try {
       persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
     } catch (error) {
-      const deliberateBranchAppend = this.pendingDeliberateAppend;
-      const sideBranchAppend =
-        this.appendMode === "side" || isSessionTranscriptSideAppendEntry(canonicalEntry);
-      const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
+      const retryableExplicitParentAppend =
+        this.pendingDeliberateAppend ||
+        this.appendMode === "side" ||
+        isSessionTranscriptSideAppendEntry(canonicalEntry);
       if (
         (!activeBranchAppend && !retryableExplicitParentAppend) ||
         !(error instanceof SqliteTranscriptMutationConflictError)
@@ -251,30 +251,27 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       // Preserve the prepared parent so storage can distinguish a descendant tail from an
       // unrelated branch. Turn-bound assistant and tool-result messages may follow only a
       // descendant tail with no newer user turn; compatible reset and reentrant writes remain.
-      const retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
-        preparedTurnAppend
-          ? (() => {
-              const validatedMutationAt = this.persistenceTarget
-                ? validatePreparedAssistantAppendSync(
-                    this.persistenceTarget,
-                    canonicalEntry.parentId,
-                    admittedUserId,
-                  )
-                : undefined;
-              if (validatedMutationAt === undefined) {
-                throw error;
-              }
-              return copyCodeModeSourceAppendOptions(persistenceOptions, {
-                ...persistenceOptions,
-                expectedMutationAt: validatedMutationAt,
-              });
-            })()
-          : copyCodeModeSourceAppendOptions(persistenceOptions, {
-              ...persistenceOptions,
-              expectedMutationAt: this.persistenceTarget
-                ? readTranscriptMutationAtSync(this.persistenceTarget)
-                : null,
-            });
+      let expectedMutationAt: number | null | undefined;
+      if (preparedTurnAppend) {
+        expectedMutationAt = this.persistenceTarget
+          ? validatePreparedAssistantAppendSync(
+              this.persistenceTarget,
+              canonicalEntry.parentId,
+              admittedUserId,
+            )
+          : undefined;
+        if (expectedMutationAt === undefined) {
+          throw error;
+        }
+      } else {
+        expectedMutationAt = this.persistenceTarget
+          ? readTranscriptMutationAtSync(this.persistenceTarget)
+          : null;
+      }
+      const retryOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+        ...persistenceOptions,
+        expectedMutationAt,
+      });
       persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
     return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
@@ -490,7 +487,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     matchesUser: (entry: SessionEntry | undefined) => boolean,
     signal?: AbortSignal,
   ) {
-    return prepareCurrentTurnReplayWitness(
+    return prepareCurrentTurnReplaySelection(
       () => {
         this.assertTranscriptViewAvailable();
         return {
@@ -501,6 +498,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           remainingAncestors:
             this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
           isInterruptedTail,
+          pendingDeliberateAppend: this.pendingDeliberateAppend,
         };
       },
       matchesUser,

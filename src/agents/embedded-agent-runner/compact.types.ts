@@ -7,7 +7,6 @@ import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/typ
 export type CompactEmbeddedAgentSessionParams = Pick<
   import("./run/params.js").RunEmbeddedAgentParams,
   | "requireWorkspaceOnly"
-  | "requireWritableSandbox"
   | "sessionTarget"
   | "sessionId"
   | "sessionKey"

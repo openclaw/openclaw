@@ -75,29 +75,20 @@ enum ExecHostRequestEvaluator {
         approvalDecision: ExecApprovalDecision?,
         approvalSource: ExecApprovalRequestSource? = nil) -> ExecHostPolicyDecision
     {
+        func deny(_ message: String, reason: String) -> ExecHostPolicyDecision {
+            .deny(ExecHostError(code: "UNAVAILABLE", message: message, reason: reason))
+        }
         let security = self.effectiveSecurity(context: context, approvalSource: approvalSource)
         if security == .deny {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DISABLED: security=deny",
-                    reason: "security=deny"))
+            return deny("SYSTEM_RUN_DISABLED: security=deny", reason: "security=deny")
         }
 
         if approvalDecision == .deny {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: user denied",
-                    reason: "user-denied"))
+            return deny("SYSTEM_RUN_DENIED: user denied", reason: "user-denied")
         }
 
         if approvalSource == .autoReview, context.ask == .always {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always",
-                    reason: "ask=always"))
+            return deny("SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always", reason: "ask=always")
         }
 
         let approvedByAsk = approvalDecision != nil || approvalSource == .autoReview
@@ -115,11 +106,7 @@ enum ExecHostRequestEvaluator {
            !context.skillAllow,
            !approvedByAsk
         {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: allowlist miss",
-                    reason: "allowlist-miss"))
+            return deny("SYSTEM_RUN_DENIED: allowlist miss", reason: "allowlist-miss")
         }
 
         return .allow

@@ -42,7 +42,8 @@ const {
   prepareSkillCommandsForWorkspaceMock: vi.fn(),
 }));
 
-vi.mock("./commands.runtime.js", () => ({
+vi.mock("./commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands.js")>()),
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
 }));
@@ -191,14 +192,12 @@ function expandedOfficeHoursRequest(body: string): string {
 
 describe("handleInlineActions", () => {
   beforeEach(() => {
-    handleCommandsMock.mockReset();
-    handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
+    handleCommandsMock.mockReset().mockResolvedValue({ shouldContinue: true, reply: undefined });
     prepareSkillCommandsForWorkspaceMock.mockReset();
     prepareSkillCommandsForWorkspaceMock.mockReturnValue([]);
     getChannelPluginMock.mockReset();
     createOpenClawToolsMock.mockReset();
-    buildStatusReplyMock.mockReset();
-    buildStatusReplyMock.mockResolvedValue({ text: "status" });
+    buildStatusReplyMock.mockReset().mockResolvedValue({ text: "status" });
     createOpenClawToolsMock.mockReturnValue([]);
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp"

@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { applyExecApprovalsUpdate } from "../../infra/exec-approvals-mutation.kernel.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const ensureExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
@@ -12,7 +17,7 @@ vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
   return {
     ...actual,
     ensureExecApprovalsSnapshot: ensureExecApprovalsSnapshotMock,
-    readExecApprovalsSnapshot: readExecApprovalsSnapshotMock,
+    readExecApprovalsSnapshotAsync: readExecApprovalsSnapshotMock,
     updateExecApprovals: updateExecApprovalsMock,
   };
 });
@@ -33,6 +38,7 @@ async function callHandler(
   method: string,
   params: Record<string, unknown>,
   context: GatewayRequestHandlerOptions["context"] = {} as never,
+  hasCurrentClientAuthority?: () => boolean,
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -45,6 +51,7 @@ async function callHandler(
     isWebchatConnect: () => false,
     respond,
     context,
+    hasCurrentClientAuthority,
   });
   return respond;
 }
@@ -160,6 +167,93 @@ describe("exec approvals gateway methods", () => {
     );
   });
 
+  it("rejects a legacy caller revoked while reading the policy before a save", async () => {
+    let current = true;
+    updateExecApprovalsMock.mockClear();
+    readExecApprovalsSnapshotMock.mockImplementationOnce(async () => {
+      current = false;
+      return makeSnapshot();
+    });
+
+    const respond = await callHandler(
+      "exec.approvals.set",
+      { baseHash: "base-hash", file: { version: 1, agents: {} } },
+      undefined,
+      () => current,
+    );
+
+    expect(updateExecApprovalsMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Gateway requester authority changed"),
+      }),
+    );
+  });
+
+  it.each(["get", "set"])(
+    "rolls back a legacy %s mutation when requester authority ends before commit",
+    async (operation) => {
+      const actual = await vi.importActual<typeof import("../../infra/exec-approvals.js")>(
+        "../../infra/exec-approvals.js",
+      );
+      await withTempDir("exec-approvals-request-", async (stateDir) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          let current = true;
+          let commitObserved = false;
+          const before = actual.readExecApprovalsSnapshot();
+          const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+          const admissionSpy = vi
+            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+            .mockImplementation((admit, attachment) =>
+              createAdmission((request, grant) => {
+                if (request.stage === "commit") {
+                  commitObserved = true;
+                  current = false;
+                }
+                admit(request, grant);
+              }, attachment),
+            );
+          ensureExecApprovalsSnapshotMock.mockImplementationOnce(
+            actual.ensureExecApprovalsSnapshot,
+          );
+          readExecApprovalsSnapshotMock.mockImplementationOnce(
+            actual.readExecApprovalsSnapshotAsync,
+          );
+          updateExecApprovalsMock.mockImplementationOnce(actual.updateExecApprovals);
+          try {
+            const respond = await callHandler(
+              `exec.approvals.${operation}`,
+              operation === "set"
+                ? { baseHash: before.hash, file: { version: 1, defaults: { security: "deny" } } }
+                : {},
+              undefined,
+              () => current,
+            );
+            expect(commitObserved).toBe(true);
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("Gateway requester authority changed"),
+              }),
+            );
+            expect(actual.readExecApprovalsSnapshot().raw).toBe(before.raw);
+          } finally {
+            admissionSpy.mockRestore();
+            ensureExecApprovalsSnapshotMock.mockReset();
+            readExecApprovalsSnapshotMock.mockReset();
+            updateExecApprovalsMock.mockReset();
+            await closeOpenClawStateDatabaseAsync();
+          }
+        });
+      });
+    },
+  );
+
   it("lets the locked update perform the first write for a missing approvals file", async () => {
     ensureExecApprovalsSnapshotMock.mockClear();
     readExecApprovalsSnapshotMock.mockClear();
@@ -173,11 +267,10 @@ describe("exec approvals gateway methods", () => {
     readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
     let createdFile: ExecApprovalsFile | undefined;
     updateExecApprovalsMock.mockImplementationOnce(
-      async (params: {
-        baseHash?: string;
-        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
-      }) => {
-        createdFile = params.update(missingSnapshot.file) ?? undefined;
+      async (
+        params: Parameters<typeof import("../../infra/exec-approvals.js").updateExecApprovals>[0],
+      ) => {
+        createdFile = applyExecApprovalsUpdate(missingSnapshot.file, params.update) ?? undefined;
         if (!createdFile) {
           throw new Error("expected first write");
         }
@@ -192,6 +285,7 @@ describe("exec approvals gateway methods", () => {
     expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
     expect(updateExecApprovalsMock).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: missingSnapshot.hash }),
+      expect.anything(),
     );
     expect(createdFile?.socket?.path).toBeTruthy();
     expect(createdFile?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);

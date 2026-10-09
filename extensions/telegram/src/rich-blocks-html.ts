@@ -56,8 +56,8 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     ...(ir.annotations ?? []),
   ];
   const root: HtmlNode[] = [];
-  const stack: Array<{ name: string; node: Extract<HtmlNode, { kind: "element" }> }> = [];
-  const childrenOf = () => (stack.length > 0 ? stack[stack.length - 1]!.node.children : root);
+  const stack: Array<Extract<HtmlNode, { kind: "element" }>> = [];
+  const childrenOf = () => stack.at(-1)?.children ?? root;
   let cursor = 0;
   const pushText = (from: number, to: number) => {
     if (to > from) {
@@ -83,8 +83,8 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
       const openIndex = stack.findLastIndex((entry) => entry.name === tag.name);
       if (openIndex >= 0) {
         for (let depth = openIndex; depth < stack.length; depth += 1) {
-          stack[depth]!.node.closed = depth === openIndex;
-          stack[depth]!.node.end = depth === openIndex ? tag.end : tag.start;
+          stack[depth]!.closed = depth === openIndex;
+          stack[depth]!.end = depth === openIndex ? tag.end : tag.start;
         }
         stack.length = openIndex;
       } else {
@@ -104,7 +104,7 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     };
     childrenOf().push(element);
     if (!selfContained) {
-      stack.push({ name: tag.name, node: element });
+      stack.push(element);
     }
   }
   pushText(cursor, text.length);
@@ -163,10 +163,6 @@ export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = fals
     }
   }
   return parts.join("");
-}
-
-function normalizeIslandText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
 }
 
 // Raw round-trip of a subtree; keeps unsupported wrappers fully literal.
@@ -248,7 +244,7 @@ export function htmlNodesToRichText(
     }
     if (node.name === "tg-emoji") {
       const emojiId = parseHtmlAttrs(node.raw).get("emoji-id");
-      const alternative = normalizeIslandText(nodeText(node.children));
+      const alternative = nodeText(node.children).replace(/\s+/g, " ").trim();
       // Wire contract: custom_emoji_id must be a valid Number (live-verified
       // 400 otherwise); unknown-but-numeric IDs degrade server-side.
       if (emojiId && /^\d+$/.test(emojiId) && alternative) {
@@ -269,7 +265,6 @@ export function htmlNodesToRichText(
       continue;
     }
     if (node.name === "p" || node.name === "span" || node.name === "div") {
-      // Transparent containers: content only.
       parts.push(emit(children));
       continue;
     }
@@ -277,11 +272,5 @@ export function htmlNodesToRichText(
     // authored Markdown spans must still apply inside that text range.
     parts.push(renderer.literal(node, () => serializeHtmlNodes([node])));
   }
-  if (parts.length === 0) {
-    return "";
-  }
-  if (parts.length === 1) {
-    return parts[0] ?? "";
-  }
-  return parts;
+  return parts.length > 1 ? parts : (parts[0] ?? "");
 }

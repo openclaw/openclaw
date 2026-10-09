@@ -1,5 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
@@ -31,15 +31,6 @@ type AgentsUnbindOptions = {
   json?: boolean;
 };
 
-function hasAgent(cfg: AgentConfig, agentId: string): boolean {
-  const targetAgentId = normalizeAgentId(agentId);
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return targetAgentId === normalizeAgentId(resolveDefaultAgentId(cfg));
-  }
-  return agents.some((agent) => normalizeAgentId(agent.id) === targetAgentId);
-}
-
 function failAgentBinding(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -55,8 +46,8 @@ function resolveTargetAgentId(params: {
       `Agent "${params.agentInput}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
   }
-  const agentId = normalized?.value ?? resolveDefaultAgentId(params.cfg);
-  if (!hasAgent(params.cfg, agentId)) {
+  const agentId = normalized?.value ?? resolveAgentOperationAgentId(params.cfg);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
     failAgentBinding(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
@@ -155,33 +146,57 @@ export async function agentsBindingsCommand(
   );
 }
 
-export async function agentsBindCommand(
-  opts: AgentsBindOptions,
-  runtime: RuntimeEnv = defaultRuntime,
+async function mutateAgentBindings(
+  operation: "bind" | "unbind",
+  opts: AgentsUnbindOptions,
+  runtime: RuntimeEnv,
 ) {
-  const resolved = await resolveConfigAndTargetAgentId({
-    runtime,
-    agentInput: opts.agent,
-  });
+  const resolved = await resolveConfigAndTargetAgentId({ runtime, agentInput: opts.agent });
   if (!resolved) {
     return;
   }
   const { cfg, agentId, writeSnapshot } = resolved;
+  if (operation === "unbind" && opts.all && (opts.bind?.length ?? 0) > 0) {
+    failAgentBinding("Use either --all or --bind, not both.");
+  }
 
-  const bindings = await resolveParsedBindings({
-    cfg,
-    agentId,
-    bindValues: opts.bind,
-    emptyMessage: "Provide at least one --bind <channel[:accountId]>.",
-  });
-
-  const { applyAgentBindings } = await import("./agents.bindings.js");
-  const result = applyAgentBindings(cfg, bindings);
-  if (result.added.length > 0 || result.updated.length > 0) {
-    await replaceConfigFile({
-      sourceConfig: result.config,
-      ...writeSnapshot,
+  const removeAll = operation === "unbind" && opts.all;
+  const binding = operation === "bind";
+  let result: ReturnType<
+    | (typeof import("./agents.bindings.js"))["applyAgentBindings"]
+    | (typeof import("./agents.bindings.js"))["removeAgentBindings"]
+  >;
+  if (removeAll) {
+    const existing = listRouteBindings(cfg);
+    const removed = existing.filter((entry) => normalizeAgentId(entry.agentId) === agentId);
+    const remaining = [
+      ...existing.filter((entry) => normalizeAgentId(entry.agentId) !== agentId),
+      ...(cfg.bindings ?? []).filter((entry) => !isRouteBinding(entry)),
+    ];
+    result = {
+      config: { ...cfg, bindings: remaining.length > 0 ? remaining : undefined },
+      removed,
+      missing: [],
+      conflicts: [],
+    };
+  } else {
+    const bindings = await resolveParsedBindings({
+      cfg,
+      agentId,
+      bindValues: opts.bind,
+      emptyMessage: binding
+        ? "Provide at least one --bind <channel[:accountId]>."
+        : "Provide at least one --bind <channel[:accountId]> or use --all.",
     });
+    const { applyAgentBindings, removeAgentBindings } = await import("./agents.bindings.js");
+    result = binding ? applyAgentBindings(cfg, bindings) : removeAgentBindings(cfg, bindings);
+  }
+  const changed =
+    "added" in result
+      ? result.added.length > 0 || result.updated.length > 0
+      : result.removed.length > 0;
+  if (changed) {
+    await replaceConfigFile({ sourceConfig: result.config, ...writeSnapshot });
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -189,24 +204,44 @@ export async function agentsBindCommand(
 
   const payload = {
     agentId,
-    added: result.added.map(describeBinding),
-    updated: result.updated.map(describeBinding),
-    skipped: result.skipped.map(describeBinding),
+    ...("added" in result
+      ? {
+          added: result.added.map(describeBinding),
+          updated: result.updated.map(describeBinding),
+          skipped: result.skipped.map(describeBinding),
+        }
+      : {
+          removed: result.removed.map(describeBinding),
+          missing: result.missing.map(describeBinding),
+        }),
     conflicts: result.conflicts.map(describeBindingConflict),
   };
   if (emitJsonPayload(runtime, opts.json, payload)) {
     return;
   }
-
-  if (result.added.length === 0 && result.updated.length === 0) {
-    runtime.log("No new bindings added.");
+  if (removeAll && "removed" in payload) {
+    runtime.log(
+      payload.removed.length > 0
+        ? `Removed ${payload.removed.length} binding(s) for "${agentId}".`
+        : `No bindings to remove for agent "${agentId}".`,
+    );
+    return;
   }
-
-  for (const [heading, descriptions] of [
-    ["Added bindings:", payload.added],
-    ["Updated bindings:", payload.updated],
-    ["Already present:", payload.skipped],
-  ] as const) {
+  if (!changed) {
+    runtime.log(binding ? "No new bindings added." : "No bindings removed.");
+  }
+  const sections =
+    "added" in payload
+      ? ([
+          ["Added bindings:", payload.added],
+          ["Updated bindings:", payload.updated],
+          ["Already present:", payload.skipped],
+        ] as const)
+      : ([
+          ["Removed bindings:", payload.removed],
+          ["Not found:", payload.missing],
+        ] as const);
+  for (const [heading, descriptions] of sections) {
     if (descriptions.length > 0) {
       runtime.log(heading);
       for (const description of descriptions) {
@@ -214,9 +249,12 @@ export async function agentsBindCommand(
       }
     }
   }
-
-  if (result.conflicts.length > 0) {
-    runtime.error("Skipped bindings already claimed by another agent:");
+  if (payload.conflicts.length > 0) {
+    runtime.error(
+      binding
+        ? "Skipped bindings already claimed by another agent:"
+        : "Bindings are owned by another agent:",
+    );
     for (const conflict of payload.conflicts) {
       runtime.error(`- ${conflict}`);
     }
@@ -224,104 +262,16 @@ export async function agentsBindCommand(
   }
 }
 
+export async function agentsBindCommand(
+  opts: AgentsBindOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  await mutateAgentBindings("bind", opts, runtime);
+}
+
 export async function agentsUnbindCommand(
   opts: AgentsUnbindOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const resolved = await resolveConfigAndTargetAgentId({
-    runtime,
-    agentInput: opts.agent,
-  });
-  if (!resolved) {
-    return;
-  }
-  const { cfg, agentId, writeSnapshot } = resolved;
-  if (opts.all && (opts.bind?.length ?? 0) > 0) {
-    failAgentBinding("Use either --all or --bind, not both.");
-  }
-
-  if (opts.all) {
-    const existing = listRouteBindings(cfg);
-    const removed = existing.filter((binding) => normalizeAgentId(binding.agentId) === agentId);
-    if (removed.length > 0) {
-      const keptRoutes = existing.filter(
-        (binding) => normalizeAgentId(binding.agentId) !== agentId,
-      );
-      const nonRoutes = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
-      const remaining = [...keptRoutes, ...nonRoutes];
-      await replaceConfigFile({
-        sourceConfig: { ...cfg, bindings: remaining.length > 0 ? remaining : undefined },
-        ...writeSnapshot,
-      });
-      if (!opts.json) {
-        logConfigUpdated(runtime);
-      }
-    }
-    const payload = {
-      agentId,
-      removed: removed.map(describeBinding),
-      missing: [] as string[],
-      conflicts: [] as string[],
-    };
-    if (emitJsonPayload(runtime, opts.json, payload)) {
-      return;
-    }
-    runtime.log(
-      removed.length > 0
-        ? `Removed ${removed.length} binding(s) for "${agentId}".`
-        : `No bindings to remove for agent "${agentId}".`,
-    );
-    return;
-  }
-
-  const bindings = await resolveParsedBindings({
-    cfg,
-    agentId,
-    bindValues: opts.bind,
-    emptyMessage: "Provide at least one --bind <channel[:accountId]> or use --all.",
-  });
-
-  const { removeAgentBindings } = await import("./agents.bindings.js");
-  const result = removeAgentBindings(cfg, bindings);
-  if (result.removed.length > 0) {
-    await replaceConfigFile({
-      sourceConfig: result.config,
-      ...writeSnapshot,
-    });
-    if (!opts.json) {
-      logConfigUpdated(runtime);
-    }
-  }
-
-  const payload = {
-    agentId,
-    removed: result.removed.map(describeBinding),
-    missing: result.missing.map(describeBinding),
-    conflicts: result.conflicts.map(describeBindingConflict),
-  };
-  if (emitJsonPayload(runtime, opts.json, payload)) {
-    return;
-  }
-
-  if (result.removed.length === 0) {
-    runtime.log("No bindings removed.");
-  }
-  for (const [heading, descriptions] of [
-    ["Removed bindings:", payload.removed],
-    ["Not found:", payload.missing],
-  ] as const) {
-    if (descriptions.length > 0) {
-      runtime.log(heading);
-      for (const description of descriptions) {
-        runtime.log(`- ${description}`);
-      }
-    }
-  }
-  if (result.conflicts.length > 0) {
-    runtime.error("Bindings are owned by another agent:");
-    for (const conflict of payload.conflicts) {
-      runtime.error(`- ${conflict}`);
-    }
-    runtime.exit(1);
-  }
+  await mutateAgentBindings("unbind", opts, runtime);
 }

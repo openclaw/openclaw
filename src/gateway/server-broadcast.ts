@@ -1,4 +1,3 @@
-import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -7,8 +6,6 @@ import {
 import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-// Gateway WebSocket broadcaster.
-// Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
@@ -23,6 +20,7 @@ import {
 import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
+  isPlainEventPayload,
   isSessionReadInvalidation,
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
@@ -571,18 +569,10 @@ export function createGatewayBroadcaster(params: {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
           getFrameFields();
-          let canSkipSourcePayload = false;
-          if (
+          const canSkipSourcePayload =
             !retained &&
             (event === "session.message" || event === "sessions.changed") &&
-            !isProxy(payload) &&
-            isRecord(payload)
-          ) {
-            // Classify without executing getters or Proxy traps.
-            const prototype = Object.getPrototypeOf(payload);
-            canSkipSourcePayload =
-              (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
-          }
+            isPlainEventPayload(payload);
           if (!canSkipSourcePayload) {
             getDeliveryFrameBase();
           }

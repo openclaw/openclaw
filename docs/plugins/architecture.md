@@ -138,6 +138,8 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 Failed registrations remain visible in plugin diagnostics after their contributions are rolled back. Those records do not enter execution scopes or block healthy plugins and core context-engine admission; the loader still owns their cleanup.
 
+Web-provider discovery honors exact prepared generations, including empty selections. It reuses an ordinary request-owned registry when it covers the selected providers; otherwise an empty result requires a complete inspected manifest inventory. Partial capability callbacks retain discovery of undeclared providers. Prepared cron runs and Doctor tool construction do not register the same plugins again merely to check whether web search is configured. Doctor keeps provider-specific schema normalization outside its selected tool generation.
+
 ### Plugin metadata snapshot and lookup table
 
 One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
@@ -153,6 +155,8 @@ Runs outside the agent's canonical workspace reuse the agent's prepared plugin g
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
 
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
+
+Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. Source and receipt checks still reject changes detected during reload preparation.
 
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence check. Scoped selections check persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
 
@@ -275,7 +279,8 @@ directory preserves every captured companion and the selected host SDK. Otherwis
 that plugin reports a load error asking for file symlink support; the update
 continues with the existing plugin-failure warning behavior.
 Within a capture, admission checks each immutable namespace and companion-directory
-mapping once. Preparing more modules reuses those facts and checks newly admitted
+mapping once, resolving each member once even when parent and child native directories
+overlap at the same placement. Preparing more modules reuses those facts and checks newly admitted
 placements. Replacement captures, host selection, and recovery copies validate again,
 so Doctor and Gateway preparation avoid repeated walks without reusing another
 capture's verdict.
@@ -301,6 +306,16 @@ Published native captures survive ordinary scratch cleanup. Doctor maintenance
 removes unreferenced captures while preserving installed-index references, warm
 generations, and live owners. System-temp fallback captures are scoped to their
 state directory; captures with unknown ownership are preserved.
+
+Gateway idle cleanup checks capture directories and npm retention markers before
+acquiring the plugin lifecycle lease. An empty scan makes no shared-state writes
+and leaves the Gateway's metadata caches intact. When candidates exist, cleanup
+uses a private operation-scoped cache and one fresh installed-index payload for
+install records and native receipt protection. Invalid receipts still preserve
+captures, and every deletion retains its live lease and custody checks. The
+private cache is disposed before the lease is released. These best-effort scans
+do not freeze the filesystem: artifacts created or retired after inspection
+remain for a later cleanup attempt. Scheduling and deletion criteria are unchanged.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -472,6 +487,16 @@ acquired by that context. The first catalog request prepares registrations for t
 agent's known configured and credential providers together; only the requested
 providers run catalog hooks. Newly observed owners extend that context without
 discarding earlier owners. Replacement releases them after admitted work settles.
+Native admission runs outside the 180-second catalog refresh deadline, so a slow
+filesystem does not repeatedly discard and recapture the same package. Each verified
+native namespace member advances a counter, forwarded through the existing worker
+task channel at most once per second unless the active plugin changes. The parent allows admission
+to continue while that counter advances. After 180 seconds without progress, it
+records a failure naming the plugin and native reference verification stage and
+closes the worker without automatically recapturing that inventory. Reload the
+plugin or restart the Gateway to retry. Parent probes and queued requests remain
+bounded; provider discovery starts its own 180-second deadline after admission.
+Inventory retirement and shutdown still close the worker.
 After successful physical cleanup, retired plugin instances release their registry
 references while preserving revocation. Native module exports no longer retain the
 disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
@@ -486,7 +511,10 @@ acquisition owner and does not wait for provider inventory renewal. Both owners
 merge their results with the latest accepted counterpart before publication.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
 Gateway's default heap budget. Explicit process-wide heap flags override this
-limit; native and external allocations are outside it.
+limit; native and external allocations are outside it. When a Gateway catalog
+worker fails, the Gateway logs a warning with the reason and counts the failure in
+`status` as `workerPools.modelCatalog.workerFailures`. Other than stalled native
+admission, failures republish the affected agent catalogs on a new worker.
 
 Catalog and authentication refresh tasks carry the host's prepared Claw consent
 provenance. Worker config reconstruction and provider imports consume these facts
@@ -891,6 +919,8 @@ For bundled workspace package names, keep the plugin id anchored in the npm name
 
 <Note>
 **Trust note:** `plugins.allow` permits **plugin ids** to load; it does not verify source provenance or choose which same-id copy loads. An auto-discovered workspace plugin does not shadow a bundled plugin merely because that id is enabled or allowlisted.
+
+An unverified-source warning logs once per plugin while its source and recorded provenance stay unchanged, including across registry rebuilds and config reloads. A changed source or provenance, or a Gateway restart, allows another warning. Each registry still retains the diagnostic for inspection with `openclaw plugins inspect <id>`.
 
 For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies. On source installs, plugins built with the host retain priority over tracked globals, including when `OPENCLAW_DEV_SOURCE_ROOT` is unset. Matching package versions alone do not prove that a registry plugin matches a source build's SDK. See [Discovery precedence](/plugins/manifest/package-json#discovery-precedence-duplicate-plugin-ids) for the full order.
 

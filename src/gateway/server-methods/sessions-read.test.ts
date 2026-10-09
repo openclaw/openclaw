@@ -405,7 +405,7 @@ test("sessions.describe retains full target and child metadata without decoding 
   ] as const) {
     await upsertSessionEntryCore(
       { agentId, sessionKey: `agent:main:${name}`, storePath },
-      { sessionId: name, updatedAt, status: "running", [relation]: sessionKey },
+      { sessionId: name, updatedAt, [relation]: sessionKey },
     );
   }
   const unrelatedPrompt = "unrelated describe prompt".repeat(512);

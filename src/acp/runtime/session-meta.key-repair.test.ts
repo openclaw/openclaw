@@ -20,7 +20,7 @@ import { repairAcpSessionMetaKeysForDoctor } from "./session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
-  readAcpSessionMeta,
+  readAcpSessionEntry,
   readAcpSessionMetaBatch,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -297,7 +297,7 @@ it.each([
         },
       ]);
       expect(readAcpSessionMetaForEntry(input)).toEqual(meta);
-      expect(readAcpSessionMeta({ cfg, env, agentId: "main", sessionKey })).toEqual(meta);
+      expect(readAcpSessionEntry({ cfg, env, agentId: "main", sessionKey })?.acp).toEqual(meta);
       const withStaleMetadata = {
         ...entry,
         acp: { ...meta, runtimeSessionName: "superseded-embedded" },

@@ -80,70 +80,6 @@ type WorkerWorkspaceInventoryEntry =
   | { path: string; type: "directory"; mode: number }
   | WorkerWorkspaceManifestEntry;
 
-class WorkerWorkspaceInventoryBudget {
-  readonly #paths = new Set<string>();
-  readonly #emptyManifestBytes = Buffer.byteLength(
-    JSON.stringify({ version: 1, baseCommit: "0".repeat(64), entries: [] }),
-  );
-  #manifestPathBytes = 0;
-  #transferPathBytes = 0;
-  #manifestEntryBytes = 0;
-  #eligibleBytes = 0;
-
-  #assert(): void {
-    const manifestEntries = this.#paths.size;
-    if (manifestEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw workspaceInventoryError(
-        `Cloud workspace inventory exceeds ${MAX_WORKSPACE_INVENTORY_ENTRIES} manifest entries; reduce eligible files or narrow .worktreeinclude`,
-      );
-    }
-    if (this.#manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw workspaceInventoryError(
-        "Cloud workspace manifest paths exceed the 64 MiB metadata limit; reduce eligible files or shorten their paths",
-      );
-    }
-    if (this.#transferPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw workspaceInventoryError(
-        "Cloud workspace eligible paths exceed the 64 MiB metadata limit; reduce eligible files or narrow .worktreeinclude",
-      );
-    }
-    if (
-      this.#emptyManifestBytes + this.#manifestEntryBytes + Math.max(0, manifestEntries - 1) >
-      MAX_WORKSPACE_MANIFEST_BYTES
-    ) {
-      throw workspaceInventoryError(
-        "Cloud workspace manifest exceeds the 64 MiB limit; reduce eligible files or shorten their paths",
-      );
-    }
-    if (this.#eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-      throw workspaceInventoryError(
-        "Cloud workspace eligible content exceeds the 4 GiB limit; remove large eligible files or ignore them",
-      );
-    }
-  }
-
-  addTransferPath(entryPath: string): void {
-    this.#transferPathBytes += Buffer.byteLength(entryPath) + 1;
-    this.#assert();
-  }
-
-  addEntry(entry: WorkerWorkspaceInventoryEntry): void {
-    if (this.#paths.has(entry.path)) {
-      return;
-    }
-    this.#paths.add(entry.path);
-    this.#manifestPathBytes += Buffer.byteLength(entry.path);
-    this.#eligibleBytes +=
-      entry.type === "file"
-        ? entry.size
-        : entry.type === "symlink"
-          ? Buffer.byteLength(entry.target)
-          : 0;
-    this.#manifestEntryBytes += Buffer.byteLength(JSON.stringify(entry));
-    this.#assert();
-  }
-}
-
 function validateGitRelativePath(file: string): string {
   if (
     !file ||
@@ -198,7 +134,60 @@ async function selectTransferPaths(params: {
 }): Promise<void> {
   const canonicalRoot = await fs.realpath(params.gitRoot);
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
-  const budget = new WorkerWorkspaceInventoryBudget();
+  const manifestPaths = new Set<string>();
+  const emptyManifestBytes = Buffer.byteLength(
+    JSON.stringify({ version: 1, baseCommit: "0".repeat(64), entries: [] }),
+  );
+  let manifestPathBytes = 0;
+  let transferPathBytes = 0;
+  let manifestEntryBytes = 0;
+  let eligibleBytes = 0;
+  const assertBudget = (): void => {
+    const manifestEntries = manifestPaths.size;
+    if (manifestEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+      throw workspaceInventoryError(
+        `Cloud workspace inventory exceeds ${MAX_WORKSPACE_INVENTORY_ENTRIES} manifest entries; reduce eligible files or narrow .worktreeinclude`,
+      );
+    }
+    if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw workspaceInventoryError(
+        "Cloud workspace manifest paths exceed the 64 MiB metadata limit; reduce eligible files or shorten their paths",
+      );
+    }
+    if (transferPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw workspaceInventoryError(
+        "Cloud workspace eligible paths exceed the 64 MiB metadata limit; reduce eligible files or narrow .worktreeinclude",
+      );
+    }
+    if (
+      emptyManifestBytes + manifestEntryBytes + Math.max(0, manifestEntries - 1) >
+      MAX_WORKSPACE_MANIFEST_BYTES
+    ) {
+      throw workspaceInventoryError(
+        "Cloud workspace manifest exceeds the 64 MiB limit; reduce eligible files or shorten their paths",
+      );
+    }
+    if (eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+      throw workspaceInventoryError(
+        "Cloud workspace eligible content exceeds the 4 GiB limit; remove large eligible files or ignore them",
+      );
+    }
+  };
+  const addEntry = (entry: WorkerWorkspaceInventoryEntry): void => {
+    if (manifestPaths.has(entry.path)) {
+      return;
+    }
+    manifestPaths.add(entry.path);
+    manifestPathBytes += Buffer.byteLength(entry.path);
+    eligibleBytes +=
+      entry.type === "file"
+        ? entry.size
+        : entry.type === "symlink"
+          ? Buffer.byteLength(entry.target)
+          : 0;
+    manifestEntryBytes += Buffer.byteLength(JSON.stringify(entry));
+    assertBudget();
+  };
   const transferredPaths = new Set<string>();
   const writer = createInventoryPathWriter();
   const inspectFile = async (file: string): Promise<WorkerWorkspaceManifestEntry | undefined> => {
@@ -270,10 +259,11 @@ async function selectTransferPaths(params: {
     }
     transferredPaths.add(file);
     for (const ancestor of workspacePathAncestors(file)) {
-      budget.addEntry({ path: ancestor, type: "directory", mode: 0o700 });
+      addEntry({ path: ancestor, type: "directory", mode: 0o700 });
     }
-    budget.addEntry(entry);
-    budget.addTransferPath(file);
+    addEntry(entry);
+    transferPathBytes += Buffer.byteLength(file) + 1;
+    assertBudget();
     const pendingWrite = writer.append(file);
     if (pendingWrite) {
       await pendingWrite;

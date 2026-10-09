@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 // Reports plugin SDK export surface metadata.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +14,7 @@ import {
   type Project,
   type Symbol,
 } from "typescript/unstable/async";
+import { listPluginCompatRecords } from "../src/plugins/compat/registry.js";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProjectAsync } from "./lib/native-typescript.mts";
@@ -24,6 +26,15 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
+import {
+  compareStableReleases,
+  evaluatePluginSdkShippedSurface,
+  formatPluginSdkShippedSurfaceFailures,
+  isStableRelease,
+  parsePluginSdkShippedSurface,
+  shippedSurfacePath,
+  typedPluginSdkSubpaths,
+} from "./lib/plugin-sdk-shipped-surface.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -33,6 +44,7 @@ type ExportEntryStats = {
   deprecatedCallableExports: number;
   deprecatedExports: number;
   exports: number;
+  exportNames: string[];
 };
 
 function usage() {
@@ -41,7 +53,7 @@ function usage() {
 Reports plugin SDK export surface metadata.
 
 Options:
-  --check     Fail when SDK surface budgets are exceeded.
+  --check     Fail on unauthorized shipped-surface removals or exceeded SDK budgets.
   -h, --help  Show this help.
 `;
 }
@@ -190,7 +202,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
-      // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
       // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
       // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
@@ -200,13 +211,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: executor controller, binding, context, and resolver.
       // +1: required session cleanup failure preserves native ownership before host reset.
       // +2: approved async upstream-link writes with released sync compatibility.
-      3650,
+      // -8: retired Skill Workshop proposal hook types.
+      3641,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
-      // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
       // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
@@ -214,7 +225,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
-      2112,
+      2111,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -293,6 +304,7 @@ async function collectExportStats(project: Project, entrypoints: string[]) {
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
+        exportNames: [],
         callableExports: 0,
         deprecatedExports: 0,
         deprecatedCallableExports: 0,
@@ -334,6 +346,10 @@ async function collectExportStats(project: Project, entrypoints: string[]) {
     }
     byEntrypoint.set(entrypoint, {
       exports: symbols.length,
+      exportNames: symbols
+        .map((symbol) => symbol.name)
+        .filter((name) => name !== "default")
+        .toSorted(),
       callableExports,
       deprecatedExports,
       deprecatedCallableExports,
@@ -359,6 +375,7 @@ function selectExportStats(
   };
   for (const entrypoint of entrypoints) {
     const stats = scannedStats.get(entrypoint) ?? {
+      exportNames: [],
       exports: 0,
       callableExports: 0,
       deprecatedExports: 0,
@@ -405,10 +422,14 @@ function collectDeprecatedEntrypointBudgetFailures(
 }
 
 export async function collectPluginSdkSurfaceReport() {
+  const typedSubpaths = typedPluginSdkSubpaths(
+    JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")),
+  );
   const scannedEntrypoints = [
     ...new Set([
       ...pluginSdkEntrypoints,
       ...publicPluginSdkEntrypoints,
+      ...typedSubpaths,
       ...privateLocalOnlyPluginSdkEntrypoints,
     ]),
   ];
@@ -481,6 +502,13 @@ export async function collectPluginSdkSurfaceReport() {
       }
     }
     return {
+      typedPublicSurface: new Map(
+        typedSubpaths.map((subpath) => [subpath, scannedStats.get(subpath)?.exportNames ?? []]),
+      ),
+      typedPublicMismatches: [
+        ...typedSubpaths.filter((subpath) => !publicEntrypointSet.has(subpath)),
+        ...publicPluginSdkEntrypoints.filter((subpath) => !typedSubpaths.includes(subpath)),
+      ],
       allStats,
       deprecatedBarrelMissingFromInventory,
       deprecatedBarrelWithoutReexports,
@@ -505,6 +533,11 @@ export function evaluatePluginSdkSurfaceReport(
   }: ReturnType<typeof readPluginSdkSurfaceBudgets>,
 ) {
   const failures: string[] = [];
+  if (report.typedPublicMismatches.length) {
+    failures.push(
+      `typed package exports disagree with publicPluginSdkEntrypoints: ${report.typedPublicMismatches.join(", ")}`,
+    );
+  }
   if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
     failures.push(
       `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
@@ -584,11 +617,42 @@ async function main(argv: string[] = process.argv.slice(2), env = process.env) {
     return 0;
   }
   const budgetConfig = readPluginSdkSurfaceBudgets(env);
+  const inventory = cliArgs.check
+    ? parsePluginSdkShippedSurface(
+        JSON.parse(fs.readFileSync(path.join(repoRoot, shippedSurfacePath), "utf8")),
+      )
+    : undefined;
+  if (inventory) {
+    const tags = execFileSync("git", ["tag", "--list", "v*"], { cwd: repoRoot, encoding: "utf8" })
+      .trim()
+      .split("\n");
+    const newer = tags
+      .filter((tag) => isStableRelease(tag) && compareStableReleases(tag, inventory.release) > 0)
+      .toSorted(compareStableReleases)
+      .at(-1);
+    if (newer) {
+      process.stderr.write(
+        `WARNING: shipped Plugin SDK inventory ${inventory.release} is older than local stable tag ${newer}. Run pnpm plugin-sdk:shipped-surface:gen -- --release ${newer} after stable release closeout.\n`,
+      );
+    }
+  }
   const report = await collectPluginSdkSurfaceReport();
   process.stdout.write(`${renderPluginSdkSurfaceReport(report)}\n`);
   const failures = evaluatePluginSdkSurfaceReport(report, budgetConfig);
+  if (inventory) {
+    const shippedFailures = evaluatePluginSdkShippedSurface(
+      inventory,
+      report.typedPublicSurface,
+      listPluginCompatRecords(),
+      env.OPENCLAW_PLUGIN_SDK_SURFACE_NOW ?? new Date().toISOString().slice(0, 10),
+    );
+    failures.push(...formatPluginSdkShippedSurfaceFailures(inventory, shippedFailures));
+    if (shippedFailures.length === 0) {
+      process.stdout.write(`shipped Plugin SDK ${inventory.release}: no unauthorized removals\n`);
+    }
+  }
   if (cliArgs.check && failures.length > 0) {
-    process.stderr.write(`plugin SDK surface budget failed:\n`);
+    process.stderr.write(`plugin SDK surface check failed:\n`);
     for (const failure of failures) {
       process.stderr.write(`- ${failure}\n`);
     }

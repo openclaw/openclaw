@@ -231,8 +231,6 @@ describe("gateway chat metadata lifecycle composition", () => {
         entries: rows,
         routeVariants: rows,
       });
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
       let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
@@ -258,10 +256,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         const evaluateEntry = projector.evaluateEntry;
         const evaluations = vi
           .spyOn(projector, "evaluateEntry")
-          .mockImplementation(async (entry, variants) => {
+          .mockImplementation((entry, variants) => {
             if (entry.id === "gpt-5.6-luna") {
-              entered.resolve();
-              await resume.promise;
+              ready = !initialReady;
             }
             return evaluateEntry(entry, variants);
           });
@@ -282,9 +279,6 @@ describe("gateway chat metadata lifecycle composition", () => {
           catalogProjector: projector,
         };
         result = buildModelsListResult(request);
-        await entered.promise;
-        ready = !initialReady;
-        resume.resolve();
         const models = (await result).models;
         expect(models.map(({ id }) => id).toSorted()).toEqual(
           ready ? ["codex-latest", "gpt-5.6-luna"] : ["gpt-5.6-luna"],
@@ -313,7 +307,6 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(evaluations).toHaveBeenCalledTimes(hostCalls);
         expect(loadModelCatalog).not.toHaveBeenCalled();
       } finally {
-        resume.resolve();
         await Promise.allSettled([result]);
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
@@ -397,11 +390,10 @@ describe("gateway chat metadata lifecycle composition", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
-      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
-        entries: [nativeModel],
-        routeVariants: [nativeModel],
-        authoritative,
-      });
+      const catalog = { entries: [nativeModel], routeVariants: [nativeModel], authoritative };
+      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue(catalog);
+      // Startup discovery builds the same catalog in the worker.
+      mocks.runPreparedModelCatalogWorker.mockImplementation(async () => structuredClone(catalog));
       const nativeContext = createCatalogContext(() => currentConfig);
       const loader = nativeContext.loadGatewayModelCatalogSnapshot;
       try {

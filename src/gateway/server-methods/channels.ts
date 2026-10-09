@@ -10,7 +10,10 @@ import {
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
-import { buildChannelAccountSnapshotFromRuntime } from "../../channels/account-summary.js";
+import {
+  buildChannelAccountSnapshotFromInspection,
+  buildChannelAccountSnapshotFromRuntime,
+} from "../../channels/account-summary.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -134,36 +137,42 @@ function channelAccountOperationHandler(
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
 
-type ChannelStatusResult =
-  | { ok: true; value: unknown }
+type ChannelStatusResult<T> =
+  | { ok: true; value: T }
   | { ok: false; error: string; timedOut?: boolean };
 
-async function runChannelStatusHook(params: {
+async function runChannelStatusHook<T>(params: {
   accountId?: string;
   channelId: ChannelId;
-  step: "audit" | "probe" | "summary";
-  timeoutMs: number;
+  step: "audit" | "probe" | "summary" | "status";
+  timeoutMs?: number;
   warnings: string[];
-  run: () => unknown;
-}): Promise<ChannelStatusResult> {
-  const timeoutMs = Math.max(1, params.timeoutMs);
+  run: () => T | Promise<T>;
+}): Promise<ChannelStatusResult<T>> {
+  const timeoutMs = params.timeoutMs;
   const warningPrefix = `${params.channelId}${params.accountId === undefined ? "" : `:${params.accountId}`} ${params.step}`;
-  const timedOut = Symbol("channel-status-timeout");
   try {
     // Plugin hooks can be slow or fail independently; keep the remaining status usable.
-    const value = await raceWithTimeout(
-      Promise.resolve().then(params.run),
-      timeoutMs,
-      () => timedOut,
-      {
-        ref: false,
-      },
-    );
-    if (value === timedOut) {
+    const pending: Promise<ChannelStatusResult<T>> = Promise.resolve()
+      .then(params.run)
+      .then((value): ChannelStatusResult<T> => ({ ok: true, value }));
+    const result =
+      timeoutMs === undefined
+        ? await pending
+        : await raceWithTimeout(
+            pending,
+            timeoutMs,
+            (): ChannelStatusResult<T> => ({
+              ok: false,
+              timedOut: true,
+              error: `${params.step} timed out after ${timeoutMs}ms`,
+            }),
+            { ref: false },
+          );
+    if (!result.ok) {
       params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
-      return { ok: false, timedOut: true, error: `${params.step} timed out after ${timeoutMs}ms` };
     }
-    return { ok: true, value };
+    return result;
   } catch (error) {
     const message = formatForLog(error);
     params.warnings.push(`${warningPrefix} failed: ${message}`);
@@ -182,65 +191,42 @@ function channelStatusFailureMessage(value: unknown): string | null {
   return record.error;
 }
 
-async function startChannelAccount(params: ChannelAccountParams) {
-  if (!params.plugin.gateway?.startAccount) {
+async function changeChannelAccount(params: ChannelAccountParams, action: "start" | "stop") {
+  if (action === "start" && !params.plugin.gateway?.startAccount) {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
   }
-  const resolvedAccountId = resolveChannelGatewayAccountId(params, () =>
+  const accountId = resolveChannelGatewayAccountId(params, () =>
     params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
   );
-  const outcomes = await params.context.startChannel(params.channelId, resolvedAccountId, {
-    manual: true,
-  });
-  const outcome = outcomes.get(resolvedAccountId);
-  if (!outcome) {
-    throw new Error(
-      `Channel ${params.channelId} did not report a start outcome for ${resolvedAccountId}`,
-    );
+  const outcomes =
+    action === "start"
+      ? await params.context.startChannel(params.channelId, accountId, { manual: true })
+      : await params.context.stopChannel(params.channelId, accountId);
+  const outcome = action === "start" && outcomes ? outcomes.get(accountId) : undefined;
+  if (action === "start" && !outcome) {
+    throw new Error(`Channel ${params.channelId} did not report a start outcome for ${accountId}`);
   }
   const runtime = params.context.getRuntimeSnapshot({
     channelId: params.channelId,
     inspectAccounts: false,
   });
-  const started =
-    resolveRuntimeAccountSnapshot({
-      runtime,
-      channelId: params.channelId,
-      accountId: resolvedAccountId,
-    })?.running === true;
+  const running =
+    resolveRuntimeAccountSnapshot({ runtime, channelId: params.channelId, accountId })?.running ===
+    true;
+  const result = { channel: params.channelId, accountId };
+  if (action === "stop") {
+    return { ...result, stopped: !running };
+  }
   const deferredIssue = resolveDeferredChannelReloadIssue(
     params.context,
     params.channelId,
-    resolvedAccountId,
+    accountId,
   );
   return {
-    channel: params.channelId,
-    accountId: resolvedAccountId,
-    started,
+    ...result,
+    started: running,
     outcome,
     ...(deferredIssue ? { statusIssues: [deferredIssue] } : {}),
-  };
-}
-
-async function stopChannelAccount(params: ChannelAccountParams) {
-  const resolvedAccountId = resolveChannelGatewayAccountId(params, () =>
-    params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
-  );
-  await params.context.stopChannel(params.channelId, resolvedAccountId);
-  const runtime = params.context.getRuntimeSnapshot({
-    channelId: params.channelId,
-    inspectAccounts: false,
-  });
-  const stopped =
-    resolveRuntimeAccountSnapshot({
-      runtime,
-      channelId: params.channelId,
-      accountId: resolvedAccountId,
-    })?.running !== true;
-  return {
-    channel: params.channelId,
-    accountId: resolvedAccountId,
-    stopped,
   };
 }
 
@@ -277,7 +263,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const runtime = context.getRuntimeSnapshot({ channelId: requestedChannel });
+    const runtime = context.getRuntimeSnapshot({
+      channelId: requestedChannel,
+      inspectAccounts: false,
+    });
     const statusWarnings: string[] = [];
 
     const buildAccountSnapshot = async (
@@ -285,6 +274,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       plugin: ChannelPlugin,
       accountId: string,
       listed: boolean,
+      remainingBudget?: () => number,
     ) => {
       const runtimeSnapshot = resolveRuntimeAccountSnapshot({ runtime, channelId, accountId });
       if (!listed && runtimeSnapshot) {
@@ -309,32 +299,46 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (diagnosticSnapshot) {
         return { accountId, snapshot: diagnosticSnapshot };
       }
+      if (!remainingBudget) {
+        return {
+          accountId,
+          snapshot: buildChannelAccountSnapshotFromInspection({
+            account: plugin.config.inspectAccount?.(cfg, accountId),
+            accountId,
+            runtime: runtimeSnapshot,
+          }),
+        };
+      }
+      remainingBudget();
       const account = await resolveChannelAccount({ plugin, cfg, accountId });
+      remainingBudget();
       const enabled = plugin.config.isEnabled?.(account, cfg) ?? isAccountEnabled(account);
       let probeResult: unknown;
       let auditResult: unknown;
       let lastProbeAt: number | null = null;
       for (const step of ["probe", "audit"] as const) {
-        if (!probe || !enabled || !plugin.status?.[`${step}Account`]) {
+        if (!enabled || !plugin.status?.[`${step}Account`]) {
           continue;
         }
         // Recheck configuration for each hook, including after an awaited probe.
+        remainingBudget();
         if (plugin.config.isConfigured && !(await plugin.config.isConfigured(account, cfg))) {
           continue;
         }
+        remainingBudget();
         const result = await runChannelStatusHook({
           channelId,
           accountId,
           step,
-          timeoutMs,
           warnings: statusWarnings,
-          run: () =>
-            plugin.status![`${step}Account`]!({
+          run: () => {
+            return plugin.status![`${step}Account`]!({
               account,
-              timeoutMs,
+              timeoutMs: remainingBudget(),
               cfg,
               ...(step === "audit" ? { probe: probeResult } : {}),
-            }),
+            });
+          },
         });
         if (step === "probe") {
           probeResult = result.ok ? result.value : result;
@@ -343,6 +347,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           auditResult = result.ok ? result.value : result;
         }
       }
+      remainingBudget();
       const snapshot = await buildChannelAccountSnapshotFromAccount({
         plugin,
         cfg,
@@ -351,6 +356,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         runtime: runtimeSnapshot,
         probe: probeResult,
         audit: auditResult,
+        assertActive: remainingBudget,
       });
       const hookError =
         channelStatusFailureMessage(auditResult) ?? channelStatusFailureMessage(probeResult);
@@ -360,29 +366,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
-      const activity = getChannelActivity({
-        channel: channelId as never,
-        accountId,
-      });
-      if (snapshot.lastInboundAt == null) {
-        snapshot.lastInboundAt = activity.inboundAt;
-      }
-      if (snapshot.lastOutboundAt == null) {
-        snapshot.lastOutboundAt = activity.outboundAt;
-      }
-      const healthState = resolveChannelHealthState(snapshot, {
-        channelId,
-        now: Date.now(),
-        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-      });
-      if (healthState !== undefined) {
-        snapshot.healthState = healthState;
-      }
       return { accountId, account, snapshot };
     };
 
-    const buildChannelAccounts = async (plugin: ChannelPlugin) => {
+    const buildChannelAccounts = async (plugin: ChannelPlugin, remainingBudget?: () => number) => {
       const channelId = plugin.id;
       if (runtime.reloadingChannels?.has(channelId)) {
         const defaultAccount = runtime.channels[channelId];
@@ -418,9 +405,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
               plugin,
               accountId,
               configuredAccountIdSet.has(accountId),
+              remainingBudget,
             ),
         ),
-        limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
+        limit: remainingBudget ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
         onTaskError: (error, index) => {
           const accountId = accountIds[index] ?? `account ${index + 1}`;
           statusWarnings.push(`${channelId}:${accountId} status failed: ${formatForLog(error)}`);
@@ -429,6 +417,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const accounts: ChannelAccountSnapshot[] = [];
       for (const result of results) {
         if (result) {
+          const { snapshot, accountId } = result;
+          const activity = getChannelActivity({ channel: channelId as never, accountId });
+          snapshot.lastInboundAt ??= activity.inboundAt;
+          snapshot.lastOutboundAt ??= activity.outboundAt;
+          snapshot.healthState = resolveChannelHealthState(snapshot, {
+            channelId,
+            now: Date.now(),
+            staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+            channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+          });
           if ("account" in result) {
             resolvedAccounts[result.accountId] = result.account;
           }
@@ -459,35 +457,75 @@ export const channelsHandlers: GatewayRequestHandlers = {
     };
     const { results: channelResults } = await runTasksWithConcurrency({
       tasks: statusPlugins.map((plugin) => async () => {
-        const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
-          await buildChannelAccounts(plugin);
-        const fallbackSummary = (lastError = defaultAccount?.lastError) => ({
-          configured: defaultAccount?.configured ?? false,
-          ...(lastError ? { lastError } : {}),
-        });
-        let summary: unknown = fallbackSummary();
-        if (
-          plugin.status?.buildChannelSummary &&
-          Object.hasOwn(resolvedAccounts, defaultAccountId)
-        ) {
-          const summaryResult = await runChannelStatusHook({
-            step: "summary",
-            channelId: plugin.id,
-            timeoutMs,
-            warnings: statusWarnings,
-            run: () =>
-              plugin.status!.buildChannelSummary!({
-                account: resolvedAccounts[defaultAccountId],
-                cfg,
-                defaultAccountId,
-                snapshot: defaultAccount ?? { accountId: defaultAccountId },
-              }),
+        const deadline = Date.now() + timeoutMs;
+        const abort = probe ? new AbortController() : undefined;
+        const remainingBudget = () => {
+          abort?.signal.throwIfAborted();
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            throw new Error(`status timed out after ${timeoutMs}ms`);
+          }
+          return remaining;
+        };
+        const build = async (live: boolean, error?: string) => {
+          const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
+            await buildChannelAccounts(plugin, live ? remainingBudget : undefined);
+          if (error) {
+            for (const account of accounts) {
+              account.lastError ||= error;
+            }
+          }
+          const fallbackSummary = (lastError = defaultAccount?.lastError) => ({
+            ...(!live ? defaultAccount : undefined),
+            configured: defaultAccount?.configured ?? (live ? false : undefined),
+            ...(lastError ? { lastError } : {}),
           });
-          summary = summaryResult.ok
-            ? redactChannelStatusSummaryBaseUrl(summaryResult.value)
-            : fallbackSummary(summaryResult.error);
+          let summary: unknown = fallbackSummary();
+          if (
+            Date.now() < deadline &&
+            plugin.status?.buildChannelSummary &&
+            Object.hasOwn(resolvedAccounts, defaultAccountId)
+          ) {
+            const summaryResult = await runChannelStatusHook({
+              step: "summary",
+              channelId: plugin.id,
+              warnings: statusWarnings,
+              run: () => {
+                remainingBudget();
+                return plugin.status!.buildChannelSummary!({
+                  account: resolvedAccounts[defaultAccountId],
+                  cfg,
+                  defaultAccountId,
+                  snapshot: defaultAccount ?? { accountId: defaultAccountId },
+                });
+              },
+            });
+            summary = summaryResult.ok
+              ? redactChannelStatusSummaryBaseUrl(summaryResult.value)
+              : fallbackSummary(summaryResult.error);
+          }
+          return { pluginId: plugin.id, summary, accounts, defaultAccountId };
+        };
+        if (!probe) {
+          return await build(false);
         }
-        return { pluginId: plugin.id, summary, accounts, defaultAccountId };
+        // Include credential resolution and snapshot hooks in the same channel budget.
+        const result = await runChannelStatusHook({
+          step: "status",
+          channelId: plugin.id,
+          timeoutMs,
+          warnings: statusWarnings,
+          run: () => build(true),
+        });
+        if (result.ok && Date.now() < deadline) {
+          return result.value;
+        }
+        abort?.abort();
+        const error = result.ok ? `status timed out after ${timeoutMs}ms` : result.error;
+        if (result.ok) {
+          statusWarnings.push(`${plugin.id} ${error}`);
+        }
+        return await build(false, error);
       }),
       limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : selectedPlugins.length || 1,
       onTaskError: (error, index) => {
@@ -520,12 +558,12 @@ export const channelsHandlers: GatewayRequestHandlers = {
   "channels.start": channelAccountOperationHandler(
     "channels.start",
     validateChannelsStartParams,
-    startChannelAccount,
+    (params) => changeChannelAccount(params, "start"),
   ),
   "channels.stop": channelAccountOperationHandler(
     "channels.stop",
     validateChannelsStopParams,
-    stopChannelAccount,
+    (params) => changeChannelAccount(params, "stop"),
   ),
   "channels.logout": async (invocation) => {
     const { params, respond, context } = invocation;

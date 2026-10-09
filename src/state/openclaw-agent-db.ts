@@ -78,6 +78,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabases,
   refreshAgentDatabaseIdleTimer,
+  registerAgentDatabaseHandle,
   retainAgentDatabase,
   retainIncognitoSharedState,
   retainFailedAgentDatabaseClose,
@@ -109,7 +110,6 @@ import {
   adoptOpenClawAgentDatabaseSchema,
   getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
-  setOpenClawAgentDatabaseValidation,
   publishOpenClawAgentDatabaseSchema,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -520,10 +520,9 @@ function* openOpenClawAgentDatabaseSteps(
     if (!isValidatedReopen) {
       assertCurrent(database);
       registerOpenClawAgentDatabase(
-        { agentId, path: pathname, env: options.env },
+        { agentId, path: pathname, env: options.env, admittedDb: db },
         registrationObserver,
       );
-      setOpenClawAgentDatabaseValidation(database);
     } else if (!reusedSchema) {
       publishOpenClawAgentDatabaseSchema(database);
     }
@@ -532,11 +531,10 @@ function* openOpenClawAgentDatabaseSteps(
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     finishPhase("registration");
-    cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
-    cache.databases.set(pathname, database);
+    const deferred = diagnostics.integrityGateMode === "deferred";
+    registerAgentDatabaseHandle(database, leaseId, leaseEnvironment, deferred);
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     assertCurrent(database);
-    const deferred = diagnostics.integrityGateMode === "deferred";
     if (
       deferred ||
       (diagnostics.integrityGateOutcome === "cached" && !(isValidatedReopen && reuseIntegrity))
@@ -649,7 +647,6 @@ export function borrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOption
   return { db, release: retainAgentDatabase(db) };
 }
 
-/** Return whether the exact cached agent database pathname is still open. */
 export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
   return cache.databases.get(path.resolve(pathname))?.db.isOpen === true;
 }

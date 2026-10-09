@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
+import {
+  assertTransactionUsable,
+  runSqliteDeferredTransactionSync,
+} from "../../infra/sqlite-transaction.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import {
@@ -32,14 +36,20 @@ export function readHotSessionTranscriptSnapshot<T>(
     | "match",
   read: () => T,
 ): T {
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      assertSessionTranscriptHot(database.db, sessionId);
-      return read();
-    },
-    { operationLabel: `session transcript ${purpose} read` },
-  );
+  const readSnapshot = () => {
+    assertSessionTranscriptHot(database.db, sessionId);
+    return read();
+  };
+  if (database.db.isTransaction) {
+    // These callbacks only read; the caller already owns their snapshot and rollback.
+    assertTransactionUsable(database.db);
+    const result = runSqliteReadOperationSync(database.db, readSnapshot);
+    assertTransactionUsable(database.db);
+    return result;
+  }
+  return runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+    operationLabel: `session transcript ${purpose} read`,
+  });
 }
 
 /** A peer can archive after restoration settles but before the read completes. */

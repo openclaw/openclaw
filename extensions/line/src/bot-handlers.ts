@@ -58,7 +58,11 @@ import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
-import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
+import {
+  isLineQuestionPostbackData,
+  parseLineQuestionPostbackData,
+  resolveLineQuestionPostback,
+} from "./question-postback.js";
 import { getLineRuntime } from "./runtime.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -168,8 +172,8 @@ async function sendLinePairingReply(params: {
   await createChannelPairingChallengeIssuer({
     channel: "line",
     accountId: context.account.accountId,
-    upsertPairingRequest: async ({ id, meta }) =>
-      await upsertChannelPairingRequest({
+    upsertPairingRequest: ({ id, meta }) =>
+      upsertChannelPairingRequest({
         channel: "line",
         id,
         accountId: context.account.accountId,
@@ -181,8 +185,8 @@ async function sendLinePairingReply(params: {
     onCreated: () => {
       logVerbose(`line pairing request sender=${senderId}`);
     },
-    sendPairingReply: async (text) =>
-      await sendLineHandlerText({
+    sendPairingReply: (text) =>
+      sendLineHandlerText({
         context,
         text,
         replyToken,
@@ -246,8 +250,7 @@ async function resolveLineEventAdmission(
         entryIdPrefix: "line-entry",
       },
       cfg,
-      readStoreAllowFrom: async () =>
-        await readChannelAllowFromStore("line", undefined, account.accountId),
+      readStoreAllowFrom: () => readChannelAllowFromStore("line", undefined, account.accountId),
       subject: event.type === "join" ? {} : { stableId: senderId },
       conversation: {
         kind: isGroup ? "group" : "direct",
@@ -640,6 +643,11 @@ async function handlePostbackEvent(
       text: lineQuestionOutcomeNotice(outcome.status),
       authorize,
     });
+    return;
+  }
+
+  // A malformed question callback must not fall through as an ordinary user message.
+  if (isLineQuestionPostbackData(data ?? "")) {
     return;
   }
 

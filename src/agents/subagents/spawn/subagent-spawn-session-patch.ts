@@ -33,7 +33,7 @@ import {
   emitSessionLifecycleEvent,
   resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
-  withSessionEntryReadOnlyInWorker,
+  readSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
 
 export async function createInitialSubagentSession(params: {
@@ -116,19 +116,13 @@ export async function createInitialSubagentSession(params: {
     params.assertActive?.();
     // Parent rows are read on the session read worker, never on the Gateway thread.
     const readParentEntry = () =>
-      withSessionEntryReadOnlyInWorker(
+      readSessionEntryReadOnlyInWorker(
         {
           agentId: parentTarget.agentId,
           storePath: parentStorePath,
           sessionKey: parentTarget.canonicalKey,
         },
         () => params.assertActive?.(),
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          return read.value;
-        },
       );
     const parentEntry = await readParentEntry();
     params.assertActive?.();
@@ -298,7 +292,6 @@ export async function createInitialSubagentSession(params: {
             : {}),
           ...buildSessionCreationStamp({
             via: "spawn",
-            conversationLink: parentEntry?.conversationLink,
             ...params.creationPolicy,
             ...(!params.incognito
               ? {

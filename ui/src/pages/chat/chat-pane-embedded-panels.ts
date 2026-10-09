@@ -57,6 +57,7 @@ type SidebarPanelDefinitionParams = {
   processesPresented?: PresentationValue;
   onRefreshProcesses?: () => void;
   subagentsAvailable: boolean;
+  subagentsShowRequest?: () => string | null | undefined;
   onRefreshSubagents: () => void;
   onSubagentSessionSelect: (
     sessionKey: string,
@@ -71,6 +72,7 @@ type SidebarPanelDefinitionParams = {
   linkReaderTabsInHeader?: boolean;
   onCloseLinkReader?: () => void;
   terminalTabsInHeader: boolean;
+  onCloseTerminal?: () => void;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   sessionBrowserTabs?: BrowserTabTarget[];
@@ -129,6 +131,7 @@ export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
 ): SidebarPanelDefinition[] {
   const state = params?.state;
+  const layoutPanels = state?.sidebarLayout.columns.flatMap((column) => column.panels) ?? [];
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
   const panelContext = params && {
     ...params,
@@ -178,10 +181,24 @@ export function sidebarPanelDefinitions(
     headerAction,
     shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
   });
+  const refreshAction = (panel: "subagents" | "processes", onRefresh?: () => void) =>
+    params
+      ? html`<button
+          type="button"
+          class="rail-header__action"
+          aria-label=${t(`chat.${panel}Panel.refresh`)}
+          title=${t(`chat.${panel}Panel.refresh`)}
+          ?disabled=${!params.connected}
+          @click=${onRefresh}
+        >
+          ${icons.refresh}
+        </button>`
+      : undefined;
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
         embedded
         .tabsInHeader=${params?.terminalTabsInHeader ?? false}
+        .onClose=${params?.onCloseTerminal}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}
@@ -253,12 +270,13 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
+  const portalPanel = layoutPanels.find((panel) => panel.slot === "portal");
   const portal = state
     ? html`<openclaw-portals-page
         embedded
         .presented=${livePresentation(params?.portalPresented ?? false)}
-        .requestedPortalId=${state.sidebarLayout.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "portal")?.portalId ?? null}
-        .requestedEnvironmentId=${state.sidebarLayout.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "portal")?.environmentId ?? null}
+        .requestedPortalId=${portalPanel?.portalId ?? null}
+        .requestedEnvironmentId=${portalPanel?.environmentId ?? null}
       ></openclaw-portals-page>`
     : null;
   const workspace = state ? getSessionWorkspace(state) : null;
@@ -268,10 +286,7 @@ export function sidebarPanelDefinitions(
     state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
   // The region mounts only tabs in the layout. Rendering Review starts its lazy
   // panel import, so default diff content must not build it before a tab exists.
-  const detailTabPresent =
-    state?.sidebarLayout.columns.some((column) =>
-      column.panels.some((panel) => panel.slot === "detail"),
-    ) ?? false;
+  const detailTabPresent = layoutPanels.some((panel) => panel.slot === "detail");
   const workspaceContent =
     state && params && workspace
       ? html`<openclaw-chat-files-panel
@@ -288,11 +303,9 @@ export function sidebarPanelDefinitions(
     (params?.pluginPanels ?? []).map((entry) => [`plugin:${entry.key}`, entry]),
   );
   // Saved tabs outlive registrations, including during reconnect and activation.
-  for (const column of state?.sidebarLayout.columns ?? []) {
-    for (const { slot } of column.panels) {
-      if (slot.startsWith("plugin:") && !pluginPanels.has(slot)) {
-        pluginPanels.set(slot, undefined);
-      }
+  for (const { slot } of layoutPanels) {
+    if (slot.startsWith("plugin:") && !pluginPanels.has(slot)) {
+      pluginPanels.set(slot, undefined);
     }
   }
   return [
@@ -309,21 +322,11 @@ export function sidebarPanelDefinitions(
             .presentationId=${params.panePresentationId}
             .inputRegion=${params.subagentsInputRegion}
             .presented=${livePresentation(params.subagentsPresented)}
+            .showRequest=${params.subagentsShowRequest}
             .onSessionSelect=${params.onSubagentSessionSelect}
           ></openclaw-chat-subagents-panel>`
         : null,
-      params
-        ? html`<button
-            type="button"
-            class="rail-header__action"
-            aria-label=${t("chat.subagentsPanel.refresh")}
-            title=${t("chat.subagentsPanel.refresh")}
-            ?disabled=${!params.connected}
-            @click=${params.onRefreshSubagents}
-          >
-            ${icons.refresh}
-          </button>`
-        : undefined,
+      refreshAction("subagents", params?.onRefreshSubagents),
     ),
     definePanel(
       "processes",
@@ -336,18 +339,7 @@ export function sidebarPanelDefinitions(
             .presented=${livePresentation(params.processesPresented ?? false)}
           ></openclaw-chat-processes-panel>`
         : null,
-      params
-        ? html`<button
-            type="button"
-            class="rail-header__action"
-            aria-label=${t("chat.processesPanel.refresh")}
-            title=${t("chat.processesPanel.refresh")}
-            ?disabled=${!params.connected}
-            @click=${params.onRefreshProcesses}
-          >
-            ${icons.refresh}
-          </button>`
-        : undefined,
+      refreshAction("processes", params?.onRefreshProcesses),
     ),
     definePanel(
       "detail",

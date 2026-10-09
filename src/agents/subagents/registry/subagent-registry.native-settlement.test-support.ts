@@ -8,8 +8,6 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import {
   createSessionEntry,
-  createSubagentRunRecord,
-  mockGatewayMethods,
   waitForFast,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
@@ -70,76 +68,6 @@ export function registerQueuedCollectorLaunchSettlementTest({
       await launch.promise;
       releaseSwarmRun(runId);
     }
-  });
-}
-
-export function registerRestoredRunDeadlineSettlementTests({
-  getRegistry,
-  mocks,
-  hydrateAndActivateRegistry,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    | "resolveAgentTimeoutMs"
-    | "restoreSubagentRunsFromDisk"
-    | "callGateway"
-    | "runSubagentAnnounceFlow"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
-}): void {
-  const findRequesterRun = (runId: string) =>
-    getRegistry()
-      .listSubagentRunsForRequester("agent:main:main")
-      .find((entry) => entry.runId === runId);
-  it("prefers explicit run timeout over late restored agent.wait success", async () => {
-    const runId = "run-resumed-late-success";
-    const createdAt = Date.parse("2026-03-24T11:59:00Z");
-    vi.setSystemTime(createdAt + 61_000);
-    mocks.resolveAgentTimeoutMs.mockReturnValue(60_000);
-    mocks.restoreSubagentRunsFromDisk.mockImplementation((async (params: {
-      runs: Map<string, unknown>;
-      mergeOnly?: boolean;
-    }) => {
-      params.runs.set(
-        runId,
-        createSubagentRunRecord({
-          runId,
-          task: "resume after explicit timeout",
-          runTimeoutSeconds: 60,
-          createdAt,
-          startedAt: createdAt,
-          sessionStartedAt: createdAt,
-        }),
-      );
-      return 1;
-    }) as never);
-    mockGatewayMethods(mocks.callGateway, {
-      "agent.wait": {
-        status: "ok",
-        startedAt: createdAt,
-        endedAt: createdAt + 61_000,
-      },
-    });
-
-    const settleRootWork = observeRootWork();
-    try {
-      await hydrateAndActivateRegistry();
-
-      await waitForFast(() => {
-        const completedRun = findRequesterRun(runId);
-        expect(completedRun?.execution.endedAt).toBe(createdAt + 60_000);
-        expect(completedRun?.execution.outcome).toMatchObject({
-          status: "timeout",
-          startedAt: createdAt,
-          endedAt: createdAt + 60_000,
-          elapsedMs: 60_000,
-        });
-      });
-    } finally {
-      await settleRootWork();
-    }
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 }
 

@@ -7,7 +7,6 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { buildPreparedModelCatalogSnapshot, loadManifestModelCatalog } from "./model-catalog.js";
-import type { ModelRegistry } from "./sessions/index.js";
 
 vi.mock("../model-catalog/index.js", { spy: true });
 vi.mock("@openclaw/model-catalog-core/model-catalog-normalize", { spy: true });
@@ -48,9 +47,7 @@ async function build(
     agentDir: "/tmp/model-catalog-planning-test",
     authCredentials: {},
     readOnly: true,
-    modelRegistry: {
-      getAll: () => observed.map((id) => ({ provider: "catalog-fixture", id, name: id })),
-    } as ModelRegistry,
+    models: observed.map((id) => ({ provider: "catalog-fixture", id, name: id })),
   });
 }
 

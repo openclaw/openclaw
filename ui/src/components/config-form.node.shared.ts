@@ -108,7 +108,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
+  return Object.keys(schema).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {
@@ -303,11 +303,30 @@ export function renderFieldRow(params: {
   `;
 }
 
+export function renderCollectionRemoveButton(
+  label: string,
+  disabled: boolean,
+  remove: () => boolean,
+): TemplateResult {
+  return html`<openclaw-tooltip .content=${label}>
+    <button
+      type="button"
+      class="btn btn--icon"
+      style="width:28px;height:28px;padding:0;"
+      aria-label=${label}
+      ?disabled=${disabled}
+      @click=${(event: Event) => removeCollectionRow(event, remove)}
+    >
+      ${icons.trash}
+    </button>
+  </openclaw-tooltip>`;
+}
+
 /**
  * Removes a collection row and keeps keyboard focus in its collection when the
  * focused Remove control is retired: next surviving row, previous row, then Add.
  */
-export function removeCollectionRow(event: Event, remove: () => boolean) {
+function removeCollectionRow(event: Event, remove: () => boolean) {
   const control = event.currentTarget;
   if (!(control instanceof HTMLButtonElement) || control !== document.activeElement) {
     remove();

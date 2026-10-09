@@ -52,11 +52,8 @@ export async function resolveDiscordPreflightRoute(params: {
     configuredConversationId: params.messageChannelId,
     parentConversationId: params.earlyThreadParentId,
   });
-  let threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
-  if (!threadBinding && configuredBinding) {
-    threadBinding = configuredBinding.record;
-  }
+  const threadBinding = runtimeRoute.bindingRecord ?? configuredBinding?.record;
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
     : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());

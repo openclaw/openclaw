@@ -311,8 +311,9 @@ describe("models.list configured runtime choices", () => {
       initialReadiness: "throws",
     },
     {
+      // A registered harness still cannot serve a provider it is incompatible with.
       provider: "picker-fixture",
-      runtime: "picker-native",
+      runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "ready",
     },
@@ -466,6 +467,12 @@ describe("models.list configured runtime choices", () => {
             expect(revokedChoice).not.toHaveProperty("unavailableReason");
           } else {
             expect(revokedChoice?.unavailableReason).toBe("unsupported-runtime");
+          }
+          readiness = "ready";
+          const recoveredChoice = prepared.read().models[0]?.runtimeChoices?.[0];
+          expect(recoveredChoice?.available).toBe(selectable);
+          if (selectable) {
+            expect(recoveredChoice).toMatchObject({ contextWindow: 128_000, reasoning: true });
           }
           expect(loadModelCatalog).not.toHaveBeenCalled();
           expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();

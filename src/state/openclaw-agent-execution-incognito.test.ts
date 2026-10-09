@@ -7,7 +7,14 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSessionManagerModelContextAsync } from "../agents/sessions/session-manager-incognito.js";
+import {
+  withAcquiredIncognitoSessionBinding,
+  withIncognitoSessionActor,
+  withIncognitoSessionEntrySummaries,
+} from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
@@ -89,6 +96,84 @@ function cancelDispatchedCreation(controller: AbortController) {
     return EventEmitter.prototype.emit.call(this, event, ...args);
   });
 }
+
+it("acquires only requested actors and releases the captured root after the consumer settles", async () => {
+  const target = {
+    agentId: "main",
+    env: { ...env },
+    sessionKey: "agent:main:dashboard:incognito-acquisition",
+  };
+  const pathname = resolveIncognitoOpenClawAgentSqlitePath(target);
+  const consume = vi.fn(async () => "missing");
+  expect(await withAcquiredIncognitoSessionBinding(target, authority, consume)).toBeUndefined();
+  expect(consume).not.toHaveBeenCalled();
+  expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+  expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env, path: pathname })).toBeUndefined();
+  expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
+  expect(fs.readdirSync(tempRoot, { recursive: true })).toEqual([]);
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  let captured:
+    | Parameters<Parameters<typeof withAcquiredIncognitoSessionBinding>[2]>[0]
+    | undefined;
+  const acquiring = withAcquiredIncognitoSessionBinding(
+    target,
+    authority,
+    async (binding) => {
+      captured = binding;
+      entered.resolve();
+      await finish.promise;
+      binding.actor.assertReadable();
+      return binding.actor.path;
+    },
+    { existingOnly: false },
+  );
+  target.env.OPENCLAW_STATE_DIR = path.join(stateRoot, "replacement");
+  await entered.promise;
+  expect(captured?.actor.path).toBe(pathname);
+  expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env, path: pathname })).toBeUndefined();
+  finish.resolve();
+  expect(await acquiring).toBe(pathname);
+  expect(() => captured?.actor.assertReadable()).toThrow("released");
+  expect(
+    await withAcquiredIncognitoSessionBinding(
+      { ...target, env },
+      authority,
+      async ({ actor }) => actor.path,
+    ),
+  ).toBe(pathname);
+});
+
+it("refuses summary disclosure when admission ends after the worker read", async () => {
+  const actor = await open();
+  const sessionKey = "agent:main:dashboard:incognito-summary-cancellation";
+  await actor.sessions.create(authority, {
+    sessionKey,
+    entry: { sessionId: "summary-cancellation", updatedAt: 1, incognito: true },
+  });
+  const admission = new AbortController();
+  const disclosed: string[] = [];
+  const list = actor.sessions.list.bind(actor.sessions);
+  const listing = vi.spyOn(actor.sessions, "list").mockImplementation(async (...args) => {
+    const result = await list(...args);
+    // Cancel after the real worker read settles, before its consumer resumes.
+    admission.abort(new Error("summary admission ended"));
+    return result;
+  });
+  try {
+    await expect(
+      withIncognitoSessionEntrySummaries(
+        { actor, admissionSignal: admission.signal },
+        async (summaries) => {
+          disclosed.push(...summaries.map((summary) => summary.sessionKey));
+        },
+      ),
+    ).rejects.toThrow("summary admission ended");
+    expect(disclosed).toEqual([]);
+  } finally {
+    listing.mockRestore();
+  }
+});
 
 it("keeps concurrent creators viable when the initiating opening is cancelled", async () => {
   const controller = new AbortController();
@@ -195,7 +280,29 @@ it("converges creating opens, pins released stores, reads only existing targets,
       { existingOnly: true },
     ),
   ).toBeUndefined();
-  await Promise.all([existing.close(), sibling.close()]);
+  const consuming = createDeferredCore();
+  const finishRead = createDeferredCore();
+  const readTarget = captureSessionTranscriptTargetBinding({
+    agentId: "main",
+    env,
+    storePath: sentinel,
+    sessionKey: "agent:main:dashboard:incognito-empty-close",
+    sessionId: "empty-close",
+  });
+  const reading = withIncognitoSessionActor(existing, () =>
+    readSessionManagerModelContextAsync(readTarget, {}, async (context) => {
+      expect(context.events).toEqual([]);
+      consuming.resolve();
+      await finishRead.promise;
+      return context;
+    }),
+  );
+  const rejectedRead = expect(reading).rejects.toBeInstanceOf(IncognitoSessionEndedError);
+  await Promise.race([consuming.promise, reading]);
+  const closing = existing.close();
+  finishRead.resolve();
+  await rejectedRead;
+  await Promise.all([closing, sibling.close()]);
   expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
   expect(fs.readdirSync(tempRoot, { recursive: true })).toEqual([]);
   const recreated = await open();
@@ -274,6 +381,96 @@ it("retains FIFO publication and rechecks authority after queue waits and before
     }),
   ).rejects.toThrow(IncognitoSessionEndedError);
   await closing;
+});
+
+it("rechecks its acquisition authority at session transaction and commit grants", async () => {
+  const healthy = await open();
+  for (const revokeAt of ["transaction", "commit"] as const) {
+    let current = true;
+    const source = {
+      assertCurrent() {
+        if (!current) {
+          throw new Error(`acquisition revoked at ${revokeAt}`);
+        }
+      },
+    };
+    const borrowed = await captureIncognito({ agentId: "main", env }, source, {
+      existingOnly: true,
+    });
+    assert(borrowed);
+    const sessionKey = `agent:main:dashboard:incognito-acquisition-${revokeAt}`;
+    const requested: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === revokeAt) {
+          current = false;
+        }
+      },
+    };
+    try {
+      await expect(
+        borrowed.sessions.create(requested, {
+          sessionKey,
+          entry: { sessionId: revokeAt, updatedAt: 1, incognito: true },
+        }),
+      ).rejects.toThrow(`acquisition revoked at ${revokeAt}`);
+      expect(() => borrowed.assertReadable()).toThrow(`acquisition revoked at ${revokeAt}`);
+      expect((await healthy.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
+    } finally {
+      await borrowed.release();
+    }
+  }
+});
+
+it("preserves outer acquisition authority and admission through nested bindings", async () => {
+  const healthy = await open();
+  for (const revoke of ["authority", "admission"] as const) {
+    let current = true;
+    const failure = new Error(`outer acquisition ${revoke} revoked`);
+    const outerAuthority = {
+      assertCurrent() {
+        if (!current) {
+          throw failure;
+        }
+      },
+    };
+    const inherited = new AbortController();
+    const inner = new AbortController();
+    const target = {
+      agentId: "main",
+      env,
+      sessionKey: `agent:main:dashboard:incognito-nested-${revoke}`,
+    };
+    await expect(
+      withAcquiredIncognitoSessionBinding(
+        target,
+        outerAuthority,
+        () =>
+          withAcquiredIncognitoSessionBinding(
+            target,
+            authority,
+            async (binding) => {
+              if (revoke === "authority") {
+                current = false;
+              } else {
+                inherited.abort(failure);
+              }
+              return binding.actor.sessions.create(
+                authority,
+                {
+                  sessionKey: target.sessionKey,
+                  entry: { sessionId: revoke, updatedAt: 1, incognito: true },
+                },
+                binding.admissionSignal,
+              );
+            },
+            { signal: inner.signal },
+          ),
+        { signal: inherited.signal },
+      ),
+    ).rejects.toThrow(failure.message);
+    expect((await healthy.sessions.read(authority, target)).entry).toBeUndefined();
+  }
 });
 
 it("joins deferred compute cleanup before closing without disclosing its revoked result", async () => {

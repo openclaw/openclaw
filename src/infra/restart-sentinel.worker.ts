@@ -1,8 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
-  WorkerOperationContext,
+  WorkerWriteOperationContext,
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
@@ -15,23 +14,13 @@ import {
   writeUpdateInstallReceiptRowSync,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 function transaction<Input, Output>(
   label: string,
   operation: (db: DatabaseSync, input: Input) => Output,
 ) {
-  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = operation(db, input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return result;
-      },
-      { database: open(), ...stateOptions() },
-      { operationLabel: label },
-    );
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
+    writeAdmitted(({ db }) => operation(db, input), { operationLabel: label });
 }
 
 export const restartSentinelOperations = {
@@ -161,4 +150,4 @@ export const restartSentinelOperations = {
       return changed ? finalized : null;
     },
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

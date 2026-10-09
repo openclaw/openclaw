@@ -78,6 +78,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
+        cronCreatorToolAllowlistCaptureRef: {},
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
         localModelLeanPreserveToolNames: [],

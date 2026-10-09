@@ -86,7 +86,20 @@
   white-space: nowrap;
 }
 
-button.chat-working-indicator__child:is(:hover, :focus-visible) {
+/* The subagents' count, running or waited on. A step above the status text:
+   a control, while the session's own work and a subagent's name lead. */
+button.chat-working-indicator__subagents {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: color-mix(in srgb, var(--text) 50%, var(--muted));
+  font: inherit;
+}
+
+button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is(
+    :hover,
+    :focus-visible
+  ) {
   text-decoration: underline;
 }
 
@@ -750,12 +763,9 @@ button.chat-working-indicator__child:is(:hover, :focus-visible) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-working-indicator {
-    animation: none;
-  }
-
   /* Includes the bubble itself: the southpaw surprise animates the bubble,
      not the svg, and must stay still under reduced motion too. */
+  .chat-working-indicator,
   .chat-reading-indicator,
   .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,

@@ -19,6 +19,7 @@ function createSessionManager(version: 3 | 4) {
     getHeader: () => ({ version }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
+    reloadPersistedTranscriptAsync: async () => {},
     getSessionId: () => "runtime-context-compat",
   } as unknown as ReturnType<typeof guardSessionManager>;
 }

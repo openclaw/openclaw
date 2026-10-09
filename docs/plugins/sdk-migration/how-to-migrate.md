@@ -95,6 +95,27 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await placement preparation
+
+Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
+`retireSessionPlacementAsync`. Await their results before using placement facts,
+starting dependent work, or releasing request resources. Their synchronous
+counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
+compatibility methods until the next Plugin SDK major.
+
+Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
+`retainAsync` for node-grant preparation. `resolveAsync` combines binding and
+retained-parent validation in one request. These additions are optional on the
+released interface so existing custom service implementations remain compatible;
+the native Gateway supplies them. Keep `consume` at the final synchronous
+transport authorization boundary: earlier prepared facts do not replace current
+placement, pairing, or parent-approval authority.
+
+Device-placement demand also has an awaited
+`workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.
+The synchronous method keeps its released signature until the next Plugin SDK
+major. These migrations change no schemas, stored data, or update behavior.
+
 ## Await reply tool authority
 
 Harness attempt parameters from `openclaw/plugin-sdk/agent-harness-runtime`
@@ -164,6 +185,39 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
 
+## Prepare session catalog identities
+
+Use `await prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })`
+from `openclaw/plugin-sdk/session-transcript-runtime` before projecting a source catalog page.
+The returned synchronous projector reads only the prepared profile and verified GitHub facts.
+For receiver attribution, use `await prepareSessionCatalogGitHubLinker({ participants, owners })`,
+passing the page's participants and configured owner references. Its synchronous
+`linkParticipant` and `resolveOwner` methods retain every verified GitHub account and
+login, while source exports use only the person's primary account.
+If multiple hosts prepare concurrently, retain each linker's `assertCurrent` and
+invoke it before publishing a completed host or the aggregate result.
+Recheck each host's snapshot lifecycle at the same publication boundary, including
+hosts that do not link profile identities.
+
+Prepare again for each page after transport work, then project and disclose without another
+await. Profile changes during preparation reject the page; identity claims never grant access.
+Foreign commits after the identity read do not rewrite that page's attribution snapshot;
+the next unpinned page reads fresh facts. This snapshot never replaces a permission check.
+Recheck the source's current sharing policy before disclosure. The existing
+`runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
+this final read to exact persisted keys while preserving canonical listing validation.
+Selected reads include derived participants and counts by default. Guards that consume only
+sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+validation remains enabled in both read-only and writable listings.
+Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
+invoke the supplied assertion after preparation and before the final sharing read to reject
+replacement at the same path, even when session IDs were reused.
+
+The released synchronous `createSessionCatalogSourceActorProjector` and
+`createSessionCatalogGitHubLinker` signatures remain available for existing plugins;
+bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
+permissions, and update behavior are unchanged.
+
 ## Await session upstream links
 
 Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
@@ -190,6 +244,26 @@ the next Plugin SDK major and explicit breaking-release approval. Their
 deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
+
+## Await locked transcript preparation
+
+Inside `withSessionTranscriptWriteLock`, use
+`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
+work. Returning `undefined` suppresses a fresh append. Duplicate messages and
+accepted pending inputs retain their original preparation decision. The existing
+`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
+transaction until the next Plugin SDK major.
+
+Await each append to consume its result. The lock also joins accepted operations
+in call order before releasing the writer, including when its callback fails or
+returns without awaiting an append. Retained context methods reject new calls
+after the callback finishes. Keep current authority checks in
+`beforeFreshMessageCommit`.
+
+Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
+owner checks through wrappers. Pass existing assertions as sources; a custom
+check may inspect only owned in-memory state. Unprepared callbacks retain their
+native transaction ordering.
 
 ## Await session transcript persistence
 
@@ -271,6 +345,15 @@ context consumer. It retains the actor through scanning, consumption, validation
 and cleanup. Without an actor binding it returns `undefined`, preserving the
 existing host route. The synchronous Codex context reader and validators refuse
 actor-bound access; they never reopen a native incognito database.
+
+Plugins that project durable history in their own worker can await
+`readCodexSessionContextProjection(target, project, signal?)` from the same SDK
+subpath. The projection callback receives the captured target, admission, and
+physical source. Pass those facts to the worker's `readCodexSessionContext`
+call and return `{ value, version }`. The retained transcript reader validates
+the result before returning it, keeping final version and admission checks off
+the Gateway thread. The synchronous validation exports remain compatible until
+the next Plugin SDK major.
 
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset

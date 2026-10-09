@@ -18,15 +18,13 @@ export function stripTelegramInternalPrefixes(to: string): string {
   let trimmed = to.trim();
   let strippedTelegramPrefix = false;
   while (true) {
-    if (/^(telegram|tg):/i.test(trimmed)) {
-      strippedTelegramPrefix = true;
-      trimmed = trimmed.replace(/^(telegram|tg):/i, "").trim();
-    } else if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-      // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      trimmed = trimmed.replace(/^group:/i, "").trim();
-    } else {
+    const prefix = /^(telegram|tg|group):/i.exec(trimmed)?.[0];
+    // Legacy group prefixes are internal only after a Telegram prefix.
+    if (!prefix || (!strippedTelegramPrefix && prefix.toLowerCase() === "group:")) {
       return trimmed;
     }
+    strippedTelegramPrefix = true;
+    trimmed = trimmed.slice(prefix.length).trim();
   }
 }
 
@@ -42,18 +40,12 @@ export function isNumericTelegramChatId(raw: string): boolean {
 export function normalizeTelegramOutboundTarget(raw: string): string {
   const trimmed = raw.trim();
   const legacyGroupMatch = /^group:(-?\d+(?::(?:direct-topic|topic):\d+|:\d+)?)$/i.exec(trimmed);
-  if (legacyGroupMatch?.[1]) {
-    return legacyGroupMatch[1];
-  }
-  return raw;
+  return legacyGroupMatch?.[1] ?? raw;
 }
 
 export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   const stripped = stripTelegramInternalPrefixes(raw);
-  if (!stripped) {
-    return undefined;
-  }
-  if (isNumericTelegramChatId(stripped)) {
+  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(stripped)) {
     return stripped;
   }
   const tmeMatch = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)$/i.exec(stripped);
@@ -64,23 +56,21 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   return TELEGRAM_USERNAME_REGEX.test(handle) ? `@${handle}` : undefined;
 }
 
-/**
- * Parse a Telegram delivery target into chatId and optional topic/thread ID.
- *
- * Supported formats:
- * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
- * - `chatId:topicId` (numeric topic/thread ID)
- * - `chatId:topic:topicId` (explicit topic marker; preferred)
- * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
- */
 function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
   const trimmed = chatId.trim();
-  if (isNumericTelegramChatId(trimmed)) {
+  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(trimmed)) {
     return trimmed.startsWith("-") ? "group" : "direct";
   }
   return "unknown";
 }
 
+/**
+ * Supported delivery targets:
+ * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
+ * - `chatId:topicId` (numeric topic/thread ID)
+ * - `chatId:topic:topicId` (explicit topic marker; preferred)
+ * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
+ */
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
   const match = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized);
@@ -111,8 +101,7 @@ export function hasRejectedTelegramTopic(raw: string): boolean {
   const base = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized)?.[1];
   return (
     base !== undefined &&
-    (normalizeTelegramChatId(base) !== undefined ||
-      normalizeTelegramLookupTarget(base) !== undefined) &&
+    normalizeTelegramLookupTarget(base) !== undefined &&
     parseTelegramTarget(normalized).chatId === normalized
   );
 }

@@ -154,27 +154,7 @@ let activeSnapshotLineageStartRevision = 0;
 // Capture auth truth at candidate publication; descendant credential refreshes keep this base so
 // rollback can distinguish pre-activation auth writes from candidate-owned resolved values.
 let activeSnapshotLineageAuthStores: PreparedSecretsRuntimeSnapshot["authStores"] = [];
-let activeSnapshotLineageAuthMutations: Record<
-  string,
-  {
-    store: {
-      baseline: StoreMutationLineage;
-      candidate: StoreMutationLineage;
-    };
-    state: {
-      token: RuntimeAuthProfileStoreMutationToken;
-      includeMain: boolean;
-      databaseOwner: RuntimeAuthProfileStoreMutationOwner;
-    };
-    profiles: Record<
-      string,
-      {
-        baseline: ProfileOwnerMutationLineage;
-        candidate: ProfileOwnerMutationLineage;
-      }
-    >;
-  }
-> = {};
+let activeSnapshotLineageAuthMutations: ReturnType<typeof captureAuthStoreMutationLineage> = {};
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
 const preparedSnapshotRefreshContext = new WeakMap<
   PreparedSecretsRuntimeSnapshot,
@@ -362,7 +342,7 @@ function readSharedProfileSetMutationToken(
 function captureAuthStoreMutationLineage(
   baselineAuthStores: PreparedSecretsRuntimeSnapshot["authStores"],
   candidateAuthStores: PreparedSecretsRuntimeSnapshot["authStores"],
-): typeof activeSnapshotLineageAuthMutations {
+) {
   const baseline = Object.fromEntries(baselineAuthStores.map((entry) => [entry.agentDir, entry]));
   const candidate = Object.fromEntries(candidateAuthStores.map((entry) => [entry.agentDir, entry]));
   const agentDirs = new Set([...Object.keys(baseline), ...Object.keys(candidate)]);
@@ -393,26 +373,29 @@ function captureAuthStoreMutationLineage(
             includeMain: effectiveStore?.runtimeInheritsMainState === true,
           },
           profiles: Object.fromEntries(
-            [...profileIds].map((profileId) => [
-              profileId,
-              {
-                baseline: captureProfileOwnerMutationLineage(
-                  agentDir,
-                  baselineStore,
+            [...profileIds].map(
+              (profileId) =>
+                [
                   profileId,
-                  baselineOwner,
-                ),
-                candidate: captureProfileOwnerMutationLineage(
-                  agentDir,
-                  candidateStore,
-                  profileId,
-                  candidateOwner,
-                ),
-              },
-            ]),
+                  {
+                    baseline: captureProfileOwnerMutationLineage(
+                      agentDir,
+                      baselineStore,
+                      profileId,
+                      baselineOwner,
+                    ),
+                    candidate: captureProfileOwnerMutationLineage(
+                      agentDir,
+                      candidateStore,
+                      profileId,
+                      candidateOwner,
+                    ),
+                  },
+                ] as const,
+            ),
           ),
         },
-      ];
+      ] as const;
     }),
   );
 }
@@ -759,10 +742,8 @@ function mergeRollbackAuthStoreCredentials(
       const profileMutationStatus = profileMutationDecision.status;
       const profileMutated = profileMutationStatus === "mutated";
       const currentOwner = profileOwner(currentStore, profileId);
-      let credential: AuthProfileCredential | undefined;
       let selectedSource: AuthProfileStore | undefined;
       if (currentOwner !== profileMutationDecision.candidateOwner) {
-        credential = currentCredential;
         selectedSource = currentStore;
       } else if (profileMutationDecision.ownerChanged) {
         if (
@@ -771,21 +752,17 @@ function mergeRollbackAuthStoreCredentials(
         ) {
           invalidateStore = true;
         } else {
-          credential = baselineCredential;
           selectedSource = baselineStore;
         }
       } else if (profileMutationStatus === "unknown") {
         if (isDeepStrictEqual(baselineCredential, candidateCredential)) {
-          credential = currentCredential;
           selectedSource = currentStore;
         } else {
           invalidateStore = true;
         }
       } else if (!profileMutated && isDeepStrictEqual(currentCredential, candidateCredential)) {
-        credential = baselineCredential;
         selectedSource = baselineStore;
       } else {
-        credential = currentCredential;
         selectedSource = currentStore;
       }
       const baselineRef = credentialSecretRef(baselineCredential);
@@ -801,7 +778,6 @@ function mergeRollbackAuthStoreCredentials(
       ) {
         // Candidate activation owns the ref transition. Descendant resolution may refresh the
         // literal, but without a persisted write rollback still restores the previous owner/ref.
-        credential = baselineCredential;
         selectedSource = baselineStore;
       }
       if (
@@ -817,23 +793,21 @@ function mergeRollbackAuthStoreCredentials(
           profileMutationStatus !== "unchanged"
         ) {
           invalidateStore = true;
-          credential = undefined;
           selectedSource = undefined;
         } else {
-          credential = baselineCredential;
           selectedSource = baselineStore;
         }
       }
-      const selectedRef = credentialSecretRef(credential);
+      const selectedRef = credentialSecretRef(selectedSource?.profiles[profileId]);
       if (
         selectedSource === currentStore &&
         selectedRef &&
         !hasSameSecretProviderDefinition(selectedRef, [configs[0], configs[1]])
       ) {
         invalidateStore = true;
-        credential = undefined;
         selectedSource = undefined;
       }
+      const credential = selectedSource?.profiles[profileId];
       if (credential && selectedSource) {
         const clonedCredential = structuredClone(credential);
         copyCanonicalAuthProfileCredentialObservations(

@@ -7,7 +7,6 @@ import {
   type ChannelMessageUnknownSendReconciliationResult,
   type MessageReceipt,
   type MessageReceiptPartKind,
-  type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -166,11 +165,6 @@ export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackS
   }
 }
 
-function getSlackDefaultSendIdentity(accountId: string): SlackSendIdentity | undefined {
-  const normalizedAccountId = normalizeOptionalString(accountId);
-  return normalizedAccountId ? slackDefaultSendIdentities.get(normalizedAccountId) : undefined;
-}
-
 function enrichSlackWebApiError(err: unknown): unknown {
   if (!(err instanceof Error)) {
     return err;
@@ -275,16 +269,11 @@ function createSlackSendReceipt(params: {
     .map((messageId) => messageId.trim())
     .filter((messageId) => messageId && messageId !== "unknown");
   return createMessageReceiptFromOutboundResults({
-    results: platformMessageIds.map((messageId) => {
-      const result: MessageReceiptSourceResult = {
-        channel: "slack",
-        messageId,
-      };
-      if (params.channelId) {
-        result.channelId = params.channelId;
-      }
-      return result;
-    }),
+    results: platformMessageIds.map((messageId) =>
+      params.channelId
+        ? { channel: "slack", messageId, channelId: params.channelId }
+        : { channel: "slack", messageId },
+    ),
     kind: params.kind,
     threadId: params.threadTs,
   });
@@ -412,7 +401,7 @@ function resolveSlackDelivery(params: {
     credential,
     identity:
       normalizeSlackSendIdentity(params.opts.identity) ??
-      getSlackDefaultSendIdentity(params.account.accountId),
+      slackDefaultSendIdentities.get(params.account.accountId),
     recipient: params.recipient,
     teamId: params.recipient.teamId,
     unfurl: params.recipient.teamId
@@ -466,7 +455,7 @@ function resolveSlackTextChunks(params: {
   textIsSlackMrkdwn?: boolean;
   preservePlainText?: boolean;
 }): string[] {
-  const text = params.preservePlainText ? params.text : params.text.trim();
+  const text = params.text;
   const chunkLimit = params.chunkLimit;
   if (params.preservePlainText) {
     return text ? chunkTextForOutbound(text, chunkLimit, { preserveWhitespace: true }) : [];
@@ -1125,100 +1114,65 @@ async function sendMessageSlackQueued(params: {
         pendingBlockFallback = orderedBlockDeliveryPlan;
       }
     }
-    if (pendingBlockFallback) {
-      const fallbackMessages = pendingBlockFallback.fallbackMessages;
-      let questionDelivery: SlackSendResult | undefined;
-      for (const [partIndex, fallback] of fallbackMessages.entries()) {
-        const metadata = withSlackDeliveryMetadata(partIndex === 0 ? opts.metadata : undefined, {
-          queueId: opts.deliveryQueueId,
-          channelId,
-          threadTs: opts.threadTs,
-          partIndex,
-          partCount: fallbackMessages.length,
-        });
-        if (partIndex === 0) {
-          await dispatchOnce();
-        }
-        const fallbackDelivery = await postPart({
-          text: fallback.text,
-          replyBroadcast: partIndex === 0 ? opts.replyBroadcast : undefined,
-          ...(fallback.blocks ? { blocks: fallback.blocks } : {}),
-          metadata,
-          mrkdwn: false,
-        });
-        if (fallbackDelivery.meta?.slackQuestionActionIds.length) {
-          questionDelivery = fallbackDelivery;
-        }
-      }
-      const deliveredThreadTs =
-        canonicalDeliveredThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-      return {
-        messageId: lastMessageId,
-        channelId: deliveredChannelId,
-        threadTs: deliveredThreadTs,
-        // Core replaces per-card progress with this aggregate; retain the
-        // actual question-card identity even when a later fallback part wins.
-        ...(questionDelivery?.meta
-          ? {
-              meta: {
-                ...questionDelivery.meta,
-                slackQuestionMessageId: questionDelivery.messageId,
-              },
-            }
-          : {}),
-        receipt: createSlackSendReceiptFromResults(deliveredResults, deliveredThreadTs),
-      };
-    }
   }
-  const resolvedChunks = resolveSlackTextChunks({
-    cfg,
-    accountId: account.accountId,
-    text: trimmedMessage,
-    chunkLimit: textChunkLimit,
-    ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
-    ...(opts.textIsSlackPlainText ? { preservePlainText: true } : {}),
-  });
-  const mediaMaxBytes =
-    opts.mediaMaxBytes ??
-    (typeof account.config.mediaMaxMb === "number"
-      ? account.config.mediaMaxMb * 1024 * 1024
-      : undefined);
-
-  let chunksToPost: string[];
-  if (opts.mediaUrl) {
-    const [firstChunk, ...rest] = resolvedChunks;
-    lastMessageId = await uploadSlackFile({
-      client: delivery.upload?.client ?? client,
-      completionClient: client,
-      channelId,
-      mediaUrl: opts.mediaUrl,
-      mediaAccess: opts.mediaAccess,
-      uploadFileName: opts.uploadFileName,
-      uploadTitle: opts.uploadTitle,
-      mediaLocalRoots: opts.mediaLocalRoots,
-      mediaReadFile: opts.mediaReadFile,
-      caption: firstChunk,
-      threadTs: opts.threadTs,
-      maxBytes: mediaMaxBytes,
-      ...(opts.forceDocument ? { optimizeImages: false } : {}),
-      onPlatformSendDispatch: dispatchOnce,
-      assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
-      ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
-    });
-    await reportDelivery(
-      createSlackSendResult(
-        lastMessageId,
-        channelId,
-        "media",
-        normalizeSlackThreadTsCandidate(opts.threadTs),
-      ),
-    );
-    chunksToPost = rest;
+  let messages: Array<{ text: string; blocks?: (Block | KnownBlock)[]; mrkdwn?: false }>;
+  if (pendingBlockFallback) {
+    messages = pendingBlockFallback.fallbackMessages;
   } else {
-    chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
+    const resolvedChunks = resolveSlackTextChunks({
+      cfg,
+      accountId: account.accountId,
+      text: trimmedMessage,
+      chunkLimit: textChunkLimit,
+      ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
+      ...(opts.textIsSlackPlainText ? { preservePlainText: true } : {}),
+    });
+    const mediaMaxBytes =
+      opts.mediaMaxBytes ??
+      (typeof account.config.mediaMaxMb === "number"
+        ? account.config.mediaMaxMb * 1024 * 1024
+        : undefined);
+
+    let chunksToPost: string[];
+    if (opts.mediaUrl) {
+      const [firstChunk, ...rest] = resolvedChunks;
+      lastMessageId = await uploadSlackFile({
+        client: delivery.upload?.client ?? client,
+        completionClient: client,
+        channelId,
+        mediaUrl: opts.mediaUrl,
+        mediaAccess: opts.mediaAccess,
+        uploadFileName: opts.uploadFileName,
+        uploadTitle: opts.uploadTitle,
+        mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
+        caption: firstChunk,
+        threadTs: opts.threadTs,
+        maxBytes: mediaMaxBytes,
+        ...(opts.forceDocument ? { optimizeImages: false } : {}),
+        onPlatformSendDispatch: dispatchOnce,
+        assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
+        ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
+      });
+      await reportDelivery(
+        createSlackSendResult(
+          lastMessageId,
+          channelId,
+          "media",
+          normalizeSlackThreadTsCandidate(opts.threadTs),
+        ),
+      );
+      chunksToPost = rest;
+    } else {
+      chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
+    }
+    messages = chunksToPost.map((text) =>
+      opts.textIsSlackPlainText ? { text, mrkdwn: false } : { text },
+    );
   }
 
-  for (const [partIndex, chunk] of chunksToPost.entries()) {
+  let questionDelivery: SlackSendResult | undefined;
+  for (const [partIndex, part] of messages.entries()) {
     const carriesPrimaryMessageOptions = partIndex === 0 && !opts.mediaUrl;
     const baseMetadata = carriesPrimaryMessageOptions ? opts.metadata : undefined;
     // Every post carries its index/count so reconciliation proves the complete
@@ -1230,17 +1184,19 @@ async function sendMessageSlackQueued(params: {
           channelId,
           threadTs: opts.threadTs,
           partIndex,
-          partCount: chunksToPost.length,
+          partCount: messages.length,
         });
     if (partIndex === 0 && !opts.mediaUrl) {
       await dispatchOnce();
     }
-    await postPart({
-      text: chunk,
+    const partDelivery = await postPart({
+      ...part,
       replyBroadcast: carriesPrimaryMessageOptions ? opts.replyBroadcast : undefined,
       metadata,
-      ...(opts.textIsSlackPlainText ? { mrkdwn: false } : {}),
     });
+    if (pendingBlockFallback && partDelivery.meta?.slackQuestionActionIds.length) {
+      questionDelivery = partDelivery;
+    }
   }
 
   const deliveredThreadTs =
@@ -1249,6 +1205,12 @@ async function sendMessageSlackQueued(params: {
     messageId: lastMessageId,
     channelId: deliveredChannelId,
     threadTs: deliveredThreadTs,
+    // Finalization follows the actual question card even when a later part wins.
+    ...(questionDelivery?.meta
+      ? {
+          meta: { ...questionDelivery.meta, slackQuestionMessageId: questionDelivery.messageId },
+        }
+      : {}),
     receipt: createSlackSendReceiptFromResults(deliveredResults, deliveredThreadTs),
   };
 }

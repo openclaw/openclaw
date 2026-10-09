@@ -6,7 +6,7 @@ import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-a
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -60,9 +60,7 @@ it.each(["before", "after"] as const)(
         retarget();
         // Join any unexpectedly accepted reader so the negative control cannot leak custody.
         await expect(
-          prepareSessionSharingSource(target, () => {}).then((prepared) => {
-            prepared.release();
-          }),
+          prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
         ).rejects.toThrow("Session sharing source changed");
       } else {
         const prepared = await prepareSessionSharingSource(target, () => {});
@@ -71,7 +69,7 @@ it.each(["before", "after"] as const)(
           retarget();
           expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
         } finally {
-          prepared.release();
+          await prepared.release();
         }
       }
     });
@@ -195,9 +193,9 @@ it("allows unrelated config reloads while worker authorization reads are pending
         id: client.authenticatedUserProfile!.profileId,
       },
     });
-    const read = historyLane.pool.run.bind(historyLane.pool);
+    const read = projectionLane.pool.run.bind(projectionLane.pool);
     let reloads = 0;
-    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         reply.ok &&
@@ -268,6 +266,7 @@ it("does not replay an authorization consumer after its own effect changes the r
 it.each([
   "worker-before-read",
   "foreign-before-read",
+  "reset-before-read",
   "native-before-consume",
   "owner-before-consume",
 ] as const)("rejects %s authority revocation before disclosure", async (boundary) => {
@@ -316,11 +315,21 @@ it.each([
     if (!authorization) {
       throw new Error("expected session authorization");
     }
-    const read = historyLane.pool.run.bind(historyLane.pool);
+    const read = projectionLane.pool.run.bind(projectionLane.pool);
     let revoked = false;
+    let inventories = 0;
     let closing: Promise<void> | undefined;
-    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
+      if (
+        reply.ok &&
+        typeof reply.value === "object" &&
+        reply.value !== null &&
+        "kind" in reply.value &&
+        reply.value.kind === "session-target-inventory"
+      ) {
+        inventories += 1;
+      }
       if (
         boundary.endsWith("before-consume") &&
         !revoked &&
@@ -346,6 +355,14 @@ it.each([
     try {
       if (boundary === "worker-before-read") {
         await removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
+      } else if (boundary === "reset-before-read") {
+        replaceSessionEntrySync(scope, {
+          sessionId: "sharing-successor",
+          lifecycleRevision: "successor",
+          updatedAt: 2,
+          visibility: "read-only",
+          createdActor: { type: "human", source: "profile", id: "another-profile" },
+        });
       } else if (boundary === "foreign-before-read") {
         const foreign = new DatabaseSync(database.path);
         try {
@@ -358,6 +375,7 @@ it.each([
       }
       await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
       expect(effect).not.toHaveBeenCalled();
+      expect(inventories).toBe(0);
       if (boundary.endsWith("before-consume")) {
         expect(revoked).toBe(true);
       }

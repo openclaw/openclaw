@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   requestSqliteWorkerOperationAdmission,
@@ -20,10 +19,7 @@ import {
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import {
-  createSessionEntryRevisionGuard,
-  SessionEntryRevisionChangedError,
-} from "./session-accessor.sqlite-entry-revision.js";
+import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
   assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
@@ -71,44 +67,35 @@ function createCurrentEntryRead(
           : lookup === "logical"
             ? readSessionEntryRow(database, sessionKey, "list")?.entry
             : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
-      if (options.projection === "capability") {
+      if (!current || options.projection === "capability") {
         entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;
         return true;
       }
-      entry = current
-        ? {
-            sessionId: current.sessionId,
-            previousSessionId: current.previousSessionId,
-            ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
-            ...(current.repositoryWorkspaceId === undefined
-              ? {}
-              : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
-            lifecycleRevision: current.lifecycleRevision,
-            lifecycleRunId: current.lifecycleRunId,
-            activeWriterRunId: current.activeWriterRunId,
-            ...(current.subagentRecovery
-              ? {
-                  subagentRecovery: {
-                    lastRunId: current.subagentRecovery.lastRunId,
-                    sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
-                  },
-                }
-              : {}),
-          }
-        : undefined;
+      entry = {
+        sessionId: current.sessionId,
+        previousSessionId: current.previousSessionId,
+        ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
+        ...(current.repositoryWorkspaceId === undefined
+          ? {}
+          : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
+        lifecycleRevision: current.lifecycleRevision,
+        lifecycleRunId: current.lifecycleRunId,
+        activeWriterRunId: current.activeWriterRunId,
+        ...(current.subagentRecovery
+          ? {
+              subagentRecovery: {
+                lastRunId: current.subagentRecovery.lastRunId,
+                sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
+              },
+            }
+          : {}),
+      };
       return true;
     },
+    "read",
   );
   return () => {
-    try {
-      guard();
-    } catch (error) {
-      if (!(error instanceof SessionEntryRevisionChangedError)) {
-        throw error;
-      }
-      // Reprepare read facts in one snapshot; admission still compares them after the host grant.
-      runSqlitePinnedReadSnapshotSync(database.db, guard);
-    }
+    guard();
     return entry;
   };
 }

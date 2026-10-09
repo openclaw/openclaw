@@ -17,6 +17,7 @@ import {
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { AgentDeletionJournalTransport } from "../state/agent-deletion-journal-transport.js";
 import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import type {
   OpenClawStateDatabase,
@@ -30,6 +31,7 @@ import { digestClawValue } from "./digest.js";
 import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
 import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
 import { updateClawInstallRecordStatus, type PersistedClawInstall } from "./provenance.js";
+import type { ClawRemovalJournalGateway } from "./removal-journal-contract.js";
 
 type ClawAgentConfigRemovalParams = {
   agentId: string;
@@ -40,6 +42,7 @@ type ClawAgentConfigRemovalParams = {
   fallbackWorkspace: string;
   config?: OpenClawConfig;
   stateDatabase?: OpenClawStateDatabaseOptions;
+  journalGateway?: ClawRemovalJournalGateway;
   onModified: () => Error;
   quiesceMonitors?: (operationId: string) => Promise<void>;
   drainMonitors?: (operationId: string) => Promise<void>;
@@ -159,10 +162,25 @@ export async function withClawAgentConfigRemoval<T>(
     ...params.stateDatabase,
     path: openOpenClawStateDatabase(params.stateDatabase).path,
   };
+  let beginConfig = params.config ?? getRuntimeConfig();
+  const journalTransport: AgentDeletionJournalTransport | undefined = params.journalGateway
+    ? (mutation, authority) =>
+        params.journalGateway!(
+          {
+            ...mutation,
+            expectedInstallDigest: digestClawValue(expectedInstall ?? null),
+            configDigest: digestClawValue(
+              mutation.kind === "begin" ? beginConfig : getRuntimeConfig(),
+            ),
+          },
+          authority,
+        )
+    : undefined;
   return await withAgentDeletion(
     params.agentId,
-    async (_begin, transact) => {
+    async (beginOwned, transact) => {
       const config = params.config ?? getRuntimeConfig();
+      beginConfig = config;
       assertAgentSessionStoreDeletionSafe(config, params.agentId, stateOptions);
       const effects = deletionEffects(
         config,
@@ -177,21 +195,35 @@ export async function withClawAgentConfigRemoval<T>(
           expectedInstall,
         );
       // Validate and claim together: a stale install snapshot must never fence a replacement.
-      const { existingJournal, deletion } = await transact((database, begin) => {
+      const prepareClaim = (database: OpenClawStateDatabase) => {
         if (!matchesInstall(database)) {
           throw params.onModified();
         }
         const previousJournal = readAgentDeletionJournalInDatabase(database, params.agentId);
-        const claimedDeletion = begin({
+        const entry = {
           agentId: params.agentId,
           workspaceDir: effects.workspace,
           agentDir: effects.agentDir,
           sessionsDir: effects.sessionsDir,
           // Selective cleanup may retain modified or untracked workspace entries.
           deleteFiles: previousJournal?.deleteFiles ?? false,
-        });
-        return { existingJournal: previousJournal, deletion: claimedDeletion };
-      });
+        };
+        return { existingJournal: previousJournal, entry };
+      };
+      const { existingJournal, deletion } = params.journalGateway
+        ? await (async () => {
+            const database = openOpenClawStateDatabase(stateOptions);
+            const { existingJournal: priorJournal, entry } = runSqliteDeferredTransactionSync(
+              database.db,
+              () => prepareClaim(database),
+            );
+            const ownedDeletion = await beginOwned(entry);
+            return { existingJournal: priorJournal, deletion: ownedDeletion };
+          })()
+        : await transact((database, begin) => {
+            const { existingJournal: priorJournal, entry } = prepareClaim(database);
+            return { existingJournal: priorJournal, deletion: begin(entry) };
+          });
       let committed = false;
       let monitorEffectsStarted = false;
       const assertCurrent = (database?: OpenClawStateDatabase) => {
@@ -225,7 +257,7 @@ export async function withClawAgentConfigRemoval<T>(
         return await apply(async () => {
           assertCurrent();
           const result = await withAgentExecApprovalsRemoved(
-            params.agentId,
+            deletion.entry,
             async () =>
               commitClawAgentConfigRemoval(
                 { ...params, config, stateDatabase: stateOptions },
@@ -270,6 +302,9 @@ export async function withClawAgentConfigRemoval<T>(
         }
       }
     },
-    stateOptions,
+    {
+      ...stateOptions,
+      ...(journalTransport ? { journalTransport } : {}),
+    },
   );
 }

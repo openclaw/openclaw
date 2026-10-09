@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import {
   access as fsAccess,
   readFile as fsReadFile,
-  stat as fsStat,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { repairJson } from "@openclaw/ai/internal/runtime";
@@ -17,8 +16,13 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { planFileEdit } from "./file-tool-planning.js";
-import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
+import {
+  type PersistedFileStat,
+  readPersistedFileStat,
+  verifyPersistedUtf8File,
+} from "./file-write-verification.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -47,21 +51,7 @@ interface EditOperations {
 const defaultEditOperations: EditOperations = {
   readFile: (path) => fsReadFile(path),
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
-  statFile: async (path) => {
-    try {
-      const stat = await fsStat(path);
-      return {
-        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      } as const;
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    }
-  },
+  statFile: (path) => readPersistedFileStat(path, (error) => hasErrnoCode(error, "ENOENT")),
   access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
 };
 
@@ -85,7 +75,13 @@ function prepareEditArguments(input: unknown): EditToolInput {
       if (Array.isArray(parsed)) {
         args.edits = parsed;
       }
-    } catch {}
+    } catch {
+      if (typeof args.oldText !== "string" || typeof args.newText !== "string") {
+        throw new Error(
+          "Could not parse edits as JSON. Provide a complete JSON array of replacements.",
+        );
+      }
+    }
   }
 
   let edits = Array.isArray(args.edits)
@@ -150,9 +146,7 @@ export function createEditTool(
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
       return withFileMutationQueueKeyResolution(queueKey, async () => {
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
+        assertFileToolNotAborted(signal);
         assertCurrent();
 
         let editCount = 0;
@@ -173,18 +167,14 @@ export function createEditTool(
         const buffer = await ops.readFile(absolutePath);
         const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
 
           const plan = await planFileEdit(
             { path, content: rawContent, edits: originalEdits },
             signal,
           );
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
           if (!plan.changed) {
             return textResult(plan.message, { changed: false } satisfies EditToolDetails);
@@ -192,9 +182,7 @@ export function createEditTool(
           editCount = plan.editCount;
           expectedContent = plan.content;
           await ops.writeFile(absolutePath, expectedContent);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
           if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
             throw new Error(

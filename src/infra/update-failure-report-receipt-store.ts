@@ -293,56 +293,38 @@ export function refreshUpdateFailureReportReceiptPreparationRowSync(
   });
 }
 
-/** Fences final artifact publication behind one process-owned preparation. */
-export function markUpdateFailureReportReceiptPreparedRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.status !== "preparing" ||
-      currentReceipt.sweepOwnerId !== undefined ||
-      currentReceipt.reservationId !== reservationId ||
-      currentReceipt.previewDigest !== previewDigest
-    ) {
-      return false;
-    }
-    return {
-      preparingSinceMs: Date.now(),
-      previewDigest,
-      ...retainedArtifactSweep(currentReceipt),
-      reservationId,
-      status: "prepared",
-    };
-  });
+function preparationTransition(status: "prepared" | "pending") {
+  const priorStatus = status === "prepared" ? "preparing" : "prepared";
+  return (
+    db: DatabaseSync,
+    attemptId: string,
+    reservationId: string,
+    previewDigest: string,
+  ): boolean =>
+    mutateReceipt(db, attemptId, (currentReceipt) => {
+      if (
+        currentReceipt.status !== priorStatus ||
+        currentReceipt.sweepOwnerId !== undefined ||
+        currentReceipt.reservationId !== reservationId ||
+        currentReceipt.previewDigest !== previewDigest
+      ) {
+        return false;
+      }
+      return {
+        ...(status === "prepared" ? { preparingSinceMs: Date.now() } : {}),
+        previewDigest,
+        ...retainedArtifactSweep(currentReceipt),
+        reservationId,
+        status,
+      };
+    });
 }
 
+/** Fences final artifact publication behind one process-owned preparation. */
+export const markUpdateFailureReportReceiptPreparedRowSync = preparationTransition("prepared");
+
 /** Makes one published preparation ambiguity-safe immediately before issue creation starts. */
-export function markUpdateFailureReportReceiptPendingRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.status !== "prepared" ||
-      currentReceipt.sweepOwnerId !== undefined ||
-      currentReceipt.reservationId !== reservationId ||
-      currentReceipt.previewDigest !== previewDigest
-    ) {
-      return false;
-    }
-    return {
-      ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
-      ...retainedArtifactSweep(currentReceipt),
-      reservationId,
-      status: "pending",
-    };
-  });
-}
+export const markUpdateFailureReportReceiptPendingRowSync = preparationTransition("pending");
 
 /** Finalizes only a process-owned reservation in the required prior phase. */
 export function finalizeUpdateFailureReportReceiptRowSync(

@@ -19,7 +19,7 @@ import {
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
@@ -31,7 +31,7 @@ export function assertExistingOpenClawStateRuntimeMetadata(
   pathname: string,
 ): number {
   const version = assertSupportedStateSchemaVersion(database, pathname);
-  if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
     );

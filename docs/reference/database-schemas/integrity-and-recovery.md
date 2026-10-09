@@ -107,11 +107,27 @@ opening timestamp. A process killed during a required full gate therefore cannot
 lend restart provenance, even when its host, boot, and WAL match. Updates, rollback, canaries, Doctor, and copied-file verification retain
 their existing strict checks.
 
-The deferred open lends only revocable runtime admission and does not publish
-durable verification or a clean-close receipt. Background success is logged;
-it does not independently certify the writer's checkpoint/close. If no full
-admission has established durable verification, even a subsequent graceful
-restart retains the full gate. Confirmed background corruption drains existing
+The deferred open lends only revocable runtime admission. A successful background
+full check can establish durable verification through that same admitted writer.
+The queued check retains an executor borrow through scanning and proof publication,
+so idle retirement and opening another agent cannot close its original writer.
+Completion, failure, cancellation, and superseded requests release that borrow;
+explicit close and revocation still prevent stale publication.
+If the scan finishes during startup preparation, proof publication waits for that
+agent's admission to finish before joining its writer queue. Failed preparation
+reports that the proof was not retained; verifier shutdown cancels the wait.
+The verifier must check the admitted physical file, and the original writer must
+still hold valid admission with an unchanged connection-local `data_version`
+since admission. Its own writes preserve that value; a commit from any other
+connection, file replacement, revoked admission, or retired writer prevents
+publication. The writer excludes foreign commits while checking continuity and
+recording verification. This adds no schema or configuration and changes no
+update or rollback contract.
+
+Verification remains dirty until the last lease completes its normal checkpoint
+and native close. A successful background check therefore lets the next orderly
+restart reuse a clean-close receipt, but never certifies a crash or unfinished
+shutdown. Quick checks cannot establish full verification. Confirmed background corruption drains existing
 agent actors, reconfirms the current file generation in a child, latches refusal,
 drains any intervening actor, and records the existing durable quarantine. New
 opens and retained actors then refuse writes until Doctor repair. Transient I/O
@@ -203,9 +219,14 @@ final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
 Restart recovery markers and reply cancellation precede background-service
-joins, including scheduled continuation delivery. An interrupted external restart
-can exit after accepted terminal writes, memory preparation, and database close
-settle, without waiting for unrelated service teardown. Scheduled deliveries retain
+joins, including scheduled continuation delivery. After a drain timeout, a process-owned
+stop or external restart exits after accepted persistence, memory preparation,
+and database close settle, without waiting for unrelated service teardown. The timeout
+log records the remaining work counts. Database owners revoke abandoned resources,
+join their accepted writes, and release their leases before certifying the receipt;
+an active or failed writer still prevents certification. Accepted auth usage, account
+saves, mentions, worktree settlement, and sandbox removals join before database close,
+including their preparation before acquiring a native writer. Scheduled deliveries retain
 their Gateway owner so restart cancellation reaches their reply admissions.
 Database retirement completes independently for each path. A database whose
 resources have settled can publish its clean-close receipt while another database
@@ -352,6 +373,15 @@ inspection copies and verifies both before SQLite recovers the private family.
 It does not discard committed WAL pages, repair the source, or change plan identity.
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
+
+Update validation reuses the prepared rehearsal databases for read-only checks.
+The complete updater isolation markers and physical containment of the database
+and its sidecars are required; external paths still use artifact-preserving
+copies. Inspection write guards remain active, and the next check sees changes
+made by the candidate's preceding migration step. Snapshot capacity errors report
+the estimated bytes needed, currently available bytes, and whether the source
+has live WAL sidecars. Free space or move the cache before retrying; a temporary
+snapshot capacity failure does not require schema repair on the serving install.
 
 Synchronous CLI snapshots also pause between source-change retries, so a brief
 write burst does not exhaust all ten attempts immediately. These retries only
@@ -569,6 +599,12 @@ the database and current authority before admission continues.
 Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at 60 seconds and the latest confirmed durable lease expiry. The live state-lease owner renews during startup until the worker takes over, so a worker that starts slowly on a busy host can still become ready. Expired or replaced owners cannot renew, and host renewal never extends the 60-second startup cap. These fields do not establish why startup stalled or ownership was lost.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
+
+Lease expiry timers cap each wait at Node's maximum timer delay and recheck the
+deadline before expiring ownership. A backward clock adjustment cannot turn a
+long remaining lease into an immediate timeout during an update or Doctor run.
+Renewal and durable ownership checks still use the recorded expiry; this changes
+no stored data, schema, or backup and rollback behavior.
 
 ## btrfs and NOCOW
 
@@ -802,6 +838,12 @@ Act on the install root, not the version. One release version string spans many 
 When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+
+Doctor, Gateway startup, update status, and offline `database preflight` prioritize
+this version refusal even when the older build cannot read the newer catalog.
+Install a compatible newer build, or restore the backup matching the older build;
+`doctor --fix` cannot repair a newer schema. These refusals leave the database and
+its SQLite sidecars unchanged, including during `update status --json`.
 
 Config reads also save health fingerprints to this database. If that write fails,
 `Config health-state write failed` reports the first failure for that database

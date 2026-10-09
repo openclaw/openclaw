@@ -42,6 +42,81 @@ describe("channel progress draft compositor", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps bounded operation state without a preamble or verbose tool log", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "start",
+      status: "running",
+      title: "Private document",
+      meta: "private/path.txt",
+    });
+    expect(update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toBe("Read: running");
+    await progress.pushItemEvent({
+      itemId: "exec-2",
+      kind: "tool",
+      name: "exec",
+      phase: "start",
+      status: "running",
+    });
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toBe("Exec: running");
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+    expect(JSON.stringify(update.mock.calls)).not.toContain("private/path");
+    await progress.pushItemEvent({ itemId: "exec-2", hideFromChannelProgress: true });
+    expect(progress.getSnapshot().lines).toHaveLength(0);
+    progress.markFinalReplyStarted();
+    const calls = update.mock.calls.length;
+    await progress.pushItemEvent({
+      itemId: "late",
+      kind: "tool",
+      name: "write",
+      status: "running",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update).toHaveBeenCalledTimes(calls);
+  });
+
+  it("continues public child state with the detailed tool log disabled", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushPreambleHeadline("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      status: "running",
+      summary: "PRIVATE CHILD CONTENT",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toContain("Verification: running");
+    expect(update.mock.lastCall?.[0]).toContain("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toContain("Verification: completed");
+    expect(JSON.stringify(update.mock.calls)).not.toContain("PRIVATE CHILD CONTENT");
+  });
+
   it("counts only work tools and resets per turn", () => {
     let now = 1_000;
     const work = createChannelProgressWorkCounter({ now: () => now });
@@ -386,6 +461,50 @@ describe("channel progress draft compositor", () => {
       expect.objectContaining({ id: "patch-1", toolName: "apply_patch" }),
     ]);
     expect(progress.getSnapshot().diffStat).toBeUndefined();
+  });
+
+  it.each([
+    { action: "react", status: "completed", hidden: true },
+    { action: "react", status: "failed", hidden: false },
+    { action: "react", status: "blocked", hidden: false },
+    { action: "react", status: "unknown", hidden: false },
+    { action: "send", status: "completed", hidden: false },
+  ] as const)("projects message $action/$status progress", async ({ action, status, hidden }) => {
+    const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
+    await progress.start();
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "start",
+        args: { action, channel: "slack", target: "C000000001" },
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual(
+      action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "result",
+        args: { action, channel: "slack", target: "C000000001" },
+        status,
+      }),
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "read-1",
+        name: "read",
+        phase: "result",
+        args: { path: "README.md" },
+        status: "completed",
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual([
+      ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
+      expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
+    ]);
   });
 
   it("retains completed edits when clearing a quiet plan", async () => {

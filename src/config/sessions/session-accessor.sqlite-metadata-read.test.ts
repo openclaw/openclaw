@@ -21,6 +21,7 @@ import {
   advanceTranscriptMutationAtInTransaction,
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -108,6 +109,20 @@ it("reads each in-transaction fence advance and restores the prior pair on rollb
     expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
+        advanceTranscriptMutationAtInTransaction(current, "hot", 1);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
+        advanceTranscriptMutationAtInTransaction(current, "hot", 25.9);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 25 });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0);
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 0,
+        });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0, { strictly: true });
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 2,
+        });
         current.db
           .prepare("UPDATE session_windows SET transcript_observed_at = 100 WHERE session_id = ?")
           .run("hot");
@@ -130,14 +145,30 @@ it("reads each in-transaction fence advance and restores the prior pair on rollb
   });
 });
 
-it("keeps prepared metadata reads in the current WAL snapshot until it ends", async () => {
+it("uses statement snapshots for point metadata reads and preserves a caller's WAL snapshot", async () => {
   await withOpenClawTestState({ label: "prepared-transcript-snapshot" }, async (state) => {
     const { database, scope } = createFixture(state);
+    const readStats = () => readTranscriptStatsFromDatabase(database, "hot");
+    const originalStats = {
+      eventCount: 1,
+      maxSeq: 0,
+      sizeBytes: Buffer.byteLength('{"type":"session"}'),
+      lastObservedMutationAtMs: 10,
+      lastMutationAtMs: 20,
+    };
+    const exec = vi.spyOn(database.db, "exec");
     expect(hasSessionTranscriptEventsSync(scope("hot"))).toBe(true);
     expect(readTranscriptMutationStateSync(scope("hot"))).toEqual({
       observedAt: 10,
       updatedAt: 20,
     });
+    expect(readStats()).toEqual(originalStats);
+    expect(
+      exec.mock.calls.filter(([sql]) =>
+        /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql),
+      ),
+    ).toEqual([]);
+    exec.mockRestore();
     const peer = new DatabaseSync(database.path);
     try {
       runSqliteDeferredTransactionSync(database.db, () => {
@@ -145,6 +176,7 @@ it("keeps prepared metadata reads in the current WAL snapshot until it ends", as
           observedAt: 10,
           updatedAt: 20,
         });
+        expect(readStats()).toEqual(originalStats);
         peer.exec(`
           BEGIN IMMEDIATE;
           DELETE FROM transcript_events WHERE session_id = 'hot';
@@ -157,11 +189,19 @@ it("keeps prepared metadata reads in the current WAL snapshot until it ends", as
           observedAt: 10,
           updatedAt: 20,
         });
+        expect(readStats()).toEqual(originalStats);
       });
       expect(hasSessionTranscriptEventsSync(scope("hot"))).toBe(false);
       expect(readTranscriptMutationStateSync(scope("hot"))).toEqual({
         observedAt: 100,
         updatedAt: 200,
+      });
+      expect(readStats()).toEqual({
+        eventCount: 0,
+        maxSeq: 0,
+        sizeBytes: 0,
+        lastObservedMutationAtMs: 100,
+        lastMutationAtMs: 200,
       });
     } finally {
       peer.close();

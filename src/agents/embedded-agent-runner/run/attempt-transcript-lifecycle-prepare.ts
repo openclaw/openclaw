@@ -1,4 +1,5 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
@@ -20,6 +21,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "abortSignal"
     | "config"
     | "runId"
+    | "replyOperation"
     | "sessionFile"
     | "sessionId"
     | "sessionKey"
@@ -95,6 +97,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: fencedSessionTarget,
+    sessionReader: getReplyOperationSessionReader(attempt.replyOperation),
     ...(initialWriter ? { initialWriter } : {}),
     assertCommitAllowed: () => {
       attempt.abortSignal?.throwIfAborted();
@@ -103,11 +106,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     },
     withTranscriptWrite,
   };
-  const withOwnedTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
-    withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-      withTranscriptWrite(operation),
-    );
-
   externalAbortController.arm();
   try {
     await externalAbortController.throwIfFiredAfterPrepCleanup();
@@ -121,6 +119,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     assertCronRootCurrent: generation ? ownedTranscriptWriteContext.assertCommitAllowed : undefined,
     ownedTranscriptWriteContext,
     transcriptLifecycle,
-    withOwnedTranscriptWrite,
+    withOwnedTranscriptWrite: (operation) =>
+      withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+        withTranscriptWrite(operation),
+      ),
   };
 }

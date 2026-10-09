@@ -331,7 +331,8 @@ vi.mock("./reply-delivery.js", () => ({
     state.createBlockReplyDeliveryHandlerMock(params),
 }));
 
-vi.mock("./reply-media-paths.runtime.js", () => ({
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
   createReplyMediaContext: () => ({
     normalizePayload: (payload: unknown) => payload,
   }),

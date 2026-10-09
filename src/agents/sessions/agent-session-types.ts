@@ -62,11 +62,9 @@ export interface AgentSessionConfig {
   sessionManager: SessionManager;
   settingsManager: SettingsManager;
   cwd: string;
-  /** Resource loader for extensions, skills, prompts, and themes. */
   resourceLoader: ResourceLoader;
   /** SDK custom tools registered outside extensions. */
   customTools?: ToolDefinition[];
-  /** Model registry for API key resolution and model discovery. */
   modelRegistry: ModelRegistry;
   /** Runtime-owned tool allowlist, also used for initial activation. */
   allowedToolNames: string[];
@@ -96,7 +94,6 @@ export interface ExtensionBindings {
 export interface PromptOptions {
   /** Expand file-based prompt templates. Defaults to true. */
   expandPromptTemplates?: boolean;
-  /** Image attachments. */
   images?: ImageContent[];
   /** Queue behavior when an agent is already streaming. */
   streamingBehavior?: "steer" | "followUp";

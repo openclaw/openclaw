@@ -9,6 +9,8 @@ import {
 } from "./diagnostic-trace-context.js";
 import { createFixedWindowBudget } from "./fixed-window-rate-limit.js";
 
+const diagnosticNow = () => performance.now();
+
 const operations = {
   "ref-mutation": {
     stateKey: "openclaw.gitRefMutationDiagnostics",
@@ -107,7 +109,7 @@ export function startGitOperationTiming(
             budget: createFixedWindowBudget({
               maxRequests: 60,
               windowMs: 60_000,
-              now: () => performance.now(),
+              now: diagnosticNow,
             }),
             omitted: 0,
           }));
@@ -144,7 +146,7 @@ export function startGitOperationTiming(
           };
           runWithDiagnosticTraceContext(trace, () =>
             log.info(
-              kind === "worktree-removal"
+              kind !== "ref-mutation"
                 ? `${operation.message} ${JSON.stringify(fields)}`
                 : operation.message,
               fields,

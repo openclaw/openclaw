@@ -166,11 +166,6 @@ export function readChatResetTargetAccess(
   return access.allowed ? { allowed: true } : access;
 }
 
-function failStaleChatCommand(host: ChatCommandHost): ChatCommandDispatchResult {
-  setChatError(host, "The Gateway connection changed. Retry the command.");
-  return "failed";
-}
-
 function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: string): string {
   return JSON.stringify([agentId ?? null, sessionKey ?? null]);
 }
@@ -343,12 +338,13 @@ export async function dispatchChatSlashCommand(
         return confirmation;
       }
       if (!isChatCommandTargetCurrent(host, target)) {
-        return failStaleChatCommand(host);
+        setChatError(host, "The Gateway connection changed. Retry the command.");
+        return "failed";
       }
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
       }
-      return await clearChatHistory(host);
+      return clearChatHistory(host);
     }
     case "compact":
       if (!requireChatSessionAction(host, "compact")) {

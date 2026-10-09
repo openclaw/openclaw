@@ -10,6 +10,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as diskSpace from "./disk-space.js";
+import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
@@ -261,16 +262,13 @@ async function originalCaptureFixture(externalAgents = false) {
       { path: plugin, kind: "directory" },
       { path: missingFile, kind: "file" },
       { path: missingDatabase, kind: "sqlite" },
+      { path: workshop, kind: "directory" },
+      { path: missingDirectory, kind: "directory" },
     ],
     deferredPluginIds: new Set(),
     notices: [],
     assertCurrent: () => {},
   });
-  const workshopOwner = await import("../commands/doctor-update-rehearsal-workshop.js");
-  vi.spyOn(workshopOwner, "collectDoctorSkillWorkshopBackupResources").mockResolvedValue([
-    { path: workshop, kind: "directory" },
-    { path: missingDirectory, kind: "directory" },
-  ]);
   const { captureUpdateRecoveryBaseline } = await import("./update-recovery-baseline-capture.js");
   const env = {
     ...process.env,
@@ -291,6 +289,7 @@ async function originalCaptureFixture(externalAgents = false) {
     configPath,
     authoredConfig,
     include,
+    applicationFile,
     skillLink,
     pluginDatabase,
     missingFile,
@@ -308,7 +307,7 @@ async function originalCaptureFixture(externalAgents = false) {
   };
 }
 
-it("seals equivalent original bytes under isolated steps and one maintenance-owned database child", async () => {
+it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
   const f = await originalCaptureFixture(true);
   const externalBytes = await Promise.all(f.external.map((source) => fs.readFile(source)));
   const result = await f.captureOriginal("original");
@@ -386,6 +385,22 @@ it("seals equivalent original bytes under isolated steps and one maintenance-own
     const maintainedManifest = parseUpdateRecoveryBackupManifest(
       await fs.readFile(maintained.ref.manifestPath, "utf8"),
     );
+    expect((await fs.lstat(maintained.ref.manifestPath)).nlink).toBe(1);
+    await expect(fs.lstat(`${maintained.ref.manifestPath}.partial`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const entry of maintainedManifest.entries) {
+      if (entry.kind !== "file") {
+        continue;
+      }
+      const payloadPath = path.join(maintained.ref.directory, entry.archivePath);
+      expect((await fs.lstat(payloadPath)).nlink).toBe(1);
+      expect(
+        createHash("sha256")
+          .update(await fs.readFile(payloadPath))
+          .digest("hex"),
+      ).toBe(entry.sha256);
+    }
     for (const field of [
       "entries",
       "databases",
@@ -532,6 +547,20 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
     const linkedTarget = await sealed(linkedId, 31, state.path("linked-capture"));
     const linked = path.join(store, linkedId);
     await fs.symlink(linkedTarget, linked, "dir");
+    const interrupted: string[] = [];
+    for (const kind of ["linked", "copied", "conflicting"]) {
+      const retained = await sealed(`doctor-${randomUUID()}`, 31);
+      const finalPath = path.join(retained, "manifest.json");
+      const partialPath = `${finalPath}.partial`;
+      if (kind === "linked") {
+        await fs.link(finalPath, partialPath);
+      } else if (kind === "copied") {
+        await fs.copyFile(finalPath, partialPath);
+      } else {
+        await fs.writeFile(partialPath, "different, unverified bytes");
+      }
+      interrupted.push(retained);
+    }
     const assertCurrent = vi.fn();
 
     const result = await retireExpiredStandaloneDoctorCaptures({
@@ -544,12 +573,84 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
     expect(result).toEqual({ retired: [expired], warnings: [] });
     expect(assertCurrent).toHaveBeenCalled();
     await expect(fs.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const retained of [recent, incomplete, update, linkedTarget]) {
+    for (const retained of [recent, incomplete, update, linkedTarget, ...interrupted]) {
       expect((await fs.lstat(retained)).isDirectory()).toBe(true);
     }
     expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
     expect(await fs.readlink(linked)).toBe(linkedTarget);
   });
+});
+
+it.each([
+  { change: "link", phase: "during" },
+  { change: "unlink", phase: "after" },
+  { change: "content", phase: "during" },
+  { change: "content", phase: "after" },
+] as const)("validates $change changes $phase original file capture", async ({ change, phase }) => {
+  const f = await originalCaptureFixture();
+  const source = f.applicationFile;
+  const timestamp = new Date("2000-01-01T00:00:00.000Z");
+  await fs.utimes(source, timestamp, timestamp);
+  const before = await fs.stat(source, { bigint: true });
+  const alias = path.join(f.root, "outside-native-capture");
+  if (change === "unlink") {
+    await fs.link(source, alias);
+  }
+  let changed = false;
+  const mutate = async () => {
+    changed = true;
+    if (change === "link") {
+      await fs.link(source, alias);
+    } else if (change === "unlink") {
+      await fs.unlink(alias);
+    } else {
+      await fs.writeFile(source, Buffer.alloc(Number(before.size), 7));
+      await fs.utimes(source, timestamp, timestamp);
+    }
+  };
+  if (phase === "during") {
+    const copy = fileDescriptor.copyFileHandle;
+    vi.spyOn(fileDescriptor, "copyFileHandle").mockImplementation(async (...args) => {
+      const stat = await args[0].stat({ bigint: true });
+      if (stat.dev === before.dev && stat.ino === before.ino) {
+        await mutate();
+      }
+      return copy(...args);
+    });
+  } else {
+    const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
+    vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementationOnce(
+      async (...args) => {
+        await mutate();
+        return readGenerations(...args);
+      },
+    );
+  }
+  const capture = f.captureOriginal(`${change}-${phase}`);
+  if (change === "content") {
+    await expect(capture).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        message: expect.stringMatching(/Original update (file|resource) changed/),
+      }),
+    });
+  } else {
+    const { ref } = await capture;
+    const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref.manifestPath, "utf8"));
+    const entry = manifest.entries.find((candidate) => candidate.sourcePath === source);
+    assert(entry?.kind === "file");
+    expect(await fs.readFile(path.join(ref.directory, entry.archivePath))).toEqual(
+      f.bytes.get(source),
+    );
+  }
+  expect(changed).toBe(true);
+  const after = await fs.stat(source, { bigint: true });
+  expect(after).toMatchObject({
+    dev: before.dev,
+    ino: before.ino,
+    size: before.size,
+    mtimeNs: before.mtimeNs,
+  });
+  expect(after.ctimeNs).not.toBe(before.ctimeNs);
 });
 
 it("retains an unsealed capture when the database changes after its snapshot", async () => {

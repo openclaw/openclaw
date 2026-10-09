@@ -37,6 +37,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { updateStatusCommand } from "./status.js";
+import { registerUpdateStatusWarningTests } from "./status.warnings.test-support.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn(),
@@ -302,12 +303,7 @@ describe("update status Node runtime findings", () => {
         this: DatabaseSync,
         sql,
       ) {
-        return realPrepare.call(
-          this,
-          sql === "SELECT sqlite_version() AS version"
-            ? `SELECT '${sqliteVersion}' AS version`
-            : sql,
-        );
+        return realPrepare.call(this, sql.replaceAll("sqlite_version()", `'${sqliteVersion}'`));
       });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
@@ -462,6 +458,8 @@ afterEach(async () => {
 });
 
 describe("update status readiness outcome", () => {
+  registerUpdateStatusWarningTests(() => runtime.log.mock.calls.flat().join("\n"));
+
   it.each([false, true])(
     "prioritizes an active update over availability (finished=%s)",
     async (finished) => {
@@ -759,7 +757,18 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({
+        pending: [],
+        settlements: [
+          {
+            pluginId: pending.pluginId,
+            status: json ? "superseded" : "completed",
+            reason: json
+              ? "Superseded by the verified successor migration."
+              : "No protected config remains.",
+          },
+        ],
+      });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });
