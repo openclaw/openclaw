@@ -297,7 +297,7 @@ function hashToolOutcome(
     return { outcomeKind: "tool-loop-veto" };
   }
   if (isError) {
-    return { resultHash: digestToolOutcome(result), unknownToolName: extractUnknownToolName(text) };
+    return { resultHash: digestToolOutcome(result) };
   }
   if (toolName === "computer" && result.isError !== true) {
     const outcome = getComputerToolOutcome(result);
@@ -432,8 +432,7 @@ export function observeRepeatedToolError(
     return undefined;
   }
   const actionKey = hashToolCall(toolCall.name, args);
-  const unknownToolName = outcome.unknownToolName;
-  const signature = `${actionKey}\0${unknownToolName ? `unknown:${unknownToolName}` : outcome.resultHash}`;
+  const signature = `${actionKey}\0${outcome.resultHash}`;
   const count =
     state.repeatedToolError?.signature === signature ? state.repeatedToolError.count + 1 : 1;
   state.repeatedToolError = { signature, count };

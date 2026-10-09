@@ -61,6 +61,7 @@ describe("default repeated tool error termination", () => {
 
   it.each([
     "changing errors",
+    "changing unknown-tool errors",
     "changing send errors",
     "changing arguments",
     "successful polling",
@@ -75,9 +76,11 @@ describe("default repeated tool error termination", () => {
         return { content: [{ type: "text", text: `progress ${calls}` }], details: {} };
       }
       throw new Error(
-        scenario === "changing errors" || scenario === "changing send errors"
-          ? `failure ${calls}`
-          : "same error",
+        scenario === "changing unknown-tool errors"
+          ? `Unknown tool id: missing_tool; lookup failure ${calls}`
+          : scenario === "changing errors" || scenario === "changing send errors"
+            ? `failure ${calls}`
+            : "same error",
       );
     };
     const turns = Array.from({ length: 4 }, (_, index) => [
