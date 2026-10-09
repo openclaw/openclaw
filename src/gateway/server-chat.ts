@@ -733,10 +733,13 @@ export function createAgentEventHandler({
     });
   };
 
-  const broadcastBufferedChatDelta = (delivery: ChatDelivery) => {
-    const { clientRunId, sourceRunId, isHeartbeat } = delivery;
+  const broadcastBufferedChatDelta = (
+    delivery: ChatDelivery,
+    heartbeatForFilter = delivery.isHeartbeat,
+  ) => {
+    const { clientRunId, sourceRunId } = delivery;
     const { text, suppress } = chatRunState.resolveBuffer(clientRunId);
-    if (!shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, isHeartbeat)) {
+    if (!shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, heartbeatForFilter)) {
       // Suppression retracts a prior visible snapshot; omission would leave stale text.
       broadcastChatDelta(delivery, suppress ? "" : text);
     }
@@ -768,7 +771,7 @@ export function createAgentEventHandler({
           agentRunSeq.delete(sourceRunId);
           return;
         }
-        broadcastBufferedChatDelta(delivery);
+        broadcastBufferedChatDelta({ ...delivery, isHeartbeat: undefined }, delivery.isHeartbeat);
       });
       return;
     }
