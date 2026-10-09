@@ -14,11 +14,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
+import * as transcriptReaders from "./session-transcript-execution-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
-import * as historyReaders from "./session-transcript-worker-readers.js";
 
 it("validates context projection inside a transcript lock and append preparation", async ({
   signal,
@@ -202,11 +202,11 @@ it("refuses a rewrite after final worker validation but before host consumption"
     const source = SessionManager.open(scope);
     source.appendMessage({ role: "user", content: "original", timestamp: 1 });
     const rewritten = createDeferred();
-    const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+    const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
     const spy = vi
-      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-      .mockImplementation((runRequest) => {
-        const readers = createReaders(runRequest);
+      .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+      .mockImplementation((params) => {
+        const readers = createReaders(params);
         return {
           ...readers,
           readAnchors: async (input, signal) => {

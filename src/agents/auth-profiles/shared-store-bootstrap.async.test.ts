@@ -43,6 +43,14 @@ async function prepareActor(env: NodeJS.ProcessEnv) {
   );
 }
 
+function interceptBootstrap(intercept: <T>(execute: () => Promise<T>) => Promise<T>) {
+  probe.command(workerStore, (command, executeOptions, scope) =>
+    command.type === "authProfiles.bootstrap"
+      ? intercept(() => scope.execute(command, executeOptions))
+      : scope.execute(command, executeOptions),
+  );
+}
+
 it.each(["missing", "empty", "credentials", "owned"] as const)(
   "prepares the %s legacy auth source without caller-thread SQL",
   async (source) => {
@@ -129,12 +137,10 @@ it.each([false, true])(
       if (sharedOwned) {
         writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
       }
-      probe.command(workerStore, (command, executeOptions, scope) => {
-        if (command.type === "authProfiles.bootstrap") {
-          fs.mkdirSync(sourceDir, { recursive: true });
-          fs.writeFileSync(sourcePath, "replacement source");
-        }
-        return scope.execute(command, executeOptions);
+      interceptBootstrap((execute) => {
+        fs.mkdirSync(sourceDir, { recursive: true });
+        fs.writeFileSync(sourcePath, "replacement source");
+        return execute();
       });
       const prepared = prepareAuthProfileWriteTransactionAsync(undefined, { env });
       if (sharedOwned) {
@@ -155,13 +161,10 @@ it("publishes acknowledged relocation without replay when its result is lost", a
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     await prepareActor(env);
     let attempts = 0;
-    probe.command(workerStore, async (command, executeOptions, scope) => {
-      const result = await scope.execute(command, executeOptions);
-      if (command.type === "authProfiles.bootstrap") {
-        attempts++;
-        throw new SqliteWorkerError("Synthetic bootstrap reply loss", "outcome-unknown");
-      }
-      return result;
+    interceptBootstrap(async (execute) => {
+      await execute();
+      attempts++;
+      throw new SqliteWorkerError("Synthetic bootstrap reply loss", "outcome-unknown");
     });
     const prepared = await prepareAuthProfileWriteTransactionAsync(undefined, { env });
     expect(prepared.sharedOwner.location).toBe("state-db");
@@ -182,15 +185,13 @@ it.each(["caller", "source"] as const)(
       resolveSharedAuthStoreOwnership(env);
       setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, sourceDir);
       let revoked = false;
-      probe.command(workerStore, async (command, executeOptions, scope) => {
-        const result = await scope.execute(command, executeOptions);
-        if (command.type === "authProfiles.bootstrap") {
-          if (retired === "caller") {
-            revoked = true;
-          } else {
-            fs.mkdirSync(sourceDir, { recursive: true });
-            fs.writeFileSync(sourcePath, "replacement after committed relocation");
-          }
+      interceptBootstrap(async (execute) => {
+        const result = await execute();
+        if (retired === "caller") {
+          revoked = true;
+        } else {
+          fs.mkdirSync(sourceDir, { recursive: true });
+          fs.writeFileSync(sourcePath, "replacement after committed relocation");
         }
         return result;
       });

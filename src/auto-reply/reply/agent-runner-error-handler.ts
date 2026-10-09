@@ -8,6 +8,7 @@ import {
   isLikelyContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -120,6 +121,9 @@ export async function handleAgentExecutionError(params: {
     );
     if (!reason) {
       return undefined;
+    }
+    if (isCliPartialOutputRejected(abortError)) {
+      turn.replyOperation?.fail("run_failed", abortError);
     }
     // Preserve signal-owned timeout attribution; only normalized restart/supersession need metadata.
     const terminalMetadata = {

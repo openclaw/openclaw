@@ -105,10 +105,10 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
 }
 
 function readStringArrayField(value: unknown, field: keyof RetiredArmState): string[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return [];
   }
-  const entries = (value as RetiredArmState)[field];
+  const entries = value[field];
   return Array.isArray(entries)
     ? entries.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     : [];
@@ -130,15 +130,10 @@ async function readRetiredArmStates(env: NodeJS.ProcessEnv) {
     inspectStatePath(legacyPath, "retired Phone Control lease state"),
     inspectStatePath(databasePath, "OpenClaw state database"),
   ]);
-  const warnings: string[] = [];
-  const inspectionUnsafe =
-    legacyInspection.status === "unsafe" || databaseInspection.status === "unsafe";
-  if (legacyInspection.status === "unsafe") {
-    warnings.push(legacyInspection.warning);
-  }
-  if (databaseInspection.status === "unsafe") {
-    warnings.push(databaseInspection.warning);
-  }
+  const warnings = [legacyInspection, databaseInspection].flatMap((inspection) =>
+    inspection.status === "unsafe" ? [inspection.warning] : [],
+  );
+  const inspectionUnsafe = warnings.length > 0;
 
   let legacyState: unknown;
   let legacyStateValid = false;

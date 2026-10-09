@@ -151,10 +151,7 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
   let current: unknown = root;
   for (const part of pathLocal) {
     if (typeof part === "number") {
-      if (!Array.isArray(current)) {
-        return null;
-      }
-      if (part < 0 || part >= current.length) {
+      if (!Array.isArray(current) || part < 0 || part >= current.length) {
         return null;
       }
       current = current[part];

@@ -31,6 +31,10 @@ import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runn
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
+import {
+  completedTurnMessageAnchor,
+  type CompletedTurnMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
 
 export {
@@ -373,6 +377,7 @@ export async function finalizeHarnessContextEngineTurn(
     turnCandidate?: {
       admission?: UserTurnTranscriptAdmissionReceipt;
       terminalEntryId?: string | null;
+      [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
       record: (facts: ContextEngineTurnAttemptFacts) => void;
     };
   },
@@ -383,18 +388,24 @@ export async function finalizeHarnessContextEngineTurn(
   if (params.turnCandidate) {
     const { admission, terminalEntryId, record } = params.turnCandidate;
     if (admission && terminalEntryId) {
-      const reader = prepareSessionTranscriptHydration(admission);
-      const { version } = await reader.readMaintenance({ operation: "version" });
-      const terminal = version
-        ? (
-            await reader.readCurrentTurnEntry({
-              entryId: terminalEntryId,
-              version,
-              includeEntry: false,
-            })
-          ).anchor
-        : undefined;
-      reader.assertCurrent();
+      const committed = params.turnCandidate[completedTurnMessageAnchor];
+      let terminal = committed?.anchor;
+      if (!committed) {
+        // Released SDK and reconstructed managers have no local append receipt.
+        const reader = prepareSessionTranscriptHydration(admission);
+        const { version } = await reader.readMaintenance({ operation: "version" });
+        terminal = version
+          ? (
+              await reader.readCurrentTurnEntry({
+                entryId: terminalEntryId,
+                version,
+                includeEntry: false,
+              })
+            ).anchor
+          : undefined;
+        reader.assertCurrent();
+      }
+      committed?.assertCurrent();
       if (terminal) {
         record({
           boundary: { admission, terminal },

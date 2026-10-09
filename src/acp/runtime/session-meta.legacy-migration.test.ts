@@ -184,23 +184,17 @@ describe("retained legacy ACP metadata", () => {
         const admission = vi
           .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
           .mockImplementation((admit, attachment) => {
-            let mutationNonce: string | undefined;
             return createAdmission((request, grant) => {
               if (
-                request.stage === "transaction" &&
-                isRecord(request.facts) &&
-                typeof request.facts.nonce === "string" &&
-                !("preparationPort" in request.facts)
-              ) {
-                mutationNonce = request.facts.nonce;
-              }
-              if (
-                mutationNonce &&
                 request.stage === "commit" &&
                 isRecord(request.facts) &&
-                request.facts.nonce === mutationNonce
+                isRecord(request.facts.facts) &&
+                request.facts.facts.kind === "acp"
               ) {
                 // Both receipt and metadata writes precede this final admission.
+                expect(request.facts.facts.acp).toEqual(
+                  operation === "close" ? null : canonicalMeta,
+                );
                 observedCommit = true;
                 current = false;
               }
