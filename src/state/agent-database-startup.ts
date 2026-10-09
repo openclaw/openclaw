@@ -368,7 +368,7 @@ class AgentDatabaseStartupAdmission {
       this.pending.set(agentId, recovery);
       this.startProgress();
       refusals.push(refusal);
-      log.warn(refusal.reason, { agentId, paths, repairHint: refusal.repairHint });
+      log.info(refusal.reason, { agentId, paths });
       const witnesses = paths.map((pathname) => {
         try {
           return { pathname, identity: readSqliteIntegrityFileIdentity(pathname) };
@@ -492,6 +492,7 @@ class AgentDatabaseStartupAdmission {
               agentId,
               paths,
               reason,
+              repairHint: readAgentDatabaseAdmissionRefusal(agentId, { env })?.repairHint,
               ...recoveryTiming(recovery),
             });
           }
