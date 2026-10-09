@@ -124,6 +124,10 @@ describe("anthropic live model discovery auth", () => {
     expect(result && "providers" in result ? Object.keys(result.providers) : []).toEqual([
       "anthropic",
     ]);
+    // Inventory retention after a later transient failure keys on this successful outcome.
+    expect(result && "providers" in result ? result.outcomes : undefined).toContainEqual(
+      expect.objectContaining({ provider: "anthropic", status: "ready" }),
+    );
     const models = new Map(
       result && "providers" in result
         ? (result.providers.anthropic?.models ?? []).map((model) => [model.id, model])

@@ -587,8 +587,13 @@ export function buildAnthropicProvider(): ProviderPlugin {
             },
           }),
         );
+        // Keep the discovery outcomes: retention after a later transient failure
+        // matches on the profile that last published successfully.
         return result && "provider" in result
-          ? { providers: { [providerId]: result.provider } }
+          ? {
+              providers: { [providerId]: result.provider },
+              ...(result.outcomes ? { outcomes: result.outcomes } : {}),
+            }
           : result;
       },
     },
