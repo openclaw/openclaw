@@ -11,6 +11,7 @@ import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "../../agents/worktrees/capacity-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -132,36 +133,25 @@ it.each([
   const worktreeId = randomUUID();
   const database = openOpenClawStateDatabase({ env });
   const context = captureOpenClawStateWorkerContext({ env });
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let revoked = false;
   let aboutToUpdate = false;
   let retainedIdentity: OpenClawStateLeaseIdentity | undefined;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    (source, operation, options) =>
-      run(
-        source,
-        (worker) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (command.type === "localWorkspace.mutate" && aboutToUpdate) {
-                aboutToUpdate = false;
-                assert(retainedIdentity);
-                const changed = database.db
-                  .prepare(
-                    fault === "expired"
-                      ? "UPDATE state_leases SET expires_at = 0 WHERE scope = ? AND lease_key = ? AND owner = ?"
-                      : "UPDATE state_leases SET owner = 'synthetic-successor' WHERE scope = ? AND lease_key = ? AND owner = ?",
-                  )
-                  .run(retainedIdentity.scope, retainedIdentity.key, retainedIdentity.owner);
-                expect(changed.changes).toBe(1);
-                revoked = true;
-              }
-              return worker.execute(command, executeOptions);
-            },
-          }),
-        options,
-      ),
-  );
+  probe.command(stateWorker, async (command, executeOptions, worker) => {
+    if (command.type === "localWorkspace.mutate" && aboutToUpdate) {
+      aboutToUpdate = false;
+      assert(retainedIdentity);
+      const changed = database.db
+        .prepare(
+          fault === "expired"
+            ? "UPDATE state_leases SET expires_at = 0 WHERE scope = ? AND lease_key = ? AND owner = ?"
+            : "UPDATE state_leases SET owner = 'synthetic-successor' WHERE scope = ? AND lease_key = ? AND owner = ?",
+        )
+        .run(retainedIdentity.scope, retainedIdentity.key, retainedIdentity.owner);
+      expect(changed.changes).toBe(1);
+      revoked = true;
+    }
+    return worker.execute(command, executeOptions);
+  });
   try {
     await expect(
       withOpenClawStateLeaseAsync(
@@ -201,27 +191,15 @@ it("adopts native committed facts after reply loss without replaying the mutatio
   await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
     store.create(localWorkspaceProjectionFixture(worktreeId, root)),
   );
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const lostReply = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "localWorkspace.mutate") {
-                writes += 1;
-                throw new Error("Synthetic local workspace reply lost after native commit");
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "localWorkspace.mutate") {
+      writes += 1;
+      throw new Error("Synthetic local workspace reply lost after native commit");
+    }
+    return result;
+  });
   const pendingRef = "refs/openclaw/results/accepted";
   const acknowledged = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
     const row = await store.update(store.get()!, { pending_ref: pendingRef });

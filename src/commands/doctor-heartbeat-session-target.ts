@@ -27,10 +27,7 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
   const warnings: string[] = [];
   const sessionScope = cfg.session?.scope ?? "per-sender";
   for (const { agentId, heartbeat: heartbeatConfig } of resolveHeartbeatAgents(cfg)) {
-    if (!heartbeatConfig) {
-      continue;
-    }
-    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
+    if (!heartbeatConfig || !resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
       continue;
     }
     const configuredSession = normalizeOptionalString(heartbeatConfig.session);

@@ -7,6 +7,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -190,17 +191,13 @@ describe("worker placement workspace journal", () => {
     const journal = await store.loadWorkspaceReconciliation(owner);
     assert(journal, "expected journal");
     await store.abortWorkspaceReconciliation(owner);
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let revoked = false;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            revoked = true;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        revoked = true;
+      }
+      admit(request, grant);
+    });
     await expect(
       store.beginWorkspaceReconciliation(owner, journal, () => {
         if (revoked) {

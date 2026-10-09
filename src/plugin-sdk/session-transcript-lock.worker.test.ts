@@ -30,6 +30,7 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import { createGatewayMetadataCloseFixture } from "../gateway/server-close.metadata.test-support.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -134,26 +135,21 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
     let current = true;
     let inCommit = false;
     let checkedCommit = false;
-    const create = admission.createSqliteWorkerOperationAdmission;
-    using _ = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((authorize, attachment) =>
-        create((request, grant) => {
-          const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-          inCommit =
-            request.stage === "commit" &&
-            isRecord(publication) &&
-            publication.kind === "session-entry-patch-committed";
-          if (inCommit) {
-            current = false;
-          }
-          try {
-            authorize(request, grant);
-          } finally {
-            inCommit = false;
-          }
-        }, attachment),
-      );
+    using _ = probe.admission(admission, (request, grant, authorize) => {
+      const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+      inCommit =
+        request.stage === "commit" &&
+        isRecord(publication) &&
+        publication.kind === "session-entry-patch-committed";
+      if (inCommit) {
+        current = false;
+      }
+      try {
+        authorize(request, grant);
+      } finally {
+        inCommit = false;
+      }
+    });
     const guard = composeSessionTranscriptWriteAssertion([], () => {
       checkedCommit ||= inCommit;
       if (!current) {

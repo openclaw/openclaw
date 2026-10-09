@@ -81,6 +81,39 @@ const PRIORITY_MESSAGE_CLASSIFIERS: ReadonlyArray<
   // Groq does not currently ship a bundled provider hook.
   [(raw) => /model(?:_is)?_deactivated|model has been deactivated/i.test(raw), "model_not_found"],
 ];
+
+const GENERAL_MESSAGE_CLASSIFIERS: ReadonlyArray<
+  readonly [(raw: string) => boolean, FailoverReason]
+> = [
+  [isRateLimitErrorMessage, "rate_limit"],
+  [isOverloadedErrorMessage, "overloaded"],
+  // A provider-completed error is not a hang; preserve server-error copy and failover.
+  [isProviderCompletedErrorFinishReasonMessage, "server_error"],
+  [
+    (raw) =>
+      isStructuredServerErrorMessage(raw) &&
+      !isBillingErrorMessage(raw) &&
+      !isAuthPermanentErrorMessage(raw) &&
+      !isAuthErrorMessage(raw),
+    "server_error",
+  ],
+  [isGenericProviderInternalError, "timeout"],
+  // Auth precedes broad api_error matching, which can also wrap invalid credentials.
+  [(raw) => Boolean(classifyOAuthRefreshFailure(raw)?.reason), "auth_permanent"],
+  [isAuthPermanentErrorMessage, "auth_permanent"],
+  [isAuthErrorMessage, "auth"],
+  [
+    (raw) =>
+      isGenericUnknownStreamErrorMessage(raw) ||
+      isServerErrorMessage(raw) ||
+      isJsonApiInternalServerError(raw),
+    "timeout",
+  ],
+  [isCloudCodeAssistFormatError, "format"],
+  [isExactUnknownNoDetailsError, "no_error_details"],
+  [isTimeoutErrorMessage, "timeout"],
+  [(raw) => matchesContextOverflowMessage(raw, "assistant-error"), "context_overflow"],
+];
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
   return (
     status === 408 ||
@@ -119,61 +152,11 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  if (isRateLimitErrorMessage(raw)) {
-    return toReasonClassification("rate_limit");
-  }
-  if (isOverloadedErrorMessage(raw)) {
-    return toReasonClassification("overloaded");
-  }
-  // Provider-completed `finish_reason: error` / stop-reason `error` is not a
-  // hang. Classify as server_error (failover still runs) so operators do not
-  // chase timeout knobs and user copy is not rewritten to "LLM request timed out."
-  // (#109218; keep #59524 fallback by remaining a failover reason).
-  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
-    return toReasonClassification("server_error");
-  }
-  if (
-    isStructuredServerErrorMessage(raw) &&
-    !isBillingErrorMessage(raw) &&
-    !isAuthPermanentErrorMessage(raw) &&
-    !isAuthErrorMessage(raw)
-  ) {
-    return toReasonClassification("server_error");
-  }
-  if (isGenericProviderInternalError(raw)) {
-    return toReasonClassification("timeout");
-  }
-  // Auth classifiers run before the broad isJsonApiInternalServerError check so that
-  // provider errors like {"type":"api_error","message":"invalid api key"} are
-  // correctly classified as "auth" rather than "timeout".
-  const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
-  if (oauthRefreshFailure?.reason) {
-    return toReasonClassification("auth_permanent");
-  }
-  if (isAuthPermanentErrorMessage(raw)) {
-    return toReasonClassification("auth_permanent");
-  }
-  if (isAuthErrorMessage(raw)) {
-    return toReasonClassification("auth");
-  }
-  if (
-    isGenericUnknownStreamErrorMessage(raw) ||
-    isServerErrorMessage(raw) ||
-    isJsonApiInternalServerError(raw)
-  ) {
-    return toReasonClassification("timeout");
-  }
-  if (isCloudCodeAssistFormatError(raw)) {
-    return toReasonClassification("format");
-  }
-  if (isExactUnknownNoDetailsError(raw)) {
-    return toReasonClassification("no_error_details");
-  }
-  if (isTimeoutErrorMessage(raw)) {
-    return toReasonClassification("timeout");
-  }
-  if (matchesContextOverflowMessage(raw, "assistant-error")) {
-    return { kind: "context_overflow" };
+  const generalReason = GENERAL_MESSAGE_CLASSIFIERS.find(([matches]) => matches(raw))?.[1];
+  if (generalReason) {
+    return generalReason === "context_overflow"
+      ? { kind: "context_overflow" }
+      : toReasonClassification(generalReason);
   }
   // Inspect raw and SDK-preserved types before the generic HTTP fallback, but
   // after more-specific text so invalid-request wrappers cannot hide an outage.

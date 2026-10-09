@@ -163,10 +163,12 @@ export async function resolveAgentRunSessionTarget(
         })
       : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
     : undefined;
-  const lookupAgentId =
+  const fixedAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
     legacyMarker?.agentId ??
-    configuredStoreResolution?.agentId ??
+    configuredStoreResolution?.agentId;
+  const lookupAgentId =
+    fixedAgentId ??
     resolveSessionAgentId({
       agentId: targetAgentId ?? params.agentId,
       config,
@@ -193,13 +195,7 @@ export async function resolveAgentRunSessionTarget(
     params.missingSessionKey === "create"
       ? toAgentStoreSessionKey({ agentId: lookupAgentId, requestKey: sessionId })
       : undefined;
-  const sessionKey =
-    targetSessionKey ??
-    suppliedSessionKey ??
-    compatibilitySessionKey ??
-    markerSessionKey ??
-    storedSessionKey ??
-    createdSessionKey;
+  const sessionKey = preliminarySessionKey ?? storedSessionKey ?? createdSessionKey;
   const suppliedKeyAgentId = parseAgentSessionKey(suppliedSessionKey)?.agentId;
   const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
   const candidateMarkerKey = targetSessionKey ?? suppliedSessionKey;
@@ -232,9 +228,7 @@ export async function resolveAgentRunSessionTarget(
     throw new AgentRunSessionTargetResolutionError(sessionId);
   }
   const effectiveAgentId =
-    (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
-    legacyMarker?.agentId ??
-    configuredStoreResolution?.agentId ??
+    fixedAgentId ??
     resolveSessionAgentId({
       agentId: targetAgentId ?? params.agentId,
       config,

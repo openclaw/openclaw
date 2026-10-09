@@ -47,18 +47,17 @@ export async function runStartupConfigPreflight(
 }
 
 function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
-  const warnings: string[] = [];
   try {
     assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
+    return [];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    warnings.push(
+    return [
       error instanceof RetiredStateFormatError && error.cause === undefined
         ? `Retired runtime state was left unchanged for Doctor; no import was attempted. ${message}`
         : `Could not inspect retired runtime state: ${message}; run openclaw doctor`,
-    );
+    ];
   }
-  return warnings;
 }
 
 async function prepareStartupConfig(
