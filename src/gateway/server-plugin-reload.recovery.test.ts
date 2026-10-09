@@ -57,7 +57,10 @@ import {
   verifyGatewayCleanupRefusal,
   verifyPendingServiceCleanupRollback,
 } from "./server-plugin-reload.managed-candidate.test-support.js";
-import { verifyGatewayMemoryReplacement } from "./server-plugin-reload.memory.test-support.js";
+import {
+  verifyGatewayMemoryReplacement,
+  verifyGatewayMemoryWatcherRestart,
+} from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
   createPluginReloadRecoveryFixture,
@@ -305,6 +308,12 @@ it("keeps another agent's decision request live across a default selection chang
 it.each(["held-close", "failed-close"] as const)(
   "drains retained memory before Gateway provider replacement (%s)",
   (mode) => verifyGatewayMemoryReplacement(createRecoveryFixture, mode),
+);
+
+it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
+  "restarts retained memory watchers after provider-only reload (%s)",
+  (providerState, { signal }) =>
+    verifyGatewayMemoryWatcherRestart(createRecoveryFixture, providerState, signal),
 );
 
 it.each(["retry", "shutdown"] as const)(

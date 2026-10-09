@@ -162,7 +162,9 @@ When Memory Core owns the memory slot, its Gateway service opens each configured
 agent's memory manager at startup and after plugin replacement. Watched file
 changes can then update the index without a search or agent turn. Retiring an
 instance closes its managers, including file watchers, timers, and session
-listeners. Memory Core running only as another memory plugin's consolidation
+listeners. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. Memory Core running only as another memory plugin's consolidation
 sidecar does not start these indexes automatically.
 
 When the index identity reports an OpenClaw chunking-implementation change,
