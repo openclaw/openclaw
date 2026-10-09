@@ -216,7 +216,12 @@ export class RequestClient {
       const response = this.guardedEndpoint
         ? await effect.run(request)
         : await effect.initiate(request);
-      const text = await readResponseBodyText(response, this.options.timeout);
+      const text = await readResponseBodyText(response, this.options.timeout).catch((error) => {
+        if (response.ok) {
+          throw error;
+        }
+        return "";
+      });
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
