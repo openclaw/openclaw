@@ -2325,7 +2325,6 @@
 ["src/agents/command/session-preparation.test.ts","../embedded-agent-runner/runs.js","dcb1cdf566df7dc9ff32af7bbf98be94c0ba246981698e144e9187274e1db8e5",1]
 ["src/agents/command/session-preparation.test.ts","../subagents/registry/subagent-registry-read.js","97238c5416e34f6dcbe757af5ddd49cad35e9a75a1b25b4925281aaf39b6db99",1]
 ["src/agents/command/session-preparation.test.ts","./attempt-execution.shared.js","3ae2f19948af7192d4802cd90adef1f6e0904b12187388bff03d38b59b991c67",1]
-["src/agents/command/session-preparation.test.ts","./run-context.js","c21b154eedb071107ea7a6f71331738d537fe74f24299ecf9ab08c5be00dfbee",1]
 ["src/agents/command/session-preparation.test.ts","./runtime-loaders.js","d323b42ebbe054ffea95a4a7b05fd7bdfe0892b836da3893ee09ac78cd884062",1]
 ["src/agents/command/session-store.test.ts","../model-selection.js","c16be4a7bfe9a4c152cedc014045af71c6abc4ed84bb1a48843abc7df26b0d03",1]
 ["src/agents/command/session.provider-owned-reset.test.ts","../../config/sessions/paths.js","9bdbebf60f9318331f5810c1cc0cca8d6664534ab6ee7d62d1617836bdb20a79",1]
