@@ -1,7 +1,4 @@
-import {
-  resolveWorkerPoolSize,
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
-} from "../../infra/worker-pool-sizing.js";
+import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
@@ -16,12 +13,12 @@ import type {
   SessionSqliteTargetWorkerInput,
 } from "./session-transcript-worker.types.js";
 
-// Callers retain writer admission and validate snapshots before consuming parallel reads.
+// Preserve model-context admission order through worker completion.
 const modelContextReads = createSessionTranscriptReadPool<
   | SessionModelContextWorkerInput
   | SessionSqliteTargetWorkerInput
   | SessionContextMessagesWorkerInput
->(SESSION_TRANSCRIPT_FOREGROUND_WORKERS);
+>(resolveWorkerPoolSize("singleton"));
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<

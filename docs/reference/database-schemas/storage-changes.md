@@ -1314,11 +1314,13 @@ No schema, stored format, migration, or updater behavior changes.
 
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
-foreground context queue. Foreground history and model-context pools each use up
-to eight read-only workers, each capped at half the host computation budget
-(rounded up). A single-CPU host keeps one worker in each pool. Each worker
-retains its own SQLite connections and snapshots; writer admission and final
-snapshot validation preserve ordered reads. Database closure joins every reader
+foreground context queue. Model-context reads use one worker so accepted requests
+complete in admission order. Foreground history uses up to eight read-only workers,
+capped at half the host computation budget (rounded up). Each worker retains its
+own SQLite connections and snapshots; writer admission and final snapshot validation
+remain in place. Usage refresh acquisition joins the writer FIFO before reading
+its lock, so reader cleanup cannot let a later contender acquire first. Refresh
+status reads remain independent of writer admission. Database closure joins every reader
 in the pool, and idle retirement releases their retained state. Background
 maintenance, exports, and SQLite writers keep their existing capacity. No schema,
 stored format, or update migration changes are required.

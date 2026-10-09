@@ -25,7 +25,10 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../state/openclaw-agent-write-admission.js";
 import type { SessionCostUsageCacheRead } from "./session-cost-usage-cache-read.js";
 import {
   acquireSessionCostUsageRefreshLockInDatabase,
@@ -346,7 +349,8 @@ export function prepareSessionCostUsageRefreshLock(
       if (closed) {
         return Promise.reject(new Error("Usage cache refresh owner is closed"));
       }
-      acquiring ??= (async () => {
+      // Reserve FIFO before the lock read can wait for worker eviction cleanup.
+      acquiring ??= runOpenClawAgentWriteAdmission(options, async () => {
         owner?.assertCurrent?.();
         const previousRaw = await readRefreshLock(options);
         const previousLock = parseRefreshLock(previousRaw);
@@ -374,7 +378,7 @@ export function prepareSessionCostUsageRefreshLock(
         );
         mayOwnLock = acquired;
         return acquired;
-      })();
+      });
       return acquiring;
     },
     release,
