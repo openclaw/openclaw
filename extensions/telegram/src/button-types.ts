@@ -13,6 +13,7 @@ import {
   resolveAskUserQuestionOptionIndex,
   type AskUserQuestionOptionIndices,
 } from "openclaw/plugin-sdk/reply-payload";
+import { z } from "zod";
 import {
   buildTelegramApprovalCallbackData,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
@@ -30,25 +31,31 @@ import {
   hasTelegramQuestionCallbackPrefix,
 } from "./question-callback-data.js";
 
-export type TelegramButtonStyle = "danger" | "success" | "primary";
+const TelegramInlineButtonSchema = z.object({
+  text: z.string(),
+  callback_data: z.string().optional(),
+  url: z.string().optional(),
+  web_app: z.object({ url: z.string() }).optional(),
+  style: z.enum(["danger", "success", "primary"]).optional(),
+});
+const TelegramInlineButtonsSchema = z.array(z.array(TelegramInlineButtonSchema));
+
+type TelegramInlineButton = z.infer<typeof TelegramInlineButtonSchema>;
+export type TelegramButtonStyle = NonNullable<TelegramInlineButton["style"]>;
 
 export function normalizeTelegramButtonStyle(style: unknown): TelegramButtonStyle | undefined {
   return style === "danger" || style === "success" || style === "primary" ? style : undefined;
 }
-
-type TelegramInlineButton = {
-  text: string;
-  callback_data?: string;
-  url?: string;
-  web_app?: { url: string };
-  style?: TelegramButtonStyle;
-};
 
 export type TelegramCallbackButton = Pick<TelegramInlineButton, "text" | "style"> & {
   callback_data: string;
 };
 
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
+
+function isTelegramInlineButtons(value: unknown): value is TelegramInlineButtons {
+  return TelegramInlineButtonsSchema.safeParse(value).success;
+}
 
 export type TelegramDroppedControl = {
   label: string;
@@ -233,13 +240,15 @@ export function buildTelegramPresentationButtons(
 /** Resolve Telegram inline buttons, preserving explicit and legacy button precedence. */
 export function resolveTelegramInlineButtons(
   params: {
-    buttons?: TelegramInlineButtons;
+    buttons?: unknown;
     presentation?: unknown;
     interactive?: unknown;
   },
   options?: TelegramButtonBuildOptions,
 ): TelegramInlineButtons | undefined {
-  if (params.buttons) {
+  if (isTelegramInlineButtons(params.buttons)) {
+    // Validate opaque channel metadata without cloning away native button fields
+    // or changing callback bytes, row order, or explicit-button precedence.
     return params.buttons;
   }
 

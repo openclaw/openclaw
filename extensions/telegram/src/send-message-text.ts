@@ -9,6 +9,7 @@ import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
+import type { TelegramRichLocalMedia } from "./rich-local-media.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
@@ -36,6 +37,9 @@ export type TelegramDeliveryReporter = (
 type SendTextOptions = {
   replyToAlreadyUsed?: boolean;
   beforeFirstAccepted?: () => Promise<void>;
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
+  /** Receives local uploads a rich-to-plain fallback left undelivered. */
+  onRichLocalMediaDegraded?: (media: readonly TelegramRichLocalMedia[]) => void;
 };
 
 export function createTelegramTextSender(config: {
@@ -223,6 +227,7 @@ export function createTelegramTextSender(config: {
       tableMode,
       chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
+      richLocalMedia: options.richLocalMedia,
       skipEntityDetection: account.config.linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),
       warn: (message) => sendLogger.warn(message),
@@ -234,6 +239,11 @@ export function createTelegramTextSender(config: {
         tracking,
         drainFallback: true,
         observe: record,
+        onPlainFallback: (page) => {
+          if (page.richLocalMedia?.length) {
+            options.onRichLocalMediaDegraded?.(page.richLocalMedia);
+          }
+        },
         preparePage: (index) => ({
           requestParams: (fallback) => {
             const count = Math.max(pages.length, fallback?.count ?? pages.length);
