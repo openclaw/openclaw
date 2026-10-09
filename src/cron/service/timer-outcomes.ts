@@ -39,6 +39,7 @@ import {
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
   resolveDisabledHeartbeatOneShotRetryDecision,
+  holdsFailureNotificationForRetry,
   resolveTransientCronRetryDecision,
   shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
@@ -236,6 +237,9 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
+  // the failure alert/repair until that retry ladder resolves.
+  let pendingTransientRetry = false;
   const applyReplaySchedule = () => {
     const nextRunAtMs = job.state.autoDisabled ? undefined : opts.replaySchedule?.nextRunAtMs;
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
@@ -253,6 +257,7 @@ export function applyJobResult(
       result,
       completionStatus,
       autoDisableNotificationOwnsFailure,
+      pendingTransientRetry,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
@@ -320,6 +325,11 @@ export function applyJobResult(
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
           if (scheduleNextRun(result.endedAt + retryDecision.backoffMs) !== undefined) {
+            pendingTransientRetry = holdsFailureNotificationForRetry(
+              job,
+              result,
+              retryDecision.retryCategory,
+            );
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -408,6 +418,11 @@ export function applyJobResult(
             return finish();
           }
           if (retryNextRunAtMs < normalNext) {
+            pendingTransientRetry = holdsFailureNotificationForRetry(
+              job,
+              result,
+              retryDecision.retryCategory,
+            );
             state.deps.log.info(
               {
                 jobId: job.id,

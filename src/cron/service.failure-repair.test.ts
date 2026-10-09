@@ -1,6 +1,7 @@
 // Owner-conversation repair replaces the first failure alert of a streak.
 import { describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
   createTelegramDelivery,
   expectAlertTextContaining,
@@ -9,6 +10,7 @@ import {
 import { maybeEmitFailureAlert, resolveFailureAlert } from "./service/failure-alerts.js";
 import { markInterruptedStartupRun } from "./service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./service/state.js";
+import { applyJobResult } from "./service/timer-outcomes.js";
 import type { CronJob } from "./types.js";
 
 const { withFailureAlertCron } = setupFailureAlertSuite();
@@ -147,6 +149,114 @@ describe("CronService failure repair", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       },
     );
+  });
+
+  describe("provider outage quick retries", () => {
+    const hourly = { schedule: { kind: "every" as const, everyMs: 3_600_000 } };
+    const runDue = async (cron: Parameters<AlertParams[1]>[0]["cron"], jobId: string) => {
+      vi.setSystemTime(cron.getJob(jobId)?.state.nextRunAtMs ?? Date.now());
+      await cron.run(jobId, "due");
+    };
+
+    it.each([
+      { name: "owned", overrides: owned, repairs: 1, alerts: 0 },
+      {
+        name: "unowned",
+        overrides: { ...owned, owner: undefined },
+        repairs: 0,
+        alerts: 1,
+      },
+    ])(
+      "holds the $name notification until the quick retries are exhausted",
+      async ({ overrides, repairs, alerts }) => {
+        await withRepair(
+          async ({
+            cron,
+            runIsolatedAgentJob,
+            sendCronFailureAlert,
+            runCronFailureRepair,
+            addJob,
+          }) => {
+            runIsolatedAgentJob.mockResolvedValue({
+              status: "error",
+              error: "fetch failed: getaddrinfo EAI_AGAIN api.example.com",
+            });
+            const job = await addJob("outage sync", { ...overrides, ...hourly });
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+              await runDue(cron, job.id);
+            }
+            expect(cron.getJob(job.id)?.state).toMatchObject({ consecutiveErrors: 3 });
+            expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeDefined();
+            expect(runCronFailureRepair).not.toHaveBeenCalled();
+            expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+            await runDue(cron, job.id);
+            expect(runCronFailureRepair).toHaveBeenCalledTimes(repairs);
+            expect(sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
+            if (repairs) {
+              expect(runCronFailureRepair.mock.calls[0]?.[0]?.message).toContain("failed 4");
+            }
+          },
+        );
+      },
+    );
+
+    it("clears a held outage silently when a quick retry succeeds", async () => {
+      await withRepair(
+        async ({
+          cron,
+          runIsolatedAgentJob,
+          sendCronFailureAlert,
+          runCronFailureRepair,
+          addJob,
+        }) => {
+          runIsolatedAgentJob.mockResolvedValue({
+            status: "error",
+            error: "HTTP 503 Service Unavailable",
+          });
+          const job = await addJob("blip sync", { ...owned, ...hourly });
+          await runDue(cron, job.id);
+          await runDue(cron, job.id);
+          runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
+          await runDue(cron, job.id);
+          expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
+          expect(runCronFailureRepair).not.toHaveBeenCalled();
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it.each([
+      {
+        name: "provider ECONNREFUSED (classified as timeout)",
+        result: { error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443" },
+        expected: [],
+      },
+      {
+        name: "cron execution watchdog timeout",
+        result: { error: "cron: job execution timed out" },
+        expected: ["failure-repair"],
+      },
+      {
+        name: "helper script timeout",
+        result: { error: "script failure", ...cronScriptFailureMetadata("payload", "timeout") },
+        expected: ["failure-repair"],
+      },
+    ])("second failure from $name requests: $expected", ({ result, expected }) => {
+      const { state, job, deferredNotifications } = repairPolicyFixture({
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: runningAtMs },
+        state: { consecutiveErrors: 1 },
+      });
+      applyJobResult(
+        state,
+        job,
+        { status: "error", startedAt: runningAtMs, endedAt: runningAtMs + 1_000, ...result },
+        { deferredNotifications },
+      );
+      expect(job.state).toMatchObject({ consecutiveErrors: 2, lastErrorReason: "timeout" });
+      expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+    });
   });
 
   it("alerts on the next failure when the repair request fails", async () => {
