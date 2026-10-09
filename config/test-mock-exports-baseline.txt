@@ -5193,7 +5193,6 @@
 ["src/cli/update-cli/status.test.ts","../../daemon/service-audit.js","655a803026ac436cfcde5fe93cbbbbe4ca09a29fb41cb3dc185037fa86ed6d28",1]
 ["src/cli/update-cli/status.test.ts","../../daemon/service.js","7606b7fe0125874d8543b29bba660c25f8abd9724dfa466da96c50b4d2c8ad58",1]
 ["src/cli/update-cli/status.test.ts","../../gateway/call.js","35ab1e2b30c8cb44553036ae7d9afb8676b84f0339e9739b63d8c24551b57668",1]
-["src/cli/update-cli/status.test.ts","../daemon-cli/restart-health-probe.js","767e20baa2bfabc47aebd5e1fc2f615d291c9cf7d183a0b19dd54b323fa9772b",1]
 ["src/cli/update-cli/update-command-admission-schema.test.ts","../../daemon/service.js","f634844c178e54e00c9183c3499923645fd8cda45b8914463ab14076594fb3dd",1]
 ["src/cli/update-cli/update-command-candidate-exit.test.ts","../../daemon/service-process-membership.js","12e959313b07eebf55b135a4463e1166cd5d753534c1c2cd9e1fedffac288076",1]
 ["src/cli/update-cli/update-command-candidate-exit.test.ts","../../infra/update-candidate-canary.js","83031d823c7a79d8cc3baef9cd2d8f83f60240c4c5ee533ceadbf8ff2c8ab672",1]
