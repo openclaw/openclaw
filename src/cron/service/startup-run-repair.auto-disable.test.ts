@@ -121,7 +121,7 @@ describe("startup run repair auto-disable", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main" }, { id: "other" }],
+        entries: { main: {}, other: {} },
       },
     };
     const sessionKey =

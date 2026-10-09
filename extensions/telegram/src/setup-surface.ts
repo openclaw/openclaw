@@ -17,6 +17,7 @@ import {
   getTelegramTokenHelpLines,
   getTelegramUserIdHelpLines,
   parseTelegramAllowFromId,
+  resolveTelegramAllowFromEntries,
   telegramSetupAdapter,
 } from "./setup-core.js";
 import {
@@ -41,10 +42,10 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 10,
     resolveConfigured: ({ cfg, accountId }) =>
-      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
-        return account.configured;
-      }),
+      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some(
+        (resolvedAccountId) =>
+          inspectTelegramAccount({ cfg, accountId: resolvedAccountId }).configured,
+      ),
   }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
@@ -83,11 +84,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: t("wizard.telegram.allowFromInvalid"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
-      }),
+    resolveEntries: resolveTelegramAllowFromEntries,
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({
         cfg,

@@ -1,8 +1,8 @@
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { readHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
-  observeOutboxRecoveryOwner,
   outboxPayloadMatchesOwner,
   outboxStorageScope,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
@@ -70,7 +70,6 @@ export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
 export { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 export { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 export type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
-export type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 
 export type { ChatComposerDraftRetry } from "../../lib/chat/chat-types.ts";
 
@@ -295,7 +294,7 @@ export function admitStoredChatComposerQueueItemResult(
   if (
     !storage ||
     !captured.scope.sessionKey.trim() ||
-    captured.owner !== observeOutboxRecoveryOwner(state) ||
+    captured.owner !== readOfflineStorageScope(state) ||
     captured.gatewayOwner !== storageTargetForComposer(state).gatewayOwner
   ) {
     return "storage-failed";
@@ -491,7 +490,7 @@ export function restoreChatComposerState(
     (!options.preserveCurrent ||
       (!state.chatMessage && !state.chatGoalDraftMode && !state.chatReplyTarget))
   ) {
-    state.chatMessage = normalizeChatComposerDraft(snapshot.draft);
+    state.chatMessage = snapshot.draft;
     state.chatMentions = snapshot.mentions;
     state.chatGoalDraftMode = snapshot.goalMode ?? null;
     state.chatReplyTarget = snapshot.replyTarget ?? null;

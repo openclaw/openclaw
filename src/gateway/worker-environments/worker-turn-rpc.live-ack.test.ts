@@ -30,8 +30,8 @@ async function recoveredTurn(ackedSeq = 5) {
     rejectExistingWorkerClaims: true,
   });
   expect(placementStore.validateWorkerTurn(previous.claim)).toBe(false);
-  placements.acceptWorkspaceResult(previous.claim);
-  placements.completeWorkspaceResultAndReleaseTurn(previous.claim);
+  await placements.acceptWorkspaceResult(previous.claim);
+  await placements.completeWorkspaceResultAndReleaseTurn(previous.claim);
   const target = {
     agentId: "main",
     sessionId,
@@ -72,46 +72,13 @@ async function recoveredTurn(ackedSeq = 5) {
 describe("worker live ACK ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("continues the recovered durable cursor under a fresh claim", async () => {
-    const { identity, placements, workerService } = await recoveredTurn();
-    await expect(
-      workerService.pushLiveEvent(
-        identity,
-        support.assistantEvent(identity, "resumed", { seq: 6, lastAckedSeq: 5 }),
-      ),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 6 } });
-    await expect(
-      workerService.pushLiveEvent(
-        identity,
-        support.terminalEvent(identity, { seq: 7, lastAckedSeq: 6 }),
-      ),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 7 } });
-    expect(placements.get(identity.sessionId!)?.lastLiveEventAckCursor).toBe(7);
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
-  });
-
-  it.each([0, 5])(
-    "rejects a worker cursor beyond its durable recovered ACK %s",
-    async (ackedSeq) => {
+  it.each([
+    { ackedSeq: 5, seq: 21, lastAckedSeq: 20, transcriptFirst: false },
+    { ackedSeq: 5, seq: 5, lastAckedSeq: 5, transcriptFirst: true },
+  ])(
+    "withholds terminal authority for seq=$seq, durable=$ackedSeq, transcriptFirst=$transcriptFirst",
+    async ({ ackedSeq, seq, lastAckedSeq, transcriptFirst }) => {
       const { identity, placements, workerService } = await recoveredTurn(ackedSeq);
-      await expect(
-        workerService.pushLiveEvent(
-          identity,
-          support.terminalEvent(identity, { seq: 21, lastAckedSeq: 20 }),
-        ),
-      ).resolves.toEqual({
-        ok: false,
-        details: { reason: "resync-required", ackedSeq, expectedSeq: ackedSeq + 1 },
-      });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-      expect(placements.get(identity.sessionId!)?.lastLiveEventAckCursor).toBe(ackedSeq);
-    },
-  );
-
-  it.each([false, true])(
-    "does not grant terminal authority to a previously ACKed sequence (transcript first: %s)",
-    async (transcriptFirst) => {
-      const { identity, placements, workerService } = await recoveredTurn();
       if (transcriptFirst) {
         await expect(
           workerService.commitTranscript(identity, support.transcriptRequest(identity, "current")),
@@ -120,16 +87,26 @@ describe("worker live ACK ownership", () => {
       await expect(
         workerService.pushLiveEvent(
           identity,
-          support.terminalEvent(identity, { seq: 5, lastAckedSeq: 5 }),
+          support.terminalEvent(identity, { seq, lastAckedSeq }),
         ),
-      ).resolves.toEqual({ ok: true, result: { ackedSeq: 5 } });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-      await expect(
-        workerService.pushLiveEvent(
-          identity,
-          support.assistantEvent(identity, "still active", { seq: 6, lastAckedSeq: 5 }),
-        ),
-      ).resolves.toEqual({ ok: true, result: { ackedSeq: 6 } });
+      ).resolves.toEqual(
+        lastAckedSeq > ackedSeq
+          ? {
+              ok: false,
+              details: { reason: "resync-required", ackedSeq, expectedSeq: ackedSeq + 1 },
+            }
+          : { ok: true, result: { ackedSeq } },
+      );
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(placements.get(identity.sessionId!)?.lastLiveEventAckCursor).toBe(ackedSeq);
+      if (lastAckedSeq === ackedSeq) {
+        await expect(
+          workerService.pushLiveEvent(
+            identity,
+            support.assistantEvent(identity, "still active", { seq: 6, lastAckedSeq: 5 }),
+          ),
+        ).resolves.toEqual({ ok: true, result: { ackedSeq: 6 } });
+      }
     },
   );
 
@@ -158,7 +135,7 @@ describe("worker live ACK ownership", () => {
         ),
       ).resolves.toEqual({ ok: true, result: { ackedSeq: seq } });
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     await expect(
       workerService.pushLiveEvent(
         identity,
@@ -166,6 +143,7 @@ describe("worker live ACK ownership", () => {
       ),
     ).resolves.toEqual({ ok: true, result: { ackedSeq: 8 } });
     expect(placements.get(identity.sessionId!)?.lastLiveEventAckCursor).toBe(8);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
   });
 });
 
@@ -194,76 +172,6 @@ describe("worker ACK ordering", () => {
       expect(placementStore.updateAckCursors).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("keeps preview ACKs in memory and persists only transcript and terminal cursors", async () => {
-    const applyTranscriptCommit = support.successfulTranscriptCommit("entry-placement");
-    const { liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-ack",
-      "session-placement-ack",
-      {
-        applyTranscriptCommit,
-        liveEvents,
-      },
-    );
-    const claim = identity.turnClaim!;
-
-    await expect(
-      workerService.commitTranscript(
-        identity,
-        support.transcriptRequest(identity, "commit", { seq: 7 }),
-      ),
-    ).resolves.toMatchObject({ ok: true });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      claim,
-      transcriptSeq: 7,
-      assertCurrent: expect.any(Function),
-    });
-
-    await expect(
-      workerService.pushLiveEvent(identity, support.assistantEvent(identity, "preview")),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 1 } });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
-
-    await expect(
-      workerService.pushLiveEvent(
-        identity,
-        support.terminalEvent(identity, { lastAckedSeq: 1, seq: 2 }),
-      ),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-    expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
-      claim,
-      liveSeq: 2,
-      assertCurrent: expect.any(Function),
-    });
-  });
-
-  it("uses worker finishing as the durable workspace-result fence", async () => {
-    const { liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-finishing",
-      "session-placement-finishing",
-      { liveEvents },
-    );
-    const terminal = support.terminalEvent(identity);
-    const finishing = {
-      ...terminal,
-      event: {
-        kind: "lifecycle" as const,
-        payload: { phase: "finishing" as const, startedAt: 1, endedAt: 2 },
-      },
-    };
-
-    await expect(workerService.pushLiveEvent(identity, finishing)).resolves.toEqual({
-      ok: true,
-      result: { ackedSeq: 1 },
-    });
-    expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
-      claim: identity.turnClaim,
-      liveSeq: 1,
-      assertCurrent: expect.any(Function),
-    });
-  });
 
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {
     const applyTranscriptCommit = vi

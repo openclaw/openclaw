@@ -3,6 +3,7 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -24,6 +25,7 @@ import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
+  prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -186,6 +188,8 @@ it("reuses native thinking observations across messages and refreshes invalidate
 
 it("reuses published native facts without renewing providers during warm API and native turns", async () => {
   const { input, owner, b, loadA, loadB } = await fixture();
+  // Settle startup's full acquisition so the refresh below discovers the new provider rows.
+  await owner.loadFullModelCatalog!();
   const api = { provider: "provider-c", id: "model", name: "API model" };
   setProviderCatalog([api]);
   await owner.loadFullModelCatalog!({ refresh: true });
@@ -643,4 +647,84 @@ it("does not publish a pending native refresh after its owner is replaced", asyn
   }
   await refresh;
   expect(owner.isCurrent()).toBe(false);
+});
+
+it("renews native observations without retaining harness-only host projections", async () => {
+  const provider = "custom";
+  const native = { provider, id: "native", name: "Native", nativeRuntime: "fixture-native" };
+  const host = { provider, id: "host-only", name: "Host only" };
+  const api = { provider, id: "api", name: "API" };
+  const profile = {
+    type: "oauth" as const,
+    provider,
+    accountId: "fixture-account",
+    access: "before",
+    refresh: "before-refresh",
+    expires: 1_900_000_000_000,
+  };
+  const setProfile = (value: typeof profile) => {
+    mocks.preparedAuthStore = { version: 1, profiles: { "custom:default": value } };
+    const { provider: _provider, accountId: _accountId, ...credential } = value;
+    mocks.authStorage.getAll.mockReturnValue({ custom: credential });
+  };
+  setProfile(profile);
+  const load = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => [native, host]);
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "fixture-native",
+      source: "fixture",
+      harness: {
+        id: "fixture-native",
+        label: "Fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        loadModelCatalog: load,
+      },
+    });
+    return registry;
+  });
+  mocks.configuredAgentIds = ["default"];
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+    entries: [api],
+    routeVariants: [api],
+    providerOutcomes: [{ provider, status: "ready" }],
+  }));
+  const input = runtimeFixture.agentInput("default", {
+    agents: { defaults: { model: "custom/api" } },
+  });
+  const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+  await refreshPreparedModelRuntimeSnapshots(input.config, options);
+  const original = await prepareModelRuntimeSnapshot(input);
+  const initial = await original.loadFullModelCatalog!();
+  expect(initial.entries).toEqual(
+    expect.arrayContaining([native, host, api].map((entry) => expect.objectContaining(entry))),
+  );
+
+  const started = createDeferred();
+  const release = createDeferred<ModelCatalogEntry[]>();
+  load.mockImplementation(async () => {
+    started.resolve();
+    return release.promise;
+  });
+  setProfile({ ...profile, access: "after", refresh: "after-refresh" });
+  let discovery: Promise<unknown> | undefined;
+  try {
+    await refreshPreparedModelRuntimeSnapshots(input.config, options);
+    const renewed = await prepareModelRuntimeSnapshot(input);
+    discovery = renewed.loadFullModelCatalog!({ changedOnly: true });
+    await started.promise;
+    const pending = renewed.readFullModelCatalog!()!;
+    expect(pending.entries).toEqual(
+      expect.arrayContaining([native, api].map((entry) => expect.objectContaining(entry))),
+    );
+    expect(pending.entries).not.toContainEqual(expect.objectContaining(host));
+    expect(pending.routeVariants).not.toContainEqual(expect.objectContaining(host));
+    release.resolve([native, host]);
+    await discovery;
+    expect(renewed.readFullModelCatalog!()!.entries).toContainEqual(expect.objectContaining(host));
+  } finally {
+    release.resolve([native, host]);
+    await discovery;
+  }
 });

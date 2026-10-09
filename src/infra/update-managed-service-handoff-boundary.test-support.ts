@@ -226,7 +226,7 @@ export function createManagedServiceManagerBoundary({
           ${updaterScript}
         })().catch((error) => { console.error(error); process.exit(18); });`;
       }
-      if (run) {
+      if (run && options?.validationResult !== "child-result") {
         updaterScript = `void (async () => {
           ${ledgerRuntimeImport}
           ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "staging");
@@ -255,14 +255,17 @@ export function createManagedServiceManagerBoundary({
           receiptClientPath,
           `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };\n`,
         );
-        const continuation = options.validationResult
-          ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
-          : createManagedServiceActivationScript({
-              ...options,
-              sourceRuntimeImport,
-              statePath,
-              updaterScript,
-            });
+        const continuation =
+          options.validationResult === "child-result"
+            ? updaterScript
+            : options.validationResult
+              ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
+              : createManagedServiceActivationScript({
+                  ...options,
+                  sourceRuntimeImport,
+                  statePath,
+                  updaterScript,
+                });
         updaterScript = `
         void import(${JSON.stringify(pathToFileURL(receiptClientPath).href)}).then(({sendReceipt}) => {
         const validationFs = require("node:fs");
@@ -502,7 +505,7 @@ export function createManagedServiceManagerBoundary({
               : undefined;
             await fs.writeFile(validationReleasePath, "activate");
             if (selectedDriverPath) {
-              await waitForFile(statePath + ".park-prefix", 5_000);
+              await waitForFile(statePath + ".park-prefix", signal);
               await expect(pathExists(commandsPath)).resolves.toBe(false);
               expect(parent.exitCode).toBeNull();
               expect(parent.signalCode).toBeNull();
@@ -582,7 +585,8 @@ export function createManagedServiceManagerBoundary({
         const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
         expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
         await expect(pathExists(updaterPath)).resolves.toBe(
-          activated && !options.expireParentWhileStopPending,
+          (activated && !options.expireParentWhileStopPending) ||
+            options.validationResult === "child-result",
         );
       } else if (options?.parentExitTimeoutMs !== undefined) {
         const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);

@@ -1,5 +1,5 @@
-import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { nothing, render } from "lit";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "../../../lib/toast.ts";
 import {
@@ -98,6 +98,9 @@ async function mountComments(additional: ChatAttachment[] = []) {
 describe("comment actions outside the transcript", () => {
   it("keeps the controller idle across unchanged chat renders and updates when composition is disabled", async () => {
     const container = document.createElement("div");
+    onTestFinished(() => {
+      render(nothing, container);
+    });
     document.body.append(container);
     const props = createChatProps({ loading: true });
     render(renderChat(props), container);

@@ -1,13 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  ensureSqliteLibrarySelected,
-  getSqliteRuntimeCapabilities,
-} from "../infra/bun-sqlite-library.js";
-import {
   createRetainedOperation,
   flatMapRetainedOperation,
   type RetainedOperation,
-} from "../infra/retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -19,6 +19,7 @@ import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
 } from "../infra/worker-native-lifecycle.js";
+import { resolveStateReadWorkerCount } from "../infra/worker-pool-sizing.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -35,6 +36,7 @@ import type {
   OpenClawStateReadCommand,
   OpenClawStateReadLocation,
   OpenClawStateReadOutcome,
+  OpenClawStateReadOptions,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
@@ -152,7 +154,7 @@ function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
       {
         workerUrl: state.workerUrl,
         workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-        maxWorkers: 2,
+        maxWorkers: resolveStateReadWorkerCount(),
         idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
         maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
         maxPendingBytes: DEFAULT_WORKER_PENDING_BYTES,
@@ -208,8 +210,11 @@ export function captureOpenClawStateReadSource() {
   const state = runtime;
   const admitted = new Set<ReadOperation>();
   return {
-    createTransport: (command: OpenClawStateReadCommand) =>
-      createReadTransport(command, state, () => admitted.size > 0),
+    createTransport: (
+      command: OpenClawStateReadCommand,
+      onChunk?: OpenClawStateReadOptions["onChunk"],
+      onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
+    ) => createReadTransport(command, state, () => admitted.size > 0, onChunk, onChunkAsync),
     own(service: () => void, close: () => Promise<void>): () => void {
       if (state.sealed || state.closing) {
         throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
@@ -253,29 +258,23 @@ export function captureOpenClawStateReadSource() {
   };
 }
 
-function decodeTaskReply(reply: OpenClawStateReadReply): OpenClawStateReadOutcome {
-  if (reply.ok) {
-    return { value: reply };
-  }
-  const error = new Error(reply.message);
-  retainOpenClawStateWorkerErrorPayload(error, reply.error);
-  return {
-    error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
-    sourceAdmitted: reply.sourceAdmitted === true,
-  };
-}
-
 function createReadTransport(
   command: OpenClawStateReadCommand,
   state: ReadRuntime,
   ownsAdmission: () => boolean,
+  onChunk?: OpenClawStateReadOptions["onChunk"],
+  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
 ) {
+  if (onChunk && onChunkAsync) {
+    throw new Error("Shared-state reads require one stream consumer");
+  }
   // Capture nested input before the read owner can yield during snapshot preparation.
   const capturedCommand = captureCommand(command);
   type ReadTask = ReturnType<ReadPool["startTask"]>;
   const tasks = new Map<ReadTask, { retire: boolean; error?: Error }>();
   let closed = false;
   let closing: RetainedOperation<void> | undefined;
+  let pendingChunks = 0;
 
   const startCloseTask = (task: ReadTask): RetainedOperation<void> => {
     const inContext = AsyncLocalStorage.snapshot();
@@ -357,7 +356,16 @@ function createReadTransport(
           retainOpenClawStateWorkerErrorPayload(error, reply.nativeCleanupFailure.error);
           cleanup.error = hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
         }
-        outcome = decodeTaskReply(reply);
+        if (reply.ok) {
+          outcome = { value: reply };
+        } else {
+          const error = new Error(reply.message);
+          retainOpenClawStateWorkerErrorPayload(error, reply.error);
+          outcome = {
+            error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+            sourceAdmitted: reply.sourceAdmitted === true,
+          };
+        }
       } catch (error) {
         outcome = { error };
       }
@@ -373,6 +381,7 @@ function createReadTransport(
         context: {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -386,7 +395,38 @@ function createReadTransport(
           authority.assertCurrent();
           return request;
         },
-        { signal: authority.signal, inputBytes: requestBytes(request) },
+        {
+          signal: authority.signal,
+          inputBytes: requestBytes(request),
+          diagnosticOperation: readCommand.type,
+          ...(onChunkAsync
+            ? {
+                async onRequest(value: unknown, { signal: taskSignal }: { signal: AbortSignal }) {
+                  authority.assertCurrent();
+                  const signal = AbortSignal.any([authority.signal, taskSignal]);
+                  signal.throwIfAborted();
+                  pendingChunks += 1;
+                  try {
+                    await onChunkAsync(value, signal);
+                    signal.throwIfAborted();
+                    authority.assertCurrent();
+                    return { input: null, timeoutMs: 300_000 };
+                  } finally {
+                    pendingChunks -= 1;
+                    closing?.service();
+                  }
+                },
+              }
+            : onChunk
+              ? {
+                  onRequestSync(value: unknown) {
+                    authority.assertCurrent();
+                    onChunk(value);
+                    return { input: null, timeoutMs: 300_000 };
+                  },
+                }
+              : {}),
+        },
       );
       tasks.set(task, cleanup);
       void task.result.then(
@@ -446,7 +486,8 @@ function createReadTransport(
         return;
       }
       const errors: unknown[] = [];
-      let pending = false;
+      // Pool cancellation stops the worker, but an accepted host consumer still owns its data.
+      let pending = pendingChunks > 0;
       for (const release of releases) {
         release.service();
         const outcome = release.read();

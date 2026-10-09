@@ -1,8 +1,8 @@
 import { ZodError } from "zod";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrationCompletions,
-  readDeferredPluginMigrations,
   recordDeferredPluginMigrationsInTransaction,
   type DeferredPluginMigrationRecordInput,
 } from "../infra/deferred-plugin-migrations.js";
@@ -10,21 +10,60 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   readPluginBindingApprovalsInDatabase,
   upsertPluginBindingApprovalInDatabase,
 } from "./conversation-binding-state.kernel.js";
 import type { PluginBindingApprovalEntry } from "./conversation-binding-state.types.js";
-import { publishPluginSourceAdmissionInDatabase } from "./installed-plugin-index-store-write.js";
+import { withPluginInstallRoots } from "./install-root-context.js";
+import {
+  publishPluginSourceAdmissionInDatabase,
+  refreshPersistedInstalledPluginIndexWithLeaseSync,
+  type PreparedInstalledPluginIndexRefresh,
+} from "./installed-plugin-index-store-write.js";
 import {
   readHostedCatalogSnapshotInDatabase,
   writeHostedCatalogSnapshotInDatabase,
 } from "./official-external-plugin-catalog-snapshot-store.kernel.js";
 import { HostedCatalogSignedFeedMonotonicityError } from "./official-external-plugin-catalog-source.js";
 import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-external-plugin-catalog.types.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
 export const pluginRuntimeOperations = {
+  "plugins.metadata.index.refresh": (
+    input: { identity: OpenClawStateLeaseIdentity; prepared: PreparedInstalledPluginIndexRefresh },
+    { open },
+  ) => {
+    const { installRoots, nowMs, candidates, discovery, ...prepared } = input.prepared;
+    const restoreCandidates = (values: NonNullable<typeof candidates>) =>
+      values.map(({ candidate, installOwner, ambiguous }) =>
+        recordPluginCandidateInstallOwner(candidate, installOwner, ambiguous),
+      );
+    return withPluginInstallRoots(installRoots, () =>
+      withPluginCache(createPluginCache(), () => {
+        const database = open();
+        return refreshPersistedInstalledPluginIndexWithLeaseSync({
+          ...prepared,
+          env: cloneEnvWithPlatformSemantics(prepared.env),
+          candidates: candidates && restoreCandidates(candidates),
+          discovery: discovery && {
+            candidates: restoreCandidates(discovery.candidates),
+            diagnostics: discovery.diagnostics,
+          },
+          filePath: database.path,
+          database,
+          ...(nowMs !== undefined ? { now: () => new Date(nowMs) } : {}),
+          lease: {
+            assertOwnedInTransaction(db, stage = "transaction") {
+              assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity, "write", stage);
+            },
+          },
+        }).index;
+      }),
+    );
+  },
   "plugins.conversationBindingApprovals.read": (_input: undefined, { open }) =>
     readPluginBindingApprovalsInDatabase(open().db),
   "plugins.conversationBindingApprovals.upsert": (
@@ -91,14 +130,6 @@ export const pluginRuntimeOperations = {
       throw error;
     }
   },
-  "plugins.deferredMigrations.read": (
-    input: { artifactPreservingReadOnly: boolean },
-    { stateOptions },
-  ) =>
-    readDeferredPluginMigrations({
-      ...stateOptions(),
-      artifactPreservingReadOnly: input.artifactPreservingReadOnly,
-    }),
   "plugins.deferredMigrations.completions.read": (_input: undefined, { stateOptions }) =>
     readDeferredPluginMigrationCompletions(stateOptions()),
 } satisfies WorkerOperationHandlers;

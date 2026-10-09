@@ -1,6 +1,11 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import * as recoveryLifecycle from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import * as recoveryOwnerRelease from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
@@ -38,6 +43,7 @@ afterEach(async () => {
 });
 function createRecoveryGatewayContext() {
   const recoveryRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: vi.fn(),
     waitForAgent: vi.fn(),
@@ -74,7 +80,7 @@ function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
   const entry: SessionEntry = {
     sessionId,
     updatedAt: 100,
-    status: "running",
+    status: "interrupted",
     abortedLastRun: true,
     ...overrides,
   };
@@ -209,7 +215,9 @@ it("keeps deferred owner release retries from retaining a successor", async () =
 });
 
 it("settles a committed recovery claim without replay when preparation changes", async () => {
-  const f = recoveryFixture();
+  const f = recoveryFixture({
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+  });
   const predecessor = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   const claimed = createDeferred();
   const release = createDeferred();
@@ -282,7 +290,7 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
         expect(isCompetingSessionWorkAdmissionActive(f.storePath, [sessionKey, sessionId])).toBe(
           false,
         );
-        return runExclusiveSessionLifecycleMutation({
+        return runExclusiveSessionLifecycleMutation("recover", {
           ...f.scope,
           run: () =>
             f.write({
@@ -330,7 +338,6 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
 });
 
 it.each([
-  { kind: "visible", failed: false },
   { kind: "queued_followup", failed: false },
   { kind: "visible", failed: true },
 ] as const)(
@@ -365,16 +372,10 @@ it.each([
         message: expect.stringMatching(/restart recovery failed/i),
       });
       expect(outcome.result).toBeUndefined();
-    } else if (kind === "queued_followup") {
+    } else {
       expect(outcome.failure).toBeUndefined();
       await outcome.settled;
       expect(outcome.result).toEqual({ status: "skipped", reason: "active-run" });
-    } else {
-      expect(outcome.failure).toBeUndefined();
-      expect(outcome.result).toBeUndefined();
-      await f.write({ sessionId, updatedAt: Date.now(), status: "done" });
-      await outcome.settled;
-      expect(outcome.result).toMatchObject({ status: "owned" });
     }
     expect(retry).toHaveBeenCalledOnce();
   },
@@ -383,7 +384,9 @@ it.each([
 it.each(["started", "cancelled", "replaced"] as const)(
   "waits for reserved startup recovery before visible input: %s",
   async (outcome) => {
-    const f = recoveryFixture();
+    const f = recoveryFixture({
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    });
     const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
     const admission = f.wait({ waitForActive: false });
     await setImmediate();
@@ -414,21 +417,7 @@ it.each(["started", "cancelled", "replaced"] as const)(
   },
 );
 
-it("admits monitoring without claiming foreground recovery from current delivery residue", async () => {
-  const f = recoveryFixture({
-    abortedLastRun: false,
-    restartRecoveryDeliveryRunId: "completed-recovery",
-    restartRecoveryRuns: [
-      { runId: "completed-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
-  });
-  const result = await f.admit({ kind: "heartbeat" });
-  expect(result.status).toBe("owned");
-  expect(f.read()).toMatchObject(f.entry);
-  expect(f.read()?.mainRestartRecovery).toBeUndefined();
-});
-
-it("leaves a named live recovery owner intact and skips the monitor", async () => {
+it("preserves live recovery authority while monitoring", async () => {
   const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
   const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
   let released = false;
@@ -441,4 +430,194 @@ it("leaves a named live recovery owner intact and skips the monitor", async () =
   expect(f.read()?.sessionId).toBe(sessionId);
   owner.release();
   await owner.released;
+});
+
+async function busyReply() {
+  const fixture = recoveryFixture({ status: undefined, abortedLastRun: false });
+  const reply = owned(await fixture.admit());
+  const replyReleased = getSessionWorkAdmissionRelease(fixture.scope);
+  if (!replyReleased) {
+    throw new Error("Reply admission must retain its lifecycle lease");
+  }
+  const target = {
+    sessionAgentId: "main",
+    isNewSession: false,
+    sessionId,
+    sessionKey,
+    storePath: fixture.storePath,
+  };
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const fence = [{ runId: "busy-reply", lifecycleGeneration }];
+  await fixture.write({
+    ...fixture.entry,
+    restartRecoveryRuns: fence,
+    restartRecoveryDeliveryRunId: "busy-reply",
+  });
+  const commands: Promise<unknown>[] = [];
+  type Command = Parameters<typeof runWithAgentCommandRecoveryOwner<typeof target, string>>[0];
+  return {
+    target,
+    controller: fixture.abort,
+    fence,
+    read: fixture.read,
+    finish: async (retainFence = false) => {
+      if (!retainFence) {
+        await fixture.write({ ...fixture.entry, status: "done" });
+      }
+      reply.operation.complete();
+      await replyReleased;
+    },
+    gateway: () => fixture.begin(),
+    command: (runId: string, overrides: Partial<Command> = {}) => {
+      const command = runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration,
+        mode: "claim",
+        opts: { message: runId, runId, abortSignal: fixture.abort.signal },
+        prepare: async () => target,
+        run: async () => runId,
+        ...overrides,
+      });
+      commands.push(command);
+      void command.catch(() => {});
+      return command;
+    },
+    cleanup: async () => {
+      fixture.abort.abort();
+      reply.operation.complete();
+      await Promise.allSettled(commands);
+      await replyReleased;
+    },
+  };
+}
+
+function pauseRejectedClaim(runId: string, release?: Promise<void>) {
+  const rejected = createDeferred();
+  const claim = recoveryStore.claimMainSessionRecoveryOwner;
+  vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
+    const result = await claim(params);
+    if (params.runId === runId && result.kind === "invalidated") {
+      rejected.resolve();
+      await release;
+    }
+    return result;
+  });
+  return rejected.promise;
+}
+
+it("keeps two accepted commands in FIFO order behind a real reply admission", async ({
+  signal,
+}) => {
+  const fixture = await busyReply();
+  const refresh = createDeferred();
+  const refreshing = createDeferred();
+  const secondPrepared = createDeferred();
+  const rejected = pauseRejectedClaim("first");
+  const order: string[] = [];
+  let preparations = 0;
+  try {
+    // Both accepted RPCs hold outer admissions; the second command depends on the first.
+    const firstGateway = await fixture.gateway();
+    const secondGateway = await fixture.gateway();
+    const first = firstGateway.run(() =>
+      fixture.command("first", {
+        prepare: async () => {
+          if (++preparations === 2) {
+            refreshing.resolve();
+            await refresh.promise;
+          }
+          return fixture.target;
+        },
+        run: async () => {
+          order.push("first");
+          return "first";
+        },
+      }),
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(rejected, first, "Command skipped the busy claim"),
+      signal,
+    );
+    const second = secondGateway.run(() =>
+      fixture.command("second", {
+        prepare: async () => {
+          secondPrepared.resolve();
+          return fixture.target;
+        },
+        run: async () => {
+          order.push("second");
+          return "second";
+        },
+      }),
+    );
+    await withinTest(secondPrepared.promise, signal);
+    expect(order).toEqual([]);
+    await fixture.finish();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        refreshing.promise,
+        first,
+        "Command did not refresh after the reply",
+      ),
+      signal,
+    );
+    expect(order).toEqual([]);
+    refresh.resolve();
+    await expect(withinTest(Promise.all([first, second]), signal)).resolves.toEqual([
+      "first",
+      "second",
+    ]);
+    expect(order).toEqual(["first", "second"]);
+  } finally {
+    refresh.resolve();
+    await fixture.cleanup();
+  }
+});
+
+it.for(["cancelled", "retained fence"] as const)(
+  "does not execute the waiting command after %s",
+  async (outcome, { signal }) => {
+    const fixture = await busyReply();
+    const rejected = pauseRejectedClaim("waiting");
+    const run = vi.fn(async () => "ran");
+    try {
+      const command = fixture.command("waiting", { run });
+      await withinTest(
+        awaitGateBeforeSettlement(rejected, command, "Command skipped the busy claim"),
+        signal,
+      );
+      if (outcome === "cancelled") {
+        fixture.controller.abort();
+      } else {
+        await fixture.finish(true);
+      }
+      await expect(withinTest(command, signal)).rejects.toMatchObject(
+        outcome === "cancelled" ? { name: "AbortError" } : { code: "SESSION_WORK_START_CHANGED" },
+      );
+      expect(run).not.toHaveBeenCalled();
+      expect(fixture.read()?.restartRecoveryRuns).toEqual(fixture.fence);
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+it("keeps the reply release captured before its durable claim returns", async ({ signal }) => {
+  const fixture = await busyReply();
+  const returnClaim = createDeferred();
+  const rejected = pauseRejectedClaim("racing", returnClaim.promise);
+  const run = vi.fn(async () => "ran");
+  try {
+    const command = fixture.command("racing", { run });
+    await withinTest(
+      awaitGateBeforeSettlement(rejected, command, "Command skipped the busy claim"),
+      signal,
+    );
+    await fixture.finish();
+    returnClaim.resolve();
+    await expect(withinTest(command, signal)).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+  } finally {
+    returnClaim.resolve();
+    await fixture.cleanup();
+  }
 });

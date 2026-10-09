@@ -111,6 +111,7 @@ export function recoverRestartTombstoneInDatabase(
       },
       ...sourceEvents.filter((event) => !(isRecord(event) && event.type === "session")),
     ],
+    { scheduleProjectionReconcile: false },
   );
 
   const now = Date.now();
@@ -153,12 +154,15 @@ export function recoverRestartTombstoneInDatabase(
   };
   return {
     result,
-    publication: prepareSessionEntryReplacementPublication({
-      pendingArchiveRecovery: false,
-      previous: previousIdentity,
-      current: currentIdentity,
-      maintenancePlans: [],
-      membershipInvalidatedKeys: [],
-    }),
+    publication: prepareSessionEntryReplacementPublication(
+      {
+        pendingArchiveRecovery: false,
+        previous: previousIdentity,
+        current: currentIdentity,
+        maintenancePlans: [],
+        membershipInvalidatedKeys: [],
+      },
+      database,
+    ),
   };
 }

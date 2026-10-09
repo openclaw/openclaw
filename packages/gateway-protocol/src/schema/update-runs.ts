@@ -129,6 +129,9 @@ export const UpdateRunRecordSchema = closedObject({
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
       exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+      termination: Type.Optional(Type.Enum(["exit", "timeout", "no-output-timeout", "signal"])),
+      signal: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+      stderrTail: Type.Optional(Type.String({ maxLength: 8192 })),
       detail: Type.Optional(text),
       failureFacts: Type.Optional(
         Type.Array(

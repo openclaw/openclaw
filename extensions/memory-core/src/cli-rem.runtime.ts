@@ -17,7 +17,7 @@ import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 const { heading, muted, warn } = theme;
@@ -28,9 +28,7 @@ export async function runMemorySessionBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory session-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -55,14 +53,14 @@ export async function runMemorySessionBackfill(
         agentId,
         workspaceDir,
         pluginConfig,
-        ...(opts.from !== undefined ? { from: opts.from } : {}),
-        ...(opts.to !== undefined ? { to: opts.to } : {}),
-        ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
-        ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
-        ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
-        ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
-        ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
-        ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
+        from: opts.from,
+        to: opts.to,
+        limitDays: opts.limitDays,
+        rem: opts.rem,
+        apply: opts.apply,
+        rollback: opts.rollback,
+        archiveFiles: opts.archiveFiles,
+        timezone: remConfig.timezone,
       });
       if (opts.json) {
         defaultRuntime.writeJson(result);
@@ -114,9 +112,7 @@ export async function runMemoryRemHarness(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-harness",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -256,9 +252,7 @@ export async function runMemoryRemBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -366,10 +360,11 @@ export async function runMemoryRemBackfill(
             replacedShortTermEntries = cleared.removed;
             const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
             if (shortTermSeedItems.length > 0) {
-              await recordGroundedShortTermCandidates({
+              await recordShortTermRecalls({
                 workspaceDir,
                 query: "__dreaming_grounded_backfill__",
-                items: shortTermSeedItems,
+                signalType: "grounded",
+                results: shortTermSeedItems,
                 dedupeByQueryPerDay: true,
                 nowMs: Date.now(),
                 timezone: remConfig.timezone,
@@ -521,8 +516,8 @@ function parseGroundedRef(
 }
 function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] {
-  const items: Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] = [];
+): Parameters<typeof recordShortTermRecalls>[0]["results"] {
+  const items: Parameters<typeof recordShortTermRecalls>[0]["results"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
@@ -559,6 +554,7 @@ function collectGroundedShortTermSeedItems(
       }
       seen.add(key);
       items.push({
+        source: "memory",
         path: parsedRef.path,
         startLine: parsedRef.startLine,
         endLine: parsedRef.endLine,

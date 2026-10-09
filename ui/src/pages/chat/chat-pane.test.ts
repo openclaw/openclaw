@@ -34,7 +34,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { openSessionWorkspacePreview } from "./components/chat-session-workspace-state.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
 

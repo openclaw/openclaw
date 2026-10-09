@@ -155,10 +155,9 @@ export class DiscordAudioTransport extends EventEmitter<{
     }
     const id = this.allocateId();
     const abort = new AbortController();
-    const complete = new Promise<void>((resolve, reject) => {
-      this.files.set(id, { resolve, reject, abort });
-    });
-    void complete.catch(() => {});
+    const complete = createDeferred<void>();
+    this.files.set(id, { ...complete, abort });
+    void complete.promise.catch(() => {});
     this.send(
       typeof input === "string"
         ? { type: "file-play", id, path: input }
@@ -204,7 +203,7 @@ export class DiscordAudioTransport extends EventEmitter<{
             }
           })();
     try {
-      await Promise.all([pump, complete]);
+      await Promise.all([pump, complete.promise]);
     } catch (error) {
       this.send({ type: "player-stop" });
       throw error;

@@ -298,7 +298,7 @@ function registerPolicyHealthChecks(
   params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
 ): void {
-  if (shouldRegisterPolicyHealth(params)) {
+  if (shouldRegisterPolicyHealth(params.cfg)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",
       artifactBasename: "api.js",
@@ -391,8 +391,8 @@ function shouldRegisterPluginHealth(cfg: OpenClawConfig, pluginId: string): bool
   });
 }
 
-function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string }): boolean {
-  const entry = params.cfg.plugins?.entries?.policy;
+function shouldRegisterPolicyHealth(cfg: OpenClawConfig): boolean {
+  const entry = cfg.plugins?.entries?.policy;
   const config = readRecord(entry?.config) ?? {};
   if (entry === undefined || entry.enabled === false || config.enabled === false) {
     return false;
@@ -401,7 +401,7 @@ function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string 
   if (
     !passesManifestOwnerBasePolicy({
       plugin: { id: "policy" },
-      normalizedConfig: normalizePluginsConfig(params.cfg.plugins),
+      normalizedConfig: normalizePluginsConfig(cfg.plugins),
     })
   ) {
     return false;

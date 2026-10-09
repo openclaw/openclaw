@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
@@ -47,14 +49,15 @@ vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
     throw new Error("Unexpected followup drain");
   },
 }));
-vi.mock("../../auto-reply/reply/queue/delivery-context.js", () => ({
+vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
   createOverflowSummaryRetrySource: () => {
     throw new Error("Unexpected queue overflow");
   },
   resolveFollowupAuthorizationKey: () => {
     throw new Error("Unexpected queue overflow");
   },
-  resolveFollowupDeliveryContextKey: () => {
+  resolveFollowupDeliveryStorageKey: () => {
     throw new Error("Unexpected queue overflow");
   },
 }));
@@ -236,7 +239,7 @@ function context(active = false): GatewayRequestContext {
     chatAbortControllers: new Map(
       active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
     ),
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;
 }
@@ -343,7 +346,7 @@ async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> 
   expect(work.hasCommandRun()).toBe(false);
 }
 
-function linkToUpstreamConversation(): void {
+function linkToUpstreamConversation(threadId = "thread-source"): void {
   expect(
     upsertSessionUpstreamLink({
       agentId: "main",
@@ -351,9 +354,9 @@ function linkToUpstreamConversation(): void {
       hostId: "gateway:local",
       marker: { turnId: "turn-2", userMessageCount: 1 },
       sessionKey,
-      threadId: "thread-source",
+      threadId,
       upstreamKind: "codex-app-server",
-      upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
+      upstreamRef: { connectionFingerprint: "fingerprint", threadId },
     }),
   ).toBe(true);
 }
@@ -422,7 +425,7 @@ function restrictedOperator(email: string, agentId: string, sandbox?: "required"
     },
   };
   const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     gateway: {
       roles: {
         default: "guest",
@@ -712,6 +715,7 @@ describe("session message-cut methods", () => {
       nativeRuntimeConsent: "native-fixture",
     }));
     const profileId = "profile-fork-creator";
+    const forkSql = observeSqliteReadSql(StatementSync.prototype);
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
       authenticatedUserProfile: {
@@ -720,7 +724,10 @@ describe("session message-cut methods", () => {
         hasAvatar: false,
         updatedAt: 1,
       },
-    } as GatewayClient);
+    } as GatewayClient).finally(forkSql.restore);
+    expect(
+      forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
+    ).toHaveLength(2);
     expect(fork).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -744,7 +751,7 @@ describe("session message-cut methods", () => {
       createdActor: { type: "human", id: profileId },
       createdAt: expect.any(Number),
     });
-    expect(listSessionStateEventsSince(forkKey ?? "", "main", 0, 20).events).toContainEqual(
+    expect((await listSessionStateEventsSince(forkKey ?? "", "main", 0, 20)).events).toContainEqual(
       expect.objectContaining({
         kind: "created",
         actorType: "human",
@@ -752,7 +759,11 @@ describe("session message-cut methods", () => {
       }),
     );
 
-    const rewind = await invoke("sessions.rewind", "user-entry");
+    const rewindSql = observeSqliteReadSql(StatementSync.prototype);
+    const rewind = await invoke("sessions.rewind", "user-entry").finally(rewindSql.restore);
+    expect(
+      rewindSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
+    ).toHaveLength(2);
     expect(rewind).toHaveBeenCalledWith(
       true,
       {
@@ -802,7 +813,7 @@ describe("session message-cut methods", () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const mutationEntered = createDeferredCore();
     const releaseMutation = createDeferredCore();
-    const archiving = runExclusiveSessionLifecycleMutation({
+    const archiving = runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [sourceSessionId],
       run: async () => {
@@ -956,7 +967,7 @@ describe("session message-cut methods", () => {
         },
       } as GatewayClient;
       const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         gateway: {
           roles: {
             default: "guest",

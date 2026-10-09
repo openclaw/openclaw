@@ -170,8 +170,10 @@ unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
 
 When native file watching is unavailable, Memory Core uses background polling
-with a 30-second minimum interval, including when polling is explicitly enabled
-with `CHOKIDAR_USEPOLLING`. A larger `CHOKIDAR_INTERVAL` is honored. Native events
+with a 30-second default interval, including when polling is explicitly enabled
+with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
+with a 20 ms minimum. Shorter intervals increase background scanning cost,
+especially for large memory trees. Native events
 still trigger prompt, debounced updates. Automatic fallback logs one warning per
 watcher lifetime. A running memory manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;

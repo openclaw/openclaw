@@ -25,15 +25,13 @@ function createVoiceCommandHarness(
     cfg?: OpenClawConfig;
     discordConfig?: DiscordAccountConfig;
     groupPolicy?: DiscordAccountConfig["groupPolicy"];
-    useAccessGroups?: boolean;
   },
 ) {
   const command = createDiscordVoiceCommand({
     cfg: overrides?.cfg ?? {},
-    discordConfig: overrides?.discordConfig ?? {},
+    discordConfig: overrides?.discordConfig ?? { allowFrom: ["*"] },
     accountId: "default",
     groupPolicy: overrides?.groupPolicy ?? "open",
-    useAccessGroups: overrides?.useAccessGroups ?? false,
     getManager: () => manager,
     ephemeralDefault: true,
   });
@@ -135,7 +133,6 @@ describe("createDiscordVoiceCommand", () => {
     const { status } = createVoiceCommandHarness(manager, {
       cfg: { commands: { ownerAllowFrom: [owner] } },
       discordConfig: { dmPolicy: "disabled", allowFrom: ["*"] },
-      useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
@@ -161,7 +158,6 @@ describe("createDiscordVoiceCommand", () => {
     const { status } = createVoiceCommandHarness(manager, {
       discordConfig: { allowFrom: [" * "], guilds: { g1: {} } },
       groupPolicy: "allowlist",
-      useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],

@@ -275,13 +275,8 @@ export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshot
   );
 }
 
-function buildResolvedComputedAccountStatusSnapshot<
-  ResolvedAccount,
-  Probe,
-  Audit,
-  TExtra extends StatusSnapshotExtra,
->(
-  params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
+function buildResolvedComputedAccountStatusSnapshot<TExtra extends StatusSnapshotExtra>(
+  params: { runtime?: ChannelAccountSnapshot; probe?: unknown },
   { extra, ...snapshot }: ComputedAccountStatusSnapshot<TExtra>,
 ) {
   return buildComputedAccountStatusSnapshot(

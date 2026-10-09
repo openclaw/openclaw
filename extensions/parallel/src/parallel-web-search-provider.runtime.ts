@@ -83,85 +83,9 @@ function resolveParallelSearchEndpoint(
   const pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.pathname = pathname.endsWith(PARALLEL_SEARCH_PATHNAME)
     ? pathname
-    : `${pathname === "" ? "" : pathname}${PARALLEL_SEARCH_PATHNAME}`;
+    : `${pathname}${PARALLEL_SEARCH_PATHNAME}`;
   parsed.hash = "";
   return { endpoint: parsed.toString() };
-}
-
-function missingParallelKeyPayload() {
-  return {
-    error: "missing_parallel_api_key",
-    message:
-      "web_search (parallel) needs a Parallel API key. Set PARALLEL_API_KEY in the Gateway environment, or configure plugins.entries.parallel.config.webSearch.apiKey.",
-    docs: "https://docs.openclaw.ai/tools/parallel-search",
-  };
-}
-
-async function runParallelSearch(params: {
-  apiKey: string;
-  endpoint: string;
-  objective?: string;
-  searchQueries: readonly string[];
-  maxResults: number;
-  sessionId?: string;
-  clientModel?: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-}): Promise<ParallelSearchResponse> {
-  const body: Record<string, unknown> = {
-    search_queries: [...params.searchQueries],
-    advanced_settings: { max_results: params.maxResults },
-  };
-  if (params.objective) {
-    body.objective = params.objective;
-  }
-  if (params.sessionId) {
-    body.session_id = params.sessionId;
-  }
-  if (params.clientModel) {
-    body.client_model = params.clientModel;
-  }
-
-  return withTrustedWebSearchEndpoint(
-    {
-      url: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "x-api-key": params.apiKey,
-          "User-Agent": USER_AGENT,
-        },
-        body: JSON.stringify(body),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        const detail = await readResponseTextLimited(res, PARALLEL_ERROR_BODY_LIMIT_BYTES).catch(
-          () => "",
-        );
-        // Provider/proxy error pages can reflect request headers (including the
-        // x-api-key), and the empty-body statusText fallback is server-controlled
-        // too. Redact in two passes before the detail lands in user-facing error
-        // text: the tools-mode pass masks header-shaped reflections while the
-        // header name is intact (a configured pattern like api[_-]?key would
-        // otherwise rewrite the name first and hide the shape from the
-        // structured matcher), then the canonical tool-payload redactor applies
-        // the operator's logging.redactPatterns on top of the built-in defaults.
-        params.signal?.throwIfAborted();
-        throw new ProviderHttpError(
-          `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
-          { status: res.status },
-        );
-      }
-      return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
-        maxBytes: PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
-      });
-    },
-  );
 }
 
 export async function executeParallelWebSearchProviderTool(
@@ -177,7 +101,12 @@ export async function executeParallelWebSearchProviderTool(
   const parallelConfig = asOptionalRecord(searchConfig?.parallel);
   const apiKey = resolveParallelApiKey(parallelConfig);
   if (!apiKey) {
-    return missingParallelKeyPayload();
+    return {
+      error: "missing_parallel_api_key",
+      message:
+        "web_search (parallel) needs a Parallel API key. Set PARALLEL_API_KEY in the Gateway environment, or configure plugins.entries.parallel.config.webSearch.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/parallel-search",
+    };
   }
   const endpointResult = resolveParallelSearchEndpoint(parallelConfig);
   if ("error" in endpointResult) {
@@ -191,14 +120,62 @@ export async function executeParallelWebSearchProviderTool(
     args,
     searchConfig,
     signal,
-    search: ({ count, ...request }, timeoutSeconds) =>
-      runParallelSearch({
-        ...request,
-        apiKey,
-        endpoint,
-        maxResults: count,
-        timeoutSeconds,
-        signal,
-      }),
+    search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {
+      const body: Record<string, unknown> = {
+        search_queries: [...request.searchQueries],
+        advanced_settings: { max_results: request.count },
+      };
+      if (request.objective) {
+        body.objective = request.objective;
+      }
+      if (request.sessionId) {
+        body.session_id = request.sessionId;
+      }
+      if (request.clientModel) {
+        body.client_model = request.clientModel;
+      }
+
+      return withTrustedWebSearchEndpoint(
+        {
+          url: endpoint,
+          timeoutSeconds,
+          signal,
+          init: {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "User-Agent": USER_AGENT,
+            },
+            body: JSON.stringify(body),
+          },
+        },
+        async (res) => {
+          if (!res.ok) {
+            const detail = await readResponseTextLimited(
+              res,
+              PARALLEL_ERROR_BODY_LIMIT_BYTES,
+            ).catch(() => "");
+            // Provider/proxy error pages can reflect request headers (including the
+            // x-api-key), and the empty-body statusText fallback is server-controlled
+            // too. Redact in two passes before the detail lands in user-facing error
+            // text: the tools-mode pass masks header-shaped reflections while the
+            // header name is intact (a configured pattern like api[_-]?key would
+            // otherwise rewrite the name first and hide the shape from the
+            // structured matcher), then the canonical tool-payload redactor applies
+            // the operator's logging.redactPatterns on top of the built-in defaults.
+            signal?.throwIfAborted();
+            throw new ProviderHttpError(
+              `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
+              { status: res.status },
+            );
+          }
+          return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
+            maxBytes: PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
+          });
+        },
+      );
+    },
   });
 }

@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resetGatewayWorkAdmission,
+  markGatewayRestartDraining,
   tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -16,6 +17,9 @@ import {
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
   executeRequest: vi.fn(),
+  prewarmLocalWorkspaceTemplates: vi.fn<
+    typeof import("./worker-environments/local-workspace-prewarm.js").prewarmLocalWorkspaceTemplates
+  >(async () => {}),
   prewarmGatewaySessionHistory: vi.fn(async () => {}),
   ensureSkillsWatcher: vi.fn(),
   prepareWorkspaceSkillEntries: vi.fn<
@@ -43,6 +47,11 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
+// mock-isolation: Exercise scheduling and cancellation without allocating repository containers.
+vi.mock("./worker-environments/local-workspace-prewarm.js", () => ({
+  prewarmLocalWorkspaceTemplates: mocks.prewarmLocalWorkspaceTemplates,
+}));
+
 vi.mock("./server-history-prewarm.js", () => ({
   prewarmGatewaySessionHistory: mocks.prewarmGatewaySessionHistory,
 }));
@@ -63,7 +72,7 @@ vi.mock("./server-chat.js", () => {
   mocks.events.push("agent-events");
   return { createAgentEventHandler: mocks.executeRequest };
 });
-vi.mock("./server-session-key.js", () => ({ resolveSessionKeyForRun: mocks.executeRequest }));
+vi.mock("./server-session-key.js", () => ({ resolveSessionForRun: mocks.executeRequest }));
 vi.mock("./server-methods/core-handlers.js", async () => {
   const { createLazyCoreHandlers } = await import("./server-methods/lazy-core-handlers.js");
   return {
@@ -97,7 +106,8 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
 
-const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
+const { scheduleGatewayHandlerPrewarm, scheduleGatewayPrewarm } =
+  await import("./server-startup-handler-prewarm.js");
 const workspaces = {
   main: path.resolve("prewarm-main"),
   research: path.resolve("prewarm-research"),
@@ -106,6 +116,7 @@ const workspaces = {
 beforeEach(() => {
   mocks.events.length = 0;
   mocks.executeRequest.mockClear();
+  mocks.prewarmLocalWorkspaceTemplates.mockClear();
   mocks.prewarmGatewaySessionHistory.mockClear();
   mocks.ensureSkillsWatcher.mockClear();
   mocks.prepareWorkspaceSkillEntries.mockClear();
@@ -263,52 +274,32 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     }
   });
 
-  it("waits for gateway readiness before warming handler data", async () => {
-    vi.useFakeTimers();
-    const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
-    const load = vi.fn(async () => {});
+  it.each([false, true])(
+    "waits for readiness and respects shutdown (stopped: %s)",
+    async (stopped) => {
+      vi.useFakeTimers();
+      const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
+      const load = vi.fn(async () => {});
 
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-      items: [{ name: "sessions", load }],
-      waitForPostReadyWork: () => gatewayReady,
-    });
+      const sidecar = scheduleGatewayHandlerPrewarm({
+        scheduler: createTestGatewayScheduler("fake-timers"),
+        getConfig: () => ({}),
+        log: { warn: vi.fn() },
+        items: [{ name: "sessions", load }],
+        waitForPostReadyWork: () => gatewayReady,
+      });
 
-    await vi.advanceTimersToNextTimerAsync();
-    expect(load).not.toHaveBeenCalled();
-
-    releaseGatewayReady();
-    await vi.runAllTimersAsync();
-    expect(load).toHaveBeenCalledOnce();
-    await sidecar.stop();
-  });
-
-  it("waits for admitted request work before warming handler data", async () => {
-    vi.useFakeTimers();
-    const admission = tryBeginGatewayRootWorkAdmission();
-    if (!admission) {
-      throw new Error("Expected request work admission");
-    }
-    const load = vi.fn(async () => {});
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-      items: [{ name: "sessions", load }],
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(load).not.toHaveBeenCalled();
-
-    admission.release();
-    await vi.advanceTimersByTimeAsync(249);
-    expect(load).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(load).toHaveBeenCalledOnce();
-    await sidecar.stop();
-  });
+      await vi.advanceTimersToNextTimerAsync();
+      expect(load).not.toHaveBeenCalled();
+      if (stopped) {
+        await sidecar.stop();
+      }
+      releaseGatewayReady();
+      await vi.runAllTimersAsync();
+      expect(load).toHaveBeenCalledTimes(stopped ? 0 : 1);
+      await sidecar.stop();
+    },
+  );
 
   it("prepares the history worker during foreground work while other preparation stays idle", async () => {
     vi.useFakeTimers();
@@ -335,27 +326,6 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       admission.release();
       await sidecar.stop();
     }
-  });
-
-  it("stays stopped when readiness arrives after shutdown", async () => {
-    vi.useFakeTimers();
-    const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
-    const load = vi.fn(async () => {});
-
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-      items: [{ name: "sessions", load }],
-      waitForPostReadyWork: () => gatewayReady,
-    });
-
-    await vi.advanceTimersToNextTimerAsync();
-    await sidecar.stop();
-    releaseGatewayReady();
-    await vi.runAllTimersAsync();
-
-    expect(load).not.toHaveBeenCalled();
   });
 
   it("logs failures and continues without changing later request behavior", async () => {
@@ -441,8 +411,10 @@ it("keeps the context cache delayed and uses current config after foreground wor
     expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
     current = { agents: { entries: {} }, skills: { load: { watch: false } } };
     request.release();
-    await vi.advanceTimersByTimeAsync(250);
-    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledWith({
+    await vi.advanceTimersByTimeAsync(249);
+    expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledExactlyOnceWith({
       config: current,
       isCancelled: expect.any(Function),
     });
@@ -486,3 +458,79 @@ it("keeps worker preparation but skips optional discovery when foreground work a
     await handle.stop();
   }
 });
+
+function scheduleDependencyPreparation(params: Parameters<typeof scheduleGatewayPrewarm>[0]) {
+  const handles = scheduleGatewayPrewarm({ ...params, items: [] });
+  return {
+    stop: async () => {
+      await Promise.all(handles.map((handle) => Promise.resolve(handle.stop())));
+    },
+  };
+}
+
+it.each([false, true])(
+  "starts dependency preparation only after readiness (stopped: %s)",
+  async (stopped) => {
+    vi.useFakeTimers();
+    const ready = createDeferred();
+    const warn = vi.fn();
+    const handle = scheduleDependencyPreparation({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      waitForPostReadyWork: () => ready.promise,
+      log: { warn },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.prewarmLocalWorkspaceTemplates).not.toHaveBeenCalled();
+    if (stopped) {
+      await handle.stop();
+    }
+    ready.resolve();
+    await vi.dynamicImportSettled();
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(stopped ? 0 : 1);
+    await handle.stop();
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["close", "restart"] as const)(
+  "cancels dependency preparation on %s and joins installer cleanup",
+  async (kind) => {
+    vi.useFakeTimers();
+    const started = createDeferred<AbortSignal>();
+    const cleanup = createDeferred();
+    mocks.prewarmLocalWorkspaceTemplates.mockImplementationOnce(async ({ signal }) => {
+      started.resolve(signal);
+      await cleanup.promise;
+    });
+    const foreground = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground request");
+    const handle = scheduleDependencyPreparation({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      log: { warn: vi.fn() },
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = await started.promise;
+      if (kind === "restart") {
+        markGatewayRestartDraining();
+      }
+      let closed = false;
+      stopping = Promise.resolve(handle.stop()).then(() => {
+        closed = true;
+      });
+      expect(signal.aborted).toBe(true);
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      cleanup.resolve();
+      await stopping;
+      expect(closed).toBe(true);
+    } finally {
+      foreground.release();
+      cleanup.resolve();
+      await handle.stop();
+      await stopping;
+    }
+  },
+);

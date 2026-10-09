@@ -11,6 +11,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
@@ -287,8 +288,8 @@ export function createApplicationGateway(
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
-    const requestedGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
-    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(requestedGatewayUrl)) {
+    const nextGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
+    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(nextGatewayUrl)) {
       gateway.stop();
       setSnapshot({
         phase: "offline",
@@ -300,7 +301,6 @@ export function createApplicationGateway(
     setUnavailableDeadline("suspensionPhase");
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
-    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
     const logicalGatewayChanged =
       gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
     const scopedCredentials = resolveGatewayCredentialsForUrlEdit(
@@ -691,10 +691,7 @@ export function createApplicationGateway(
         lastErrorAuthReason: null,
       });
     },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     subscribeEventLog: (listener) => {
       eventLogListeners.add(listener);
       return () => {
@@ -704,10 +701,7 @@ export function createApplicationGateway(
         }
       };
     },
-    subscribeEvents: (listener) => {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribeEvents: (listener) => registerListener(eventListeners, listener),
     loadSelfProfile: selfProfile.load,
     updateSelfUser: (patch) => {
       if (!snapshot.selfUser) {

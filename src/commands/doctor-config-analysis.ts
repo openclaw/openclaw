@@ -5,6 +5,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
+  readAgentRosterProperty,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -12,7 +13,6 @@ import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -274,13 +274,26 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   return false;
 }
 
-export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
-  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+export function noteImplicitFallbackClobberWarnings(cfg: unknown): void {
+  const agents = isRecord(cfg) && isRecord(cfg.agents) ? cfg.agents : undefined;
+  const defaults = isRecord(agents?.defaults) ? agents.defaults : undefined;
+  const model = defaults?.model;
+  const defaultFallbacks = isRecord(model) && Array.isArray(model.fallbacks) ? model.fallbacks : [];
   if (defaultFallbacks.length === 0) {
     return;
   }
+  const roster = readAgentRosterProperty(cfg);
+  const rosterConfig =
+    roster?.kind === "entries" && isRecord(roster.value)
+      ? { agents: { entries: roster.value } }
+      : roster?.kind === "list" && Array.isArray(roster.value)
+        ? { agents: { list: roster.value } }
+        : undefined;
+  if (!rosterConfig) {
+    return;
+  }
   const warnings: string[] = [];
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(rosterConfig)) {
     if (!agent || !isImplicitFallbackClobber(agent.model)) {
       continue;
     }

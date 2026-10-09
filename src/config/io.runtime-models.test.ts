@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetModelsJsonReadyCacheForTest } from "../agents/models-config-state.test-support.js";
 import { CUSTOM_PROXY_MODELS_CONFIG } from "../agents/models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "../agents/models-config.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { persistClawInstallRecord } from "../claws/provenance.js";
 import { makeProvenancePlan } from "../claws/provenance.test-helpers.js";
 import { resolveClawToolPolicyConsent } from "../claws/tool-policy-runtime.js";
@@ -65,35 +65,29 @@ async function fixture() {
   return { config, agentDir, state };
 }
 
-it.each(["ensure", "plan"] as const)(
-  "%s loads cold config and Claw consent without host provenance SQL",
-  async (operation) => {
-    const { agentDir } = await fixture();
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const contents = await withPluginCache(createPluginCache(), async () => {
-      if (operation === "plan") {
-        return (await planOpenClawModelsJsonSource(undefined, agentDir)).modelsJsonContents;
-      }
-      await ensureOpenClawModelsJson(undefined, agentDir);
-      return fs.readFile(path.join(agentDir, "models.json"), "utf8");
-    });
-    expect(JSON.parse(contents ?? "null")).toEqual({
-      providers: CUSTOM_PROXY_MODELS_CONFIG.models?.providers,
-    });
-    const tools = getRuntimeConfigSnapshot()?.agents?.entries?.worker?.tools;
-    expect(
-      resolveClawToolPolicyConsent({
-        agentTools: tools,
-        agentId: "worker",
-        hasAgentAllowlist: true,
-        ownsProfile: true,
-        profile: "full",
-      }),
-    ).toEqual({ frozen: true });
-    const hostQueries = prepare.mock.calls.map(([sql]) => sql);
-    expect(hostQueries.filter((sql) => /from\s+"?claw_installs/i.test(sql))).toEqual([]);
-  },
-);
+it("loads cold config and Claw consent without host provenance SQL", async () => {
+  const { agentDir } = await fixture();
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  const contents = await withPluginCache(createPluginCache(), async () => {
+    await ensureOpenClawModelsJson(undefined, agentDir);
+    return fs.readFile(path.join(agentDir, "models.json"), "utf8");
+  });
+  expect(JSON.parse(contents ?? "null")).toEqual({
+    providers: CUSTOM_PROXY_MODELS_CONFIG.models?.providers,
+  });
+  const tools = getRuntimeConfigSnapshot()?.agents?.entries?.worker?.tools;
+  expect(
+    resolveClawToolPolicyConsent({
+      agentTools: tools,
+      agentId: "worker",
+      hasAgentAllowlist: true,
+      ownsProfile: true,
+      profile: "full",
+    }),
+  ).toEqual({ frozen: true });
+  const hostQueries = prepare.mock.calls.map(([sql]) => sql);
+  expect(hostQueries.filter((sql) => /from\s+"?claw_installs/i.test(sql))).toEqual([]);
+});
 
 it("keeps source secret markers when the same runtime is republished before continuation", async () => {
   const { config, agentDir } = await fixture();
@@ -119,21 +113,29 @@ it("keeps source secret markers when the same runtime is republished before cont
   );
 });
 
-it("refuses a cold read after its config selector changes", async () => {
-  const { agentDir, state } = await fixture();
-  const pending = ensureOpenClawModelsJson(undefined, agentDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "replaced.json"));
-  await expect(pending).rejects.toThrow("Runtime config source changed");
-  expect(getRuntimeConfigSnapshot()).toBeNull();
-  await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-});
-
-it("retains its default agent directory after captured environment changes", async () => {
-  const { config, agentDir, state } = await fixture();
-  setRuntimeConfigSnapshot(config);
-  const pending = ensureOpenClawModelsJson();
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
-  expect((await pending).agentDir).toBe(agentDir);
-});
+it.each(["cold selector", "pinned directory"] as const)(
+  "retains captured model-config authority after an environment change: %s",
+  async (mode) => {
+    const { config, agentDir, state } = await fixture();
+    if (mode === "pinned directory") {
+      setRuntimeConfigSnapshot(config);
+    }
+    const pending = ensureOpenClawModelsJson(
+      undefined,
+      mode === "cold selector" ? agentDir : undefined,
+    );
+    vi.stubEnv(
+      mode === "cold selector" ? "OPENCLAW_CONFIG_PATH" : "OPENCLAW_STATE_DIR",
+      path.join(state, mode === "cold selector" ? "replaced.json" : "replacement-state"),
+    );
+    if (mode === "pinned directory") {
+      expect((await pending).agentDir).toBe(agentDir);
+    } else {
+      await expect(pending).rejects.toThrow("Runtime config source changed");
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+      await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  },
+);

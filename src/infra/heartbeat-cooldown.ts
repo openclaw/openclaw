@@ -21,11 +21,10 @@ type ShouldDeferInput = {
   nextDueMs: number;
   lastRunStartedAtMs?: number;
   recentRunStarts?: readonly number[];
-  minSpacingMs?: number;
-  floodWindowMs?: number;
-  floodThreshold?: number;
   /** Work already retained by the wake queue after a prior guard deferral. */
   retainedWork?: boolean;
+  /** Every pending event is a command completion owned by a conversation turn. */
+  conversationTurn?: boolean;
 };
 
 export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
@@ -53,7 +52,13 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (input.intent !== "task" && !input.retainedWork && input.now < input.nextDueMs) {
+  // A conversation's own completion is its reply, not periodic work; spacing and flood still apply.
+  if (
+    input.intent !== "task" &&
+    !input.retainedWork &&
+    !input.conversationTurn &&
+    input.now < input.nextDueMs
+  ) {
     const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
     return {
       defer: true,
@@ -71,47 +76,35 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
 }
 
 function resolveMinSpacingRetryAtMs(input: ShouldDeferInput): number | undefined {
-  const minSpacing = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
-  if (minSpacing <= 0 || input.lastRunStartedAtMs === undefined) {
+  if (input.lastRunStartedAtMs === undefined) {
     return undefined;
   }
-  const retryAtMs = input.lastRunStartedAtMs + minSpacing;
+  const retryAtMs = input.lastRunStartedAtMs + DEFAULT_MIN_WAKE_SPACING_MS;
   return input.now < retryAtMs ? retryAtMs : undefined;
 }
 
 function checkFloodGuard(input: ShouldDeferInput): DeferDecision | null {
-  const floodWindow = input.floodWindowMs ?? DEFAULT_FLOOD_WINDOW_MS;
-  const floodThreshold = input.floodThreshold ?? DEFAULT_FLOOD_THRESHOLD;
-  if (!input.recentRunStarts || input.recentRunStarts.length < floodThreshold || floodWindow <= 0) {
+  if (!input.recentRunStarts || input.recentRunStarts.length < DEFAULT_FLOOD_THRESHOLD) {
     return null;
   }
-  const windowStart = input.now - floodWindow;
+  const windowStart = input.now - DEFAULT_FLOOD_WINDOW_MS;
   let inWindow = 0;
-  let thresholdOldestTs: number | undefined;
   for (let i = input.recentRunStarts.length - 1; i >= 0; i--) {
     const ts = input.recentRunStarts[i];
     if (ts === undefined || ts < windowStart) {
       break;
     }
     inWindow += 1;
-    if (inWindow === floodThreshold) {
-      thresholdOldestTs = ts;
+    if (inWindow === DEFAULT_FLOOD_THRESHOLD) {
+      return { defer: true, reason: "flood", retryAtMs: ts + DEFAULT_FLOOD_WINDOW_MS + 1 };
     }
   }
-  return inWindow >= floodThreshold && thresholdOldestTs !== undefined
-    ? { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 }
-    : null;
+  return null;
 }
 
-export function recordRunStart(
-  buffer: number[],
-  ts: number,
-  floodThreshold: number = DEFAULT_FLOOD_THRESHOLD,
-): number[] {
+export function recordRunStart(buffer: number[], ts: number): void {
   buffer.push(ts);
-  const max = floodThreshold + 1;
-  while (buffer.length > max) {
+  while (buffer.length > DEFAULT_FLOOD_THRESHOLD + 1) {
     buffer.shift();
   }
-  return buffer;
 }

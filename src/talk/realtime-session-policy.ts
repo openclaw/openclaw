@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
@@ -139,7 +140,7 @@ function resolveRealtimeVoiceWakeNames(params: {
       .filter((name): name is string => Boolean(name));
     return sortRealtimeVoiceActivationNames(uniqueStrings(configured));
   }
-  const agent = params.cfg.agents?.list?.find((candidate) => candidate.id === params.agentId);
+  const agent = resolveAgentEntry(params.cfg, params.agentId);
   const configuredAgentNames = [agent?.name, agent?.identity?.name]
     .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
     .filter((name): name is string => Boolean(name));

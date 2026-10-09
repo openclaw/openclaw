@@ -1,13 +1,7 @@
-/**
- * Channel allowlist resolution helpers.
- *
- * Dedupes allowFrom entries and canonicalizes user lookups into stable id additions.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
@@ -29,10 +23,9 @@ export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
+  return dedupeAllowlistEntries([...(params.existing ?? []).map(String), ...params.additions]);
 }
 
-/** Splits lookup results into resolved mappings, unresolved display text, and id additions. */
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
   opts?: {
@@ -106,7 +99,6 @@ export function canonicalizeAllowlistWithResolvedIds<
   return dedupeAllowlistEntries(canonicalized, params.entryKey);
 }
 
-/** Updates nested `{ users }` allowlist entries using merge or canonicalize semantics. */
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
@@ -165,7 +157,6 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
   }
 }
 
-/** Logs a compact resolved/unresolved allowlist lookup summary when there is anything to report. */
 export function summarizeMapping(
   label: string,
   mapping: string[],

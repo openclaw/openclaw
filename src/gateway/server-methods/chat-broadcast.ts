@@ -76,13 +76,7 @@ export function sendGlobalAwareNodeChatPayload(params: {
   payload: unknown;
   opts?: GatewayBroadcastOpts;
 }): void {
-  const deliveryKeys =
-    params.opts?.sessionKeys ??
-    resolveChatSessionKeys({
-      context: params.context,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-    });
+  const deliveryKeys = params.opts?.sessionKeys ?? resolveChatSessionKeys(params);
   if (deliveryKeys[0]) {
     const opts = params.opts?.sessionKeys
       ? params.opts
@@ -97,6 +91,16 @@ type ChatBroadcastParams = {
   sessionKey: string;
   agentId?: string;
 };
+
+function broadcastChatPayload(
+  params: Omit<ChatBroadcastParams, "runId">,
+  event: string,
+  payload: unknown,
+  opts?: GatewayBroadcastOpts,
+): void {
+  params.context.broadcast(event, payload, opts ?? { sessionKeys: resolveChatSessionKeys(params) });
+  sendGlobalAwareNodeChatPayload({ ...params, event, payload, opts });
+}
 
 type ChatTerminal =
   | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
@@ -164,15 +168,7 @@ function broadcastChatFrame(
       agentId: payloadAgentId,
     }),
   };
-  params.context.broadcast("chat", payload, opts);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-    opts,
-  });
+  broadcastChatPayload({ ...params, agentId: payloadAgentId }, "chat", payload, opts);
 }
 
 export function broadcastChatDelta(
@@ -240,20 +236,11 @@ export function broadcastSideResult(params: {
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
   };
-  params.context.broadcast("chat.side_result", payload, {
-    sessionKeys: resolveChatSessionKeys({
-      context: params.context,
-      sessionKey: params.payload.sessionKey,
-      agentId: payloadAgentId,
-    }),
-  });
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.payload.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat.side_result",
+  broadcastChatPayload(
+    { context: params.context, sessionKey: params.payload.sessionKey, agentId: payloadAgentId },
+    "chat.side_result",
     payload,
-  });
+  );
 }
 
 export function broadcastChatError(

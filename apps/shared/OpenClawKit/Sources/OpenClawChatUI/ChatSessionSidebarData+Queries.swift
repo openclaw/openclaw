@@ -1,6 +1,17 @@
 import Foundation
 import OpenClawProtocol
 
+extension OpenClawChatSidebarStatus {
+    func includes(_ session: OpenClawChatSessionEntry, now: Date) -> Bool {
+        switch self {
+        case .active: !session.isArchived && !session.isSnoozed(at: now)
+        case .snoozed: !session.isArchived && session.isSnoozed(at: now)
+        case .archived: session.isArchived
+        case .all: true
+        }
+    }
+}
+
 struct ChatSidebarTranscriptResult: Decodable {
     let results: [SessionsSearchHit]
     let sessions: [OpenClawChatSessionEntry]?
@@ -12,7 +23,9 @@ struct ChatSidebarQueryState {
     let transport: any OpenClawChatSidebarTransport
     var query: OpenClawChatSidebarQuery
     var page: OpenClawChatSessionsListResponse?
+    var owners: [OpenClawChatSessionEntry.CreatedActor]?
     var pageIDs: [String] = []
+    var readRevision = 0
     var searchIDs: [String]?
     var metadataIDs: Set<String> = []
     var hits: [SessionsSearchHit] = []
@@ -33,6 +46,10 @@ extension OpenClawChatSessionSidebarData {
 
     public var query: OpenClawChatSidebarQuery {
         self.queryState?.query ?? .init(agentID: nil)
+    }
+
+    var owners: [OpenClawChatSessionEntry.CreatedActor]? {
+        self.queryState?.owners
     }
 
     public var agentScope: OpenClawChatSidebarAgentScope {
@@ -56,21 +73,36 @@ extension OpenClawChatSessionSidebarData {
     }
 
     public var rows: [OpenClawChatSessionEntry] {
+        self.rows(at: .now)
+    }
+
+    public func rows(at now: Date) -> [OpenClawChatSessionEntry] {
+        self.queryRows.filter { self.query.status.includes($0, now: now) }
+    }
+
+    /// Cache query membership and ranking; time-dependent visibility uses the caller's clock.
+    var queryRows: [OpenClawChatSessionEntry] {
         guard let state = self.queryState else { return [] }
         return self.cachedProjection(.sidebar) {
-            let candidates: [OpenClawChatSessionEntry] = if let ids = state.searchIDs {
+            var candidates: [OpenClawChatSessionEntry] = if let ids = state.searchIDs {
                 self.project(ids)
-            } else if state.page == nil, state.query.agentID != nil, state.query.status == .active,
+            } else if state.page == nil, state.query.agentID != nil, state.query.wire.status == .active,
                       state.query.involvingMe != true
             {
                 self.conversationRows(agentID: state.query.agentID)
             } else {
                 self.project(state.pageIDs)
             }
+            if state.query.search.isEmpty, state.query.involvingMe != true {
+                let held = Set(candidates.map(Self.identity))
+                candidates += self.project(self.restoredIDs(after: state.readRevision)).filter {
+                    !held.contains(Self.identity($0)) && ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                        key: $0.key, agentID: $0.agentId, activeAgentID: state.query.agentID)
+                }
+            }
             let rows = candidates.filter {
-                (state.query.status == .all || $0.isArchived == (state.query.status == .archived)) &&
-                    (state.query.involvingMe == true || state.query.ownerId == nil || $0.owner?.actor.id == state.query
-                        .ownerId)
+                state.query.involvingMe == true || state.query.ownerId == nil || $0.owner?.actor.id == state.query
+                    .ownerId
             }
             return state.query.search.isEmpty ? rows : Self.ranked(rows, state: state)
         }
@@ -81,6 +113,28 @@ extension OpenClawChatSessionSidebarData {
               let page = state.page, page.hasMore == true else { return nil }
         // ui/src/components/session-data-controller-events.ts:197 distinguishes missing from explicit null.
         return page.nextOffsetPresent ? page.nextOffset : state.pageIDs.count
+    }
+
+    var rowsIncludingLoadedDescendants: [OpenClawChatSessionEntry] {
+        guard self.query.search.isEmpty, self.query.ownerId != nil,
+              self.query.involvingMe != true else { return self.queryRows }
+        return self.cachedProjection(.sidebarTree) {
+            var rows = self.queryRows
+            var seen = Set(rows.map(Self.identity))
+            var index = 0
+            // Owner membership hides navigation rows, not facts from already-loaded, linked children.
+            while index < rows.count {
+                let parent = rows[index]
+                let agentID = OpenClawChatSessionKey.agentID(from: parent.key) ?? parent.agentId ?? self.query.agentID
+                for key in parent.childSessions ?? [] {
+                    if let child = self.row(key: key, agentID: agentID), seen.insert(Self.identity(child)).inserted {
+                        rows.append(child)
+                    }
+                }
+                index += 1
+            }
+            return rows
+        }
     }
 
     public var isSettled: Bool {
@@ -141,7 +195,9 @@ extension OpenClawChatSessionSidebarData {
             self.queryState?.metadataIDs = []
             self.queryState?.hits = []
             self.queryState?.page = nil
+            self.queryState?.owners = nil
             self.queryState?.pageIDs = []
+            self.queryState?.readRevision = 0
         }
         self.invalidateQueryProjection()
     }
@@ -213,6 +269,8 @@ extension OpenClawChatSessionSidebarData {
             }
             let search = await transcript
             guard generation == self.queryState?.generation, !Task.isCancelled, var page else { return }
+            // Search and browsing share the complete facet, independently of retained page membership.
+            self.queryState?.owners = page.owners
             if !query.search.isEmpty {
                 self.queryState?.metadataIDs = Set(incoming.map(Self.identity))
                 incoming += (search.0?.sessions ?? []).filter { seen.insert(Self.identity($0)).inserted }
@@ -227,6 +285,7 @@ extension OpenClawChatSessionSidebarData {
                 page.sessions = []
                 self.queryState?.page = page
                 self.queryState?.pageIDs = ids
+                self.queryState?.readRevision = read.revision
             }
             self.queryState?.didLoad = true
             self.invalidateQueryProjection()

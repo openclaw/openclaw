@@ -296,25 +296,22 @@ class SessionPrefetcher {
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
     const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
-    if (!mayRequest() || this.isOpen(candidate.snapshotKey, this.snapshot)) {
+    if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
       return;
     }
+    const target = { sessionKey: candidate.canonicalSessionKey };
+    const readSnapshot = () => readChatSessionSnapshot(this.cache, snapshot.snapshotHost, target);
+    const cacheSnapshot = (value: ChatSessionSnapshot) =>
+      cacheChatSessionSnapshot(this.cache, snapshot.snapshotHost, target, value);
     try {
-      let existing = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
-        sessionKey: candidate.canonicalSessionKey,
-      });
+      let existing = readSnapshot();
       if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
         existing = await this.snapshotStore.read(candidate.snapshotKey);
         if (!mayRequest()) {
           return;
         }
         if (existing) {
-          cacheChatSessionSnapshot(
-            this.cache,
-            snapshot.snapshotHost,
-            { sessionKey: candidate.canonicalSessionKey },
-            existing,
-          );
+          cacheSnapshot(existing);
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
         }
       }
@@ -334,12 +331,7 @@ class SessionPrefetcher {
       if (result.kind === "reset") {
         if (existing?.deltaCursor !== undefined) {
           const { deltaCursor: _deltaCursor, ...withoutCursor } = existing;
-          cacheChatSessionSnapshot(
-            this.cache,
-            snapshot.snapshotHost,
-            { sessionKey: candidate.canonicalSessionKey },
-            withoutCursor,
-          );
+          cacheSnapshot(withoutCursor);
           existing = withoutCursor;
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
         }
@@ -356,7 +348,7 @@ class SessionPrefetcher {
           return;
         }
       }
-      if (this.isOpen(candidate.snapshotKey, this.snapshot)) {
+      if (this.isOpen(candidate.snapshotKey)) {
         return;
       }
       let cached: ChatSessionSnapshot;
@@ -366,17 +358,9 @@ class SessionPrefetcher {
           if (!event || !Object.hasOwn(event, "message")) {
             continue;
           }
-          appendChatMessageToCache(
-            this.cache,
-            snapshot.snapshotHost,
-            { sessionKey: candidate.canonicalSessionKey },
-            event.message,
-            event,
-          );
+          appendChatMessageToCache(this.cache, snapshot.snapshotHost, target, event.message, event);
         }
-        const updated = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
-          sessionKey: candidate.canonicalSessionKey,
-        });
+        const updated = readSnapshot();
         if (!updated) {
           return;
         }
@@ -395,12 +379,7 @@ class SessionPrefetcher {
       } else {
         throw new Error("chat history page request returned a cursor reset");
       }
-      cacheChatSessionSnapshot(
-        this.cache,
-        snapshot.snapshotHost,
-        { sessionKey: candidate.canonicalSessionKey },
-        cached,
-      );
+      cacheSnapshot(cached);
     } catch (error) {
       console.debug(
         `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
@@ -520,7 +499,8 @@ class SessionPrefetcher {
     return found;
   }
 
-  private isOpen(snapshotKey: string, snapshot: SessionPrefetchSnapshot | null): boolean {
+  private isOpen(snapshotKey: string): boolean {
+    const snapshot = this.snapshot;
     return Boolean(
       snapshot?.openSessionKeys.some(
         (sessionKey) =>

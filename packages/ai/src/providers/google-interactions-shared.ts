@@ -20,7 +20,14 @@ import {
   parseTerminalToolCallArguments,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
-import type { AssistantMessage, Context, Model, ThinkingContent, ToolCall } from "../types.js";
+import type {
+  AssistantMessage,
+  Context,
+  Model,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+} from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleInteractionsParams,
@@ -29,15 +36,11 @@ import {
 } from "./google-interactions-request.js";
 import type { GoogleApiType, GoogleProviderOptions } from "./google-shared.js";
 
-export type { GoogleApiType };
-
 export function resolveGoogleInteractionsApiKey<T extends GoogleApiType>(
   model: Model<T>,
   options?: GoogleProviderOptions,
-  apiKey?: string,
 ): string {
   return (
-    apiKey ||
     options?.apiKey ||
     getEnvApiKey(model.provider) ||
     process.env.GEMINI_API_KEY ||
@@ -76,14 +79,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   options?: GoogleProviderOptions;
   context: Context;
   nextToolCallId: (name: string) => string;
-  apiKey?: string;
 }): Promise<void> {
   const { stream, model, output, options, context, nextToolCallId } = params;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   try {
     const host = getAiTransportHost();
-    const unresolvedApiKey = resolveGoogleInteractionsApiKey(model, options, params.apiKey);
+    const unresolvedApiKey = resolveGoogleInteractionsApiKey(model, options);
     const apiKey = host.resolveSecretSentinel(unresolvedApiKey);
     if (!apiKey.trim()) {
       throw new Error(`No API key for provider: ${model.provider}`);
@@ -165,64 +167,56 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     const decoder = new TextDecoder();
     let buffer = "";
 
-    let currentBlockType: "text" | "thinking" | "toolCall" | null = null;
+    let currentBlock: TextContent | ThinkingContent | ToolCall | null = null;
     let currentBlockIndex = -1;
-    let currentToolCall: ToolCall | null = null;
     let currentToolArgs = "";
     let latestThoughtSignature: string | undefined;
     let latestUsage: Record<string, unknown> | undefined;
 
     const endCurrentBlock = () => {
-      if (currentBlockType === "text") {
-        const block = output.content[currentBlockIndex];
-        const textBlock = block?.type === "text" ? block : undefined;
-        stream.push({
-          type: "text_end",
-          contentIndex: currentBlockIndex,
-          content: textBlock?.text ?? "",
-          partial: output,
-        });
-      } else if (currentBlockType === "thinking") {
-        const block = output.content[currentBlockIndex];
-        const thinkingBlock = block?.type === "thinking" ? block : undefined;
-        if (thinkingBlock && !thinkingBlock.thinkingSignature && latestThoughtSignature) {
-          thinkingBlock.thinkingSignature = latestThoughtSignature;
-        }
-        stream.push({
-          type: "thinking_end",
-          contentIndex: currentBlockIndex,
-          content: thinkingBlock?.thinking ?? "",
-          partial: output,
-        });
-        latestThoughtSignature = undefined;
-      } else if (currentBlockType === "toolCall" && currentToolCall) {
+      if (!currentBlock) {
+        return;
+      }
+      if (currentBlock.type === "toolCall") {
         if (currentToolArgs.trim()) {
-          currentToolCall.arguments = parseTerminalToolCallArguments(currentToolArgs);
+          currentBlock.arguments = parseTerminalToolCallArguments(currentToolArgs);
         }
         stream.push({
           type: "toolcall_end",
           contentIndex: currentBlockIndex,
-          toolCall: currentToolCall,
+          toolCall: currentBlock,
           partial: output,
         });
-        currentToolCall = null;
         currentToolArgs = "";
+      } else {
+        if (currentBlock.type === "thinking") {
+          if (!currentBlock.thinkingSignature && latestThoughtSignature) {
+            currentBlock.thinkingSignature = latestThoughtSignature;
+          }
+          latestThoughtSignature = undefined;
+        }
+        stream.push({
+          type: currentBlock.type === "text" ? "text_end" : "thinking_end",
+          contentIndex: currentBlockIndex,
+          content: currentBlock.type === "text" ? currentBlock.text : currentBlock.thinking,
+          partial: output,
+        });
       }
-      currentBlockType = null;
+      currentBlock = null;
     };
 
     const startTextBlock = (type: "text" | "thinking", text = "") => {
       endCurrentBlock();
       currentBlockIndex = output.content.length;
-      output.content.push(
+      const block: TextContent | ThinkingContent =
         type === "text"
           ? { type, text }
           : {
               type,
               thinking: text,
               ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
-            },
-      );
+            };
+      output.content.push(block);
       stream.push({
         type: type === "text" ? "text_start" : "thinking_start",
         contentIndex: currentBlockIndex,
@@ -236,26 +230,18 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
           partial: output,
         });
       }
-      return type;
+      return block;
     };
 
     const appendTextDelta = (type: "text" | "thinking", text: string) => {
       if (!text) {
         return;
       }
-      if (currentBlockType !== type) {
-        currentBlockType = startTextBlock(type);
-      }
-      const block = output.content[currentBlockIndex];
-      if (type === "text") {
-        if (block?.type !== "text") {
-          throw new Error("Google Interactions text delta has no active text block");
-        }
+      const block = currentBlock?.type === type ? currentBlock : startTextBlock(type);
+      currentBlock = block;
+      if (block.type === "text") {
         block.text += text;
       } else {
-        if (block?.type !== "thinking") {
-          throw new Error("Google Interactions thought delta has no active thought block");
-        }
         block.thinking += text;
       }
       stream.push({
@@ -362,11 +348,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             const signature = readStringField(delta, "signature") ?? "";
             if (signature) {
               latestThoughtSignature = signature;
-              if (currentBlockType === "thinking") {
-                const block = output.content[currentBlockIndex];
-                if (block?.type === "thinking") {
-                  block.thinkingSignature = signature;
-                }
+              if (currentBlock?.type === "thinking") {
+                currentBlock.thinkingSignature = signature;
               } else {
                 const lastThinking = output.content.findLast(
                   (block): block is ThinkingContent => block.type === "thinking",
@@ -385,21 +368,16 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
           } else if (deltaType === "arguments" || deltaType === "arguments_delta") {
             const argText =
               readStringField(delta, "arguments") ?? readStringField(delta, "text") ?? "";
-            if (currentBlockType !== "toolCall") {
-              currentToolCall = startToolCallBlock(delta);
-              currentBlockType = "toolCall";
+            if (currentBlock?.type !== "toolCall") {
+              currentBlock = startToolCallBlock(delta);
             }
             const streamedToolName = readStringField(delta, "name");
-            if (
-              streamedToolName &&
-              currentToolCall &&
-              (!currentToolCall.name || currentToolCall.name === "tool")
-            ) {
-              currentToolCall.name = streamedToolName;
+            if (streamedToolName && (!currentBlock.name || currentBlock.name === "tool")) {
+              currentBlock.name = streamedToolName;
             }
             const streamedToolCallId = readStringField(delta, "id");
-            if (streamedToolCallId && currentToolCall) {
-              currentToolCall.id = streamedToolCallId;
+            if (streamedToolCallId) {
+              currentBlock.id = streamedToolCallId;
             }
             currentToolArgs += argText;
             stream.push({
@@ -417,14 +395,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
               latestThoughtSignature = stepSignature;
             }
             const initialThinking = joinTextParts(step.summary);
-            if (currentBlockType !== "thinking") {
-              currentBlockType = startTextBlock("thinking", initialThinking);
+            if (currentBlock?.type !== "thinking") {
+              currentBlock = startTextBlock("thinking", initialThinking);
             }
           } else if (step?.type === "model_output") {
-            currentBlockType = startTextBlock("text", joinTextParts(step.content));
+            currentBlock = startTextBlock("text", joinTextParts(step.content));
           } else if (step?.type === "function_call") {
-            currentToolCall = startToolCallBlock(step, asRecord(step.arguments));
-            currentBlockType = "toolCall";
+            currentBlock = startToolCallBlock(step, asRecord(step.arguments));
           }
         } else if (eventType === "step.stop") {
           latestUsage = asOptionalRecord(event.usage) ?? latestUsage;
@@ -485,11 +462,6 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
           block.thinkingSignature = latestThoughtSignature;
         }
       }
-    }
-
-    if (!output.stopReason) {
-      const hasToolCalls = output.content.some((b) => b.type === "toolCall");
-      output.stopReason = hasToolCalls ? "toolUse" : "stop";
     }
 
     if (output.stopReason === "aborted" || output.stopReason === "error") {

@@ -4,6 +4,10 @@ import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import type { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import {
+  managedCommandCustody,
+  managedCommandUnsettled,
+} from "./update-managed-service-handoff-children.js";
+import {
   canCleanupLegacyManagedHandoff,
   readManagedHandoffRepairFacts,
   inspectManagedHandoffRepairFacts,
@@ -20,6 +24,7 @@ import type {
   ManagedHandoffRepair,
   ManagedHandoffLeaseTransition,
 } from "./update-managed-service-handoff-lease-types.js";
+import { hasOriginalUpdateExecutorCustody } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
@@ -27,51 +32,114 @@ import {
   parseManagedHandoffLeasePayload,
   type ManagedHandoffLeaseAction,
 } from "./update-managed-service-handoff-schema.js";
+import type { createManagedHandoffScopeReader } from "./update-managed-service-handoff-scope.js";
 
 type Rows = ReturnType<typeof createManagedHandoffLeaseRows>;
 
-/** Observe dead original-generation mirrors before the admission write lock.
- * Commit their removal with the original row, never strand a slot whose
- * mutationOriginal would immediately become stale. Cancellation/native custody
- * is not reclaimable and all existing mutation predicates remain unchanged. */
-export function observeManagedHandoffOriginalReclamation(
+export function createManagedHandoffReclaimability({
+  bootIdentity,
+  processState,
+  nativeClosed,
+  hasUnsettledChildren,
+  withDatabase,
+  transact,
+}: {
+  bootIdentity: ReturnType<typeof createManagedHandoffBootIdentityReader>;
+  processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
+  nativeClosed: ReturnType<typeof createManagedHandoffScopeReader>["nativeClosed"];
+  hasUnsettledChildren: (lease: ManagedHandoffLease, db?: DatabaseSync) => boolean;
+  withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
+  transact: <T>(db: DatabaseSync, operation: () => T) => T;
+}) {
+  return function reclaimable(lease: ManagedHandoffLease, db?: DatabaseSync) {
+    // No process/boot liveness observation is a join receipt.
+    if (lease.version === 3 || lease.version === 4 || hasOriginalUpdateExecutorCustody(lease)) {
+      return false;
+    }
+    const action = lease.action;
+    if (managedCommandCustody(lease)) {
+      return !managedCommandUnsettled(lease) && !hasUnsettledChildren(lease, db);
+    }
+    if (action.kind === "triage" && action.lifetime.kind === "foreground") {
+      const boot = bootIdentity();
+      if (
+        boot.platform === action.lifetime.boot.platform &&
+        boot.identity !== action.lifetime.boot.identity
+      ) {
+        const repair = (connection: DatabaseSync) =>
+          readManagedHandoffRepairMetadata(connection, lease, (operation) =>
+            transact(connection, operation),
+          );
+        return action.phase === "closed" || !(db ? repair(db) : withDatabase(true, repair));
+      }
+      if (!["reserved", "closed"].includes(action.phase)) {
+        return false;
+      }
+    }
+    if (processState(lease.helper) !== "dead" || processState(lease.executor) !== "dead") {
+      return false;
+    }
+    return (
+      !hasUnsettledChildren(lease, db) &&
+      (action.kind !== "triage" ||
+        action.lifetime.kind !== "native" ||
+        nativeClosed(action.lifetime))
+    );
+  };
+}
+
+/** Retire dead command claims and original mirrors with the replacing admission.
+ * A shipped parent cannot settle candidate custody after Doctor dies. Retained
+ * bound claims must not survive successful repair and fence an older reader. */
+export function observeManagedHandoffReclamation(
+  root: string,
   original: ManagedHandoffLease | undefined,
   db: DatabaseSync,
   deps: Pick<Rows, "handle" | "deleteRow"> & {
     reclaimable: (lease: ManagedHandoffLease, db: DatabaseSync) => boolean;
     hasUnsettledChildren: (lease: ManagedHandoffLease, db: DatabaseSync) => boolean;
+    readCommandChildren: (roots: readonly string[], db?: DatabaseSync) => ManagedHandoffLease[];
+    processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
   },
 ): () => boolean {
-  if (
-    !original ||
-    original.version !== 2 ||
-    original.mutationOriginal ||
-    original.action.kind !== "update" ||
-    original.action.mutationProtocol !== "original-cancellation-v1"
-  ) {
-    return () => true;
-  }
-  const generation = {
-    key: original.key,
-    owner: original.owner,
-    payload: original.payload,
-    updatedAt: original.updatedAt,
-  };
+  const generation =
+    original?.version === 2 &&
+    !original.mutationOriginal &&
+    original.action.kind === "update" &&
+    original.action.mutationProtocol === "original-cancellation-v1"
+      ? {
+          key: original.key,
+          owner: original.owner,
+          payload: original.payload,
+          updatedAt: original.updatedAt,
+        }
+      : undefined;
   const readPairs = () =>
-    executeSqliteQuerySync(
-      db,
-      leaseQueries(db)
-        .selectFrom("managed_update_handoffs")
-        .select(["install_root", "owner", "payload_json", "updated_at"])
-        .orderBy("install_root"),
-    ).rows.flatMap((row) => {
-      const payload = parseManagedHandoffLeasePayload(row.payload_json);
-      return payload?.version === 2 && isDeepStrictEqual(payload.mutationOriginal, generation)
-        ? [{ row, lease: deps.handle(row.install_root, row) }]
-        : [];
-    });
+    generation
+      ? executeSqliteQuerySync(
+          db,
+          leaseQueries(db)
+            .selectFrom("managed_update_handoffs")
+            .select(["install_root", "owner", "payload_json", "updated_at"])
+            .orderBy("install_root"),
+        ).rows.flatMap((row) => {
+          const payload = parseManagedHandoffLeasePayload(row.payload_json);
+          return payload?.version === 2 && isDeepStrictEqual(payload.mutationOriginal, generation)
+            ? [{ row, lease: deps.handle(row.install_root, row) }]
+            : [];
+        })
+      : [];
   const observed = readPairs();
-  const dead = observed.every(({ lease }) => deps.reclaimable(lease, db));
+  const roots = [root, ...observed.map(({ lease }) => lease.key)];
+  const readCommands = () =>
+    deps.readCommandChildren(roots, db).toSorted((a, b) => a.key.localeCompare(b.key));
+  const commands = readCommands();
+  const commandSettled = (lease: ManagedHandoffLease) =>
+    managedCommandCustody(lease) === "bound" &&
+    deps.processState(lease.helper) === "dead" &&
+    !managedCommandUnsettled(lease);
+  const dead =
+    observed.every(({ lease }) => deps.reclaimable(lease, db)) && commands.every(commandSettled);
   // The caller runs this only after revalidating the exact original observation
   // and its descendants, inside the same transaction that replaces that row.
   return () => {
@@ -79,9 +147,22 @@ export function observeManagedHandoffOriginalReclamation(
     if (
       !dead ||
       !isDeepStrictEqual(current, observed) ||
+      !isDeepStrictEqual(readCommands(), commands) ||
+      !commands.every(commandSettled) ||
       current.some(({ lease }) => deps.hasUnsettledChildren(lease, db))
     ) {
       return false;
+    }
+    for (const lease of commands) {
+      if (
+        !deps.deleteRow(db, lease.key, {
+          owner: lease.owner,
+          payload_json: lease.payload,
+          updated_at: lease.updatedAt,
+        })
+      ) {
+        throw new Error("Managed command custody changed during reclamation");
+      }
     }
     for (const { row } of current) {
       if (!deps.deleteRow(db, row.install_root, row)) {

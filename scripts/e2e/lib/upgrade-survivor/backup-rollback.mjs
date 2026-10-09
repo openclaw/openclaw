@@ -3,13 +3,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { compareReleaseVersions } from "../../../lib/release-version.mjs";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
   transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const RESTORED_TRANSCRIPT = "agents/main/sessions/upgrade-restored-index-history.jsonl";
 const MINIMUM_BASELINE = "2026.9.4";
@@ -86,8 +86,7 @@ function databaseInventory(stateDir, specimen) {
     return { ...specimen, present: false };
   }
   // This observer cannot initialize or migrate the database it is measuring.
-  const database = new DatabaseSync(file, { readOnly: true });
-  try {
+  return readDatabase(file, (database) => {
     database.exec("BEGIN");
     const userVersion = database.prepare("PRAGMA user_version").get().user_version;
     const tables = database
@@ -145,9 +144,7 @@ function databaseInventory(stateDir, specimen) {
       sessions,
       tables: logicalTables.map((table) => tableInventory(database, table)),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function inventory(stateDir, specimens, files) {
@@ -183,10 +180,7 @@ function canonicalRestoredTranscript(schema, runtime) {
         .every((event) => event.type === "message" && typeof event.message?.content === "string"),
     "volatile omission requires the text-only restored-index fixture",
   );
-  const database = new DatabaseSync(containedPath(schema.stateDir, agent.databaseRelative), {
-    readOnly: true,
-  });
-  try {
+  return readDatabase(containedPath(schema.stateDir, agent.databaseRelative), (database) => {
     const canonical = database
       .prepare(
         `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? ORDER BY seq`,
@@ -205,9 +199,7 @@ function canonicalRestoredTranscript(schema, runtime) {
       sessionId,
       canonicalEventCount: canonical.length,
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function archiveMembers(archive) {

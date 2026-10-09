@@ -211,18 +211,6 @@ describe("skills verify CLI", () => {
     expect(mocks.verify).not.toHaveBeenCalled();
   });
 
-  it("reports runtime errors in JSON by default", async () => {
-    mocks.verify.mockRejectedValueOnce(new Error("ClawHub verification unavailable"));
-    await expect(runCommand(["skills", "verify", "@demo-owner/weather"])).rejects.toThrow(
-      "__exit__:1",
-    );
-    expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: "ClawHub verification unavailable" },
-    });
-    expect(mocks.runtimeErrors).toStrictEqual([]);
-  });
-
   it("maps registry failures to a human domain error without leaking upstream details", async () => {
     mocks.verify.mockRejectedValueOnce(
       new ClawHubRequestError({

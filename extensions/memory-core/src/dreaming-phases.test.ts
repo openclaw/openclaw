@@ -29,6 +29,7 @@ import {
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { appendSessionCorpusLines } from "./session-ingestion.js";
+import { makeMessage, withSessionAdmissionReadBudget } from "./session-ingestion.test-support.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -158,14 +159,6 @@ async function seedTranscript(params: {
   await upsertSessionEntry(registration);
 }
 
-function makeMessage(
-  role: "user" | "assistant",
-  timestamp: string,
-  content: unknown,
-): Parameters<typeof seedTranscript>[0]["messages"][number] {
-  return { role, timestamp, content };
-}
-
 function corpusPath(workspaceDir: string, day = DAY) {
   return path.join(workspaceDir, "memory", ".dreams", "session-corpus", `${day}.txt`);
 }
@@ -276,7 +269,7 @@ function createDailyHarness(
         },
       }),
       ...(options.includeMainAgent
-        ? { agents: { list: [{ id: "main", workspace: workspaceDir }] } }
+        ? { agents: { entries: { main: { workspace: workspaceDir } } } }
         : {}),
       ...(options.memorySearchEnabled === false ? { memory: { search: { enabled: false } } } : {}),
     },
@@ -861,7 +854,7 @@ describe("memory-core dreaming phases", () => {
     });
 
     const excludedConfig: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+      agents: { entries: { main: { workspace: workspaceDir } } },
       plugins: {
         entries: {
           "memory-core": {
@@ -879,7 +872,7 @@ describe("memory-core dreaming phases", () => {
     const excludedHarness = createHarness(excludedConfig, workspaceDir);
     const corpusFile = corpusPath(workspaceDir);
 
-    await runLight(excludedHarness.sweep);
+    await withSessionAdmissionReadBudget(() => runLight(excludedHarness.sweep), 1);
     const excludedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(excludedState.files["main:sessions/main/gmail-session"]).toMatchObject({
       contentHash: "",
@@ -897,7 +890,7 @@ describe("memory-core dreaming phases", () => {
     const admittedHarness = createDailyHarness(workspaceDir, {
       includeMainAgent: true,
     });
-    await runLight(admittedHarness.sweep, 6);
+    await withSessionAdmissionReadBudget(() => runLight(admittedHarness.sweep, 6), 0);
     const admittedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(admittedState.files["main:sessions/main/gmail-session"]).not.toHaveProperty(
       "excludedReason",
@@ -971,7 +964,7 @@ describe("memory-core dreaming phases", () => {
             rem: { enabled: phase === "rem", limit: 20, lookbackDays: 7 },
           },
         }),
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
       };
       const prepared = createDeferred<string>();
       const publish = createDeferred<void>();

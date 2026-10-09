@@ -1,4 +1,3 @@
-// Evaluates exec approval allowlists and safe-bin usage.
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -108,21 +107,13 @@ async function explainShellPolicySegments(params: {
   }
 }
 
-function normalizeSafeBins(entries?: readonly string[]): Set<string> {
-  if (!Array.isArray(entries)) {
-    return new Set();
-  }
-  const normalized = entries
-    .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-    .filter((entry) => entry.length > 0);
-  return new Set(normalized);
-}
-
 export function resolveSafeBins(entries?: readonly string[] | null): Set<string> {
-  if (entries === undefined) {
-    return normalizeSafeBins(DEFAULT_SAFE_BINS);
-  }
-  return normalizeSafeBins(entries ?? []);
+  const bins = entries === undefined ? DEFAULT_SAFE_BINS : entries;
+  return new Set(
+    Array.isArray(bins)
+      ? bins.map((entry) => normalizeLowercaseStringOrEmpty(entry)).filter(Boolean)
+      : [],
+  );
 }
 
 function isSafeBinUsage(params: {
@@ -746,20 +737,16 @@ function evaluateAuthorizationCandidate(params: {
 }
 
 function evaluateAuthorizationPlan(params: {
-  plan: ExecAuthorizationPlan;
+  plan: Extract<ExecAuthorizationPlan, { ok: true }>;
   context: ExecAllowlistContext;
 }): ExecAllowlistAnalysis {
   const result: ExecAllowlistAnalysis = {
     ...emptyExecAllowlistEvaluation(),
-    analysisOk: params.plan.ok,
-    allowlistSatisfied: params.plan.ok,
+    analysisOk: true,
+    allowlistSatisfied: true,
     segments: [],
     authorizationPlan: params.plan,
   };
-  if (!params.plan.ok) {
-    return result;
-  }
-
   const skillBins = params.context.skillBins ?? [];
   const allowSkills = params.context.autoAllowSkills === true && skillBins.length > 0;
   const skillBinTrust = buildSkillBinTrustIndex(skillBins);
@@ -810,13 +797,9 @@ export function evaluateExecAllowlist(
   return result;
 }
 
-export type ExecAllowlistAnalysis = {
+export type ExecAllowlistAnalysis = ExecAllowlistEvaluation & {
   analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
-  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
-  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
   authorizationPlan?: ExecAuthorizationPlan;
 };
 
@@ -826,19 +809,10 @@ function hasSegmentExecutableMatch(
 ): boolean {
   const execution = resolveExecutionTargetResolution(segment.resolution);
   const candidates = [execution?.executableName, execution?.rawExecutable, segment.argv[0]];
-  for (const candidate of candidates) {
-    if (typeof candidate !== "string") {
-      continue;
-    }
-    const trimmed = candidate.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (predicate(trimmed)) {
-      return true;
-    }
-  }
-  return false;
+  return candidates.some((candidate) => {
+    const trimmed = normalizeOptionalString(candidate);
+    return trimmed ? predicate(trimmed) : false;
+  });
 }
 
 function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
@@ -1093,17 +1067,6 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
   });
 }
 
-function resolveAllowAlwaysPatternArgv(
-  argv: string[],
-  platform: NodeJS.Platform = process.platform,
-): string[] | null {
-  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(argv, platform);
-  if (packageManagerTarget.kind === "blocked") {
-    return null;
-  }
-  return packageManagerTarget.argv;
-}
-
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -1117,15 +1080,15 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const patternArgv = resolveAllowAlwaysPatternArgv(
+  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(
     params.segment.argv,
     (params.platform ?? undefined) as NodeJS.Platform | undefined,
   );
-  if (!patternArgv) {
+  if (packageManagerTarget.kind === "blocked") {
     return;
   }
   const trustPlan = resolveExecWrapperTrustPlan(
-    patternArgv,
+    packageManagerTarget.argv,
     undefined,
     (params.platform ?? undefined) as NodeJS.Platform | undefined,
   );
@@ -1268,38 +1231,6 @@ export function resolveAllowAlwaysPatternEntries(params: {
   return patterns;
 }
 
-/**
- * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
- */
-function evaluateShellAllowlist(
-  params: {
-    command: string;
-    env?: NodeJS.ProcessEnv;
-  } & ExecAllowlistContext,
-): ExecAllowlistAnalysis {
-  const analysisFailure = (): ExecAllowlistAnalysis => ({
-    analysisOk: false,
-    ...emptyExecAllowlistEvaluation(),
-    segments: [],
-  });
-
-  // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
-  // and can rewrite token boundaries at runtime.
-  if (hasShellLineContinuation(params.command) || !isWindowsPlatform(params.platform)) {
-    return analysisFailure();
-  }
-
-  const analysis = analyzeWindowsShellCommand(params);
-  if (!analysis.ok) {
-    return analysisFailure();
-  }
-  return {
-    analysisOk: true,
-    ...evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true }),
-    segments: analysis.segments,
-  };
-}
-
 export async function evaluateShellAllowlistWithAuthorization(
   params: {
     command: string;
@@ -1307,7 +1238,18 @@ export async function evaluateShellAllowlistWithAuthorization(
   } & ExecAllowlistContext,
 ): Promise<ExecAllowlistAnalysis> {
   if (isWindowsPlatform(params.platform)) {
-    return evaluateShellAllowlist(params);
+    // Shell line continuations can rewrite token boundaries at runtime.
+    const analysis = hasShellLineContinuation(params.command)
+      ? undefined
+      : analyzeWindowsShellCommand(params);
+    if (!analysis?.ok) {
+      return { analysisOk: false, ...emptyExecAllowlistEvaluation(), segments: [] };
+    }
+    return {
+      analysisOk: true,
+      ...evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true }),
+      segments: analysis.segments,
+    };
   }
   const allowlistContext = { ...params, allowShellBuiltins: true };
   const authorizationPlan = await planShellAuthorization({ ...params });

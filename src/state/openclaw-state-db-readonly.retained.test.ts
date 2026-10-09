@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createRetainedOperation } from "../infra/retained-operation.js";
 import type { RetainedPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
 import type { RetainedWorkerTask, WorkerTaskInput } from "../infra/worker-task-pool.types.js";
@@ -44,7 +44,6 @@ import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -61,9 +60,9 @@ const tasks: Array<RetainedWorkerTask<OpenClawStateReadReply>> = [];
 const releaseFixtures: Array<() => void> = [];
 const reply: OpenClawStateReadReply = {
   ok: true,
-  type: "fleet.list",
+  type: "backup.runs",
   sourceAdmitted: true,
-  cells: [],
+  runs: [],
 };
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -183,30 +182,46 @@ function observeReaders() {
   };
 }
 
-it("services two ordinary readers through release before admitting a queued reader", async () => {
+it("services queued readers through release while retaining native source custody", async () => {
   const observed = observeReaders();
   const options = source();
-  const first = owner.run("first", () =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-  );
-  const second = owner.run("second", () =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-  );
-  const follower = owner.run("follower", () =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-  );
+  const backup = createDeferredCore<{ location: string; cleanupAsync(): Promise<boolean> }>();
+  const nativeCleanup = createDeferredCore<boolean>();
+  const release = vi.fn();
+  const observe = vi.fn();
+  const cleanupAsync = vi.fn(() => nativeCleanup.promise);
+  mock.borrow.mockReturnValueOnce({
+    database: { db: {} },
+    assertCurrent() {},
+    observe,
+    release,
+  });
+  mock.prepareNative.mockReturnValueOnce(backup.promise);
+  releaseFixtures.push(() => {
+    backup.resolve({ location: options.path, cleanupAsync });
+    nativeCleanup.resolve(true);
+  });
+  const read = () => executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+  const first = owner.run("first", () => withArtifactPreservingStateReads(read));
+  observed("first").source.service();
+  expect(mock.prepareNative).toHaveBeenCalledOnce();
+  expect(mock.prepareFresh).not.toHaveBeenCalled();
+  expect(tasks).toHaveLength(0);
+  expect(observed("first").released).not.toHaveBeenCalled();
+  backup.resolve({ location: options.path, cleanupAsync });
+  await submitted.promise;
+  const second = owner.run("second", read);
+  const follower = owner.run("follower", read);
   expect(events).toEqual(["admit first", "admit second"]);
   ready = true;
   let microtaskRan = false;
   queueMicrotask(() => {
     microtaskRan = true;
   });
-  // The real captured source advances all owners, including the earlier reads' release tails.
   owner.run("unrelated caller", () => observed("follower").source.service());
   expect(microtaskRan).toBe(false);
-  for (const name of ["first", "second", "follower"]) {
-    expect(observed(name).released).toHaveBeenCalledOnce();
-  }
+  expect(observed("second").released).toHaveBeenCalledOnce();
+  expect(observed("follower").released).toHaveBeenCalledOnce();
   expect(events).toEqual([
     "admit first",
     "admit second",
@@ -216,66 +231,14 @@ it("services two ordinary readers through release before admitting a queued read
     "release follower",
   ]);
   expect(occupied).toBe(0);
-  await expect(Promise.all([first, second, follower])).resolves.toEqual([reply, reply, reply]);
-});
-
-it("keeps native backup asynchronous while a later source services its query release", async () => {
-  const observed = observeReaders();
-  const options = source();
-  const backup = createDeferredCore<{ location: string; cleanupAsync(): Promise<boolean> }>();
-  const nativeCleanup = createDeferredCore<boolean>();
-  const release = vi.fn();
-  const observe = vi.fn();
-  mock.borrow.mockReturnValueOnce({ database: { db: {} }, assertCurrent() {}, observe, release });
-  mock.prepareNative.mockReturnValueOnce(backup.promise);
-  releaseFixtures.push(() => {
-    backup.resolve({ location: options.path, cleanupAsync: () => nativeCleanup.promise });
-    nativeCleanup.resolve(true);
-  });
-  const first = owner.run("native", () =>
-    withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-    ),
-  );
-  observed("native").source.service();
-  expect(mock.prepareNative).toHaveBeenCalledOnce();
-  expect(mock.prepareFresh).not.toHaveBeenCalled();
-  expect(tasks).toHaveLength(0);
-  expect(observed("native").released).not.toHaveBeenCalled();
-  const cleanupAsync = vi.fn(() => nativeCleanup.promise);
-  backup.resolve({ location: options.path, cleanupAsync });
-  await submitted.promise;
-  const second = owner.run("second", () =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-  );
-  const follower = owner.run("follower", () =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-  );
-  ready = true;
-  let microtaskRan = false;
-  queueMicrotask(() => {
-    microtaskRan = true;
-  });
-  observed("follower").source.service();
-  expect(microtaskRan).toBe(false);
-  expect(observed("follower").released).toHaveBeenCalledOnce();
-  expect(observed("second").released).toHaveBeenCalledOnce();
-  expect(observed("native").released).not.toHaveBeenCalled();
-  expect(events).toEqual([
-    "admit native",
-    "admit second",
-    "release native",
-    "release second",
-    "admit follower",
-    "release follower",
-  ]);
+  expect(observed("first").released).not.toHaveBeenCalled();
   expect(observe).toHaveBeenCalledOnce();
   expect(cleanupAsync).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
   nativeCleanup.resolve(true);
   await expect(Promise.all([first, second, follower])).resolves.toEqual([reply, reply, reply]);
   expect(release).toHaveBeenCalledOnce();
-  expect(observed("native").released).toHaveBeenCalledOnce();
+  expect(observed("first").released).toHaveBeenCalledOnce();
   expect(mock.prepareFresh).not.toHaveBeenCalled();
 });
 
@@ -303,7 +266,7 @@ it("finishes fresh snapshot preparation, query, and snapshot cleanup without Pro
   });
   const completion = owner.run("fresh", () =>
     withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
     ),
   );
   ready = true;
@@ -322,36 +285,6 @@ it("finishes fresh snapshot preparation, query, and snapshot cleanup without Pro
     "snapshot cleaned",
   ]);
   await expect(completion).resolves.toEqual(reply);
-});
-
-it("retains an inherited snapshot until its outer owner closes after the query", async () => {
-  const observed = observeReaders();
-  const options = source();
-  const snapshotCleanup = vi.fn(async () => true);
-  mock.prepareInherited.mockResolvedValueOnce({
-    location: options.path,
-    cleanup: () => true,
-    cleanupAsync: snapshotCleanup,
-  });
-  await withOpenClawStateDatabaseReadSnapshot(async () => {
-    const completion = owner.run("inherited", () =>
-      executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-    );
-    ready = true;
-    let microtaskRan = false;
-    queueMicrotask(() => {
-      microtaskRan = true;
-    });
-    observed("inherited").source.service();
-    expect(microtaskRan).toBe(false);
-    expect(observed("inherited").released).toHaveBeenCalledOnce();
-    expect(events).toEqual(["admit inherited", "release inherited"]);
-    expect(snapshotCleanup).not.toHaveBeenCalled();
-    await expect(completion).resolves.toEqual(reply);
-  }, options);
-  expect(snapshotCleanup).toHaveBeenCalledOnce();
-  expect(mock.prepareFresh).not.toHaveBeenCalled();
-  expect(mock.borrow).not.toHaveBeenCalled();
 });
 
 it("retains failed preparation custody through a pending close and canonical retry", async () => {
@@ -384,7 +317,7 @@ it("retains failed preparation custody through a pending close and canonical ret
   try {
     completion = maintenance.run(() =>
       withArtifactPreservingStateReads(() =>
-        executeExistingOpenClawStateRead(options, { type: "fleet.list" }, { mapError }),
+        executeExistingOpenClawStateRead(options, { type: "backup.runs" }, { mapError }),
       ),
     );
     void completion.then(

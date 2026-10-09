@@ -169,6 +169,7 @@ describe("requestCliNativeToolApproval", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", dir);
     const binary = makeExecutable(dir, "gog");
     saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
+    let revoked = false;
     const outcome = await requestCliNativeToolApproval({
       toolName: "Bash",
       toolInput: { command: binary },
@@ -176,7 +177,12 @@ describe("requestCliNativeToolApproval", () => {
       agentId: "main",
       cwd: dir,
       ask: "on-miss",
-      assertActive: () => saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } }),
+      assertActive: () => {
+        if (!revoked) {
+          revoked = true;
+          saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } });
+        }
+      },
     });
     expect(outcome).toEqual({ kind: "deny", reason: "unavailable" });
     expect(loadExecApprovals().agents?.main?.allowlist).toEqual([]);

@@ -10,6 +10,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../../config/session
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -29,6 +30,7 @@ const reclamation = vi.hoisted(() => ({
   databasePath: undefined as string | undefined,
   exits: [] as Promise<number>[],
   exitCodes: [] as number[],
+  invalidateAtStart: undefined as string | undefined,
 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -40,6 +42,16 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       private observedValidation = false;
 
       constructor(filename: string | URL, options: WorkerOptions = {}) {
+        if (
+          reclamation.invalidateAtStart !== undefined &&
+          options.workerData?.operation === "reclaim" &&
+          options.workerData.databaseOptions.path === reclamation.invalidateAtStart
+        ) {
+          // Preparation already admitted the executor; expire its shared proof before
+          // the reclaimer requests validation for its own native handle.
+          invalidateOpenClawAgentDatabaseValidation(reclamation.invalidateAtStart);
+          reclamation.invalidateAtStart = undefined;
+        }
         const gate =
           options.workerData?.operation === "reclaim" || reclamation.databasePath
             ? reclamation.gate
@@ -149,6 +161,7 @@ afterEach(async () => {
   reclamation.databasePath = undefined;
   reclamation.exits = [];
   reclamation.exitCodes = [];
+  reclamation.invalidateAtStart = undefined;
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -214,15 +227,17 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     storePath,
   });
   const { ws } = await openClient();
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
+  // Seed a host handle; the worker interceptor expires proof after executor preparation.
+  await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+  openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
   const validation = holdReclamationValidation();
   const { gate } = validation;
   try {
     expect(await rpcReq(ws, "sessions.patch", { key: unrelatedKey, label: "warm" })).toMatchObject({
       ok: true,
     });
-    invalidateOpenClawAgentDatabaseValidation(
-      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-    );
+    reclamation.invalidateAtStart = databasePath;
     const deletion = validation.own(rpcReq(ws, "sessions.delete", { key: targetKey }));
     await validation.entered(deletion, signal);
     expect(loadSessionEntry({ sessionKey: targetKey, storePath })?.sessionId).toBe(
@@ -293,6 +308,8 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     agentId: "main",
     path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
   };
+  // Retire the seeded executor so validation must open beside this native handle.
+  await closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path, "main");
   const database = openOpenClawAgentDatabase(databaseOptions);
   const stateDatabase = openOpenClawStateDatabase();
   const readLeases = () =>

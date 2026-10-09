@@ -1,20 +1,18 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
+import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
@@ -23,6 +21,10 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
@@ -34,9 +36,9 @@ import type {
   SessionTranscriptReadScope,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
-import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
+import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   prepareSqliteTranscriptReadScope,
   resolveSqliteTranscriptReadScope,
@@ -44,21 +46,30 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type {
   SessionColdMutationPlan,
-  SessionColdBatchInput,
   SessionColdBatchPrepared,
-  SessionColdMutationResult,
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
-import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import {
+  projectionLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import { resolveSessionStoreTargets } from "./targets.js";
+import {
+  parseTranscriptAppendRefusal,
+  SessionTranscriptWriterClaimReboundError,
+} from "./session-transcript-writer-claim-error.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
+import { listConfiguredSessionStoreAgentIds } from "./targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const operations = new KeyedAsyncQueue();
@@ -95,20 +106,42 @@ async function runColdMutation(
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
     async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
-      const retained = await runExclusiveSqliteSessionWrite(
-        plan.databaseOptions,
-        async () => {
+      const execution =
+        plan.kind !== "cold-restore" && supportsOpenClawAgentDatabaseExecution(plan.databaseOptions)
+          ? captureOpenClawAgentDatabaseExecution(plan.databaseOptions)
+          : undefined;
+      let retained: ReturnType<typeof retainOpenClawAgentDatabaseReadOnly> | undefined;
+      try {
+        const assertOpeningCurrent = () => {
           assertRequestCurrent();
           assertCurrent?.();
-          return retainOpenClawAgentDatabaseReadOnly(plan.databaseOptions);
-        },
-        "session.reclamation.retain",
-      );
-      if (!retained.found) {
-        throw new Error("Cold transcript operation lost its owning database");
-      }
-      const { database, claim } = retained;
-      try {
+        };
+        if (!execution) {
+          retained = await runExclusiveSqliteSessionWrite(
+            plan.databaseOptions,
+            async () => {
+              assertOpeningCurrent();
+              return retainOpenClawAgentDatabaseReadOnly(plan.databaseOptions);
+            },
+            "session.reclamation.retain",
+          );
+        }
+        const executionClaim = execution
+          ? await withSessionEntryWorker(
+              plan.databaseOptions,
+              undefined,
+              assertOpeningCurrent,
+              (owner, source) =>
+                owner.runExisting(source, async () => owner.captureGenerationClaim()),
+              undefined,
+              execution,
+              signal,
+            )
+          : undefined;
+        const claim = executionClaim ?? (retained?.found ? retained.claim : undefined);
+        if (!claim) {
+          throw new Error("Cold transcript operation lost its owning database");
+        }
         const assertAllowed = () => {
           claim.assertCurrent();
           assertRequestCurrent();
@@ -117,7 +150,7 @@ async function runColdMutation(
         const diagnostics: SqliteSessionReclamationDiagnostics = { kind: plan.kind };
         const [completed] = await withSqliteReclamationAuthorization(
           commitGate,
-          database.db,
+          retained?.found ? retained.database.db : plan.databaseOptions.path,
           assertAllowed,
           (authorize) =>
             runSqliteTranscriptArchiveWorkerOperation<{
@@ -127,10 +160,12 @@ async function runColdMutation(
               diagnostics,
               signal,
               expectedMessageType: "reclaimed",
-              validationOwner: { database, isCurrent: claim.isCurrent },
-              onCommitRequest: () => {
-                authorize();
-              },
+              validationOwner: executionClaim
+                ? { source: plan.databaseOptions, claim: executionClaim }
+                : retained?.found
+                  ? { database: retained.database, isCurrent: retained.claim.isCurrent }
+                  : undefined,
+              onCommitRequest: authorize,
               withWriteAdmission: async (run, reclamationAdmission) =>
                 runExclusiveSqliteSessionWrite(
                   plan.databaseOptions,
@@ -173,17 +208,23 @@ async function runColdMutation(
           plan.kind === "cold-restore" &&
           completed.result.restored &&
           completed.result.sessionKey !== undefined &&
-          claim.isCurrent()
+          retained?.found &&
+          retained.claim.isCurrent()
         ) {
           assertAllowed();
+          // Restoration commits transcript rows only; a facts-less change would revoke sharing.
           sessionChanges.emit({
-            storePath: database.path,
+            storePath: retained.database.path,
             sessionKey: completed.result.sessionKey,
+            facts: { kind: "unchanged" },
           });
         }
         return completed.result;
       } finally {
-        claim.release();
+        await execution?.release();
+        if (retained?.found) {
+          retained.claim.release();
+        }
       }
     },
   );
@@ -205,134 +246,69 @@ type ColdBatchResult = SessionColdMaintenanceResult & {
 
 async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdBatchResult> {
   const storePath = resolveOpenClawAgentSqlitePath(options.databaseOptions);
+  const source = createOpenClawAgentDatabasePathMatcher();
+  source(storePath, storePath);
+  const assertCurrent = () => {
+    options.assertCurrent?.();
+    if (!source.isCurrent()) {
+      throw new Error("Cold transcript database changed during maintenance");
+    }
+  };
   return operations.enqueue(storePath, async () => {
-    const selection = await runExclusiveSqliteSessionWrite(
-      options.databaseOptions,
-      async () =>
-        withOpenClawAgentDatabaseReadOnly((database) => {
-          options.assertCurrent?.();
-          const db = getNodeSqliteKysely<DB>(database.db);
-          const excluded = readSessionColdStorageProtection(database, options.beforeMs);
-          const admissions = collectAdmissionProtectedSessionIds({
-            database,
-            storePath: options.ownerStorePath,
-          });
-          for (const id of admissions) {
-            excluded.add(id);
-          }
-          const cooled = new Set<string>();
-          const now = Date.now();
-          for (const cache of [restoredUntil, oversizedUntil]) {
-            for (const [key, until] of cache) {
-              if (until <= now) {
-                cache.delete(key);
-              } else if (key.startsWith(`${storePath}\0`)) {
-                cooled.add(key.slice(storePath.length + 1));
-              }
-            }
-          }
-          for (const id of cooled) {
-            excluded.add(id);
-          }
-          const externalizations = executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_transcript_cold_archives")
-              .select("session_id")
-              .where("storage", "=", "sqlite")
-              .$if(cooled.size + admissions.size > 0, (query) =>
-                query.where("session_id", "not in", sqliteStringSet([...cooled, ...admissions])),
-              )
-              .orderBy("archived_at")
-              .orderBy("session_id")
-              .limit(options.maxTranscripts),
-          ).rows.flatMap((row) => {
-            const archive = readSessionColdTranscript(database.db, row.session_id);
-            return archive ? [archive] : [];
-          });
-          const candidates =
-            externalizations.length < options.maxTranscripts
-              ? executeSqliteQuerySync(
-                  database.db,
-                  db
-                    .selectFrom("session_windows as window")
-                    .leftJoin(
-                      "session_transcript_cold_archives as cold",
-                      "cold.session_id",
-                      "window.session_id",
-                    )
-                    .select("window.session_id")
-                    .where("cold.session_id", "is", null)
-                    .$if(excluded.size > 0, (query) =>
-                      query.where("window.session_id", "not in", sqliteStringSet([...excluded])),
-                    )
-                    .where("window.transcript_updated_at", "<", options.beforeMs)
-                    .where((eb) =>
-                      eb.exists(
-                        eb
-                          .selectFrom("transcript_events as event")
-                          .select("event.seq")
-                          .whereRef("event.session_id", "=", "window.session_id"),
-                      ),
-                    )
-                    .orderBy("window.transcript_updated_at")
-                    .orderBy("window.session_id")
-                    .limit(options.maxTranscripts - externalizations.length),
-                ).rows
-              : [];
-          const databaseOptions = workerDatabaseOptions(options.databaseOptions);
-          const plans = candidates.flatMap(({ session_id: sessionId }) => {
-            const snapshot = readSessionStateDeleteSnapshot(database.db, sessionId);
-            return snapshot.generation && snapshot.lastSeq !== null
-              ? [{ databaseOptions, sessionId, beforeMs: options.beforeMs, snapshot }]
-              : [];
-          });
-          const freePages = Number(
-            // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
-            database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
-          );
-          return {
-            input: {
-              databaseOptions,
-              plans,
-              externalizations,
-              maxBytes: options.maxBytes,
-            } satisfies SessionColdBatchInput,
-            freePages,
-          };
-        }, options.databaseOptions),
-      "session.history.eviction-prepare",
+    assertCurrent();
+    const cooled = new Set<string>();
+    const now = Date.now();
+    for (const cache of [restoredUntil, oversizedUntil]) {
+      for (const [key, until] of cache) {
+        if (until <= now) {
+          cache.delete(key);
+        } else if (key.startsWith(`${storePath}\0`)) {
+          cooled.add(key.slice(storePath.length + 1));
+        }
+      }
+    }
+    const input: SessionColdPreparationWorkerData["input"] = {
+      databaseOptions: workerDatabaseOptions(options.databaseOptions),
+      admissionIdentities: [
+        ...(collectActiveSessionWorkAdmissions().get(options.ownerStorePath) ?? []),
+      ],
+      liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
+      cooledSessionIds: [...cooled],
+      beforeMs: options.beforeMs,
+      maxTranscripts: options.maxTranscripts,
+      maxBytes: options.maxBytes,
+    };
+    const [batch] = await withSqliteMutationWorkerLifetime(
+      input.databaseOptions,
+      async ({ assertCurrent: assertRequestCurrent, signal }) => {
+        const prepared = await runSqliteTranscriptArchiveWorkerOperation<SessionColdBatchPrepared>({
+          expectedMessageType: "done",
+          signal,
+          assertCurrent: () => {
+            assertRequestCurrent();
+            assertCurrent();
+          },
+          workerData: {
+            type: "sqlite-transcript-archive-v2",
+            operation: "cold-prepare",
+            input,
+          } satisfies SessionColdPreparationWorkerData,
+        });
+        assertRequestCurrent();
+        assertCurrent();
+        return prepared;
+      },
     );
+    assertCurrent();
+    if (!batch) {
+      throw new Error("Cold archive worker returned no prepared batch");
+    }
     const empty: ColdBatchResult = {
       archivedTranscripts: 0,
       externalizedTranscripts: 0,
       envelopeBytes: 0,
       attemptedTranscripts: 0,
     };
-    if (!selection.found) {
-      return empty;
-    }
-    const { input, freePages } = selection.value;
-    if (input.plans.length + input.externalizations.length === 0) {
-      if (freePages > 0) {
-        await runColdMutation(
-          { kind: "cold-maintain", databaseOptions: input.databaseOptions },
-          options.assertCurrent,
-        );
-      }
-      return empty;
-    }
-    const [batch] = await runSqliteTranscriptArchiveWorkerOperation<SessionColdBatchPrepared>({
-      expectedMessageType: "done",
-      workerData: {
-        type: "sqlite-transcript-archive-v2",
-        operation: "cold-prepare",
-        input,
-      } satisfies SessionColdPreparationWorkerData,
-    });
-    if (!batch) {
-      throw new Error("Cold archive worker returned no prepared batch");
-    }
     for (const sessionId of batch.oversizedSessionIds) {
       oversizedUntil.set(`${storePath}\0${sessionId}`, Date.now() + RESTORE_COOLDOWN_MS);
       log.warn("Transcript remains in SQLite because its archive exceeds the 64 MiB limit", {
@@ -352,24 +328,26 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
               prepared: batch.prepared,
               externalizations: batch.externalizations,
               beforeMs: options.beforeMs,
+              protectionKeys: batch.protectionKeys,
+              liveSessionKeys: input.liveSessionKeys,
             },
             () => {
-              options.assertCurrent?.();
-              const read = withOpenClawAgentDatabaseReadOnly(
-                (database) =>
-                  collectAdmissionProtectedSessionIds({
-                    database,
-                    storePath: options.ownerStorePath,
-                  }),
-                input.databaseOptions,
-              );
-              if (!read.found) {
-                throw new Error("Cold transcript database disappeared");
+              assertCurrent();
+              const admissions = collectActiveSessionWorkAdmissions().get(options.ownerStorePath);
+              if (
+                [
+                  ...(admissions ?? []),
+                  ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+                ].some((identity) =>
+                  batch.protectionKeys.includes(normalizeStoreSessionKey(identity)),
+                )
+              ) {
+                throw new Error("Transcript became active; cold archival was canceled");
               }
               if (
                 included.some(
                   (id) =>
-                    read.value.has(id) ||
+                    admissions?.has(id) ||
                     (restoredUntil.get(`${storePath}\0${id}`) ?? 0) > Date.now(),
                 )
               ) {
@@ -377,7 +355,13 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
               }
             },
           )
-        : empty;
+        : batch.freePages > 0
+          ? await runColdMutation(
+              { kind: "cold-maintain", databaseOptions: input.databaseOptions },
+              assertCurrent,
+            )
+          : empty;
+    assertCurrent();
     return {
       archivedTranscripts: result.archivedTranscripts,
       externalizedTranscripts: result.externalizedTranscripts,
@@ -387,12 +371,34 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
   });
 }
 
+export class SessionColdTurnReboundError extends Error {
+  constructor(readonly result: NonNullable<SessionColdMutationResult["turnRebound"]>) {
+    super("Session changed before cold transcript restoration");
+    this.name = "SessionColdTurnReboundError";
+  }
+}
+
+export class SessionColdSourceReboundError extends Error {
+  constructor(readonly refusal: NonNullable<SessionColdMutationResult["refusedSource"]>) {
+    super("Session source changed before cold transcript restoration");
+    this.name = "SessionColdSourceReboundError";
+  }
+}
+
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
   preparation?: SessionColdReadPreparation,
+  guard?: SessionColdRestorationGuard,
 ): Promise<void> {
   assertCurrent?.();
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    // An actor has no cold archive to restore; loss must still reject this continuation.
+    return;
+  }
   let resolved = preparation?.target;
   if (
     !resolved &&
@@ -436,27 +442,36 @@ export async function restoreSessionColdTranscript(
       }
       const source = createOpenClawAgentDatabasePathMatcher();
       source(target.path, target.path);
-      return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-        const assertAllowed = () => {
-          assertPreparedCurrent();
-          owner.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while preparing its metadata. Retry the request.",
-            );
-          }
-        };
-        return await restoreSessionColdTranscript(captured, assertAllowed, {
-          target,
-          readMetadata: async () => {
-            const metadata = await owner.readColdMetadata({
-              sessionId: target.sessionId,
-              env: captured.env,
-            });
-            return metadata.archive;
-          },
-        });
-      });
+      return await withSessionHistoryWorkerDatabase(
+        options,
+        async (owner) => {
+          const assertAllowed = () => {
+            assertPreparedCurrent();
+            owner.assertCurrent();
+            if (!source.isCurrent()) {
+              throw new Error(
+                "Session store changed while preparing its metadata. Retry the request.",
+              );
+            }
+          };
+          return await restoreSessionColdTranscript(
+            captured,
+            assertAllowed,
+            {
+              target,
+              readMetadata: async () => {
+                const metadata = await owner.readColdMetadata({
+                  sessionId: target.sessionId,
+                  env: captured.env,
+                });
+                return metadata.archive;
+              },
+            },
+            guard,
+          );
+        },
+        projectionLane,
+      );
     }
   }
   const options = toDatabaseOptions(resolved);
@@ -486,15 +501,29 @@ export async function restoreSessionColdTranscript(
     if (!archive) {
       return;
     }
-    await runColdMutation(
+    const result = await runColdMutation(
       {
         kind: "cold-restore",
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
         archive,
+        guard,
       },
       assertCurrent,
     );
+    if (result.turnRebound) {
+      throw new SessionColdTurnReboundError(result.turnRebound);
+    }
+    if (result.refusedSource) {
+      throw new SessionColdSourceReboundError(result.refusedSource);
+    }
+    if (result.writerRefusal !== undefined) {
+      const refusal = parseTranscriptAppendRefusal(result.writerRefusal);
+      if (!refusal) {
+        throw new Error("Cold transcript writer refusal has an invalid identity");
+      }
+      throw new SessionTranscriptWriterClaimReboundError(refusal);
+    }
     assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.
     const now = Date.now();
@@ -507,18 +536,63 @@ export async function restoreSessionColdTranscript(
   });
 }
 
-function configuredStores(
-  config: OpenClawConfig,
-): Array<{ agentId: string; storePath: string; ownerStorePath: string }> {
-  return resolveSessionStoreTargets(config, { allAgents: true }).map((target) => {
-    const resolved = resolveSqliteTranscriptReadScope({ ...target, sessionId: "cold-maintenance" });
-    const options = toDatabaseOptions(resolved);
-    return {
-      agentId: options.agentId,
-      storePath: resolveOpenClawAgentSqlitePath(options),
-      ownerStorePath: target.storePath,
-    };
+async function configuredStores(config: OpenClawConfig, assertCallerCurrent?: () => void) {
+  const prepared = prepareSessionStoreTargetInventory(
+    config,
+    listConfiguredSessionStoreAgentIds(config),
+    process.env,
+    "configured",
+  );
+  const { env, candidates } = prepared;
+  const context = captureOpenClawStateReadWorkerContext({ env });
+  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
+  const source = createOpenClawAgentDatabasePathMatcher();
+  for (const candidate of candidates) {
+    source(candidate.path, candidate.path);
+  }
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+    if (!source.isCurrent()) {
+      throw new Error("Session store changed during cold maintenance");
+    }
+  };
+  const stores = await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
+    const registry = await registryRead.read();
+    assertCurrent();
+    registryRead.assertCurrent();
+    discovery.assertCurrent();
+    const inventory = await discovery.readTargetInventory({
+      ...prepared,
+      registeredDatabases:
+        registry.result.status === "available"
+          ? registry.result.entries
+          : { status: "unavailable" },
+    });
+    assertCurrent();
+    registryRead.assertCurrent();
+    discovery.assertCurrent();
+    if (inventory.kind === "session-target-registry-required") {
+      throw new Error("Cold maintenance did not receive its registry snapshot");
+    }
+    return inventory.agents.flatMap(({ result, reads }) =>
+      result.available
+        ? result.targets.map((target, index) => ({
+            databaseOptions: {
+              ...reads[index]!.database,
+              // Archive paths and restore cooldowns retain the configured SQLite locator.
+              path: reads[index]!.target.storePath,
+              env,
+            },
+            ownerStorePath: target.storePath,
+          }))
+        : [],
+    );
   });
+  assertCurrent();
+  registryRead.assertCurrent();
+  return { stores, assertCurrent };
 }
 
 export async function runSessionColdStorageMaintenance(params: {
@@ -535,31 +609,29 @@ export async function runSessionColdStorageMaintenance(params: {
     return result;
   }
   const beforeMs = Date.now() - (config.afterDays ?? 30) * 24 * 60 * 60 * 1000;
-  const stores = configuredStores(params.config);
+  const { stores, assertCurrent } = await configuredStores(params.config, params.assertCurrent);
+  assertCurrent();
   const start = stores.length ? nextStore % stores.length : 0;
   nextStore = start + 1;
   let remainingTranscripts = MAX_TRANSCRIPTS_PER_PASS;
   let remainingBytes = MAX_BATCH_BYTES;
-  for (const { agentId, storePath, ownerStorePath } of [
+  for (const { databaseOptions, ownerStorePath } of [
     ...stores.slice(start),
     ...stores.slice(0, start),
   ]) {
     if (remainingTranscripts <= 0 || remainingBytes <= 0) {
       break;
     }
-    params.assertCurrent?.();
-    const exists = withOpenClawAgentDatabaseReadOnly(() => true, { agentId, path: storePath });
-    if (!exists.found) {
-      continue;
-    }
+    assertCurrent();
     const batch = await archiveSessionColdBatch({
-      databaseOptions: { agentId, path: storePath },
+      databaseOptions,
       ownerStorePath,
       beforeMs,
       maxTranscripts: remainingTranscripts,
       maxBytes: remainingBytes,
-      assertCurrent: params.assertCurrent,
+      assertCurrent,
     });
+    assertCurrent();
     result.archivedTranscripts += batch.archivedTranscripts;
     result.externalizedTranscripts += batch.externalizedTranscripts;
     remainingTranscripts -= batch.attemptedTranscripts;

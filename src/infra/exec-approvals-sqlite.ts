@@ -7,12 +7,19 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
 import {
+  createFailClosedExecApprovalsFallback,
+  LEGACY_EXEC_APPROVALS_DIAGNOSTIC,
   normalizeExecApprovalsInternal,
+  parsePersistedExecApprovals,
   resolveExecApprovalsDisplayPath,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
-import { resetExecApprovalsMigrationGateForTest } from "./exec-approvals-migration-gate.js";
+import {
+  ExecApprovalsMigrationRequiredError,
+  resetExecApprovalsMigrationGateForTest,
+} from "./exec-approvals-migration-gate.js";
+import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -39,22 +46,6 @@ export class ExecApprovalsMutationFencedError extends Error {
   }
 }
 
-export function assertExecApprovalsMutationAuthority(
-  db: DatabaseSync,
-  authority: ExecApprovalsMutationAuthority,
-): void {
-  const journal = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<ExecApprovalsDatabase>(db)
-      .selectFrom("agent_deletion_journal")
-      .select("operation_id")
-      .where("agent_id", "=", normalizeAgentId(authority.agentId)),
-  );
-  if (journal?.operation_id !== authority.operationId) {
-    throw new ExecApprovalsMutationFencedError();
-  }
-}
-
 export function assertExecApprovalsMutationAllowed(params: {
   db: DatabaseSync;
   current: ExecApprovalsFile;
@@ -63,36 +54,43 @@ export function assertExecApprovalsMutationAllowed(params: {
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
-  const agentIds = new Set([
-    ...Object.keys(current.agents ?? {}),
-    ...Object.keys(next.agents ?? {}),
-  ]);
-  const state = getNodeSqliteKysely<ExecApprovalsDatabase>(params.db);
-  for (const agentId of agentIds) {
+  const changed = [
+    ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
+  ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
+  const authority = params.authority;
+  const agentIds = new Set(changed.map(normalizeAgentId));
+  if (authority) {
+    // Removal with no policy entries still requires the exact current deletion operation.
+    agentIds.add(authority.agentId);
+  }
+  if (agentIds.size === 0) {
+    return;
+  }
+  const journals = new Map(
+    executeSqliteQuerySync(
+      params.db,
+      getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
+        .selectFrom("agent_deletion_journal")
+        .select(["agent_id", "operation_id"])
+        .where("agent_id", "in", [...agentIds]),
+    ).rows.map((row) => [row.agent_id, row.operation_id]),
+  );
+  if (authority && journals.get(authority.agentId) !== authority.operationId) {
+    throw new ExecApprovalsMutationFencedError();
+  }
+  for (const agentId of changed) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const operationId = journals.get(normalizedAgentId);
+    if (operationId === undefined) {
+      continue;
+    }
     const currentPolicy = current.agents?.[agentId];
     const nextPolicy = next.agents?.[agentId];
-    if (isDeepStrictEqual(currentPolicy, nextPolicy)) {
-      continue;
-    }
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const journal = executeSqliteQueryTakeFirstSync(
-      params.db,
-      state
-        .selectFrom("agent_deletion_journal")
-        .select("operation_id")
-        .where("agent_id", "=", normalizedAgentId),
-    );
-    if (!journal) {
-      continue;
-    }
-    const authority = params.authority;
-    const authorizedRemoval = currentPolicy !== undefined && nextPolicy === undefined;
-    const authorizedRestore = currentPolicy === undefined && nextPolicy !== undefined;
     if (
       authority?.agentId === normalizedAgentId &&
-      authority.operationId === journal.operation_id &&
-      ((authority.action === "remove" && authorizedRemoval) ||
-        (authority.action === "restore" && authorizedRestore))
+      authority.operationId === operationId &&
+      ((authority.action === "remove" && currentPolicy !== undefined && nextPolicy === undefined) ||
+        (authority.action === "restore" && currentPolicy === undefined && nextPolicy !== undefined))
     ) {
       continue;
     }
@@ -137,7 +135,11 @@ export function snapshotFromExecApprovalsRow(params: {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  const parsed = tryParsePersistedExecApprovals(raw);
+  const result = parsePersistedExecApprovals(raw);
+  if (!result.ok && result.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC) {
+    throw new ExecApprovalsMigrationRequiredError(params.path, undefined, result.error);
+  }
+  const parsed = result.ok ? result.value : null;
   if (!parsed) {
     params.onMalformed?.();
   }
@@ -145,18 +147,7 @@ export function snapshotFromExecApprovalsRow(params: {
     path: params.path,
     exists: true,
     raw,
-    file:
-      parsed ??
-      normalizeExecApprovalsInternal({
-        version: 1,
-        defaults: {
-          security: "deny",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-        agents: {},
-      }),
+    file: parsed ?? createFailClosedExecApprovalsFallback(),
     hash: hashExecApprovalsRaw(raw),
   };
 }
@@ -186,34 +177,29 @@ export function writeExecApprovalsConfigRow(params: {
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
-}): void {
-  const raw = params.raw ?? serializeExecApprovals(params.file);
+}): string {
+  const normalized = normalizeExecApprovalsInternal(params.file);
+  const authored = params.raw ?? serializeExecApprovals(params.file);
+  const parsed = parsePersistedExecApprovals(authored);
+  // Malformed policy must remain visible to the fail-closed reader, not become partial defaults.
+  const raw =
+    params.raw ??
+    (!parsed.ok && parsed.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC
+      ? serializeExecApprovals(normalized)
+      : authored);
   const values = {
-    config_key: EXEC_APPROVALS_CONFIG_KEY,
     raw_json: raw,
-    ...projectionValues(params.file),
+    ...projectionValues(normalized),
     updated_at_ms: params.now ?? Date.now(),
   };
   executeSqliteQuerySync(
     params.db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
       .insertInto("exec_approvals_config")
-      .values(values)
-      .onConflict((conflict) =>
-        conflict.column("config_key").doUpdateSet({
-          raw_json: values.raw_json,
-          socket_path: values.socket_path,
-          has_socket_token: values.has_socket_token,
-          default_security: values.default_security,
-          default_ask: values.default_ask,
-          default_ask_fallback: values.default_ask_fallback,
-          auto_allow_skills: values.auto_allow_skills,
-          agent_count: values.agent_count,
-          allowlist_count: values.allowlist_count,
-          updated_at_ms: values.updated_at_ms,
-        }),
-      ),
+      .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
+      .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
+  return raw;
 }
 
 export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
@@ -262,6 +248,7 @@ export function mintMcpToolGrantLocked(
       },
     },
   };
+  assertExecApprovalsHostPolicyUnchanged(current, next);
   assertExecApprovalsMutationAllowed({ db, current, next });
   writeExecApprovalsConfigRow({ db, file: next, now: nowMs });
 }

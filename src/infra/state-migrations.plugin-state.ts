@@ -5,7 +5,7 @@ import {
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
-import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -283,7 +283,7 @@ export async function runLegacyMigrationPlans(
       if (migrationFileExists(plan.targetPath)) {
         continue;
       }
-      ensureMigrationDir(path.dirname(plan.targetPath));
+      fs.mkdirSync(path.dirname(plan.targetPath), { recursive: true });
       if (plan.kind === "move") {
         fs.renameSync(plan.sourcePath, plan.targetPath);
         changes.push(`Moved ${plan.label} → ${plan.targetPath}`);

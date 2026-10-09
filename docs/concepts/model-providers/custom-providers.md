@@ -115,16 +115,20 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
 
 <Tabs>
   <Tab title="Standard models">
-    - `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
-    - `volcengine/doubao-seed-code-preview-251028`
-    - `volcengine/kimi-k2-5-260127` (Kimi K2.5)
-    - `volcengine/glm-4-7-251222` (GLM 4.7)
-    - `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2)
+    - `volcengine/doubao-seed-evolving` (Doubao Seed Evolving)
+    - `volcengine/doubao-seed-2-1-pro-260628` (Doubao Seed 2.1 Pro)
+    - `volcengine/doubao-seed-2-1-turbo-260628` (Doubao Seed 2.1 Turbo)
+    - `volcengine/glm-5-2-260617` (GLM 5.2)
+    - `volcengine/deepseek-v4-pro-260425` (DeepSeek V4 Pro)
+    - `volcengine/deepseek-v4-flash-260425` (DeepSeek V4 Flash)
 
   </Tab>
   <Tab title="Coding models (volcengine-plan)">
-    - `volcengine-plan/ark-code-latest`
-    - `volcengine-plan/doubao-seed-code`
+    - `volcengine-plan/ark-code-latest` (Ark Coding Plan)
+    - `volcengine-plan/doubao-seed-2.1-turbo` (Doubao Seed 2.1 Turbo)
+    - `volcengine-plan/glm-5.2` (GLM 5.2)
+    - `volcengine-plan/deepseek-v4-pro` (DeepSeek V4 Pro)
+    - `volcengine-plan/deepseek-v4-flash` (DeepSeek V4 Flash)
 
   </Tab>
 </Tabs>
@@ -160,15 +164,16 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
 
 <Tabs>
   <Tab title="Standard models">
-    - `byteplus/seed-1-8-251228` (Seed 1.8)
-    - `byteplus/kimi-k2-5-260127` (Kimi K2.5)
-    - `byteplus/glm-4-7-251222` (GLM 4.7)
+    - `byteplus/dola-seed-2-1-turbo-260628` (Dola Seed 2.1 Turbo)
+    - `byteplus/seed-2-0-code-preview-260328` (Seed 2.0 Code Preview)
+    - `byteplus/glm-5-2-260617` (GLM 5.2)
+    - `byteplus/deepseek-v4-pro-260425` (DeepSeek V4 Pro)
+    - `byteplus/deepseek-v4-flash-260425` (DeepSeek V4 Flash)
 
   </Tab>
   <Tab title="Coding models (byteplus-plan)">
-    - `byteplus-plan/ark-code-latest`
-    - `byteplus-plan/kimi-k2.5`
-    - `byteplus-plan/glm-4.7`
+    - `byteplus-plan/ark-code-latest` (Ark Coding Plan)
+    - `byteplus-plan/kimi-k2.5` (Kimi K2.5 Coding)
 
   </Tab>
 </Tabs>
@@ -429,10 +434,11 @@ Example (OpenAI-compatible):
   </Accordion>
   <Accordion title="Proxy-route shaping rules">
     - For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
+    - Runtime notices stay in conversation order as `developer` messages when the route supports that role, or labeled `user` messages otherwise. They never add a later `system` message, so strict chat templates can continue after a notice without changing the leading prompt or stored history.
     - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request shaping: no `service_tier`, no Responses `store`, no Completions `store`, no prompt-cache hints, no OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution headers.
     - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
     - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. The bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
-    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
+    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. Without an explicit provider timeout, TCP/TLS connection setup keeps its 10-second default independently of the longer streaming timeout, including when reconnecting a pooled transport. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
     - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata, local-use NAT64 (`64:ff9b:1::/48`) destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.

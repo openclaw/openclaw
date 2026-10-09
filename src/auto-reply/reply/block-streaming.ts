@@ -64,8 +64,6 @@ export type BlockStreamingCoalescing = {
   maxChars: number;
   idleMs: number;
   joiner: string;
-  /** Internal escape hatch for transports that truly need per-enqueue flushing. */
-  flushOnEnqueue?: boolean;
 };
 
 type BlockStreamingChunking = {
@@ -94,7 +92,6 @@ export function resolveEffectiveBlockStreamingConfig(params: {
   chunking?: BlockStreamingChunking;
   /** Optional upper bound for chunking/coalescing max chars. */
   maxChunkChars?: number;
-  /** Optional coalescer idle flush override in milliseconds. */
   coalesceIdleMs?: number;
 }): {
   chunking: BlockStreamingChunking;

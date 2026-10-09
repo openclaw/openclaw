@@ -29,13 +29,12 @@ it.each([
     activePanel: "cron",
     selectedAgentId: "alpha",
     basePath: "/gateway",
-    onCronRunNow,
   });
   render(
     renderAgents({
       ...props,
       access: { ...props.access, canRunCron },
-      cron: { ...props.cron, cronJobs: [job] },
+      cron: { ...props.cron, jobs: [job], onRunNow: onCronRunNow },
     }),
     container,
   );

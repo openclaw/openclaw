@@ -682,7 +682,6 @@ export function sanitizeOutboundText(text: string): string {
     isInsideCode(offset, closedFencedRegions) ? marker : "",
   );
 
-  // Collapse excessive blank lines left after stripping.
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 
   return cleaned;

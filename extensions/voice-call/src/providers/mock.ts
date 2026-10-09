@@ -46,16 +46,13 @@ export class MockProvider implements VoiceCallProvider {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const events: NormalizedEvent[] = [];
-
-      if (Array.isArray(payload.events)) {
-        for (const evt of payload.events) {
-          const normalized = this.normalizeEvent(evt);
-          if (normalized) {
-            events.push(normalized);
-          }
-        }
-      } else if (payload.event) {
-        const normalized = this.normalizeEvent(payload.event);
+      const candidates = Array.isArray(payload.events)
+        ? payload.events
+        : payload.event
+          ? [payload.event]
+          : [];
+      for (const evt of candidates) {
+        const normalized = this.normalizeEvent(evt);
         if (normalized) {
           events.push(normalized);
         }
@@ -68,15 +65,19 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   private normalizeEvent(evt: Partial<NormalizedEvent>): NormalizedEvent | null {
-    if (!evt.type || !evt.callId) {
+    if (!evt.type || typeof evt.callId !== "string" || !evt.callId) {
       return null;
     }
 
     const base = {
       id: evt.id ?? crypto.randomUUID(),
       callId: evt.callId,
-      providerCallId: evt.providerCallId,
+      providerCallId: typeof evt.providerCallId === "string" ? evt.providerCallId : undefined,
       timestamp: evt.timestamp ?? Date.now(),
+      direction:
+        evt.direction === "inbound" || evt.direction === "outbound" ? evt.direction : undefined,
+      from: typeof evt.from === "string" ? evt.from : undefined,
+      to: typeof evt.to === "string" ? evt.to : undefined,
     };
 
     switch (evt.type) {
@@ -85,6 +86,9 @@ export class MockProvider implements VoiceCallProvider {
       case "call.answered":
       case "call.active":
         return { ...base, type: evt.type };
+
+      case "call.amd":
+        return evt.answeredBy ? { ...base, type: evt.type, answeredBy: evt.answeredBy } : null;
 
       case "call.speaking": {
         return {
@@ -164,6 +168,8 @@ export class MockProvider implements VoiceCallProvider {
   async hangupCall(_input: HangupCallInput): Promise<void> {}
 
   async playTts(_input: PlayTtsInput): Promise<void> {}
+
+  async playMessageAndHangup(_input: PlayTtsInput): Promise<void> {}
 
   async sendDtmf(_input: SendDtmfInput): Promise<void> {}
 

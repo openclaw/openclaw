@@ -37,7 +37,6 @@ import {
   createBackupResourcePlan,
   type BackupAgentRoot,
   type BackupRegenerableKind,
-  type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -91,17 +90,6 @@ type SkippedBackupAsset = {
   coveredBy?: string;
 };
 
-type BackupPlan = {
-  configCapture?: BackupConfigCapture;
-  stateDir: string;
-  configPath: string;
-  oauthDir: string;
-  workspaceDirs: string[];
-  resources: BackupResourcePlan;
-  included: BackupAsset[];
-  skipped: SkippedBackupAsset[];
-};
-
 type BackupAssetCandidate = {
   kind: BackupAssetKind;
   sourcePath: string;
@@ -119,10 +107,8 @@ const BACKUP_ASSET_PRIORITY = {
 } satisfies Record<BackupAssetKind, number>;
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
-function formatBackupArchiveTimestamp(
-  nowMs = Date.now(),
-  offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
-): string {
+export function buildBackupArchiveRoot(nowMs = Date.now()): string {
+  const offsetMinutes = -new Date(nowMs).getTimezoneOffset();
   const shifted = nowMs + offsetMinutes * 60_000;
   const local = new Date(shifted);
   const sign = offsetMinutes >= 0 ? "+" : "-";
@@ -136,11 +122,7 @@ function formatBackupArchiveTimestamp(
   const minutes = String(local.getUTCMinutes()).padStart(2, "0");
   const seconds = String(local.getUTCSeconds()).padStart(2, "0");
   const millis = String(local.getUTCMilliseconds()).padStart(3, "0");
-  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
-}
-
-export function buildBackupArchiveRoot(nowMs = Date.now()): string {
-  return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
+  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}-openclaw-backup`;
 }
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
@@ -179,7 +161,7 @@ async function resolveBackupPlanFromPaths(params: {
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = params.stateDir;
@@ -246,7 +228,7 @@ async function resolveBackupPlanFromPaths(params: {
       included: exists
         ? [{ ...asset, archivePath: buildBackupArchivePath(archiveRoot, sourcePath) }]
         : [],
-      skipped: exists ? [] : [{ ...asset, reason: "missing" }],
+      skipped: exists ? [] : [{ ...asset, reason: "missing" as const }],
     };
   }
 
@@ -557,7 +539,7 @@ export async function resolveBackupPlanFromDisk(
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
-): Promise<BackupPlan> {
+) {
   if (params.onlyConfig) {
     return await resolveBackupPlanFromState(params);
   }
@@ -569,7 +551,7 @@ async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();

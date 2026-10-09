@@ -92,10 +92,8 @@ All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,w
 or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
 filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
 rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
-all nine install/upgrade combinations. Selected lanes must succeed except
-`normalCi`'s policy-derived `windows-node-ci` and authenticated `recorded-flake`
-jobs; see [record a flake](/reference/full-release-validation/continuation#record-a-flake).
-Other children stay strict. No operator waiver can authorize publication with
+all nine install/upgrade combinations. Every selected lane must succeed. No
+operator waiver can authorize publication with
 failed selected tests. Stable publication requires stable/full evidence,
 soak, and blocking performance.
 

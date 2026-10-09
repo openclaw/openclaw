@@ -34,11 +34,12 @@ struct ChatSessionSidebarModelTests {
             sessions: sessions, currentSessionKey: "older", mainSessionKey: "agent:main:main",
             activeAgentID: "main", excludesMainSession: true, query: "", viewOptions: .init())
         #expect(sections.first?.nodes.map(\.id) == ["pinned-new", "pinned-old"])
-        #expect(sections.last?.nodes.map(\.id) == [
-            "named-internal", "human", "newer", "child", "older", "z-tie", "a-tie",
-            "agent:main:slack:channel:demo", "missing",
+        let recent = sections.first(where: { $0.id == "recent" })
+        #expect(recent?.nodes.map(\.id) == [
+            "named-internal", "human", "newer", "child", "older", "z-tie", "a-tie", "missing",
         ])
-        #expect(sections.last?.nodes.first(where: { $0.id == "child" })?.children.map(\.id) == ["grandchild"])
+        #expect(recent?.nodes.first(where: { $0.id == "child" })?.children.map(\.id) == ["grandchild"])
+        #expect(sections.first(where: { $0.id == "groups" })?.nodes.map(\.id) == ["agent:main:slack:channel:demo"])
     }
 
     @Test func `sidebar visibility toggles are independent and selected hidden rows survive`() throws {
@@ -81,11 +82,11 @@ struct ChatSessionSidebarModelTests {
             sessions[index].category = "Work"
         }
         var order = ChatSessionSidebarModel.ObservedOrder()
-        order.observe(sessions.map(\.key))
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
         // A transient paging gap and a reordered refresh must not reverse tied rows.
-        order.observe(["older"])
+        order.observe([OpenClawChatSessionSidebarData.identity(self.entry(key: "older"))])
         sessions.reverse()
-        order.observe(sessions.map(\.key))
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
         for (sort, expected) in [
             (ChatSessionSidebarModel.Sort.created, ["newer", "older", "z-tie", "a-tie", "missing"]),
             (.updated, ["missing", "older", "newer", "a-tie", "z-tie"]),
@@ -451,7 +452,7 @@ struct ChatSessionSidebarModelTests {
         }
         #expect(keys(nil) == ["active"])
         #expect(keys(.init()) == ["active"])
-        #expect(keys(.init(showArchived: true)) == ["active", "archived"])
+        #expect(keys(.init(status: .all)) == ["active", "archived"])
     }
 
     @Test func `active session gets a placeholder row before lists load`() {

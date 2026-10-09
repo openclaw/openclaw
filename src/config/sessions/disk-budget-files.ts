@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
@@ -32,42 +33,12 @@ export async function removeFileIfExists(filePath: string): Promise<FileRemovalR
   if (!stat?.isFile()) {
     return err("not-removed");
   }
+  getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   // Forced removal would count paths another cleanup already removed after stat.
   return fs.promises.rm(filePath).then(
     () => ok(stat.size),
     () => err("not-removed"),
   );
-}
-
-export async function removeFileForBudget(params: {
-  filePath: string;
-  canonicalPath?: string;
-  dryRun: boolean;
-  fileSizesByPath: Map<string, number>;
-  simulatedRemovedPaths: Set<string>;
-  onRemovedPath?: (canonicalPath: string) => void;
-}): Promise<FileRemovalResult> {
-  const resolvedPath = path.resolve(params.filePath);
-  const canonicalPath = params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
-  if (params.dryRun) {
-    // Dry-run deletion is path-deduped so a transcript and pointer alias cannot count the same
-    // artifact twice against the simulated budget.
-    if (params.simulatedRemovedPaths.has(canonicalPath)) {
-      return err("not-removed");
-    }
-    const size = params.fileSizesByPath.get(canonicalPath);
-    if (size === undefined) {
-      return err("not-removed");
-    }
-    params.simulatedRemovedPaths.add(canonicalPath);
-    params.onRemovedPath?.(canonicalPath);
-    return ok(size);
-  }
-  const removal = await removeFileIfExists(resolvedPath);
-  if (removal.ok) {
-    params.onRemovedPath?.(canonicalPath);
-  }
-  return removal;
 }
 
 async function readSessionFileStat(filePath: string): Promise<SessionsDirFileStat | null> {

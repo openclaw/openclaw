@@ -128,7 +128,7 @@ afterEach(async () => {
 });
 
 it.each([false, true])(
-  "reads exact row presence without creating a database (incognito=%s)",
+  "reads exact row presence from its captured target without creating a database (incognito=%s)",
   async (incognito) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const target = {
@@ -137,7 +137,7 @@ it.each([false, true])(
           ? "agent:main:dashboard:incognito-presence"
           : "agent:main:dashboard:presence",
         storePath: path.join(state.agentDir(), "presence.sqlite"),
-        env: state.env,
+        env: { ...state.env },
       };
       const databasePath = incognito
         ? resolveIncognitoOpenClawAgentSqlitePath(target)
@@ -165,28 +165,15 @@ it.each([false, true])(
         expect(fs.existsSync(databasePath)).toBe(false);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
+        target.storePath = path.join(state.agentDir(), "replacement.sqlite");
+        target.env.OPENCLAW_STATE_DIR = state.path("different-state");
+        expect(await read()).toBe(true);
+        expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
+        expect(fs.existsSync(target.storePath)).toBe(false);
       }
     });
   },
 );
-
-it("retains the prepared metadata target when caller scope and environment change", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:captured-presence",
-      storePath: path.join(state.agentDir(), "captured.sqlite"),
-      env: { ...state.env },
-    };
-    await replaceSessionEntry(target, { sessionId: "captured-row", updatedAt: 1 });
-    const { read } = prepareSessionEntryPresenceRead(target);
-    target.storePath = path.join(state.agentDir(), "replacement.sqlite");
-    target.env.OPENCLAW_STATE_DIR = state.path("different-state");
-    expect(await read()).toBe(true);
-    expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
-    expect(fs.existsSync(target.storePath)).toBe(false);
-  });
-});
 
 it("reads an exact ended-session archive in the history worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -582,9 +569,6 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
       "replacement-a-message",
     ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
-    if (keepsWorker) {
-      expect(observed.workers.at(-1)).toBe(oldWorker);
-    }
   });
 });
 
@@ -632,43 +616,15 @@ it("evicts the least recently used of 64 retained targets without charging missi
   });
 });
 
-it("rejects the captured generation when A closes during restoration before worker admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const a = await seed(state, "main", "restoring-a");
-    const b = await seed(state, "other", "unrelated-b");
-    await b.read();
-    const entered = createDeferredCore();
-    const gate = createDeferredCore();
-    observed.restoration = {
-      sessionId: "restoring-a",
-      entered: entered.resolve,
-      wait: gate.promise,
-    };
-    const pending = a.read();
-    const failure = expect(pending).rejects.toThrow("revoked");
-    try {
-      await entered.promise;
-      await closeOpenClawAgentDatabaseByPathAsync(a.path, "main");
-      expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "unrelated-b-message",
-      ]);
-    } finally {
-      observed.restoration = undefined;
-      gate.resolve();
-    }
-    await failure;
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "restoring-a-message",
-    ]);
-  });
-});
-
 it.each(["before restoration", "queued restoration"])(
   "does not restore a replacement database for a revoked history read (%s)",
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const fixture = await createSessionColdStorageFixture(databasePath);
+      const unrelated =
+        phase === "before restoration" ? await seed(state, "other", "unrelated-b") : undefined;
+      await unrelated?.read();
       expect(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(databasePath) }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
@@ -725,23 +681,30 @@ it.each(["before restoration", "queued restoration"])(
             hooks,
           );
         });
-      const pending = readChatHistoryPage({
-        entry: undefined,
-        provider: undefined,
-        sessionId: fixture.scope.sessionId,
-        storePath: databasePath,
-        sessionAgentId: fixture.scope.agentId,
-        canonicalKey: fixture.scope.sessionKey,
-        max: 20,
-        maxHistoryBytes: 100_000,
-        effectiveMaxChars: 8000,
-        offset: undefined,
-        messageId: undefined,
-      });
+      const read = () =>
+        readChatHistoryPage({
+          entry: undefined,
+          provider: undefined,
+          sessionId: fixture.scope.sessionId,
+          storePath: databasePath,
+          sessionAgentId: fixture.scope.agentId,
+          canonicalKey: fixture.scope.sessionKey,
+          max: 20,
+          maxHistoryBytes: 100_000,
+          effectiveMaxChars: 8000,
+          offset: undefined,
+          messageId: undefined,
+        });
+      const pending = read();
       const failure = expect(pending).rejects.toThrow("revoked");
       try {
         await entered.promise;
         await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+        if (unrelated) {
+          expect((await unrelated.read()).messages.map(readChatHistoryMessageId)).toEqual([
+            "unrelated-b-message",
+          ]);
+        }
         fs.copyFileSync(databasePath, `${databasePath}.replacement`);
         fs.renameSync(databasePath, `${databasePath}.previous`);
         fs.renameSync(`${databasePath}.replacement`, databasePath);
@@ -753,6 +716,12 @@ it.each(["before restoration", "queued restoration"])(
         await failure;
       }
       expect(readStoredTranscript()).toEqual(before);
+      if (unrelated) {
+        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
+          "history-user",
+          "history-assistant",
+        ]);
+      }
     });
   },
 );

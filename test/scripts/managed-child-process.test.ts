@@ -257,12 +257,23 @@ describe("managed-child-process", () => {
   });
 
   it.runIf(process.platform === "linux")(
-    "accepts exited tooling descendants still awaiting reaping",
+    "accepts exited descendants still awaiting reaping",
     async () => {
       const dir = createTempDir("openclaw-managed-zombie-");
-      const childPath = path.join(dir, "child.mts");
+      const childPath = path.join(dir, "child.py");
       const runnerPath = path.join(dir, "runner.mjs");
-      fs.writeFileSync(childPath, 'const value: number = 7; console.log("typed-child", value);');
+      fs.writeFileSync(
+        childPath,
+        `import os
+pid = os.fork()
+if pid == 0:
+    os._exit(0)
+exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+assert exited.si_code == os.CLD_EXITED and exited.si_status == 0
+print("retained-descendant", pid, flush=True)
+os._exit(0)
+`,
+      );
       fs.writeFileSync(
         runnerPath,
         `
@@ -271,8 +282,8 @@ import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("s
 import { assertFixtureProcessGroupStopped } from ${JSON.stringify(pathToFileURL(path.resolve("test/scripts/exited-descendant-reaper.test-support.ts")).href)};
 let pgid;
 process.exitCode = await runManagedCommand({
-  bin: process.execPath,
-  args: ["--import", ${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)}, ${JSON.stringify(childPath)}],
+  bin: "python3",
+  args: [${JSON.stringify(childPath)}],
   requireProcessTreeExit: true,
   onReady(child) { pgid = child.pid; },
 });
@@ -281,8 +292,8 @@ assert.doesNotThrow(() => process.kill(-pgid, 0));
 assertFixtureProcessGroupStopped(pgid);
 `,
       );
-      // Linux may reap orphaned tool services after the leader's close. Adopt
-      // them here and defer reaping until the real supervisor has settled.
+      // Keep a witnessed exited descendant, independent of the runtime's loaders.
+      // The subreaper adopts it until the real supervisor has settled.
       let output = "";
       const code = await runManagedCommand({
         bin: "python3",
@@ -296,7 +307,7 @@ assertFixtureProcessGroupStopped(pgid);
         },
       });
       expect(code, output).toBe(0);
-      expect(output).toContain("typed-child 7");
+      expect(output).toMatch(/retained-descendant [1-9]\d*/u);
       expect(output).toMatch(/successfully reaped: [1-9]/u);
     },
   );
@@ -2463,6 +2474,27 @@ child.once("message", () => ${typeof exit === "string" ? `process.kill(process.p
           expect(stderr).toBe("descendant stderr drained\n");
           expect(child?.stdout?.closed).toBe(true);
           expect(child?.stderr?.closed).toBe(true);
+        } else if (output !== "ignore") {
+          // Open descendant output keeps the original command timeout active
+          // while the group drains; its cancellation must precede forced cleanup.
+          const timeout = {
+            code: "ETIMEDOUT",
+            message: "Managed command timed out after 1000ms",
+          };
+          expect
+            .soft(outcome)
+            .toMatchObject(
+              runner === "preparation"
+                ? { message: "lingering-prep timed out after 1000ms", cause: timeout }
+                : timeout,
+            );
+          expect(fs.readFileSync(receivedSignalPath, "utf8")).toBe("SIGTERM");
+          if (runner === "managed") {
+            expect(stdout).toBe("descendant stdout drained\n");
+            expect(stderr).toBe("descendant stderr drained\n");
+            expect(child?.stdout?.closed).toBe(true);
+            expect(child?.stderr?.closed).toBe(true);
+          }
         } else {
           expect.soft(outcome).toMatchObject({
             code: "EPROCESSGROUP_CLEANUP_FAILED",

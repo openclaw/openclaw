@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { moduleResolve } from "import-meta-resolve";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -11,28 +10,11 @@ import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { withPluginCache, type getPluginCache } from "./plugin-cache.js";
 import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
+import { getPluginBunConditions } from "./plugin-native-resolution.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
+import { resolvePluginPackageMapTarget } from "./plugin-source-references.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
-
-function getBunConditions(requireMode: boolean): Set<string> {
-  const conditions = new Set(["bun", "node", "module-sync", requireMode ? "require" : "import"]);
-  if (!process.execArgv.includes("--no-addons")) {
-    conditions.add("node-addons");
-  }
-  for (let index = 0; index < process.execArgv.length; index += 1) {
-    const argument = process.execArgv[index];
-    if (argument === "--conditions") {
-      const condition = process.execArgv[index + 1];
-      if (condition && !condition.startsWith("-")) {
-        conditions.add(condition);
-        index += 1;
-      }
-    } else if (argument?.startsWith("--conditions=")) {
-      conditions.add(argument.slice("--conditions=".length));
-    }
-  }
-  return conditions;
-}
 
 /** Native adapters acquire source through the instance's artifact without replacing evaluation. */
 export function bindNativePluginInstanceModuleLoader(
@@ -40,7 +22,7 @@ export function bindNativePluginInstanceModuleLoader(
     instance: PluginModuleLoaderOwner;
     rootDir: string;
     origin: PluginOrigin;
-    bindModuleLoader?: PluginModuleLoaderOwner["bindModuleLoader"];
+    bindModuleLoader: PluginModuleLoaderOwner["bindModuleLoader"];
   },
   cache: ReturnType<typeof getPluginCache>,
   artifact: ReturnType<typeof capturePluginGenerationArtifact>,
@@ -97,37 +79,48 @@ export function bindNativePluginInstanceModuleLoader(
           }
         : {}),
       prepare(request, parent, kind) {
-        // Bun previews literal require calls as imports while compiling CommonJS.
-        // The require-call hook owns acquisition when that operation executes.
-        if (kind === "import-statement" && artifact.isRequirePreview(parent, request)) {
-          return undefined;
-        }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
         const sdkTarget = hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget === request ? undefined : sdkTarget;
         }
-        const source = original
-          ? parent
-          : artifact.sourceForCaptured(request)
-            ? request
-            : undefined;
-        if (!source) {
+        if (!original && !artifact.sourceForCaptured(request)) {
           return undefined;
         }
+        const source = original ? parent : request;
         return withPluginCache(cache, () => {
           artifact.prepareModule(source);
+          // Prefetched entries need their own facts before classifying Bun's require previews.
+          const facts = artifact.moduleFacts(parent);
+          if (
+            kind === "import-statement" &&
+            facts?.staticImports &&
+            !facts.staticImports.has(request)
+          ) {
+            return undefined;
+          }
+          // Deferred SDK imports retain their generation's host selection after cache replacement.
+          if (source === parent && isPluginSdkAliasSpecifier(request)) {
+            return resolvePluginNativeAliasForParent(request, parent);
+          }
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
-          const conditions = [...getBunConditions(requireMode)];
-          if (source === parent && request.startsWith(".")) {
-            // Jiti implements computed imports through require.resolve; relative source capture
-            // still follows the authored import graph rather than that internal mechanism.
+          const conditions = [...getPluginBunConditions(requireMode)];
+          if (
+            source === parent &&
+            !path.isAbsolute(request) &&
+            !request.startsWith("file:") &&
+            !isBuiltin(request) &&
+            !(request.startsWith("#") && facts?.isNativeImportPattern(request))
+          ) {
             const captured = artifact.captureModule(
               parent,
               request,
-              kind === "require-resolve" && !artifact.isRequireReference(parent, request)
+              // Jiti implements computed relative imports through require.resolve.
+              request.startsWith(".") &&
+                kind === "require-resolve" &&
+                !facts?.isRequireReference(request)
                 ? ["node", "module-sync", "import"]
                 : conditions,
             );
@@ -136,47 +129,18 @@ export function bindNativePluginInstanceModuleLoader(
                 captured.target.search || captured.target.hash
                   ? captured.target.href
                   : fileURLToPath(captured.target);
-            }
-          } else if (
-            source === parent &&
-            !path.isAbsolute(request) &&
-            !request.startsWith("file:") &&
-            !isBuiltin(request)
-          ) {
-            const captured = artifact.captureModule(parent, request, conditions);
-            if (captured && "target" in captured) {
-              target =
-                captured.target.search || captured.target.hash
-                  ? captured.target.href
-                  : fileURLToPath(captured.target);
             } else if (captured && "retryNative" in captured) {
               try {
-                let selected: URL;
-                try {
-                  selected = moduleResolve(
-                    request,
-                    pathToFileURL(parent),
-                    getBunConditions(requireMode),
-                  );
-                } catch (error) {
-                  if (
-                    !(error instanceof Error) ||
-                    !("code" in error) ||
-                    error.code !== "ERR_MODULE_NOT_FOUND" ||
-                    !("url" in error) ||
-                    typeof error.url !== "string"
-                  ) {
-                    throw error;
+                const selected = resolvePluginPackageMapTarget(request, parent, conditions);
+                if (selected) {
+                  const capturedTarget = artifact.captureResolvedModule(fileURLToPath(selected));
+                  if (capturedTarget) {
+                    const capturedUrl = pathToFileURL(capturedTarget);
+                    capturedUrl.search = selected.search;
+                    capturedUrl.hash = selected.hash;
+                    target =
+                      capturedUrl.search || capturedUrl.hash ? capturedUrl.href : capturedTarget;
                   }
-                  selected = new URL(error.url);
-                }
-                const capturedTarget = artifact.captureResolvedModule(fileURLToPath(selected));
-                if (capturedTarget) {
-                  const capturedUrl = pathToFileURL(capturedTarget);
-                  capturedUrl.search = selected.search;
-                  capturedUrl.hash = selected.hash;
-                  target =
-                    capturedUrl.search || capturedUrl.hash ? capturedUrl.href : capturedTarget;
                 }
               } catch {
                 // Native resolution owns the final error when the request remains unavailable.
@@ -256,7 +220,7 @@ export function bindNativePluginInstanceModuleLoader(
     origin: params.origin,
     rootDir: params.rootDir,
   });
-  (params.bindModuleLoader ?? params.instance.bindModuleLoader.bind(params.instance))(
+  params.bindModuleLoader(
     (source) =>
       withPluginCache(cache, () => {
         const captured = artifact.resolve(source, rejectHardlinks);

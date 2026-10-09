@@ -34,17 +34,15 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
-import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
 } from "./model-selection-shared.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import {
-  loadPersistedPluginModelCatalogsReadOnly,
-  resolvePluginModelCatalogOwnerPluginId,
-} from "./plugin-model-catalog.js";
+import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
+import { resolvePluginModelCatalogOwnerPluginId } from "./plugin-model-catalog.js";
 import { prepareAgentFacts } from "./prepared-model-runtime.agent-facts.js";
 import type {
   PreparedModelRuntimeAgentBaseFacts,
@@ -122,14 +120,12 @@ export async function prepareWorkspaceBuildGroup(
     includeCredentialProviders?: boolean;
     getConfiguredHarnessRuntimes?: () => readonly string[];
     getConfiguredModelFacts?: typeof prepareConfiguredModelFacts;
-    basePluginIds?: readonly string[];
     onStage?: (stage: string) => void;
     signal?: AbortSignal;
     assertCurrent?: (input: PreparedModelRuntimeInput) => void;
     onBeforeAuthCapture?: (input: PreparedModelRuntimeInput) => void;
     registryResources?: PreparedModelRuntimeBuildResources;
     loadRuntimeRegistry?: PreparedModelRuntimeBuildResources["load"];
-    purpose?: RuntimePluginLoadPurpose;
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -206,9 +202,8 @@ export async function prepareWorkspaceBuildGroup(
     preferBuiltPluginArtifacts,
     reusablePluginGeneration,
     options.getConfiguredHarnessRuntimes,
-    options.basePluginIds,
+    undefined,
     options.loadRuntimeRegistry,
-    options.purpose,
   );
   const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
     preparingRegistries instanceof Promise ? await preparingRegistries : preparingRegistries;
@@ -605,7 +600,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
 }> {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
-  const staticProviderConfigs = resolvePreparedProviderStaticConfigs(
+  const preparedStaticProviderConfigs = resolvePreparedProviderStaticConfigs(
     params.pluginGeneration.preparedStaticProviderCatalog,
   );
   const { pluginMetadataSnapshot } = params.pluginGeneration;
@@ -619,12 +614,25 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
     await nextTurn();
     params.assertCurrent?.(facts.input);
     const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
+    // Signed-in providers browse known manifest rows until their account listing publishes. Scope
+    // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
+    // credential-only providers out of facts.providerIds.
+    const staticProviderConfigs = {
+      ...loadManifestModelProviderConfigs({
+        config: facts.input.config,
+        metadataSnapshot: pluginMetadataSnapshot,
+        providerIds: Object.keys(facts.credentials).map(normalizeProviderId),
+      }),
+      ...preparedStaticProviderConfigs,
+    };
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Root files remain authored inventory even when static preparation returned an empty result.
-    const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
+    const pluginCatalogs = await loadPersistedPluginModelCatalogs(
       facts.input.agentDir,
       facts.configuredGeneratedCatalogPluginIds,
+      facts.env,
     );
+    params.assertCurrent?.(facts.input);
     const key = fingerprintPreparedRuntimeFacts({
       config: hashRuntimeConfigValue(facts.input.config),
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,

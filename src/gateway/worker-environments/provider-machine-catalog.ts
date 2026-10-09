@@ -6,20 +6,18 @@ import type {
   WorkerProfile,
   WorkerProvider,
 } from "../../plugins/types.js";
-import { notifyListeners } from "../../shared/listeners.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
   normalizeWorkerMachineOptions,
   normalizeWorkerOperatingSystems,
+  requireWorkerProfile,
 } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export function createWorkerMachineCatalog(
-  options: Pick<WorkerProviderLifecycleOptions, "getConfig" | "resolveProvider" | "warn"> & {
-    requireWorkerProfile: (value: unknown) => WorkerProfile;
-  },
+  options: Pick<WorkerProviderLifecycleOptions, "getConfig" | "resolveProvider" | "warn">,
 ) {
-  const { requireWorkerProfile } = options;
   type MachineCatalog = {
     providerId: string;
     provider: WorkerProvider | undefined;
@@ -190,12 +188,8 @@ export function createWorkerMachineCatalog(
         options.warn(`Worker machine catalog warmup failed for profile ${profileId}`),
       );
     },
-    subscribeMachineShapeChanged: (listener: (profileId: string) => void) => {
-      machineShapeListeners.add(listener);
-      return () => {
-        machineShapeListeners.delete(listener);
-      };
-    },
+    subscribeMachineShapeChanged: (listener: (profileId: string) => void) =>
+      registerListener(machineShapeListeners, listener),
     clearMachineShapeListeners: () => machineShapeListeners.clear(),
     machineShapeVersion: () => machineShapeVersion,
   };

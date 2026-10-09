@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
   DevicesPageDataState,
@@ -14,6 +15,8 @@ import {
   renameDevice,
   revokeDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
+
+registerDevicesEnglish();
 
 type DeviceAliasTarget = {
   id: string;
@@ -141,6 +144,32 @@ export class DevicesDialogController {
           role,
         }),
     );
+  }
+
+  /**
+   * Switching the exec approvals target throws away an unsaved policy draft, so
+   * it confirms through the same single-dialog slot as the destructive actions:
+   * a reconnect aborts it and it cannot stack on another prompt. There is no
+   * request to place, so the post-await revalidation is only that this dialog is
+   * still the page's current one — a false result must leave every field alone.
+   */
+  async confirmExecApprovalsDiscard(): Promise<boolean> {
+    if (this.pending) {
+      return false;
+    }
+    const controller = new AbortController();
+    this.pending = controller;
+    const confirmed = await showConfirmDialog({
+      title: t("devices.execApprovals.discardPromptTitle"),
+      message: t("devices.execApprovals.discardPromptBody"),
+      confirmLabel: t("devices.execApprovals.discardConfirm"),
+      danger: true,
+      signal: controller.signal,
+    });
+    if (this.pending === controller) {
+      this.pending = null;
+    }
+    return confirmed && !controller.signal.aborted;
   }
 
   // Every destructive Devices action confirms here, never through window.confirm: the

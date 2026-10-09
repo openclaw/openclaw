@@ -1523,7 +1523,7 @@ extension GatewayConnectionControlTests {
                 AppStateStore.shared.connectionMode = mode
                 AppStateStore.shared.isPaused = false
                 manager._testResetGatewayStartTask()
-                manager.setTestingDesiredActive(true)
+                manager.desiredActive = true
                 manager.setTestingStatus(.stopped)
                 manager.setTestingConnection(connection)
                 manager.setTestingSkipControlChannelRefresh(true)
@@ -1544,7 +1544,7 @@ extension GatewayConnectionControlTests {
                     manager.setTestingStatus(.stopped)
                     manager.setTestingConnection(nil)
                     manager.setTestingSkipControlChannelRefresh(false)
-                    manager.setTestingDesiredActive(false)
+                    manager.desiredActive = false
                     GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                     GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                     GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)

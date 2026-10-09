@@ -81,7 +81,7 @@ struct DashboardReconnectTests {
                     routeRevision: 1))
             }
             await discoveryGate.waitUntilRequested()
-            selection = Task { await manager._testSwitchTarget(target, in: original) }
+            selection = Task { _ = await manager.switchTarget(target, in: original)?.value }
             await profileGate.waitUntilRequested()
             manager.dispatchNativeCommand(.newSession)
             manager.dispatchNativeCommand(.commandPalette)
@@ -242,7 +242,7 @@ struct DashboardReconnectTests {
             let reopened = try #require(manager._testController())
             #expect(reopened === first)
             #expect(reopened.webView.url == loginURL)
-            #expect(reopened.tlsParams == nil)
+            #expect(reopened.documentHost.tlsParams == nil)
             #expect(reopened.auth.usesBrowserIdentity)
         }
     }
@@ -253,7 +253,7 @@ struct DashboardReconnectTests {
         let identityURL = try #require(URL(string: "https://team.example/dashboard/"))
         let controller = DashboardWindowController(
             url: server.url("/"),
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "shared-owner-token",
                 password: nil),
@@ -277,7 +277,7 @@ struct DashboardReconnectTests {
         #expect(identified.auth == .browserIdentity(gatewayUrl: "wss://team.example/dashboard/"))
         #expect(identified.auth.token == nil)
         #expect(identified.auth.password == nil)
-        #expect(identified.tlsParams == nil)
+        #expect(identified.documentHost.tlsParams == nil)
 
         let nextTunnel = try #require(URL(string: "ws://127.0.0.1:29876"))
         await manager.handleEndpointState(.ready(
@@ -300,7 +300,7 @@ struct DashboardReconnectTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),

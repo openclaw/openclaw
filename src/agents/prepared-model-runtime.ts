@@ -44,10 +44,7 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
 import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
-import {
-  notifyPreparedModelRuntimePublication,
-  resetPreparedModelRuntimePublicationListenersForTest,
-} from "./prepared-model-runtime.publication-events.js";
+import { notifyPreparedModelRuntimePublication } from "./prepared-model-runtime.publication-events.js";
 import { PreparedModelRuntimePublicationQueue } from "./prepared-model-runtime.publication-queue.js";
 import {
   createPublishedModelRuntimeAccess,
@@ -57,8 +54,7 @@ import {
 } from "./prepared-model-runtime.published-owner.js";
 import {
   refreshCommittedProviderCatalogs,
-  createPreparedModelRuntimeCatalogRecovery,
-  createPreparedModelRuntimePluginRecovery,
+  createPreparedModelRuntimeRecovery,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -66,6 +62,8 @@ import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-ru
 import {
   acquireRetainedAgentRuntimeCleanupRegistries,
   PreparedModelRuntimeOwnerRetention,
+  retirePreparedModelRuntimeAgentOwners,
+  type AgentRuntimeRetirement,
 } from "./prepared-model-runtime.retention.js";
 import { setPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 import { PreparedModelRuntimeStartup } from "./prepared-model-runtime.startup.js";
@@ -126,6 +124,7 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
       config: {},
     }),
   getPendingReplacement: () => getAdmissionReplacement()?.promise,
+  ensureReady: (params) => ensureGatewayPreparedModelRuntimeReady(params),
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
 
@@ -182,6 +181,13 @@ async function closeModelRuntime(error: Error): Promise<void> {
   if (failures.length) {
     throw new AggregateError(failures, "Prepared model work failed to close");
   }
+}
+
+/** Retire deleted-agent publications before closing readers that their builds can reopen. */
+export async function retirePreparedModelRuntimeAgent(
+  target: AgentRuntimeRetirement,
+): Promise<void> {
+  await retirePreparedModelRuntimeAgentOwners(target, preparedModelRuntimeLeaseContext);
 }
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
@@ -345,6 +351,7 @@ const preparedModelRuntimeLeaseContext = {
   agentBuildCompletions,
   retainedDirectRunOwners,
   retainedGatewayRunOwners,
+  replyDispatchPublication,
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: getAdmissionReplacement,
@@ -453,19 +460,16 @@ export function rejectPendingPreparedModelRuntimeReplacement(
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
-export const recoverPreparedModelRuntimeCatalogWorker = createPreparedModelRuntimeCatalogRecovery(
+const modelRuntimeRecovery = createPreparedModelRuntimeRecovery({
   owners,
-  refreshPreparedModelRuntimeSnapshots,
-);
-
-const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePluginRecovery(
-  owners,
-  () =>
-    gatewayLifecycleActive &&
-    !refreshCancellation.signal.aborted &&
-    !pendingModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
-);
+  canRecover: () => gatewayLifecycleActive && !refreshCancellation.signal.aborted,
+  getReplacement: () => pendingModelRuntimeReplacement,
+  getAdmissionReplacement: () => modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement,
+  captureLifetime: captureModelRuntimeLifetime,
+  publish: refreshPreparedModelRuntimeSnapshots,
+});
+export const recoverPreparedModelRuntimeCatalogWorker = modelRuntimeRecovery.recoverCatalog;
+export const ensureGatewayPreparedModelRuntimeReady = modelRuntimeRecovery.ensureReady;
 const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublication({
   ...preparedModelRuntimeLeaseContext,
   publicationQueue,
@@ -475,7 +479,7 @@ const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublicatio
   // Catalog adoption also waits for a degraded startup's final publication.
   getPendingReplacement: () =>
     (modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement)?.promise,
-  onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+  onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
 });
 export const { applyRemoteModelCatalogUpdate, advancePreparedModelRuntimeConfig } =
   remoteCatalogPublication;
@@ -587,7 +591,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
           acquisitionSignal,
-          onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+          onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
         },
       );
       if (!isPublicationCurrent()) {
@@ -718,7 +722,6 @@ registerPreparedRuntimeAuthMaterializationPublisher(owners, notifyPreparedModelR
 
 async function resetPreparedModelRuntimeSnapshotsForTest(): Promise<void> {
   await closePreparedModelRuntimeSnapshots();
-  resetPreparedModelRuntimePublicationListenersForTest();
   modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 }
 

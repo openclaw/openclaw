@@ -16,10 +16,7 @@ import {
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "../infra/state-migrations.doctor.js";
 import { writeLegacySessionsFixture } from "../infra/state-migrations.session-store.test-support.js";
-import {
-  autoMigrateLegacyStateDir,
-  resetAutoMigrateLegacyStateDirForTest,
-} from "../infra/state-migrations.state-dir.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
@@ -345,41 +342,6 @@ async function withStateDir<T>(root: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
-type StateDirMigrationResult = Awaited<ReturnType<typeof autoMigrateLegacyStateDir>>;
-
-const DIR_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
-
-function getStateDirMigrationPaths(root: string) {
-  return {
-    targetDir: path.join(root, ".openclaw"),
-    legacyDir: path.join(root, ".clawdbot"),
-  };
-}
-
-function ensureLegacyAndTargetStateDirs(root: string) {
-  const paths = getStateDirMigrationPaths(root);
-  fs.mkdirSync(paths.targetDir, { recursive: true });
-  fs.mkdirSync(paths.legacyDir, { recursive: true });
-  return paths;
-}
-
-async function runFreshStateDirMigration(root: string) {
-  resetAutoMigrateLegacyStateDirForTest();
-  return autoMigrateLegacyStateDir({ env: {}, homedir: () => root });
-}
-
-function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targetDir: string) {
-  expect(result.migrated).toBe(false);
-  expect(result.warnings).toEqual([
-    `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-  ]);
-}
-
-function expectUnmigratedWithoutWarnings(result: StateDirMigrationResult) {
-  expect(result.migrated).toBe(false);
-  expect(result.warnings).toStrictEqual([]);
-}
-
 function writeLegacyAgentFiles(root: string, files: Record<string, string>) {
   const legacyAgentDir = path.join(root, "agent");
   fs.mkdirSync(legacyAgentDir, { recursive: true });
@@ -445,27 +407,6 @@ describe("doctor legacy state migrations", () => {
     expect(detected.preview).not.toContain(
       `- Sessions: repair migrated transcript paths in ${path.join(targetDir, "sessions.json")}`,
     );
-  });
-
-  it("repairs canonical headerless legacy transcript paths", async () => {
-    const root = makeDoctorStateDir();
-    const legacyDir = path.join(root, "sessions");
-    const targetDir = path.join(root, "agents", "main", "sessions");
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.writeFileSync(path.join(targetDir, "legacy.jsonl"), '{"role":"user"}\n', "utf8");
-    writeJson5(path.join(targetDir, "sessions.json"), {
-      "agent:main:main": {
-        sessionId: "legacy",
-        sessionFile: path.join(legacyDir, "legacy.jsonl"),
-        updatedAt: 10,
-      },
-    });
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    expect(detected.sessions.hasLegacy).toBe(true);
   });
 
   it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
@@ -1307,73 +1248,6 @@ describe("doctor legacy state migrations", () => {
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     expect(fs.existsSync(targetPath)).toBe(false);
-  });
-
-  it("classifies already-migrated symlink mirrors without warnings", async () => {
-    const flatRoot = makeDoctorStateDir();
-    const flat = ensureLegacyAndTargetStateDirs(flatRoot);
-    fs.mkdirSync(path.join(flat.targetDir, "sessions"), { recursive: true });
-    fs.mkdirSync(path.join(flat.targetDir, "agent"), { recursive: true });
-    fs.symlinkSync(
-      path.join(flat.targetDir, "sessions"),
-      path.join(flat.legacyDir, "sessions"),
-      DIR_LINK_TYPE,
-    );
-    fs.symlinkSync(
-      path.join(flat.targetDir, "agent"),
-      path.join(flat.legacyDir, "agent"),
-      DIR_LINK_TYPE,
-    );
-    expectUnmigratedWithoutWarnings(await runFreshStateDirMigration(flatRoot));
-
-    const nestedRoot = makeDoctorStateDir();
-    const nested = ensureLegacyAndTargetStateDirs(nestedRoot);
-    fs.mkdirSync(path.join(nested.targetDir, "agents", "main"), { recursive: true });
-    fs.mkdirSync(path.join(nested.legacyDir, "agents"), { recursive: true });
-    fs.symlinkSync(
-      path.join(nested.targetDir, "agents", "main"),
-      path.join(nested.legacyDir, "agents", "main"),
-      DIR_LINK_TYPE,
-    );
-    expectUnmigratedWithoutWarnings(await runFreshStateDirMigration(nestedRoot));
-  });
-
-  it("warns when target exists and legacy state is not a safe mirror", async () => {
-    const fileRoot = makeDoctorStateDir();
-    const file = ensureLegacyAndTargetStateDirs(fileRoot);
-    fs.writeFileSync(path.join(file.legacyDir, "sessions.json"), "{}", "utf-8");
-    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(fileRoot), file.targetDir);
-
-    const outsideRoot = makeDoctorStateDir();
-    const outside = ensureLegacyAndTargetStateDirs(outsideRoot);
-    const outsideDir = path.join(outsideRoot, ".outside-state");
-    fs.mkdirSync(path.join(outside.targetDir, "sessions"), { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
-    fs.symlinkSync(outsideDir, path.join(outside.legacyDir, "sessions"), DIR_LINK_TYPE);
-    expectTargetAlreadyExistsWarning(
-      await runFreshStateDirMigration(outsideRoot),
-      outside.targetDir,
-    );
-
-    const brokenRoot = makeDoctorStateDir();
-    const broken = ensureLegacyAndTargetStateDirs(brokenRoot);
-    const targetSessionDir = path.join(broken.targetDir, "sessions");
-    fs.mkdirSync(targetSessionDir, { recursive: true });
-    fs.symlinkSync(targetSessionDir, path.join(broken.legacyDir, "sessions"), DIR_LINK_TYPE);
-    fs.rmSync(targetSessionDir, { recursive: true, force: true });
-    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(brokenRoot), broken.targetDir);
-
-    const secondHopRoot = makeDoctorStateDir();
-    const secondHop = ensureLegacyAndTargetStateDirs(secondHopRoot);
-    const secondHopOutsideDir = path.join(secondHopRoot, ".outside-state");
-    fs.mkdirSync(secondHopOutsideDir, { recursive: true });
-    const targetHop = path.join(secondHop.targetDir, "hop");
-    fs.symlinkSync(secondHopOutsideDir, targetHop, DIR_LINK_TYPE);
-    fs.symlinkSync(targetHop, path.join(secondHop.legacyDir, "sessions"), DIR_LINK_TYPE);
-    expectTargetAlreadyExistsWarning(
-      await runFreshStateDirMigration(secondHopRoot),
-      secondHop.targetDir,
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

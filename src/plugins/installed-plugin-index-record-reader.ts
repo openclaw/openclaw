@@ -38,6 +38,7 @@ import {
 } from "./managed-npm-retention.js";
 import { listManagedPluginNpmProjectsSync } from "./npm-project-roots.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 
@@ -258,12 +259,10 @@ function buildRecoveredManagedNpmInstallRecords(
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
   const records = createPluginInstallRecordMap<PluginInstallRecord>();
-  const candidatesByPluginId = new Map<string, RecoveredManagedNpmInstallCandidate[]>();
-  for (const candidate of listRecoveredManagedNpmInstallCandidates(options)) {
-    const candidates = candidatesByPluginId.get(candidate.pluginId) ?? [];
-    candidates.push(candidate);
-    candidatesByPluginId.set(candidate.pluginId, candidates);
-  }
+  const candidatesByPluginId = groupPluginRecords(
+    listRecoveredManagedNpmInstallCandidates(options),
+    (candidate) => candidate.pluginId,
+  );
   for (const [pluginId, candidates] of candidatesByPluginId) {
     // The install ledger is the active-generation authority. Directory order,
     // version, and recency may only break ties when that authority is absent.

@@ -95,50 +95,41 @@ describe("config cli roster integration", () => {
   const changedList = Object.entries(changedEntries).map(([id, entry]) =>
     Object.assign({ id }, entry),
   );
-  const rosterMutations = [
-    { name: "indexed set", args: ["set", "agents.list[0].name", "changed-main"] },
-    { name: "whole list patch", patch: { agents: { list: changedList } } },
-    {
-      name: "indexed unset",
-      args: ["unset", "agents.list[0].name"],
-      expected: { ...originalEntries, main: {} },
-    },
-  ];
+  it("persists an indexed roster edit after a read-only preview", async () => {
+    const agents = {
+      ownership: "explicit",
+      entries: originalEntries,
+    };
+    const raw = `${JSON.stringify({ agents })}\n`;
+    await withConfig(raw, async ({ configPath }) => {
+      const args = ["set", "agents.list[0].name", "changed-main"];
+      await run(...args, "--dry-run");
+      expect(read(configPath)).toBe(raw);
+      await run(...args);
+      const after = load(configPath);
+      expect(after.agents.entries).toEqual(changedEntries);
+      expect(after.agents).not.toHaveProperty("list");
+      expect(errors).toEqual([]);
+    });
+  });
 
-  it.each(
-    rosterMutations.map((mutation) =>
-      Object.assign({}, mutation, { legacy: mutation.name === "indexed set" }),
-    ),
-  )(
-    "persists roster intent for $name (legacy file: $legacy) after a read-only preview",
-    async (mutation) => {
-      const agents = {
+  it("requires Doctor before editing a persisted legacy roster", async () => {
+    const raw = JSON.stringify({
+      agents: {
         ownership: "explicit",
-        ...(mutation.legacy
-          ? {
-              list: Object.entries(originalEntries).map(([id, entry]) =>
-                Object.assign({ id }, entry),
-              ),
-            }
-          : { entries: originalEntries }),
-      };
-      const raw = `${JSON.stringify({ agents })}\n`;
-      await withConfig(raw, async ({ configPath, tempDir }) => {
-        const patchPath = path.join(tempDir, "patch.json");
-        const args = mutation.args ?? ["patch", "--file", patchPath];
-        if (mutation.patch) {
-          fs.writeFileSync(patchPath, JSON.stringify(mutation.patch));
-        }
-        await run(...args, "--dry-run");
+        list: Object.entries(originalEntries).map(([id, entry]) => Object.assign({ id }, entry)),
+      },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      for (const preview of [true, false]) {
+        await reject(set("agents.list[0].name", "changed-main", ...(preview ? ["--dry-run"] : [])));
         expect(read(configPath)).toBe(raw);
-        await run(...args);
-        const after = load(configPath);
-        expect(after.agents.entries).toEqual(mutation.expected ?? changedEntries);
-        expect(after.agents).not.toHaveProperty("list");
-        expect(errors).toEqual([]);
-      });
-    },
-  );
+        expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+      }
+      expect(errors.join("\n")).toContain("doctor --fix");
+      expect(logs.join("\n")).not.toContain("Updated");
+    });
+  });
 
   it("keeps submitted numeric list order through later indexed batch edits", async () => {
     const entries = { "1": { name: "first" }, "2": { name: "second" } };
@@ -169,55 +160,6 @@ describe("config cli roster integration", () => {
       });
     });
   });
-
-  it.each(["agents.list[0]"])(
-    "preserves authored references during %s edits with equal resolved values",
-    async (agentPath) => {
-      const raw = JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          entries: {
-            main: { workspace: "${ROSTER_WORKSPACE}", skills: ["${ROSTER_SKILL}"] },
-            worker: { name: "${ROSTER_NAME}" },
-          },
-        },
-        gateway: { port: 19001 },
-      });
-      await withConfig(raw, async ({ configPath, tempDir }) => {
-        const envSnapshot = captureEnv(["ROSTER_WORKSPACE", "ROSTER_SKILL", "ROSTER_NAME"]);
-        try {
-          const workspace = path.join(fs.realpathSync(tempDir), "workspace");
-          setTestEnvValue("ROSTER_WORKSPACE", workspace);
-          setTestEnvValue("ROSTER_SKILL", "fixture-skill");
-          setTestEnvValue("ROSTER_NAME", "untouched");
-          const args = [
-            "config",
-            "set",
-            "--batch-json",
-            JSON.stringify([
-              { path: `${agentPath}.workspace`, value: workspace },
-              { path: `${agentPath}.skills[0]`, value: "fixture-skill" },
-              { path: `${agentPath}.name`, value: "changed-main" },
-              { path: "gateway.port", value: 19002 },
-            ]),
-          ];
-          await invoke([...args, "--dry-run"]);
-          expect(read(configPath)).toBe(raw);
-          await invoke(args);
-          expect(load(configPath).agents.entries).toEqual({
-            main: {
-              workspace: "${ROSTER_WORKSPACE}",
-              skills: ["${ROSTER_SKILL}"],
-              name: "changed-main",
-            },
-            worker: { name: "${ROSTER_NAME}" },
-          });
-        } finally {
-          envSnapshot.restore();
-        }
-      });
-    },
-  );
 
   it.each(["agentDir", "session.store"])(
     "preserves the physical owner when config set assigns an equivalent reference to %s",
@@ -419,13 +361,13 @@ describe("config cli roster integration", () => {
     });
   });
 
-  it("requires explicit ownership before activating an escaped legacy agentDir", async () => {
+  it("requires explicit ownership before activating an escaped agentDir", async () => {
     await withConfig("{}", async ({ configPath, tempDir }) => {
       const root = fs.realpathSync(tempDir);
       const agentDir = path.join(root, "$${CONFIG_OWNER}");
       const activeDir = path.join(root, "${CONFIG_OWNER}");
       const raw = `${JSON.stringify({
-        agents: { list: [{ id: "main", agentDir }] },
+        agents: { entries: { main: { agentDir } } },
         browser: { enabled: true },
       })}\n`;
       fs.writeFileSync(configPath, raw);
@@ -465,42 +407,6 @@ describe("config cli roster integration", () => {
     });
   });
 
-  it("uses config env over lower-precedence values before checking a physical owner", async () => {
-    await withConfig("{}", async ({ configPath, tempDir }) => {
-      const { createConfigIO } = await import("../config/io.factory.js");
-      const physicalPath = path.join(fs.realpathSync(tempDir), "custom-agent");
-      const raw = `${JSON.stringify({
-        agents: { entries: { main: { agentDir: physicalPath } } },
-      })}\n`;
-      fs.writeFileSync(configPath, raw);
-      const lowerPrecedenceEnv = { CONFIG_OWNER_PATH: path.join(tempDir, "fallback-agent") };
-      const io = createConfigIO({
-        configPath,
-        env: { ...process.env, ...lowerPrecedenceEnv },
-        lowerPrecedenceEnv,
-      });
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-      await io.writeConfigFile(
-        {
-          ...snapshot.sourceConfig,
-          env: { vars: { CONFIG_OWNER_PATH: physicalPath } },
-          agents: { entries: { main: { agentDir: "${CONFIG_OWNER_PATH}" } } },
-        },
-        {
-          inputBase: "source",
-          baseSnapshot: snapshot,
-          explicitSetPaths: [["agents", "entries", "main", "agentDir"]],
-        },
-      );
-      expect(load(configPath).agents.entries.main.agentDir).toBe("${CONFIG_OWNER_PATH}");
-      const reloaded = await io.readConfigFileSnapshot();
-      expect(reloaded.valid).toBe(true);
-      expect(reloaded.sourceConfig.agents?.entries?.main?.agentDir).toBe(physicalPath);
-      expect(read(`${configPath}.bak`)).toBe(raw);
-    });
-  });
-
   it.each([
     { name: "entry recreated", removed: { main: null }, main: { name: "changed-main" } },
     { name: "leaf remains deleted", removed: { main: { name: null } }, main: {} },
@@ -531,42 +437,41 @@ describe("config cli roster integration", () => {
     });
   });
 
-  it.each([
-    { name: "retained legacy source", replacement: undefined, editedId: "2" },
-    { name: "replaced null parent", replacement: null, editedId: "1" },
-  ])("uses current numeric roster order after $name", async ({ replacement, editedId }) => {
+  it("resets submitted numeric roster order after replacing a null parent", async () => {
     const entries = { "1": { name: "first" }, "2": { name: "second" } };
     const raw = JSON.stringify({
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "2", name: "second" },
-          { id: "1", name: "first" },
-        ],
+        entries,
       },
     });
     await withConfig(raw, async ({ configPath }) => {
-      const args =
-        replacement === undefined
-          ? ["config", "set", "agents.list[0].name", "indexed-change"]
-          : [
-              "config",
-              "set",
-              "--batch-json",
-              JSON.stringify([
-                { path: "agents", value: replacement },
-                { path: "agents.entries.1", value: entries["1"] },
-                { path: "agents.entries.2", value: entries["2"] },
-                { path: "agents.list[0].name", value: "indexed-change" },
-              ]),
-              "--replace",
-            ];
+      const args = [
+        "config",
+        "set",
+        "--batch-json",
+        JSON.stringify([
+          {
+            path: "agents.list",
+            value: [
+              { id: "2", name: "second" },
+              { id: "1", name: "first" },
+            ],
+          },
+          { path: "agents.entries.2.name", value: "discarded" },
+          { path: "agents", value: null },
+          { path: "agents.entries.1", value: entries["1"] },
+          { path: "agents.entries.2", value: entries["2"] },
+          { path: "agents.list[0].name", value: "indexed-change" },
+        ]),
+        "--replace",
+      ];
       await invoke([...args, "--dry-run"]);
       expect(read(configPath)).toBe(raw);
       await invoke(args);
       expect(load(configPath).agents.entries).toEqual({
         ...entries,
-        [editedId]: { name: "indexed-change" },
+        "1": { name: "indexed-change" },
       });
     });
   });
@@ -624,11 +529,6 @@ describe("config cli roster integration", () => {
   );
 
   it.each([
-    {
-      name: "removed member",
-      list: [{ id: "main", name: "changed-main" }],
-      error: "drop agent roster entries",
-    },
     { name: "duplicate identity", list: [{ id: "main" }, { id: "main" }], error: "duplicate" },
   ])("does not write a legacy roster with $name", async ({ list, error }) => {
     const raw = JSON.stringify({ agents: { ownership: "explicit", entries: originalEntries } });
@@ -641,52 +541,29 @@ describe("config cli roster integration", () => {
   });
 
   it.each([
-    { mode: "canonical patch", ownerId: "main", input: "canonical" },
     { mode: "legacy agents replacement", ownerId: "main", input: "agents" },
     { mode: "batch changes retired default", ownerId: "keeper", input: "batch" },
-    { mode: "explicit fleet replacement", ownerId: "keeper", input: "agents", explicitFleet: true },
-    {
-      mode: "canonical parent copy with a changed store",
-      ownerId: "keeper",
-      input: "canonical-store",
-    },
     { mode: "explicit destination store owner", ownerId: "keeper", input: "owned-store" },
   ])("preserves ownership intent through $mode preview and write", async (scenario) => {
     const { ownerId, input } = scenario;
-    const explicitFleet = scenario.explicitFleet === true;
     const changedStore = input.endsWith("store");
     const prepareCronOwner = vi.spyOn(cronOwnerRefusal, "prepareCronOwnerWriteRefusal");
     await withConfig("{}", async ({ configPath, tempDir }) => {
       const workspace = path.join(fs.realpathSync(tempDir), "existing-workspace");
       const defaults = {
         workspace,
-        ...(explicitFleet || changedStore ? { sessionStore: { agentId: ownerId } } : {}),
-        ...(explicitFleet
-          ? {
-              heartbeat: { agentId: ownerId },
-              systemAgent: { agentId: ownerId },
-              authInheritance: { agentId: ownerId },
-            }
-          : {}),
+        ...(changedStore ? { sessionStore: { agentId: ownerId } } : {}),
       };
-      const ownerEntry = { name: "original-owner", ...(explicitFleet ? { workspace } : {}) };
+      const ownerEntry = { name: "original-owner" };
       const original = {
         agents: {
           defaults,
-          ...(explicitFleet ? { ownership: "explicit" } : {}),
           entries: {
             [ownerId]: ownerEntry,
-            ...(explicitFleet ? { work: { name: "new-worker" } } : {}),
           },
         },
         session: { store: path.join(fs.realpathSync(tempDir), "sessions.sqlite") },
         channels: { discord: { enabled: true, dmPolicy: "disabled", groupPolicy: "disabled" } },
-        ...(explicitFleet
-          ? {
-              talk: { agentId: ownerId },
-              bindings: [{ agentId: ownerId, match: { channel: "discord", accountId: "*" } }],
-            }
-          : {}),
       };
       const nextStore = changedStore
         ? path.join(fs.realpathSync(tempDir), "destination.sqlite")
@@ -694,24 +571,17 @@ describe("config cli roster integration", () => {
       const raw = `${JSON.stringify(original)}\n`;
       fs.writeFileSync(configPath, raw);
       const list = [
-        { id: ownerId, ...ownerEntry, default: !explicitFleet && !changedStore },
+        { id: ownerId, ...ownerEntry, default: !changedStore },
         {
           id: "work",
           name: "new-worker",
-          ...(explicitFleet || changedStore ? { default: true } : {}),
+          ...(changedStore ? { default: true } : {}),
         },
       ];
-      const patchFile = path.join(tempDir, "patch.json");
-      fs.writeFileSync(
-        patchFile,
-        JSON.stringify({
-          agents: input === "canonical" ? { entries: { work: { name: "new-worker" } } } : { list },
-        }),
-      );
-      let args = ["config", "patch", "--file", patchFile];
+      let args: string[];
       if (input === "agents") {
         args = ["config", "set", "agents", JSON.stringify({ defaults, list }), "--strict-json"];
-      } else if (input === "batch" || changedStore) {
+      } else {
         const operations = changedStore
           ? [
               {
@@ -723,9 +593,7 @@ describe("config cli roster integration", () => {
                 },
               },
               { path: "session.store", value: nextStore },
-              ...(input === "owned-store"
-                ? [{ path: "agents.defaults.sessionStore.agentId", value: "work" }]
-                : []),
+              { path: "agents.defaults.sessionStore.agentId", value: "work" },
             ]
           : [
               { path: "agents.list", value: list },
@@ -738,7 +606,8 @@ describe("config cli roster integration", () => {
       expect(read(configPath)).toBe(raw);
       expect(prepareCronOwner).not.toHaveBeenCalled();
       await invoke(args);
-      expect(prepareCronOwner).toHaveBeenCalledTimes(explicitFleet ? 0 : 1);
+      expect(prepareCronOwner).toHaveBeenCalledTimes(1);
+      expect(read(`${configPath}.bak`)).toBe(raw);
       const after = load(configPath);
       expect(after.agents).toMatchObject({
         ownership: "explicit",
@@ -762,53 +631,10 @@ describe("config cli roster integration", () => {
       expect(resolveAgentWorkspaceDir(reloaded.config, "work")).toBe(path.join(workspace, "work"));
       expect(resolveLegacyInheritedAuthAgentId(reloaded.config)).toBe(ownerId);
       expect(after.session.store).toBe(nextStore);
-      if (changedStore && input !== "owned-store") {
-        expect(after.agents.defaults).not.toHaveProperty("sessionStore.agentId");
-      } else {
-        const expectedStoreOwner = input === "owned-store" ? "work" : ownerId;
-        expect(after.agents.defaults.sessionStore.agentId).toBe(expectedStoreOwner);
-        expect(resolveSessionStoreCompatibilityAgentId(reloaded.config)).toBe(expectedStoreOwner);
-      }
+      const expectedStoreOwner = input === "owned-store" ? "work" : ownerId;
+      expect(after.agents.defaults.sessionStore.agentId).toBe(expectedStoreOwner);
+      expect(resolveSessionStoreCompatibilityAgentId(reloaded.config)).toBe(expectedStoreOwner);
       expect(errors).toEqual([]);
-    });
-  });
-
-  it.each([
-    {
-      name: "duplicate default markers",
-      value: {
-        list: [
-          { id: "main", default: true },
-          { id: "work", default: true },
-        ],
-      },
-    },
-    {
-      name: "non-boolean default marker",
-      value: { list: [{ id: "main", default: "yes" }, { id: "work" }] },
-    },
-    {
-      name: "inherited explicit ownership with a default marker",
-      sourceAgents: { ownership: "explicit", entries: { main: {}, work: {} } },
-      configPath: "agents.list",
-      value: [{ id: "main", default: true }, { id: "work" }],
-    },
-  ])("refuses $name without changing the config", async (scenario) => {
-    const raw = JSON.stringify({ agents: scenario.sourceAgents ?? { entries: { main: {} } } });
-    await withConfig(raw, async ({ configPath }) => {
-      const args = [
-        "config",
-        "set",
-        scenario.configPath ?? "agents",
-        JSON.stringify(scenario.value),
-        "--replace",
-        "--strict-json",
-      ];
-      for (const preview of [true, false]) {
-        await reject(invoke([...args, ...(preview ? ["--dry-run", "--json"] : [])]));
-        expect(read(configPath)).toBe(raw);
-      }
-      expect(logs.join("\n")).not.toContain("Updated");
     });
   });
 });

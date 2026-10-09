@@ -1,4 +1,3 @@
-/** Classifies runtime executable paths for daemon command rendering. */
 const NODE_VERSIONED_PATTERN = /^node(?:-\d+|\d+)(?:\.\d+)*(?:\.exe)?$/;
 
 function normalizeRuntimeBasename(execPath: string): string {
@@ -8,13 +7,11 @@ function normalizeRuntimeBasename(execPath: string): string {
   return basename.trim().toLowerCase();
 }
 
-/** Returns whether an executable path names a Node runtime binary. */
 export function isNodeRuntime(execPath: string): boolean {
   const base = normalizeRuntimeBasename(execPath);
   return /^node(?:js)?(?:\.exe)?$/.test(base) || NODE_VERSIONED_PATTERN.test(base);
 }
 
-/** Returns whether an executable path names a Bun runtime binary. */
 export function isBunRuntime(execPath: string): boolean {
   const base = normalizeRuntimeBasename(execPath);
   return base === "bun" || base === "bun.exe";
@@ -118,7 +115,7 @@ export function resolveRuntimeScriptPosition(args: string[]): {
       const nodeOption = !bun && process.allowedNodeEnvironmentFlags.has(option);
       const knownBoolean =
         RUNTIME_BOOLEAN_OPTIONS.has(option) ||
-        (bun && option === "--hot") ||
+        (bun && (option === "--hot" || option === "--no-install")) ||
         (nodeOption && process.allowedNodeEnvironmentFlags.has(negated));
       if (!inlineCommand && !knownBoolean && !/^--[^=]+=/.test(arg)) {
         unresolved ??= { kind: "unclassified", reason: `unsupported runtime option ${arg}` };

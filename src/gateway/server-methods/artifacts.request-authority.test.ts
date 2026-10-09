@@ -28,7 +28,10 @@ import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const boundaries = vi.hoisted(() => ({
-  visit: vi.fn<typeof import("../session-transcript-readers.js").visitSessionMessagesAsync>(),
+  visit:
+    vi.fn<
+      typeof import("../session-transcript-native.test-support.js").visitSessionMessagesAsync
+    >(),
   managed:
     vi.fn<
       typeof import("../managed-image-attachments.js").resolveManagedOutgoingMediaArtifactDownload
@@ -148,14 +151,15 @@ async function exercise(
       visit(message, 2);
       return 1;
     });
-    boundaries.managed.mockResolvedValue({
+    const managedDownload = {
       artifactId: managedId,
       sessionKey,
-      type: "image",
+      type: "image" as const,
       title: "managed.png",
       url: "https://example.invalid/synthetic-artifact",
       expiresAt: "2030-01-01T00:00:00.000Z",
-    });
+    };
+    boundaries.managed.mockResolvedValue(managedDownload);
     boundaries.managedUrl.mockResolvedValue(null);
     await invoke({ sessionKey }, "artifacts.list");
     expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -195,14 +199,7 @@ async function exercise(
       } else if (disclosureBoundary === "managed") {
         boundaries.managed.mockImplementationOnce(async () => {
           await hold();
-          return {
-            artifactId: managedId,
-            sessionKey,
-            type: "image",
-            title: "managed.png",
-            url: "https://example.invalid/synthetic-artifact",
-            expiresAt: "2030-01-01T00:00:00.000Z",
-          };
+          return managedDownload;
         });
       } else {
         boundaries.managedUrl.mockImplementationOnce(async () => {
@@ -321,15 +318,17 @@ async function exercise(
 }
 
 describe("registered artifact request authority after session preparation", () => {
-  it.each(methods)("uses the current default agent after preparing %s", async (method) => {
+  it.each(methods)("uses the current system agent after preparing %s", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let config: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
       };
       await state.writeConfig(config);
-      const readers = await vi.importActual<typeof import("../session-transcript-readers.js")>(
-        "../session-transcript-readers.js",
-      );
+      const readers = await import("../session-transcript-native.test-support.js");
       boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
       const client: GatewayClient = {
         connId: "artifact-default-agent",
@@ -381,7 +380,13 @@ describe("registered artifact request authority after session preparation", () =
       const prepare = resolution.prepareArtifactSessionResolution;
       vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
         const resolve = await prepare(query);
-        config = { agents: { list: [{ id: "main" }, { id: "work", default: true }] } };
+        config = {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "work" } },
+            entries: { main: {}, work: {} },
+          },
+        };
         return resolve;
       });
       const response = await request(
@@ -400,13 +405,12 @@ describe("registered artifact request authority after session preparation", () =
     });
   });
 
-  it.each(methods.flatMap((method) => changes.map((change) => ({ method, change }))))(
-    "checks $change after $method preparation",
-    async ({ method, change }) => exercise(method, change),
+  it.each(changes)("checks %s after artifact session preparation", async (change) =>
+    exercise("artifacts.download", change),
   );
 
-  it.each(changes)("checks %s again before the managed-download capability", async (change) => {
-    await exercise("artifacts.download", change, true);
+  it("rechecks the guard before the managed-download capability", async () => {
+    await exercise("artifacts.download", "opaque guard refused", true);
   });
 });
 
@@ -416,12 +420,18 @@ describe("registered artifact response authority after asynchronous reads", () =
     { method: "artifacts.download" as const, boundary: "managed" as const },
     { method: "artifacts.download" as const, boundary: "url" as const },
   ];
-  const outcomes = ["request canceled", "opaque guard refused", "reconnected"] as const;
-  it.each(
-    frames.flatMap((frame) =>
-      outcomes.map((change) => ({ method: frame.method, boundary: frame.boundary, change })),
-    ),
-  )("checks $change after $method $boundary read", async ({ method, boundary, change }) =>
+  it.each([
+    ...frames.map(({ method, boundary }) => ({
+      method,
+      boundary,
+      change: "opaque guard refused" as const,
+    })),
+    ...(["request canceled", "reconnected"] as const).map((change) => ({
+      method: "artifacts.download" as const,
+      boundary: "transcript" as const,
+      change,
+    })),
+  ])("checks $change after $method $boundary read", async ({ method, boundary, change }) =>
     exercise(method, change, false, boundary),
   );
 });

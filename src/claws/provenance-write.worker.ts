@@ -3,41 +3,55 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
+  clawPackageLifecycleLeaseKey,
+} from "../state/claw-package-lifecycle-lease-key.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { verifyOpenClawStateLeaseOwnership } from "../state/openclaw-state-lease-storage.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
+import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { rowToRef, selectMcpRefs } from "./mcp-records.js";
-import type {
-  ClawPackageRefStatus,
-  PersistedClawPackageRef,
-} from "./package-extension-provenance.js";
 import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
+import {
+  readClawInstallRecordFromDatabase,
+  readClawOrphanWorkspaceInDatabase,
+} from "./provenance-read.kernel.js";
+import type { ClawProvenanceWriteOperations } from "./provenance-write.worker-contract.js";
+import { mutateClawRemovalJournalInWorker } from "./removal-journal.worker.js";
 
 export const clawProvenanceOperations = {
+  "clawProvenance.removalJournal": (
+    input: ClawProvenanceWriteOperations["clawProvenance.removalJournal"]["input"],
+    { open, stateOptions },
+  ) => mutateClawRemovalJournalInWorker(open(), input, stateOptions()),
   "clawProvenance.packageStatus": (
-    input: {
-      ref: PersistedClawPackageRef;
-      status: ClawPackageRefStatus;
-      nowMs?: number;
-      lease: OpenClawStateLeaseIdentity;
-    },
+    input: ClawProvenanceWriteOperations["clawProvenance.packageStatus"]["input"],
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const assertLease = () =>
-          verifyOpenClawStateLeaseOwnership({
-            ...input.lease,
-            leaseLabel: "Claw package lifecycle",
-            transaction: db,
-          });
-        assertLease();
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        assertLease();
         const ref = input.ref;
+        const artifact =
+          ref.kind === "plugin"
+            ? { kind: ref.kind, source: ref.source, ref: ref.ref }
+            : {
+                kind: ref.kind,
+                source: ref.source,
+                ref: ref.ref,
+                workspace:
+                  readClawInstallRecordFromDatabase(db, ref.agentId)?.workspace ??
+                  readClawOrphanWorkspaceInDatabase(db, ref.agentId)?.workspace ??
+                  "",
+              };
+        if (
+          (artifact.kind === "skill" && !artifact.workspace) ||
+          input.lease.scope !== CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE ||
+          input.lease.key !== clawPackageLifecycleLeaseKey(artifact)
+        ) {
+          throw new Error("Claw package claim does not match the held artifact lease");
+        }
+        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.lease);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<DB>(db)
@@ -66,14 +80,13 @@ export const clawProvenanceOperations = {
           input.status,
           input.nowMs ?? Date.now(),
         );
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        assertLease();
+        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.lease, "write", "commit");
         return result;
       },
       { database: open(), ...stateOptions() },
     ),
   "clawProvenance.reconcileMcp": (
-    input: { agentId: string; digests: Record<string, string>; nowMs?: number },
+    input: ClawProvenanceWriteOperations["clawProvenance.reconcileMcp"]["input"],
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(

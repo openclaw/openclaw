@@ -1,23 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  buildFullReleaseCandidateBinding,
-  buildFullReleaseCandidateRequest,
-} from "../../scripts/full-release-candidate-contract.mjs";
-import type { FlakeClassification } from "../../scripts/full-release-flake-classification.mjs";
-import {
-  createPublicationAdmission,
-  createPublicationObservations,
-  createPublicationSourceFact,
-  publicationDispatchEnvelope,
-  publicationIntentInputs,
-  publicationSourceRequest,
-  type PublicationSourceRequest,
-} from "../../scripts/full-release-publication-contract.mjs";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
+import { publicationIntentInputs } from "../../scripts/full-release-publication-contract.mjs";
 import {
   composeReleaseAttemptJobs,
   buildReleaseValidationManifest,
@@ -27,20 +15,15 @@ import {
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
-  validateReleaseManifestAdvisoryJobs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   affectedActiveRunIds,
-  buildReleaseExecutionPlan,
-  buildReleaseExecutionPlanArtifact,
   buildReleaseStateArtifact,
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
   hydrateReusedPlan,
   readChild,
   releaseGhRetryDelayMs,
-  releasePlanGateFailures,
-  releaseStateChildEvidence,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateReleaseExecutionPlanArtifact,
@@ -54,313 +37,31 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import {
-  fullReleaseCandidateBindingFixture,
-  fullReleaseCandidateManifestFixture,
-} from "../helpers/full-release-candidate.js";
+import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  SCRIPT,
+  SHA,
+  TARGET_SHA,
+  TRUSTED_MAIN,
+  collectorEnv,
+  runCollector,
+  candidateRequestInput,
+  canonicalCandidateRequest,
+  candidateBinding,
+  evidenceManifest,
+  generatedManifest,
+  child,
+  githubRun,
+  plan,
+  executionPlan,
+  reusedEvidenceChildren,
+  sourceFact,
+  registryRecord,
+} from "./full-release-validation-state.test-support.js";
 
-const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
-const SHA = "a".repeat(40);
-const TARGET_SHA = "b".repeat(40);
-const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function collectorEnv(overrides: NodeJS.ProcessEnv) {
-  return {
-    ...process.env,
-    GITHUB_REF_NAME: "release-ci/tooling",
-    GITHUB_REPOSITORY: "openclaw/openclaw",
-    GITHUB_RUN_ATTEMPT: "2",
-    GITHUB_RUN_ID: "77",
-    GITHUB_SHA: SHA,
-    RELEASE_PROFILE: "stable",
-    RERUN_GROUP: "ci",
-    TARGET_SHA,
-    ...overrides,
-  };
-}
-
-function runCollector(mode: string, overrides: NodeJS.ProcessEnv) {
-  return spawnSync(process.execPath, [SCRIPT, mode], {
-    encoding: "utf8",
-    env: collectorEnv(overrides),
-    timeout: 10_000,
-  });
-}
-
-function candidateRequestInput(overrides: Record<string, unknown> = {}) {
-  return {
-    repository: "openclaw/openclaw",
-    targetSha: TARGET_SHA,
-    toolingSha: SHA,
-    releaseProfile: "stable",
-    releaseSoak: true,
-    upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "reported-issues",
-    allowFrozenTargetScenarioOmissions: false,
-    allowUnreleasedChangelog: false,
-    packagePublished: false,
-    sharedImagePolicy: "no-push-artifact",
-    ...overrides,
-  };
-}
-
-function canonicalCandidateRequest(overrides: Record<string, unknown> = {}) {
-  return buildFullReleaseCandidateRequest(candidateRequestInput(overrides));
-}
-
-function candidateBinding(requestOverrides: Record<string, unknown> = {}) {
-  return fullReleaseCandidateBindingFixture({
-    ...candidateRequestInput(requestOverrides),
-    ...requestOverrides,
-  });
-}
-
-function evidenceManifest() {
-  return { runAttempt: 1, runId: "99", targetSha: TARGET_SHA };
-}
-
-function generatedManifest(planArtifact: Record<string, any>): Record<string, any> {
-  return {
-    candidateBinding: planArtifact.candidate ?? null,
-    childRuns: {
-      normalCi: "101",
-      npmTelegram: "",
-      pluginPrerelease: "",
-      productPerformance: { blocking: true, conclusion: "", runId: "" },
-      releaseChecks: "",
-    },
-    controls: {
-      performanceBlocking: true,
-      performanceReportPublication: "artifact-only",
-      stableSoakRequired: false,
-    },
-    executionPlanSha256: planArtifact.sha256,
-    releaseProfile: "stable",
-    rerunGroup: "ci",
-    runAttempt: 2,
-    runId: "77",
-    runReleaseSoak: "false",
-    sourceParentRunAttempt: 1,
-    targetRef: "main",
-    targetSha: TARGET_SHA,
-    version: 3,
-    workflowFullRef: "refs/heads/release-ci/tooling",
-    workflowName: "Full Release Validation",
-    workflowRef: "release-ci/tooling",
-    workflowRefType: "branch",
-    workflowSha: SHA,
-  };
-}
-
-function child(key: string, overrides: Record<string, unknown> = {}) {
-  return {
-    conclusion: "",
-    dispatchName: `Dispatch ${key}`,
-    displayTitle: key,
-    errors: [],
-    jobs: [],
-    key,
-    required: true,
-    result: "success",
-    runAttempt: 1,
-    runId: "101",
-    selected: true,
-    source: "fresh",
-    status: "in_progress",
-    url: "https://example.invalid/runs/101",
-    workflow: "ci.yml",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
-    ...overrides,
-  };
-}
-
-function githubRun(planned: ReturnType<typeof child>, overrides: Record<string, unknown> = {}) {
-  return {
-    actor: { login: "github-actions[bot]" },
-    display_title: planned.displayTitle,
-    event: "workflow_dispatch",
-    head_branch: planned.workflowRef,
-    head_sha: planned.workflowSha,
-    id: 101,
-    path: ".github/workflows/ci.yml",
-    repository: { full_name: "openclaw/openclaw" },
-    run_attempt: 1,
-    status: "completed",
-    triggering_actor: { login: "github-actions[bot]" },
-    ...overrides,
-  };
-}
-
-function plan(overrides: Record<string, unknown> = {}) {
-  return buildReleaseExecutionPlan({
-    children: {
-      normalCi: { result: "success", runAttempt: 1, runId: "101" },
-      npmTelegram: { result: "success", runAttempt: 1, runId: "404" },
-      pluginPrerelease: { result: "success", runAttempt: 1, runId: "202" },
-      productPerformance: { result: "success", runAttempt: 1, runId: "505" },
-      releaseChecks: { result: "success", runAttempt: 1, runId: "303" },
-    },
-    dockerPreflightResult: "success",
-    evidenceReuse: false,
-    parentRunAttempt: 2,
-    parentRunId: "77",
-    candidateBindingResult: "success",
-    rerunGroup: "all",
-    resolveTargetResult: "success",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
-    ...overrides,
-  });
-}
-
-function executionPlan(
-  overrides: Record<string, unknown> = {},
-  artifactOverrides: Record<string, unknown> = {},
-) {
-  const {
-    candidateRequest,
-    expected: expectedOverrides,
-    ...remainingArtifactOverrides
-  } = artifactOverrides;
-  const expected = {
-    parentRunAttempt: 1,
-    parentRunId: "77",
-    repository: "openclaw/openclaw",
-    targetSha: TARGET_SHA,
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
-    ...(candidateRequest === undefined ? {} : { candidateRequest }),
-    ...(expectedOverrides as Record<string, unknown> | undefined),
-  };
-  const built = plan({ ...overrides, parentRunAttempt: expected.parentRunAttempt });
-  return buildReleaseExecutionPlanArtifact({
-    children: built.children,
-    expected,
-    gates: built.gates,
-    releaseProfile: "stable",
-    rerunGroup: typeof overrides.rerunGroup === "string" ? overrides.rerunGroup : "all",
-    trustedWorkflow: TRUSTED_MAIN,
-    ...remainingArtifactOverrides,
-  });
-}
-
-function reusedEvidenceChildren() {
-  return [
-    ["normalCi", "101", "CI"],
-    ["pluginPrerelease", "202", "Plugin Prerelease"],
-    ["releaseChecks", "303", "OpenClaw Release Checks"],
-    ["productPerformance", "505", "OpenClaw Performance"],
-  ].map(([role, runId, name]) => ({
-    displayTitle: `${name} full-release-validation-99-1`,
-    headBranch: "release-ci/tooling",
-    role,
-    runAttempt: 1,
-    runId,
-    url: `https://example.invalid/runs/${runId}`,
-    workflowSha: SHA,
-  }));
-}
-
-function sourceFact(overrides: Partial<PublicationSourceRequest> = {}) {
-  const request = {
-    ...publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: TARGET_SHA,
-        release_profile: "stable",
-        rerun_group: "all",
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route: "normal",
-            npmDistTag: "latest",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
-        }),
-      }),
-      PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
-      PUBLICATION_TOOLING_JSON: JSON.stringify(TRUSTED_MAIN),
-      PUBLICATION_TARGET_SHA: TARGET_SHA,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/release-ci/tooling",
-      GITHUB_SHA: SHA,
-      GITHUB_RUN_ID: "77",
-      GITHUB_RUN_ATTEMPT: "1",
-    }),
-    ...overrides,
-  };
-  return createPublicationSourceFact(
-    request,
-    request.validationPurpose === "publish" ? { packages: [], platforms: [] } : null,
-    request.validationPurpose === "publish"
-      ? {
-          version: "2026.9.9",
-          packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
-          platforms: [],
-        }
-      : null,
-  );
-}
-
-function registryRecord(source = sourceFact()) {
-  const time = "2026-09-13T14:00:00.000Z";
-  const observations = createPublicationObservations(source, {
-    sourceDigest: source.digest,
-    prerequisitesCompletedAt: time,
-    collectionStartedAt: time,
-    collectionCompletedAt: time,
-    npm: [
-      {
-        name: "openclaw",
-        version: "2026.9.9",
-        required: true,
-        observedAt: time,
-        outcome: "observed",
-        state: {
-          packageExists: true,
-          hasVersionHistory: true,
-          selectedVersionExists: false,
-          latestVersion: null,
-        },
-      },
-    ],
-    clawhub: [],
-    pendingAuthority: [],
-    plans: {
-      npm: { all: [], candidates: [], skippedPublished: [], warnings: [] },
-      clawhub: {
-        all: [],
-        candidates: [],
-        skippedPublished: [],
-        warnings: [],
-        bootstrapCandidates: [],
-        missingTrustedPublisher: [],
-      },
-    },
-  });
-  return {
-    sourceAdmissionContract: "1",
-    sourceAdmission: source,
-    publicationAdmissionContract: "1",
-    publicationAdmission: createPublicationAdmission(
-      source,
-      observations,
-      {
-        id: "456",
-        name: `full-release-publication-observations-${source.runId}-1`,
-        digest: `sha256:${"d".repeat(64)}`,
-        sizeInBytes: 4096,
-      },
-      time,
-    ),
-  };
-}
 
 function runPlanSubprocess(overrides: Record<string, unknown>, env: Record<string, string> = {}) {
   const root = tempDirs.make("frv-candidate-plan-");
@@ -1142,8 +843,8 @@ describe("release child attempt composition", () => {
   });
 
   describe("GitHub ghost rerun jobs", () => {
-    // Shape observed on 2026.9.7 FRV-E CI attempt 2: one rerun-failed POST left 17
-    // queued copies with no runner or steps beside the completed job.
+    // Shapes observed on FRV reruns: queued copies have no runner beside the completed
+    // job. GitHub may either omit their steps or mirror the completed job's steps.
     const ghost = {
       completed_at: null,
       conclusion: null,
@@ -1153,7 +854,7 @@ describe("release child attempt composition", () => {
       runner_name: null,
       started_at: "2026-09-29T20:38:30Z",
       status: "queued",
-      steps: [],
+      steps: [{ name: "Run tests", status: "completed", conclusion: "failure" }],
     };
     const completed = {
       ...job("checks-node-core-runtime-infra-process", "success"),
@@ -1195,18 +896,31 @@ describe("release child attempt composition", () => {
       ]);
     });
 
+    it("ignores never-executed copies beside a completed job in the effective attempt", () => {
+      const result = composeReleaseAttemptJobs([ghostAttempt], {
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 2,
+      });
+      expect(result.jobs).toEqual([
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "success",
+          name: "checks-node-core-runtime-infra-process",
+        }),
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "failure",
+          name: "checks-ui",
+        }),
+      ]);
+    });
+
     it.each<{
       label: string;
       attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
       effectiveRunAttempt: number;
       plannedRunAttempt: number;
     }>([
-      {
-        label: "in the effective attempt",
-        attempts: [ghostAttempt],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 2,
-      },
       {
         label: "without a completed sibling",
         attempts: [
@@ -1282,8 +996,8 @@ describe("release decision policy", () => {
     }
   });
 
-  it.each(["beta", "stable", "full"])(
-    "reports Windows Node failures as policy advisory for %s publication",
+  it.each(["beta", "stable"])(
+    "blocks %s release decisions and evidence on a failed Windows Node shard",
     (releaseProfile) => {
       const snapshot = child("normalCi", {
         conclusion: "failure",
@@ -1292,13 +1006,8 @@ describe("release decision policy", () => {
       });
       const result = classifyReleaseSnapshot({ children: [snapshot], releaseProfile });
       expect(result).toMatchObject({
-        blockers: [],
-        blockerCount: 0,
-        errors: [],
-        state: "passed",
-        advisoryJobs: [
+        blockers: [
           {
-            class: "windows-node-ci",
             child: "normalCi",
             job: windowsJob.name,
             conclusion: "failure",
@@ -1306,8 +1015,12 @@ describe("release decision policy", () => {
             url: windowsJob.url,
           },
         ],
+        blockerCount: 1,
+        errors: [],
+        state: "blocked_complete",
+        advisoryJobs: [],
       });
-      expect(terminalPolicyPass(snapshot)).toBe(true);
+      expect(terminalPolicyPass(snapshot)).toBe(false);
       const artifact = buildReleaseStateArtifact({
         children: [snapshot],
         decision: result,
@@ -1319,10 +1032,7 @@ describe("release decision policy", () => {
       });
       expect(validateReleaseStateArtifact(artifact).advisoryJobs).toEqual(result.advisoryJobs);
       expect(formatReleaseStateOutcome(artifact)).toContain(
-        "- Advisory [windows-node-ci]: checks-windows-node-test-2 (failure) https://example.invalid/windows",
-      );
-      expect(() => validateReleaseStateArtifact({ ...artifact, advisoryJobs: [] })).toThrow(
-        /advisory jobs differ/u,
+        "- Blocker: checks-windows-node-test-2 (failure) https://example.invalid/windows",
       );
       const manifest = buildReleaseValidationManifest({
         plan: executionPlan(),
@@ -1331,365 +1041,6 @@ describe("release decision policy", () => {
       });
       expect(manifest.version).toBe(4);
       expect(manifest.advisoryJobs).toEqual(result.advisoryJobs);
-    },
-  );
-
-  function recordedFlakeChild() {
-    const job = {
-      name: "checks-node-compact-small-19-3",
-      conclusion: "failure",
-      status: "completed",
-      acceptedRunAttempt: 1,
-      url: "https://github.com/openclaw/openclaw/actions/runs/101/job/1001",
-    };
-    const gateJob = {
-      ...job,
-      ...ciGate,
-      conclusion: "failure",
-      url: "https://github.com/openclaw/openclaw/actions/runs/101/job/1003",
-    };
-    const receipt: FlakeClassification = {
-      schema: "openclaw.frv-flake-classification.v1",
-      parentRunId: "77",
-      parentRunAttempt: 1,
-      child: "normalCi",
-      childRunId: "101",
-      childRunAttempt: 1,
-      targetSha: TARGET_SHA,
-      jobId: "1001",
-      jobName: job.name,
-      jobUrl: job.url,
-      conclusion: "failure",
-      trackingUrl: "https://github.com/openclaw/openclaw/issues/42",
-      reason: "The shared fixture leaks state; repair is tracked on main.",
-      classifiedBy: "release-maintainer",
-      receiptRunId: "901",
-      receiptRunAttempt: 1,
-    };
-    const preflight = { name: "preflight", result: "success", selected: true };
-    const lastEntry = { name: "pr-fail-fast", result: "skipped", selected: false };
-    const snapshot = {
-      ...child("normalCi", { conclusion: "failure", status: "completed" }),
-      jobs: [job, gateJob],
-      flakeClassifications: [receipt],
-      gateEntries: [
-        preflight,
-        { name: "checks-node-core-test-nondist-shard", result: "failure", selected: true },
-        lastEntry,
-      ],
-    };
-    return { snapshot, job, gateJob, receipt, preflight, lastEntry };
-  }
-
-  it.each([
-    { status: "completed", loaderFails: false },
-    { status: "completed", loaderFails: true },
-    { status: "in_progress", loaderFails: false },
-  ])(
-    "hydrates receipts only after child completion: $status, loader error=$loaderFails",
-    async ({ status, loaderFails }) => {
-      const {
-        snapshot: { flakeClassifications, gateEntries, ...snapshot },
-      } = recordedFlakeChild();
-      let classificationReads = 0;
-      const observed = await readChild(snapshot, undefined, undefined, {
-        parentRunId: "77",
-        parentRunAttempt: 1,
-        targetSha: TARGET_SHA,
-        readRun: async () => ({
-          actor: { login: "github-actions[bot]" },
-          triggering_actor: { login: "github-actions[bot]" },
-          conclusion: status === "completed" ? "failure" : null,
-          display_title: snapshot.displayTitle,
-          event: "workflow_dispatch",
-          head_branch: snapshot.workflowRef,
-          head_sha: SHA,
-          html_url: snapshot.url,
-          id: 101,
-          path: ".github/workflows/ci.yml",
-          repository: { full_name: "openclaw/openclaw" },
-          run_attempt: 1,
-          status,
-        }),
-        readAttemptJobs: async () => snapshot.jobs,
-        loadFlakeClassifications: async (binding) => {
-          classificationReads += 1;
-          expect(binding).toMatchObject({
-            parentRunId: "77",
-            parentRunAttempt: 1,
-            targetSha: TARGET_SHA,
-          });
-          if (loaderFails) {
-            throw new Error("receipt artifact digest differs");
-          }
-          return { flakeClassifications, gateEntries };
-        },
-      });
-      if (status !== "completed") {
-        expect(observed).toMatchObject({ status, errors: [] });
-        expect(classificationReads).toBe(0);
-        return;
-      }
-      expect(classificationReads).toBe(1);
-      const decision = classifyReleaseSnapshot({ children: [observed] });
-      expect(decision.state).toBe(loaderFails ? "orchestration_error" : "passed");
-      if (loaderFails) {
-        expect(decision.errors).toEqual([
-          expect.objectContaining({
-            kind: "api_error",
-            message: expect.stringContaining("receipt artifact digest differs"),
-          }),
-        ]);
-      } else {
-        expect(decision.advisoryJobs).toEqual([
-          expect.objectContaining({ class: "recorded-flake", receiptRunId: "901" }),
-        ]);
-      }
-    },
-  );
-
-  it("retains recorded matrix flakes with different gate names through state and manifest validation", () => {
-    const { snapshot, job, receipt } = recordedFlakeChild();
-    const result = classifyReleaseSnapshot({ children: [snapshot] });
-    expect(result).toMatchObject({
-      state: "passed",
-      blockers: [],
-      advisoryJobs: [
-        {
-          class: "recorded-flake",
-          child: "normalCi",
-          job: job.name,
-          conclusion: "failure",
-          runId: "101",
-          url: job.url,
-          jobId: "1001",
-          trackingUrl: receipt.trackingUrl,
-          reason: receipt.reason,
-          receiptRunId: "901",
-        },
-      ],
-    });
-    const artifact = buildReleaseStateArtifact({
-      children: [snapshot],
-      decision: result,
-      executionPlan: { parentRunAttempt: 1, sha256: "a".repeat(64) },
-      expected: { parentRunAttempt: 2, parentRunId: "77", targetSha: TARGET_SHA },
-      mode: "decision",
-      releaseProfile: "stable",
-      rerunGroup: "all",
-    });
-    const validated = validateReleaseStateArtifact(artifact);
-    assert(validated.children.normalCi, "normalCi evidence must survive validation");
-    expect(releaseStateChildEvidence(validated.children.normalCi)).toMatchObject({
-      flakeClassifications: snapshot.flakeClassifications,
-      gateEntries: snapshot.gateEntries,
-    });
-    expect(formatReleaseStateOutcome(artifact)).toContain(
-      `normalCi/${job.name} (failure) ${job.url} — ${receipt.reason} ${receipt.trackingUrl}`,
-    );
-    const manifest = buildReleaseValidationManifest({
-      plan: executionPlan(),
-      drain: validated,
-      context: { runId: "77", runAttempt: 2, releaseProfile: "stable", validationInputs: {} },
-    });
-    expect(validateReleaseManifestAdvisoryJobs(manifest)).toEqual(result.advisoryJobs);
-  });
-
-  it.each(["new job ID", "new attempt", "new job name", "other child", "cancelled job"])(
-    "blocks a recorded flake after %s changes accepted evidence",
-    (scenario) => {
-      const { snapshot, job } = recordedFlakeChild();
-      if (scenario === "new job ID") {
-        job.url = "https://github.com/openclaw/openclaw/actions/runs/101/job/1002";
-      }
-      if (scenario === "new attempt") {
-        job.acceptedRunAttempt = 2;
-      }
-      if (scenario === "new job name") {
-        job.name = "checks-node-other";
-      }
-      if (scenario === "other child") {
-        snapshot.key = "releaseChecksCandidate";
-      }
-      if (scenario === "cancelled job") {
-        job.conclusion = "cancelled";
-      }
-      expect(terminalPolicyPass(snapshot)).toBe(false);
-      expect(classifyReleaseSnapshot({ children: [snapshot] })).toMatchObject({
-        state: "blocked_complete",
-        advisoryJobs: [],
-      });
-    },
-  );
-
-  it.each([
-    { name: "checks-node-core-test-nondist-shard", result: "skipped", selected: true },
-    { name: "checks-node-core-test-nondist-shard", result: "cancelled", selected: true },
-    { name: "checks-node-core-test-nondist-shard", result: "missing", selected: true },
-    { name: "checks-node-core-test-nondist-shard", result: "failure", selected: false },
-    { name: "checks-node-core-test-nondist-shard", result: "failure", selected: "missing" },
-    { name: "checks-node-core-test-nondist-shard", result: "neutral", selected: true },
-  ])("blocks uncovered gate entry $name:$result:$selected", (entry) => {
-    const { snapshot: base, preflight, lastEntry } = recordedFlakeChild();
-    const snapshot = { ...base, gateEntries: [preflight, entry, lastEntry] };
-    expect(terminalPolicyPass(snapshot)).toBe(false);
-    expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
-  });
-
-  it.each([
-    "no entries",
-    "passing entries only",
-    "duplicate entries",
-    "missing gate",
-    "unclassified failure",
-  ])("requires complete gate coverage with %s", (scenario) => {
-    const { snapshot, preflight, gateJob } = recordedFlakeChild();
-    if (scenario === "no entries") {
-      snapshot.gateEntries = [];
-    }
-    if (scenario === "passing entries only") {
-      snapshot.gateEntries = snapshot.gateEntries.slice(0, 1);
-    }
-    if (scenario === "duplicate entries") {
-      snapshot.gateEntries.push(preflight);
-    }
-    if (scenario === "missing gate") {
-      snapshot.jobs.pop();
-    }
-    if (scenario === "unclassified failure") {
-      snapshot.jobs.push({ ...gateJob, name: "macos-node", conclusion: "failure" });
-    }
-    expect(terminalPolicyPass(snapshot)).toBe(false);
-  });
-
-  it.each([
-    "parent",
-    "parent attempt",
-    "child run",
-    "target",
-    "job success",
-    "denied job",
-    "advisory reason",
-    "gate coverage",
-  ])("rejects forged manifest %s evidence", (scenario) => {
-    const { snapshot, job, receipt } = recordedFlakeChild();
-    const manifest = {
-      runId: "77",
-      sourceParentRunAttempt: 1,
-      targetSha: TARGET_SHA,
-      childRuns: { normalCi: "101" },
-      childEvidence: { normalCi: snapshot },
-      advisoryJobs: classifyReleaseSnapshot({ children: [snapshot] }).advisoryJobs,
-    };
-    if (scenario === "parent") {
-      manifest.runId = "78";
-    }
-    if (scenario === "parent attempt") {
-      manifest.sourceParentRunAttempt = 2;
-    }
-    if (scenario === "child run") {
-      receipt.childRunId = "102";
-    }
-    if (scenario === "target") {
-      manifest.targetSha = SHA;
-    }
-    if (scenario === "job success") {
-      job.conclusion = "success";
-    }
-    if (scenario === "denied job") {
-      receipt.jobName = "build-artifacts";
-      job.name = receipt.jobName;
-    }
-    if (scenario === "advisory reason") {
-      receipt.reason = "A forged replacement reason is not the recorded advisory.";
-    }
-    if (scenario === "gate coverage") {
-      snapshot.gateEntries = [];
-    }
-    expect(() => validateReleaseManifestAdvisoryJobs(manifest)).toThrow(
-      scenario === "denied job" ? /job cannot be classified/u : undefined,
-    );
-  });
-
-  it.each([
-    ["normalCi", "macos-node"],
-    ["normalCi", "macos-swift (tests)"],
-    ["normalCi", "checks-node-core-test-nondist-shard"],
-    ["normalCi", "checks-fast-core"],
-    ["normalCi", "openclaw/ci-gate"],
-    ["normalCi", "checks-windows-packaged-install"],
-    ["releaseChecksCandidate", "checks-windows-node-test-2"],
-    ["releaseChecksCandidate", "install-smoke (linux)"],
-    ["releaseChecksCandidate", "upgrade-survivor"],
-    ["releaseChecksCandidate", "update-first-hop-compat / published driver"],
-    ["releaseChecksCandidate", "npm-pack"],
-    ["releaseChecksCandidate", "Run package acceptance / Package integrity"],
-    ["releaseChecksCandidate", "cross_os_release_checks / Linux / packaged upgrade"],
-    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged fresh"],
-    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged upgrade"],
-    ["releaseChecksCandidate", "cross_os_release_checks / macOS / packaged fresh"],
-    ["releaseChecks", "Run QA Lab runtime-pair lane (core)"],
-    ["releaseChecks", "Run QA Lab live Telegram lane"],
-    ["npmTelegram", "Telegram package E2E"],
-    ["productPerformance", "benchmark"],
-  ])("keeps %s / %s blocking alongside a Windows Node advisory", (key, name) => {
-    const failure = { name, conclusion: "failure", status: "completed" };
-    const snapshots = [
-      child("normalCi", {
-        status: "completed",
-        conclusion: "failure",
-        jobs:
-          key === "normalCi"
-            ? [windowsJob, failure, ...(name === ciGate.name ? [] : [ciGate])]
-            : [windowsJob, ciGate],
-      }),
-    ];
-    if (key !== "normalCi") {
-      snapshots.push(child(key, { status: "completed", conclusion: "failure", jobs: [failure] }));
-    }
-    const result = classifyReleaseSnapshot({ children: snapshots });
-    expect(result).toMatchObject({
-      state: "blocked_complete",
-      blockers: [{ child: key, job: name }],
-      advisoryJobs: [{ job: windowsJob.name }],
-    });
-  });
-
-  it("keeps parent npm qualification blocking alongside Windows Node advisory", () => {
-    const result = classifyReleaseSnapshot({
-      children: [
-        child("normalCi", {
-          status: "completed",
-          conclusion: "failure",
-          jobs: [windowsJob, ciGate],
-        }),
-      ],
-      localFailures: releasePlanGateFailures([
-        { name: "Qualify release npm artifacts", required: true, result: "failure" },
-      ]),
-    });
-    expect(result).toMatchObject({
-      state: "blocked_complete",
-      blockers: [{ child: "<parent>", job: "Qualify release npm artifacts" }],
-      advisoryJobs: [{ job: windowsJob.name }],
-    });
-  });
-
-  it.each(["cancelled", "missing gate", "skipped gate", "cancelled shard"])(
-    "refuses advisory-only success with %s",
-    (scenario) => {
-      const snapshot = child("normalCi", {
-        status: "completed",
-        conclusion: scenario === "cancelled" ? "cancelled" : "failure",
-        jobs: [
-          { ...windowsJob, conclusion: scenario === "cancelled shard" ? "cancelled" : "failure" },
-          ...(scenario === "missing gate"
-            ? []
-            : [{ ...ciGate, conclusion: scenario === "skipped gate" ? "skipped" : "success" }]),
-        ],
-      });
-      expect(terminalPolicyPass(snapshot)).toBe(false);
-      expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
     },
   );
 
@@ -1736,8 +1087,10 @@ describe("release decision policy", () => {
     ]);
   });
 
-  it("preserves the last valid snapshot through a transient error and then recovers", async () => {
-    const message = "HTTP 403: secondary rate limit";
+  it.each([
+    "HTTP 403: secondary rate limit",
+    "stream error: stream ID 47; CANCEL; received from peer",
+  ])("preserves the last valid snapshot through %s and then recovers", async (message) => {
     const planned = child("normalCi");
     const previous = {
       ...planned,
@@ -1830,20 +1183,6 @@ describe("release decision policy", () => {
         workflowRef: "main",
       }),
     ).toMatchObject({ state: "orchestration_error" });
-  });
-
-  it("keeps GitHub permission errors terminal", async () => {
-    const message = "HTTP 403: Resource not accessible by integration";
-    const planned = child("normalCi");
-    const observed = await readChild(planned, planned, undefined, {
-      readRun: async () => {
-        throw Object.assign(new Error(message), { stderr: message });
-      },
-    });
-    expect(observed).toMatchObject({
-      errors: [expect.objectContaining({ kind: "api_error" })],
-      transportFailure: undefined,
-    });
   });
 
   it("preserves complete composite evidence when the run read succeeds but jobs fail", async () => {

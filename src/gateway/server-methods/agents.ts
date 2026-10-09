@@ -15,10 +15,13 @@ import { createAgent } from "../../agents/agent-create.js";
 import {
   AgentSharedStoreOwnerError,
   assertAgentSessionStoreDeletionSafe,
+  finishAgentDeleteDatabases,
   isPathOwnedBySurvivingAgent,
   prepareAgentDeleteDatabases,
+  prepareJournaledAgentDirOwnership,
   readAgentDeleteDatabaseRegistry,
   resolveSurvivingDatabaseFilePaths,
+  retireAgentDeleteRuntime,
   type AgentDeleteDatabasePlan,
 } from "../../agents/agent-delete-databases.js";
 import {
@@ -28,7 +31,6 @@ import {
 } from "../../agents/agent-delete-safety.js";
 import {
   normalizeAgentDirRegistryPath,
-  registerResolvedAgentDir,
   resolveRegisteredAgentIdForDir,
   unregisterResolvedAgentDir,
 } from "../../agents/agent-dir-registry.js";
@@ -39,7 +41,6 @@ import {
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
 import {
-  listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
@@ -84,8 +85,8 @@ import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
 } from "../../state/agent-deletion-journal.js";
-import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { resolveUserPath } from "../../utils.js";
+import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
@@ -424,22 +425,6 @@ function cleanupPathCovers(
   );
 }
 
-function prepareJournaledAgentDirOwnership(
-  cfg: OpenClawConfig,
-  agentId: string,
-  agentDir: string,
-): void {
-  for (const configuredAgentId of listAgentIds(cfg)) {
-    resolveAgentDir(cfg, configuredAgentId);
-  }
-  const registeredOwner = resolveRegisteredAgentIdForDir(agentDir);
-  if (registeredOwner !== undefined) {
-    return;
-  }
-  // The durable journal retains ownership across restarts after the roster entry is gone.
-  registerResolvedAgentDir({ agentId, agentDir });
-}
-
 export const agentsHandlers: GatewayRequestHandlers = {
   "agents.list": agentListHandler,
   "agents.create": async ({ params, respond, client, context }) => {
@@ -465,6 +450,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
         return;
       }
+      await reviveAgentDatabasesAfterConfigCommit([result.agentId], (message) =>
+        context.logGateway.warn(message),
+      );
       respond(
         true,
         {
@@ -549,7 +537,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
         ensuredWorkspace = await ensureAgentWorkspace({
           dir: workspaceDir,
-          beforePersistentApply: assertUploadAllowed,
+          guard: { assertHost: assertUploadAllowed },
           ensureBootstrapFiles: !skipBootstrap,
           skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
         });
@@ -702,7 +690,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             );
           }
           if (configured && lockedJournal?.cleanupCompleted) {
-            const claimed = claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
+            const claimed = await claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
             const remainingJournal = readAgentDeletionJournal(agentId);
             if (!claimed && remainingJournal) {
               throw new Error(
@@ -712,7 +700,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             lockedJournal = undefined;
           }
           const deleteFiles = lockedJournal?.deleteFiles ?? requestedDeleteFiles;
-          const deletion = begin(
+          const deletion = await begin(
             lockedJournal ?? {
               agentId,
               agentDir: resolveAgentDir(lockedConfig, agentId),
@@ -789,7 +777,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }
             }
             await context.cron.removeAgentJobsTransactional(agentId, () =>
-              withAgentExecApprovalsRemoved(agentId, async () => {
+              withAgentExecApprovalsRemoved(deletion.entry, async () => {
                 deletion.assertCurrent();
                 if (!rosterCommitted) {
                   try {
@@ -843,10 +831,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }
             }
             if (canReleaseFence) {
-              deletion.rollback();
+              await deletion.rollback();
             }
             throw error;
           }
+
+          await retireAgentDeleteRuntime(
+            lockedConfig,
+            deletion,
+            databasePlan?.agentDirs ?? [journal.agentDir],
+          );
 
           const deleteResult = committed?.result ?? {
             agentDir: journal.agentDir,
@@ -862,7 +856,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
           const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId, {
             runDatabaseCleanup: deletion.runDatabaseCleanup,
           });
-          deletion.assertCurrent();
+          await deletion.assertCurrentAsync();
+          const { closeDeletedAgentDatabases } =
+            await import("../../state/openclaw-agent-db-readers.js");
+          await deletion.assertCurrentAsync();
+          await closeDeletedAgentDatabases(agentId, databasePlan?.readerPaths ?? []);
+          await deletion.assertCurrentAsync();
 
           const removed: AgentDeleteRemovedPath[] = [];
           const failed: AgentDeleteFailedPath[] = [];
@@ -1066,16 +1065,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
               unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
             }
           }
-          deletion.assertCurrent();
-          if (failed.length === 0 && !purgeFailed) {
-            unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
-            if (deleteFiles) {
-              for (const databasePath of databasePlan?.registrationPaths ?? []) {
-                unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
-              }
-            }
-            deletion.finish();
-          }
+          await finishAgentDeleteDatabases({
+            deletion,
+            databasePlan,
+            agentDir: agentDirRegistryPath,
+            deleteFiles,
+            complete: failed.length === 0 && !purgeFailed,
+          });
           return {
             ok: true,
             agentId,

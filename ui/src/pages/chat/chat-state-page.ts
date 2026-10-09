@@ -46,6 +46,7 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   openSessionWorkspacePreview,
+  getSessionWorkspace,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
@@ -172,7 +173,6 @@ async function loadPageAssistantIdentity(state: ChatPageHost) {
     }
     state.assistantName = identity.name;
     state.assistantAvatar = identity.avatar;
-    state.assistantAvatarSource = identity.avatarSource ?? null;
     state.assistantAvatarStatus = identity.avatarStatus ?? null;
     state.assistantAvatarReason = identity.avatarReason ?? null;
     state.assistantAgentId = identity.agentId ?? null;
@@ -207,13 +207,10 @@ export function createPageState(
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
     settings,
-    password: "",
-    onboarding: false,
     assistantName: appConfig.assistantIdentity.name,
     assistantAvatar: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,
-    assistantAvatarSource: null,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -266,7 +263,6 @@ export function createPageState(
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
-    chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatModelSwitchPromises: {},
@@ -349,7 +345,6 @@ export function createPageState(
 
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
-  state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
     resetChatScroll(state);
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
@@ -594,7 +589,14 @@ export function createPageState(
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
     if (fileTab && content) {
-      openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+      }
     } else {
       state.sidebarContent = content;
     }

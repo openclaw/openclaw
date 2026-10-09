@@ -1,14 +1,9 @@
-import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
-import {
-  captureClawPackageLifecycleWriteAuthority,
-  type MaintainedClawPackageLifecycleLease,
-} from "../state/claw-package-lifecycle-lease.js";
+import { assertClawPackageLifecycleWriteArtifact } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { runWithOpenClawStateLeaseWorker } from "../state/openclaw-state-lease-worker-operation.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "../state/openclaw-state-worker-store.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import type {
   ClawPackageRefStatus,
   PersistedClawPackageRef,
@@ -18,7 +13,7 @@ export async function claimClawPackageRefStatus(
   ref: PersistedClawPackageRef,
   status: ClawPackageRefStatus,
   options: OpenClawStateDatabaseOptions & {
-    lease: MaintainedClawPackageLifecycleLease;
+    lease: OpenClawStateLeaseContext;
     nowMs?: number;
     assertCurrent?: () => void;
   },
@@ -28,32 +23,26 @@ export async function claimClawPackageRefStatus(
   }
   // Store admission can yield before execute captures the command.
   const capturedRef = structuredClone(ref);
-  const owner = captureClawPackageLifecycleWriteAuthority(options.lease, capturedRef);
-  const input = { ref: capturedRef, status, nowMs: options.nowMs, lease: { ...owner.identity } };
+  const nowMs = options.nowMs;
+  assertClawPackageLifecycleWriteArtifact(options.lease, capturedRef);
   const assertCaller = options.assertCurrent?.bind(options);
   const context = captureOpenClawStateWorkerContext({
     ...options,
-    path: options.database?.path ?? options.path ?? owner.path,
+    path: options.database?.path ?? options.path,
   });
   const assertCurrent = () => {
     context.admission.assertCurrent();
-    owner.assertCurrent();
     assertCaller?.();
-    if (context.admission.databasePath !== owner.path) {
-      throw new Error("Package write differs from its lifecycle database.");
-    }
   };
-  const result = await runOpenClawStateWorkerOperation(
+  const result = await runWithOpenClawStateLeaseWorker(
+    options.lease,
     context,
-    (scope) =>
+    (scope, identity) =>
       scope.execute({
         type: "clawProvenance.packageStatus",
-        input,
+        input: { ref: capturedRef, status, nowMs, lease: identity },
       }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [owner.path]),
-    },
+    { assertCurrent },
   );
   assertCurrent();
   return result;

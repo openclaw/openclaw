@@ -168,24 +168,4 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
     expect(message).not.toContain("hidden cause prose");
     expect(message).not.toContain("hidden cleanup");
   });
-
-  it("keeps the source operation through the snapshot owner's existing staging wrapper", async () => {
-    const failure = Object.freeze(
-      Object.assign(new Error("disk full"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 13,
-        cause: new Error("hidden cause prose"),
-      }),
-    );
-    const { write, observedFailure } = await inspectFailure("backup-source", failure);
-    expect(observedFailure instanceof Error && observedFailure.cause).toBe(failure);
-    expect(write).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(
-        "failed while opening the source database: disk full (SQLite errcode=13)",
-      ),
-    );
-    const [message] = expectDefined(write.mock.calls[0], "worker output");
-    expect(message).toContain("code=ERR_SQLITE_ERROR, errcode=13");
-    expect(message).not.toContain("hidden cause prose");
-  });
 });

@@ -49,6 +49,8 @@ import {
   posixAgentTurnScript,
   posixStopGatewayScript,
   SmokeRunController,
+  smokeDefaultOptions,
+  smokeDefaultStatus,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
@@ -69,24 +71,14 @@ const guestNode = "node";
 const guestNpm = "npm";
 
 const defaultOptions = (): MacosOptions => ({
+  ...smokeDefaultOptions,
   discordChannelId: undefined,
   discordGuildId: undefined,
   discordTokenEnv: undefined,
-  hostIp: undefined,
   hostPort: 18425,
-  hostPortExplicit: false,
   installUrl: "https://openclaw.ai/install.sh",
-  installVersion: "",
-  json: false,
-  keepServer: false,
-  latestVersion: "",
-  mode: "both",
-  modelId: undefined,
-  npmRegistry: undefined,
-  provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "macOS 26.5 latest",
-  targetPackageSpec: "",
   vmName: "macOS Tahoe",
   vmNameExplicit: false,
 });
@@ -163,20 +155,12 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
   private updateDevTimeoutSeconds: number;
   private devTargetCommit: string | undefined;
   protected status = {
-    freshAgent: "skip",
+    ...smokeDefaultStatus,
     freshDashboard: "skip",
     freshDiscord: "skip",
-    freshGateway: "skip",
-    freshMain: "skip",
-    freshVersion: "skip",
-    latestInstalledVersion: "skip",
-    upgrade: "skip",
-    upgradeAgent: "skip",
     upgradeDashboard: "skip",
     upgradeDiscord: "skip",
-    upgradeGateway: "skip",
     upgradePrecheck: "skip",
-    upgradeVersion: "skip",
   };
 
   constructor(options: MacosOptions) {
@@ -225,9 +209,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
       say(`Snapshot hint: ${this.options.snapshotHint}`);
       say(`Resolved snapshot: ${this.snapshot.name} [${this.snapshot.state}]`);
       say(`Latest npm version: ${this.latestVersion}`);
-      say(
-        `Current head: ${run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim()}`,
-      );
+      say(`Current head: ${run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim()}`);
       say(
         `Discord smoke: ${this.discordEnabled() ? `guild=${this.options.discordGuildId} channel=${this.options.discordChannelId}` : "disabled"}`,
       );
@@ -254,17 +236,13 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
             this.artifact.version || (await expectedPackageTargetVersion(this.artifact));
         }
       } else if (this.targetInstallsDirectly()) {
-        this.targetExpectVersion = run(
-          "npm",
-          [
-            "view",
-            this.options.targetPackageSpec || "",
-            "version",
-            "--userconfig",
-            path.join(this.tgzDir, "npmrc"),
-          ],
-          { quiet: true },
-        ).stdout.trim();
+        this.targetExpectVersion = run("npm", [
+          "view",
+          this.options.targetPackageSpec || "",
+          "version",
+          "--userconfig",
+          path.join(this.tgzDir, "npmrc"),
+        ]).stdout.trim();
       }
 
       await this.runLanesAndFinish();
@@ -335,9 +313,6 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
   }
 
   private artifactLabel(): string {
-    if (this.targetInstallsDirectly()) {
-      return "target package spec";
-    }
     return this.options.targetPackageSpec ? "target package tgz" : "current main tgz";
   }
 
@@ -429,16 +404,12 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
     }
   }
 
-  private guestOpenClawEntryExec(
-    args: string[],
-    options: { check?: boolean; env?: Record<string, string> } = {},
-  ): string {
+  private guestOpenClawEntryExec(args: string[]): string {
     const argv = args.map((arg) => shellQuote(arg)).join(" ");
     return this.guest.sh(
       `set -e
 entry="$(npm root -g)/openclaw/openclaw.mjs"
 exec node "$entry" ${argv}`,
-      options.env,
     );
   }
 
@@ -449,7 +420,7 @@ exec node "$entry" ${argv}`,
       if (this.tryCurrentUser()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     const fallback = this.resolveDesktopUser();
     if (fallback) {
@@ -464,7 +435,7 @@ exec node "$entry" ${argv}`,
       if (this.tryCurrentUser()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("guest current user did not become available");
   }
@@ -472,7 +443,6 @@ exec node "$entry" ${argv}`,
   private tryCurrentUser(): boolean {
     const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
       check: false,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(),
     });
     const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
@@ -495,7 +465,6 @@ exec node "$entry" ${argv}`,
   private readDesktopUserOutput(args: string[]): string {
     return run("prlctl", ["exec", this.options.vmName, ...args], {
       check: false,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(30_000),
     }).stdout;
   }
@@ -514,7 +483,7 @@ exec node "$entry" ${argv}`,
       const result = run(
         "prlctl",
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
-        { check: false, quiet: true, timeoutMs: this.phases.remainingTimeoutMs(360_000) },
+        { check: false, timeoutMs: this.phases.remainingTimeoutMs(360_000) },
       );
       this.phases.append(result.stdout);
       this.phases.append(result.stderr);
@@ -525,27 +494,24 @@ exec node "$entry" ${argv}`,
       warn(`snapshot-switch attempt ${attempt} failed (rc=${result.status})`);
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(60_000),
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
         run("prlctl", ["stop", this.options.vmName, "--kill"], {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(120_000),
         });
         waitForVmStatus(this.options.vmName, "stopped", 360, {
           probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000),
         });
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     if (!restored) {
       throw new Error("snapshot restore failed");
     }
     const status = run("prlctl", ["status", this.options.vmName], {
       check: false,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(60_000),
     }).stdout;
     if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
@@ -554,13 +520,11 @@ exec node "$entry" ${argv}`,
       });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       });
     } else if (status.includes(" suspended")) {
       say(`Resume restored snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       });
     }
@@ -789,7 +753,7 @@ sleep 1`,
       }
       if (attempt < 8) {
         warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"], { quiet: true });
+        run("sleep", ["5"]);
       }
     }
     throw new Error("gateway status did not become RPC-ready");
@@ -940,7 +904,7 @@ ${posixAgentTurnScript({
     const summary = {
       currentHead:
         this.artifact?.buildCommitShort ||
-        run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim(),
+        run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim(),
       freshMain: {
         agent: this.status.freshAgent,
         dashboard: this.status.freshDashboard,

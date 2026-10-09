@@ -24,28 +24,24 @@ export const telegramThreadBindingLifecycle: Pick<
       persist: false,
       enableSweeper: false,
     }),
-  setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+  setIdleTimeoutBySessionKey: (params) =>
     setTelegramThreadBindingIdleTimeoutBySessionKey({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      idleTimeoutMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }),
-  setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+  setMaxAgeBySessionKey: (params) =>
     setTelegramThreadBindingMaxAgeBySessionKey({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      maxAgeMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }),
-  setIdleTimeoutBySessionKeyAsync: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+  setIdleTimeoutBySessionKeyAsync: (params) =>
     setTelegramThreadBindingIdleTimeoutBySessionKeyAsync({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      idleTimeoutMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }),
-  setMaxAgeBySessionKeyAsync: ({ targetSessionKey, accountId, maxAgeMs }) =>
+  setMaxAgeBySessionKeyAsync: (params) =>
     setTelegramThreadBindingMaxAgeBySessionKeyAsync({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      maxAgeMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }),
 };

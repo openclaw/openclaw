@@ -165,7 +165,7 @@ describe("cross-layer failover behavior", () => {
       reason: "rate_limit",
     });
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     );
   });
 
@@ -236,9 +236,7 @@ describe("cross-layer failover behavior", () => {
     expect(facet).toBeNull();
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_model_unavailable",
-      userMessage: expect.stringContaining(
-        "Select an available model or update the model configuration, then try again.",
-      ),
+      userMessage: expect.stringContaining("Choose another model in the Control UI"),
     });
   });
 
@@ -274,6 +272,36 @@ describe("cross-layer failover behavior", () => {
     expect(classifyFailoverSignal({ message: row.message })).toEqual({
       kind: "reason",
       reason: "rate_limit",
+    });
+  });
+});
+
+describe("retired model HTTP 410 classification", () => {
+  const retirement =
+    "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)";
+
+  it.each([
+    { status: 410, message: JSON.stringify({ error: retirement }) },
+    { message: `410 ${JSON.stringify({ error: retirement })}` },
+    { status: 410, message: "Gone", details: [retirement] },
+    { status: 410, message: "The selected model has been retired." },
+  ])("keeps retired models out of timeout retries: $message", (signal) => {
+    expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
+      kind: "reason",
+      reason: "model_not_found",
+    });
+  });
+
+  it.each([
+    { message: "410 Gone", reason: "timeout" },
+    { message: "410 conversation expired", reason: "session_expired" },
+    { message: "410 authentication failed", reason: "auth" },
+    { message: "410 insufficient credits", reason: "billing" },
+    { message: "410 The account has been retired.", reason: "timeout" },
+  ])("preserves unrelated HTTP 410 behavior: $message", ({ message, reason }) => {
+    expect(classifyFailoverSignal({ message }, { providerPlugin: null })).toEqual({
+      kind: "reason",
+      reason,
     });
   });
 });

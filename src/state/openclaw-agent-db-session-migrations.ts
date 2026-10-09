@@ -11,33 +11,35 @@ import { buildConversationRef, normalizeConversationPeerId } from "../routing/co
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
 import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
-type MigratedConversationEntry = Record<string, unknown>;
-
-export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void {
-  // The pre-landing sessions_search branch tracked JSONL file watermarks and
-  // stored session_key inside the FTS table. Both are derived caches; drop
-  // them so reconcile rebuilds the row-native index shape.
-  db.exec("DROP TABLE IF EXISTS session_transcript_files;");
-  const columns = db.prepare("PRAGMA table_info(session_transcript_fts)").all();
-  if (columns.some((row) => row.name === "session_key")) {
-    db.exec(`
-      DROP TABLE IF EXISTS session_transcript_fts;
-      DROP TABLE IF EXISTS session_transcript_index_state;
-    `);
-  }
-}
-
-export function assertSupportedRuntimeJournalSchemas(db: DatabaseSync, pathname: string): void {
-  const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
-  const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
+export function assertSupportedAgentMigrationSchemas(
+  db: DatabaseSync,
+  pathname: string,
+  userVersion: number,
+): void {
   if (
-    (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) ||
-    trajectoryColumns?.has("event_id")
+    (userVersion < 8 &&
+      ["sessions", "session_entries", "transcript_events"].some((table) =>
+        tableExists(db, table),
+      )) ||
+    tableExists(db, "session_transcript_files") ||
+    readSqliteTableColumns(db, "session_transcript_fts")?.has("session_key")
   ) {
     throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${pathname} has an unsupported runtime journal schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
+      `OpenClaw agent database ${pathname} contains an unreleased session schema (version ${userVersion}). Preserve a complete copy of your state directory and configuration, including shared agent registration. Run "openclaw doctor --fix" with OpenClaw 2026.9.7 against that copy. If a store is held, follow Doctor's explicit agent-restoration instructions, then rerun Doctor before retrying the upgrade.`,
+    );
+  }
+  const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
+  const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
+  const memorySourceColumns = readSqliteTableColumns(db, "memory_index_sources");
+  if (
+    (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) ||
+    trajectoryColumns?.has("event_id") ||
+    memorySourceColumns?.has("source_kind")
+  ) {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${pathname} has an unsupported legacy schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
     );
   }
 }
@@ -90,19 +92,15 @@ export function migrateSessionTranscriptActiveProjection(
   `);
 }
 
-function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
-  return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
-}
-
 function inferMigratedChatType(params: {
-  entry: MigratedConversationEntry;
+  entry: Record<string, unknown>;
   persistedChatType?: string;
   sessionKey?: string;
   deliveryTarget?: string;
 }): ChatType {
   const explicit =
     normalizeChatType(normalizeOptionalString(params.entry.chatType)) ??
-    normalizeChatType(normalizeOptionalString(params.persistedChatType));
+    normalizeChatType(params.persistedChatType);
   if (explicit) {
     return explicit;
   }
@@ -124,7 +122,7 @@ function inferMigratedChatType(params: {
 }
 
 function migratedConversation(
-  entry: MigratedConversationEntry,
+  entry: Record<string, unknown>,
   persistedChatType?: string,
   sessionKey?: string,
 ) {
@@ -133,14 +131,14 @@ function migratedConversation(
     asOptionalRecord(canonicalDelivery?.context) ?? asOptionalRecord(entry.deliveryContext);
   const origin = asOptionalRecord(canonicalDelivery?.origin) ?? asOptionalRecord(entry.origin);
   const deliveryRouteTarget = normalizeOptionalString(delivery?.to);
+  const originTarget = normalizeOptionalString(origin?.from);
   const kind = inferMigratedChatType({
     entry,
     persistedChatType,
     sessionKey,
-    deliveryTarget: deliveryRouteTarget ?? normalizeOptionalString(origin?.from),
+    deliveryTarget: deliveryRouteTarget ?? originTarget,
   });
-  const deliveryTarget =
-    deliveryRouteTarget ?? (kind === "direct" ? normalizeOptionalString(origin?.from) : undefined);
+  const deliveryTarget = deliveryRouteTarget ?? (kind === "direct" ? originTarget : undefined);
   if (!deliveryTarget) {
     return undefined;
   }
@@ -293,7 +291,8 @@ export function backfillSessionConversations(db: DatabaseSync): void {
   }
   for (const row of rows) {
     const sessionId = normalizeOptionalString(row.session_id);
-    const entry = parseConversationEntry(row.entry_json);
+    const entry =
+      typeof row.entry_json === "string" ? safeParseJsonRecord(row.entry_json) : undefined;
     const updatedAt = typeof row.updated_at === "number" ? row.updated_at : Date.now();
     const conversation = entry
       ? migratedConversation(
@@ -350,20 +349,12 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
   ensurePendingInputConsumptionColumn(db);
-  if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
-    // NULL records an older writer's unclassified projection; the transcript
-    // reconcile owner fills it without parsing payloads during schema open.
-    db.exec("ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible INTEGER;");
-  }
-  const columns = readSqliteTableColumns(db, "session_nodes");
-  if (columns && !columns.has("project_id")) {
-    db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
-  }
-  const conversationColumns = readSqliteTableColumns(db, "session_conversations");
-  if (conversationColumns && !conversationColumns.has("route_context_json")) {
-    db.exec("ALTER TABLE session_conversations ADD COLUMN route_context_json TEXT");
-  }
-  if (conversationColumns) {
+  // NULL records an older writer's unclassified projection; the transcript
+  // reconcile owner fills it without parsing payloads during schema open.
+  ensureColumn(db, "session_transcript_active_events", "context_eligible INTEGER");
+  ensureColumn(db, "session_nodes", "project_id TEXT");
+  ensureColumn(db, "session_conversations", "route_context_json TEXT");
+  if (tableExists(db, "session_conversations")) {
     // Same-version older writers leave the envelope byte-identical. Clear it on their update so
     // stale owner facts cannot survive a downgrade/re-upgrade cycle with an unchanged timestamp.
     db.exec(`
@@ -398,13 +389,9 @@ export function hasPendingSessionTranscriptContextEligibilityColumn(db: Database
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
 export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void {
-  const columns = readSqliteTableColumns(db, "conversations");
-  if (!columns || columns.has("delivery_target")) {
-    return;
-  }
   // SQLite requires a default for a NOT NULL additive column. The canonical
   // session projection replaces recoverable rows; backfill drops the rest.
-  db.exec("ALTER TABLE conversations ADD COLUMN delivery_target TEXT NOT NULL DEFAULT '';");
+  ensureColumn(db, "conversations", "delivery_target TEXT NOT NULL DEFAULT ''");
 }
 
 /** Adds the validity projection and settles only rows left pending by older writers. */
@@ -456,29 +443,6 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
     }
     for (const row of rows) {
       update.run(parseSqliteSessionEntryRecord(row) ? 1 : -1, row.session_key);
-    }
-  }
-}
-
-export function migrateSessionEntryStatusProjection(
-  db: DatabaseSync,
-  readStatus: (entryJson: unknown) => string | null,
-): void {
-  const columns = readSqliteTableColumns(db, "session_entries");
-  if (!columns) {
-    return;
-  }
-  if (!columns.has("status")) {
-    db.exec(
-      "ALTER TABLE session_entries ADD COLUMN status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout'));",
-    );
-  }
-  const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all();
-  const update = db.prepare("UPDATE session_entries SET status = ? WHERE session_key = ?");
-  update.setReadBigInts(true);
-  for (const row of rows) {
-    if (typeof row.session_key === "string") {
-      update.run(readStatus(row.entry_json), row.session_key);
     }
   }
 }

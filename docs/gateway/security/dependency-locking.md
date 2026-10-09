@@ -19,7 +19,9 @@ These projects do not inherit root pnpm overrides. The Vercel project uses appro
 
 ## Check dependency advisories
 
-The production audit pre-commit hook and ordinary CI's `security-fast` job remain zero-install, npm-only checks of the product production graph. They query npm bulk advisory data, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities. CI runs dispatched by Full Release Validation or release publication record a failing audit as a warning instead of failing: advisories never block a release.
+Ordinary pull-request, push, and scheduled CI do not run the production dependency audit. The `security-fast` job runs it only for `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-`. These release checks and the optional production audit pre-commit hook print audit findings and turn every audit failure into a warning with exit code 0, including unavailable or invalid advisory data. Dependency advisories never block CI, local commits, or release verification.
+
+The separate daily [Dependency Audit workflow](/ci/scheduled-workflows#dependency-audit) remains strict: findings, unavailable advisories, or invalid data can leave it red as a triage signal, but it is not a required PR check. Investigate that signal and follow up with a dependency bump on `main`. These zero-install checks query npm bulk advisory data for the product production graph, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities.
 
 `pnpm deps:vuln:gate`, used by release dependency evidence, audits the target's product pnpm lock plus each release-tool lock whose package is present in that target. It checks npm advisory data and adds published security advisories from verified public GitHub repositories. Repository mappings come from the manifests for exact locked npm package versions, not a package's latest manifest. The gate verifies that each repository is public before requesting advisories with the explicit `state=published` filter. It does not scan private repositories or unpublished advisories.
 
@@ -43,6 +45,8 @@ Published OpenClaw plugin packages bundle their runtime dependency files in the 
 
 Native-heavy plugins opt out of runtime dependency bundling because their dependency trees contain platform-specific or large native artifacts. Those plugins resolve dependencies at install time from exact-pinned direct dependencies. The root `openclaw` package also resolves dependencies at install time and does not bundle its full dependency tree.
 
+When preparing a package that carries bundled dependencies, OpenClaw also declares its hoisted optional platform packages as root `optionalDependencies`, using the validated npm dependency graph. This preserves platform filtering on npm 10 global installs, including installs with lifecycle scripts disabled, without removing the patched bundled runtimes.
+
 The bundled Anthropic plugin communicates directly with the separately installed `claude` executable. It does not depend on or copy the Claude Agent SDK into OpenClaw's package. The external ACPX plugin independently declares an ACP adapter that depends on the SDK; ACPX leaves those dependencies to installation from npm instead of bundling them into its published package.
 
 Neither path publishes a lockfile:
@@ -53,7 +57,7 @@ Neither path publishes a lockfile:
 
 ## Validate npm dependency graphs
 
-The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It does not write a lockfile into the checkout.
+The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It preserves `optional` metadata and verifies that every declared `os`, `cpu`, and `libc` constraint matches the pnpm lock. It does not write a lockfile into the checkout.
 
 ```bash
 # Root and every publishable package

@@ -243,7 +243,7 @@ flow:
             - ref: config.sessionKey
             - lambda:
                 params: [history]
-                expr: "(() => { const calls = projectQaToolMessages(history.messages ?? []).flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : []).filter((item) => item.type === 'toolCall' && item.name === 'automations'); return calls.length >= 4 ? calls : undefined; })()"
+                expr: "(() => { const calls = projectQaToolMessages(history.messages ?? []).flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : []).filter((item) => item.type === 'toolCall' && item.name === 'automations' && item.isError !== true); return calls.length >= 4 ? calls : undefined; })()"
             - expr: liveTurnTimeoutMs(env, 240000)
             - 250
         - assert:

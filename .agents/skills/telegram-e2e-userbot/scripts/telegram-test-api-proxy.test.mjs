@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
 
 async function listen(server) {
@@ -19,7 +20,7 @@ test("inserts the Test Server segment after the bot token", () => {
   assert.throws(() => telegramTestApiPath("/healthz"), /invalid Bot API path/u);
 });
 
-test("proxies method, query, headers, and body to the Test Server path", async () => {
+test("proxies method, query, headers, and body to the Test Server path", async (t) => {
   let observed;
   const upstreamServer = http.createServer((request, response) => {
     let body = "";
@@ -39,11 +40,20 @@ test("proxies method, query, headers, and body to the Test Server path", async (
     });
   });
   const upstream = await listen(upstreamServer);
+  const previousDispatcher = getGlobalDispatcher();
+  const dispatcher = new Agent({ allowH2: false });
+  setGlobalDispatcher(dispatcher);
   const proxy = await startTelegramTestApiProxy({ upstream });
+  t.after(async () => {
+    await proxy.close();
+    setGlobalDispatcher(previousDispatcher);
+    await dispatcher.close();
+    await new Promise((resolve) => upstreamServer.close(resolve));
+  });
   const response = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage?chat_id=42`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-marker": "kept" },
-    body: JSON.stringify({ text: "hello" }),
+    body: JSON.stringify({ text: "hello 🌻" }),
   });
   assert.equal(response.status, 201);
   assert.equal(response.headers.get("x-upstream"), "yes");
@@ -51,11 +61,9 @@ test("proxies method, query, headers, and body to the Test Server path", async (
   assert.deepEqual(observed, {
     method: "POST",
     url: "/bot123:ABC/test/sendMessage?chat_id=42",
-    body: '{"text":"hello"}',
+    body: '{"text":"hello 🌻"}',
     marker: "kept",
   });
-  await proxy.close();
-  await new Promise((resolve) => upstreamServer.close(resolve));
 });
 
 test("drains every pending Test Server update", async (t) => {
@@ -363,6 +371,7 @@ test("getFile timing ends when the streamed response finishes", async (t) => {
 });
 
 test("records completion timing on upstream and response-stream errors", async (t) => {
+  t.mock.method(console, "error", () => {});
   for (const [expectedStatus, fetchImpl] of [
     [
       502,
@@ -392,7 +401,42 @@ test("records completion timing on upstream and response-stream errors", async (
   }
 });
 
-test("proxy close aborts the in-flight Test Server request", async () => {
+test("reports upstream failures without exposing exception details or bot tokens", async (t) => {
+  const privateDetail = "synthetic-private-upstream-detail";
+  const cause = Object.assign(new Error(privateDetail), { code: "ECONNRESET" });
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () => {
+      throw new TypeError(privateDetail, { cause });
+    },
+  });
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxy.apiRoot}/bot123:ABC/deleteWebhook`, {
+    method: "POST",
+    body: "{}",
+  });
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    description: "Telegram Test Server proxy failed.",
+  });
+  assert.equal(diagnostic.mock.calls.length, 1);
+  const line = diagnostic.mock.calls[0]?.arguments[0];
+  assert.equal(typeof line, "string");
+  assert.deepEqual(JSON.parse(line), {
+    event: "telegram_test_api_proxy_failure",
+    phase: "upstream-fetch",
+    method: "deleteWebhook",
+    errorClass: "TypeError",
+    errorCode: "ECONNRESET",
+  });
+  assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
+});
+
+test("proxy close aborts the in-flight Test Server request", async (t) => {
+  t.mock.method(console, "error", () => {});
   let upstreamStarted;
   let upstreamAborted = false;
   const started = new Promise((resolve) => {
@@ -424,6 +468,7 @@ test("proxy close aborts the in-flight Test Server request", async () => {
 });
 
 test("lease revocation blocks every later Bot API request", async (t) => {
+  t.mock.method(console, "error", () => {});
   const leaseError = new Error("lease revoked");
   let healthy = true;
   let revoke;

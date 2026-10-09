@@ -19,7 +19,6 @@ import {
   resolveAssistantUsage,
   resolveEventTimestamp,
   sanitizeToolDetailText,
-  type AssistantMessage,
   type AssistantProjectionChunk,
   type AssistantProjectionGroup,
   type AssistantUsageSnapshot,
@@ -41,13 +40,12 @@ export interface SessionLike {
   abort(): Promise<void>;
   disconnect(): Promise<void>;
   id?: string;
-  off?: (eventType: string, handler: (...args: unknown[]) => void) => void;
   on: {
     <K extends SessionEventType>(
       eventType: K,
       handler: (event: Extract<SessionEvent, { type: K }>) => void,
-    ): (() => void) | void;
-    (eventType: string, handler: (event: SessionEvent) => void): (() => void) | void;
+    ): () => void;
+    (eventType: string, handler: (event: SessionEvent) => void): () => void;
   };
   rpc?: {
     history?: {
@@ -93,43 +91,9 @@ interface EventBridgeSnapshot {
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
-interface BuildAssistantMessageArgs {
-  modelRef: { api?: string; id: string; provider: string };
-  now: () => number;
-}
-
-interface EventBridgeController {
-  recordSendResult(result: SessionEvent | undefined): boolean;
-  awaitCompactionChain(): Promise<void>;
-  awaitCompactionCompletion(): Promise<void>;
-  awaitSessionIdle(): Promise<void>;
-  settleCompactionWait(): void;
-  awaitDeltaChain(): Promise<void>;
-  awaitAgentEventChain(): Promise<void>;
-  flushTranscriptProjection(): void;
-  hasObservedCompaction(): boolean;
-  hasObservedSessionIdle(): boolean;
-  isCompacting(): boolean;
-  snapshot(): EventBridgeSnapshot;
-  buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
-  finalizeAssistantTexts(): string[];
-  detach(): void;
-  completeTool(tool: {
-    toolCallId: string;
-    parentToolCallId?: string;
-    toolName: string;
-    args?: unknown;
-    result?: unknown;
-    isError: boolean;
-  }): void;
-}
-
 type MessageAccumulator = { text: string };
 
-export function attachEventBridge(
-  session: SessionLike,
-  options: EventBridgeOptions,
-): EventBridgeController {
+export function attachEventBridge(session: SessionLike, options: EventBridgeOptions) {
   const messagesById = new Map<string, MessageAccumulator>();
   const reasoningById = new Map<string, string>();
   const durableReasoningById = new Map<string, string>();
@@ -163,8 +127,14 @@ export function attachEventBridge(
   let detached = false;
   let unconsumedDurableReasoning = false;
   const unsubscribeFns: Array<() => void> = [];
+  const listen = <K extends SessionEventType>(
+    eventType: K,
+    handler: (event: Extract<SessionEvent, { type: K }>) => void,
+  ) => {
+    unsubscribeFns.push(session.on(eventType, handler));
+  };
 
-  registerListener(session, unsubscribeFns, "user.message", (event) => {
+  listen("user.message", (event) => {
     if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
     }
@@ -200,28 +170,16 @@ export function attachEventBridge(
     });
   });
 
-  registerListener(session, unsubscribeFns, "system.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
-      return;
-    }
-    // System/developer prompts affect native history but AgentMessage has no
-    // lossless canonical role for them, so keep native replay fail-closed.
-    options.transcriptProjection?.journal.markReplayIncomplete();
-  });
+  // These native history events have no lossless AgentMessage projection.
+  for (const eventType of ["system.message", "skill.invoked", "system.notification"] as const) {
+    listen(eventType, (event) => {
+      if (isRootSessionEvent(event) && event.ephemeral !== true) {
+        options.transcriptProjection?.journal.markReplayIncomplete();
+      }
+    });
+  }
 
-  registerListener(session, unsubscribeFns, "skill.invoked", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
-      options.transcriptProjection?.journal.markReplayIncomplete();
-    }
-  });
-
-  registerListener(session, unsubscribeFns, "system.notification", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
-      options.transcriptProjection?.journal.markReplayIncomplete();
-    }
-  });
-
-  registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
+  listen("assistant.message_delta", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
     }
@@ -258,7 +216,7 @@ export function attachEventBridge(
     void deltaChain.catch(() => undefined);
   });
 
-  registerListener(session, unsubscribeFns, "assistant.reasoning_delta", (event) => {
+  listen("assistant.reasoning_delta", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
     }
@@ -270,7 +228,7 @@ export function attachEventBridge(
     reasoningById.set(reasoningId, `${reasoningById.get(reasoningId) ?? ""}${delta}`);
   });
 
-  registerListener(session, unsubscribeFns, "assistant.reasoning", (event) => {
+  listen("assistant.reasoning", (event) => {
     if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
     }
@@ -279,15 +237,15 @@ export function attachEventBridge(
     unconsumedDurableReasoning = true;
   });
 
-  registerListener(session, unsubscribeFns, "assistant.turn_start", (event) => {
+  listen("assistant.turn_start", (event) => {
     if (isRootSessionEvent(event)) {
       markUnconsumedReasoningIncomplete();
     }
   });
 
-  registerListener(session, unsubscribeFns, "assistant.message", handleAssistantMessage);
+  listen("assistant.message", handleAssistantMessage);
 
-  registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
+  listen("assistant.usage", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
     }
@@ -301,14 +259,14 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "tool.user_requested", (event) => {
+  listen("tool.user_requested", (event) => {
     if (isRootSessionEvent(event) && event.ephemeral !== true) {
       userRequestedToolCallIds.add(event.data.toolCallId);
       options.transcriptProjection?.journal.markReplayIncomplete();
     }
   });
 
-  registerListener(session, unsubscribeFns, "tool.execution_start", (event) => {
+  listen("tool.execution_start", (event) => {
     flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
     if (isRootSessionEvent(event)) {
       startedCount += 1;
@@ -332,7 +290,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "tool.execution_complete", (event) => {
+  listen("tool.execution_complete", (event) => {
     flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
     if (isRootSessionEvent(event)) {
       completedCount += 1;
@@ -404,7 +362,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "session.plan_changed", (event) => {
+  listen("session.plan_changed", (event) => {
     enqueueAgentEvent({
       stream: "plan",
       data: {
@@ -417,7 +375,7 @@ export function attachEventBridge(
     });
   });
 
-  registerListener(session, unsubscribeFns, "exit_plan_mode.requested", (event) => {
+  listen("exit_plan_mode.requested", (event) => {
     const steps = splitPlanText(event.data.planContent).map((step) => ({
       step,
       status: "pending" as const,
@@ -440,7 +398,7 @@ export function attachEventBridge(
     });
   });
 
-  registerListener(session, unsubscribeFns, "exit_plan_mode.completed", (event) => {
+  listen("exit_plan_mode.completed", (event) => {
     enqueueAgentEvent({
       stream: "plan",
       data: {
@@ -459,7 +417,7 @@ export function attachEventBridge(
     });
   });
 
-  registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
+  listen("session.compaction_start", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
     }
@@ -471,7 +429,7 @@ export function attachEventBridge(
     enqueueCompactionCallback(options.onCompactionStart);
   });
 
-  registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
+  listen("session.compaction_complete", (event) => {
     if (event.data.success) {
       try {
         // The SDK shares one tool-handler map and omits agent identity from
@@ -499,7 +457,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "session.idle", (event) => {
+  listen("session.idle", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
     }
@@ -509,7 +467,7 @@ export function attachEventBridge(
     sessionIdle.resolve();
   });
 
-  registerListener(session, unsubscribeFns, "session.error", (event) => {
+  listen("session.error", (event) => {
     markUnconsumedReasoningIncomplete();
     if (!options.isAborted()) {
       streamError = createPromptError(
@@ -519,7 +477,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "abort", (event) => {
+  listen("abort", (event) => {
     markUnconsumedReasoningIncomplete();
     if (!options.isAborted()) {
       streamError = createPromptError(
@@ -530,7 +488,7 @@ export function attachEventBridge(
   });
 
   return {
-    recordSendResult(result) {
+    recordSendResult(result: SessionEvent | undefined) {
       if (
         !isAssistantMessageEvent(result) ||
         !isRootSessionEvent(result) ||
@@ -573,7 +531,7 @@ export function attachEventBridge(
     isCompacting() {
       return activeCompactionCount > 0;
     },
-    snapshot() {
+    snapshot(): EventBridgeSnapshot {
       return {
         assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
         completedCount,
@@ -584,7 +542,9 @@ export function attachEventBridge(
         usage: usage ? { ...usage } : undefined,
       };
     },
-    buildAssistantMessage(args) {
+    buildAssistantMessage(
+      args: Pick<Parameters<typeof buildAssistantMessage>[0], "modelRef" | "now">,
+    ) {
       const group = pendingAssistantProjection ?? lastAssistantProjection;
       return group
         ? buildAssistantProjectionGroup(
@@ -607,7 +567,14 @@ export function attachEventBridge(
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messagesById, lastAssistantEvent);
     },
-    completeTool(tool) {
+    completeTool(tool: {
+      toolCallId: string;
+      parentToolCallId?: string;
+      toolName: string;
+      args?: unknown;
+      result?: unknown;
+      isError: boolean;
+    }) {
       const owner = toolCallsById.get(tool.parentToolCallId ?? tool.toolCallId);
       if (detached || !owner?.root) {
         return;
@@ -841,20 +808,4 @@ function splitPlanText(text: string | undefined): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s+/, ""))
     .filter((line) => line.length > 0);
-}
-
-function registerListener<K extends SessionEventType>(
-  session: SessionLike,
-  unsubscribeFns: Array<() => void>,
-  eventType: K,
-  handler: (event: Extract<SessionEvent, { type: K }>) => void,
-): void {
-  const maybeUnsubscribe = session.on(eventType, handler);
-  if (typeof maybeUnsubscribe === "function") {
-    unsubscribeFns.push(maybeUnsubscribe);
-    return;
-  }
-  unsubscribeFns.push(() => {
-    session.off?.(eventType, handler as (...args: unknown[]) => void);
-  });
 }

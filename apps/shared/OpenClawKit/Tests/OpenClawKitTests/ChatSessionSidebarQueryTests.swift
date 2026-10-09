@@ -1,9 +1,14 @@
 import Foundation
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
-private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
+actor SidebarQueryTransport: OpenClawChatSidebarTransport {
+    func loadSidebarAgentAvatar(_: String) async -> Data? {
+        nil
+    }
+
     struct Pending: Sendable {
         let request: OpenClawChatGatewayRequest
         let reply: CheckedContinuation<Data, any Error>
@@ -52,6 +57,18 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
         self.responder = responder
     }
 
+    nonisolated func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
+        self
+    }
+
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        OpenClawChatSessionSettingsRouteLease { key, agentID, patch in
+            let response = try await self.send(OpenClawChatGatewayRequests.patchSessionSettings(
+                sessionKey: key, agentID: agentID, model: patch.model))
+            return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: response)
+        }
+    }
+
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
         throw CancellationError()
     }
@@ -77,6 +94,45 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
 
 @MainActor
 struct ChatSessionSidebarQueryTests {
+    @Test(arguments: [false, true])
+    func `owner tree context retains only currently linked loaded descendants`(allAgents: Bool) async throws {
+        let transport = SidebarQueryTransport()
+        let agentID = allAgents ? nil : "main"
+        let owner = self.owner(transport, query: .init(agentID: agentID))
+        let parent = #"""
+        {"key":"agent:main:parent","sessionId":"parent","owner":{"actor":{"type":"human","id":"alice"}},
+         "childSessions":["agent:main:child"]}
+        """#
+        let child = #"""
+        {"key":"agent:main:child","sessionId":"child","owner":{"actor":{"type":"human","id":"bob"}},
+         "unread":true,"status":"failed"}
+        """#
+        _ = await self.load(owner, transport, self.page([parent, child]))
+        if owner.setQuery(.init(agentID: agentID, ownerId: "alice")) {
+            _ = await self.load(owner, transport, self.page([parent]))
+        }
+        #expect(owner.rows.map(\.sessionId) == ["parent"])
+        #expect(owner.rowsIncludingLoadedDescendants.map(\.sessionId) == ["parent", "child"])
+        var updated = try #require(owner.rows.first)
+        updated.childSessions = []
+        owner.receive([updated], read: owner.beginRead())
+        #expect(owner.rowsIncludingLoadedDescendants.map(\.sessionId) == ["parent"])
+        updated.childSessions = ["agent:main:child"]
+        owner.receive([updated], read: owner.beginRead())
+        #expect(owner.rowsIncludingLoadedDescendants.count == 2)
+        // Fractional seconds can round upward through the wire millisecond conversion.
+        let wake = Date(timeIntervalSince1970: Date.now.timeIntervalSince1970.rounded(.up) + 3600)
+        updated.snoozedUntil = wake.timeIntervalSince1970 * 1000
+        owner.receive([updated], read: owner.beginRead())
+        #expect(owner.rows(at: wake.addingTimeInterval(-1)).isEmpty)
+        #expect(owner.rowsIncludingLoadedDescendants.map(\.sessionId) == ["parent", "child"])
+        #expect(owner.rows(at: wake).map(\.sessionId) == ["parent"])
+        owner.setQuery(.init(agentID: agentID, search: "parent", ownerId: "alice"))
+        #expect(owner.rowsIncludingLoadedDescendants == owner.queryRows)
+        owner.setQuery(.init(agentID: agentID, involvingMe: true))
+        #expect(owner.rowsIncludingLoadedDescendants == owner.queryRows)
+    }
+
     @Test func `paging and retained refresh preserve enrichment beyond the Gateway response cap`() async {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)
@@ -95,6 +151,7 @@ struct ChatSessionSidebarQueryTests {
             }
             return try JSONSerialization.data(withJSONObject: [
                 "sessions": rows, "hasMore": end < 205, "nextOffset": end, "totalCount": 205,
+                "owners": [["type": "human", "id": "owner"]],
             ])
         }
         await owner.load()
@@ -105,10 +162,11 @@ struct ChatSessionSidebarQueryTests {
         await owner.load()
         #expect(owner.rows.count == 205)
         #expect(owner.rows.allSatisfy { $0.derivedTitle != nil && $0.lastMessagePreview != nil })
+        #expect(owner.owners?.map(\.id) == ["owner"])
         #expect(await transport.requests.allSatisfy { ($0.params["limit"]?.value as? Int ?? 0) <= 100 })
     }
 
-    private func owner(
+    func owner(
         _ transport: SidebarQueryTransport,
         query: OpenClawChatSidebarQuery = .init(agentID: "main")) -> OpenClawChatSessionSidebarData
     {
@@ -117,15 +175,15 @@ struct ChatSessionSidebarQueryTests {
         return owner
     }
 
-    private func row(_ name: String, label: String = "Work", updatedAt: Int = 10) -> String {
+    func row(_ name: String, label: String = "Work", updatedAt: Int = 10) -> String {
         #"{"key":"agent:main:\#(name)","sessionId":"\#(name)","label":"\#(label)","updatedAt":\#(updatedAt)}"#
     }
 
-    private func page(_ rows: [String], paging: String = #""hasMore":false,"nextOffset":null"#) -> Data {
+    func page(_ rows: [String], paging: String = #""hasMore":false,"nextOffset":null"#) -> Data {
         Data(#"{"count":\#(rows.count),"sessions":[\#(rows.joined(separator: ","))],\#(paging)}"#.utf8)
     }
 
-    private func load(
+    func load(
         _ owner: OpenClawChatSessionSidebarData,
         _ transport: SidebarQueryTransport,
         _ data: Data,
@@ -138,13 +196,76 @@ struct ChatSessionSidebarQueryTests {
         return call.request
     }
 
-    @Test func `view model enables offline query projection and dispatches selected and all agent scopes`() async throws {
+    @Test func `status projection wakes cached rows at the exact deadline without another request`() async {
+        let transport = SidebarQueryTransport()
+        let owner = self.owner(transport, query: .init(agentID: nil))
+        _ = await self.load(owner, transport, self.page([
+            self.row("awake"),
+            #"{"key":"agent:main:snoozed","sessionId":"snoozed","snoozedUntil":101000}"#,
+            #"{"key":"agent:main:expired","sessionId":"expired","snoozedUntil":99000}"#,
+            #"{"key":"agent:main:archived","sessionId":"archived","archived":true,"snoozedUntil":102000}"#,
+        ]))
+        let cases: [(OpenClawChatSidebarStatus, [String], [String])] = [
+            (.active, ["awake", "expired"], ["awake", "snoozed", "expired"]),
+            (.snoozed, ["snoozed"], []),
+            (.archived, ["archived"], ["archived"]),
+            (.all, ["awake", "snoozed", "expired", "archived"], ["awake", "snoozed", "expired", "archived"]),
+        ]
+        for (status, beforeWake, atWake) in cases {
+            #expect(!owner.setQuery(.init(agentID: nil, status: status)))
+            #expect(owner.rows(at: Date(timeIntervalSince1970: 100)).compactMap(\.sessionId) == beforeWake)
+            #expect(owner.rows(at: Date(timeIntervalSince1970: 101)).compactMap(\.sessionId) == atWake)
+        }
+        #expect(await transport.requests.count == 1)
+    }
+
+    @Test func `active and snoozed queries share the non archived request and loaded membership`() async {
+        let transport = SidebarQueryTransport()
+        let owner = self.owner(transport)
+        let activeRequest = await self.load(owner, transport, self.page([
+            #"{"key":"agent:main:snoozed","sessionId":"snoozed","snoozedUntil":101000}"#,
+        ]))
+        #expect(owner.rows(at: Date(timeIntervalSince1970: 100)).isEmpty)
+        #expect(!owner.setQuery(.init(agentID: "main", status: .snoozed)))
+        #expect(owner.rows(at: Date(timeIntervalSince1970: 100)).map(\.sessionId) == ["snoozed"])
+        let snoozedRequest = OpenClawChatGatewayRequests.sidebarSessions(query: owner.query, limit: 100)
+        #expect(activeRequest.params["archived"] == nil)
+        #expect(snoozedRequest.params == activeRequest.params)
+        #expect(await transport.requests.count == 1)
+    }
+
+    @Test func `selected rows cannot bypass snooze status or reappear as placeholders`() throws {
+        let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: self.page([
+            self.row("awake"),
+            #"{"key":"agent:main:snoozed","sessionId":"snoozed","snoozedUntil":101000}"#,
+        ])).sessions
+        let cases: [(OpenClawChatSidebarStatus, String, [String])] = [
+            (.active, "snoozed", ["awake"]),
+            (.snoozed, "awake", ["snoozed"]),
+            (.snoozed, "missing", ["snoozed"]),
+            (.all, "snoozed", ["awake", "snoozed"]),
+        ]
+        for (status, selected, expected) in cases {
+            let sections = ChatSessionSidebarModel.sections(
+                sessions: sessions,
+                currentSessionKey: "agent:main:\(selected)",
+                activeAgentID: "main",
+                query: "",
+                viewOptions: .init(status: status),
+                now: Date(timeIntervalSince1970: 100))
+            #expect(sections.flatMap(\.nodes).map(\.id).sorted() == expected.map { "agent:main:\($0)" })
+        }
+    }
+
+    @Test func `view model enables offline projection and dispatches selected and all agent scopes`() async throws {
         let suite = "ChatSessionSidebarQueryTests.EntryPoint.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let transport = SidebarQueryTransport()
         let vm = OpenClawChatViewModel(
-            sessionKey: "agent:main:thread", transport: transport, activeAgentId: "main",
+            sessionKey: "agent:main:thread",
+            transport: transport,
+            activeAgentId: "main",
             modelPickerStore: ChatModelPickerStore(defaults: defaults))
         defer { vm.detachTransport() }
         vm.enableSidebarData()
@@ -187,7 +308,9 @@ struct ChatSessionSidebarQueryTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let transport = SidebarQueryTransport()
         let vm = OpenClawChatViewModel(
-            sessionKey: "agent:main:thread", transport: transport, activeAgentId: "main",
+            sessionKey: "agent:main:thread",
+            transport: transport,
+            activeAgentId: "main",
             modelPickerStore: ChatModelPickerStore(defaults: defaults))
         defer { vm.detachTransport() }
         vm.enableSidebarData()
@@ -215,7 +338,7 @@ struct ChatSessionSidebarQueryTests {
         #expect(await transport.requests.count == 2)
     }
 
-    @Test func `selected pages deduplicate and refresh retains the loaded window without committing pending edits`() async throws {
+    @Test func `selected pages deduplicate and refresh retains the window without committing edits`() async throws {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)
         let first = (0..<100).map { self.row("row-\($0)") }
@@ -223,9 +346,13 @@ struct ChatSessionSidebarQueryTests {
         #expect(initial.params["limit"]?.value as? Int == 100)
         let target = try #require(owner.rows.first)
         let intent = owner.beginMutation(target: target, field: .label) { $0.label = "Pending" }
-        let append = await self.load(owner, transport, self.page([
-            self.row("row-0", label: "Duplicate"), self.row("row-100"),
-        ]), append: true)
+        let append = await self.load(
+            owner,
+            transport,
+            self.page([
+                self.row("row-0", label: "Duplicate"), self.row("row-100"),
+            ]),
+            append: true)
         #expect(append.params["offset"]?.value as? Int == 100)
         #expect(append.params["limit"]?.value as? Int == 100)
         #expect(owner.rows.count == 101)
@@ -297,11 +424,14 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.row(key: "agent:main:stale", agentID: "main") == nil)
     }
 
-    @Test func `all agents use three pages of one hundred with local status and owner qualified global identities`() async {
+    @Test func `all agents use three hundred rows with local status and owner qualified global identities`() async {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport, query: .init(agentID: nil))
         let pages = (0..<3).map { index in
-            let global = #"{"key":"global","agentId":"owner-\#(index)","sessionId":"global-\#(index)","archived":true,"owner":{"actor":{"type":"human","id":"person-\#(index)"}}}"#
+            let global = #"""
+            {"key":"global","agentId":"owner-\#(index)","sessionId":"global-\#(index)",\#
+            "archived":true,"owner":{"actor":{"type":"human","id":"person-\#(index)"}}}
+            """#
             let rows = [global] + (1..<100).map { self.row("page-\(index)-\($0)") }
             let cursor = index == 0 ? #", "nextOffset":null"# : ""
             return self.page(rows, paging: #""hasMore":true\#(cursor)"#)
@@ -384,17 +514,19 @@ struct ChatSessionSidebarQueryTests {
         let list = await transport.next(), transcript = await transport.next("sessions.search")
         #expect(list.request.params["limit"]?.value as? Int == 10)
         #expect(transcript.request.params["limit"]?.value as? Int == 25)
-        oldList.reply.resume(returning: self.page([self.row("old", label: "Old query")]))
+        oldList.reply.resume(returning: self.page(
+            [self.row("old", label: "Old query")], paging: #""owners":[{"type":"human","id":"stale-owner"}]"#))
         oldTranscript.reply.resume(returning: Data(
             #"{"results":[],"sessions":[],"indexing":true,"archivedTranscriptsExcluded":3}"#.utf8))
         await oldLoad.value
         #expect(owner.isLoading)
         #expect(owner.rows.isEmpty)
+        #expect(owner.owners == nil)
         list.reply.resume(returning: self.page([
             self.row("prefix", label: "New plans"), self.row("exact", label: " NEW "),
             self.row("server", label: "Opaque title"), self.row("substring", label: "A new topic"),
             self.row("recent", label: "Another new topic", updatedAt: 20),
-        ]))
+        ], paging: #""owners":[{"type":"human","id":"current-owner"}]"#))
         transcript.reply.resume(returning: Data(#"""
         {"results":[
           {"sessionKey":"agent:main:server","sessionId":"server","messageId":"m1",
@@ -409,6 +541,12 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.isSettled)
         #expect(!owner.searchIndexing)
         #expect(owner.archivedTranscriptsExcluded == 0)
+        #expect(owner.owners?.map(\.id) == ["current-owner"])
+        owner.setQuery(.init(agentID: "main", status: .archived, search: "new"))
+        #expect(owner.owners == nil)
+        await transport.replyAutomatically(with: Data(#"{"sessions":[],"results":[],"owners":[]}"#.utf8))
+        await owner.load()
+        #expect(owner.owners == [])
     }
 
     @Test func `hidden metadata matches cannot evict visible transcript results before the sidebar limit`() async {
@@ -420,21 +558,33 @@ struct ChatSessionSidebarQueryTests {
             #"{"key":"agent:main:cron:\#($0)","sessionId":"cron-\#($0)","label":"needle"}"#
         }
         let system = (0..<4).map {
-            #"{"key":"agent:main:system-\#($0)","sessionId":"system-\#($0)","label":"needle","createdActor":{"type":"system","id":"internal"}}"#
+            #"""
+            {"key":"agent:main:system-\#($0)","sessionId":"system-\#($0)","label":"needle",\#
+            "createdActor":{"type":"system","id":"internal"}}
+            """#
         }
         metadata.reply.resume(returning: self.page(cron + system + [
             self.row("main", label: "needle"), self.row("onboarding", label: "needle"),
         ]))
         let rows = (0..<15).map { self.row("visible-\($0)", label: "Discussion", updatedAt: 30 - $0) }
         let hits = (0..<15).map {
-            #"{"sessionKey":"agent:main:visible-\#($0)","sessionId":"visible-\#($0)","messageId":"m\#($0)","role":"user","timestamp":10,"snippet":"needle","score":\#($0)}"#
+            #"""
+            {"sessionKey":"agent:main:visible-\#($0)","sessionId":"visible-\#($0)",\#
+            "messageId":"m\#($0)","role":"user","timestamp":10,"snippet":"needle","score":\#($0)}
+            """#
         }
         transcript.reply.resume(returning: Data(
             #"{"results":[\#(hits.joined(separator: ","))],"sessions":[\#(rows.joined(separator: ","))]}"#.utf8))
         await task.value
         let sections = ChatSessionSidebarModel.sections(
-            sessions: owner.rows, currentSessionKey: "", mainSessionKey: "agent:main:main", activeAgentID: "main",
-            excludesMainSession: true, query: "", rankedSearch: true, viewOptions: .init())
+            sessions: owner.rows,
+            currentSessionKey: "",
+            mainSessionKey: "agent:main:main",
+            activeAgentID: "main",
+            excludesMainSession: true,
+            query: "",
+            rankedSearch: true,
+            viewOptions: .init())
         #expect(sections.flatMap(\.nodes).map(\.session.sessionId) == (5..<15).reversed().map { "visible-\($0)" })
     }
 
@@ -520,9 +670,12 @@ struct ChatSessionSidebarQueryTests {
         ]))
         transcript.reply.resume(returning: Data(#"""
         {"results":[
-          {"sessionKey":"global","sessionId":"alpha","messageId":"a","role":"user","timestamp":10,"snippet":"needle","score":10},
-          {"sessionKey":"global","sessionId":"beta","messageId":"b","role":"user","timestamp":10,"snippet":"needle","score":20},
-          {"sessionKey":"global","sessionId":"gamma","messageId":"c","role":"user","timestamp":10,"snippet":"needle","score":100}
+          {"sessionKey":"global","sessionId":"alpha","messageId":"a","role":"user",\#
+        "timestamp":10,"snippet":"needle","score":10},
+          {"sessionKey":"global","sessionId":"beta","messageId":"b","role":"user",\#
+        "timestamp":10,"snippet":"needle","score":20},
+          {"sessionKey":"global","sessionId":"gamma","messageId":"c","role":"user",\#
+        "timestamp":10,"snippet":"needle","score":100}
         ],"sessions":[
           {"key":"global","agentId":"gamma","sessionId":"gamma","label":"Gamma transcript"},
           {"key":"global","agentId":"alpha","sessionId":"alpha","label":"Duplicate"}
@@ -578,13 +731,14 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.isSettled)
     }
 
-    @Test func `delayed search projects pending settings and observer facts without replacing conversation membership`() async throws {
+    @Test func `delayed search projects pending settings and observer facts and retains membership`() async throws {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)
         let original = #"""
         {"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"Work original",
          "model":"fixture-before","thinkingLevel":"off","updatedAt":10,"hasActiveRun":true,
-         "activeRunIds":["run"],"observerDigest":{"runId":"run","revision":1,"updatedAt":10,"headline":"Working","health":"on-track"}}
+         "activeRunIds":["run"],"observerDigest":{"runId":"run","revision":1,"updatedAt":10,\#
+        "headline":"Working","health":"on-track"}}
         """#
         let seed = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: self.page([original])).sessions
         owner.receive(seed, read: owner.beginRead(), replacingAgent: "main")
@@ -616,7 +770,7 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.rows.first(where: { $0.sessionId == "thread" })?.label == "Work original")
     }
 
-    @Test func `enriched query absence clears previews and derived titles while ordinary reads preserve them`() async throws {
+    @Test func `enriched query absence clears previews and titles while ordinary reads preserve them`() async throws {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)
         _ = await self.load(owner, transport, self.page([#"""

@@ -10,12 +10,14 @@ import {
   readBundledPluginAssetHooks,
   runBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mts";
+import * as managedCommands from "../../scripts/lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
 import {
   createRunNodePathClassifier,
   isBuildRelevantRunNodePath,
   isRestartRelevantRunNodePath,
 } from "../../scripts/run-node-watch-paths.mts";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,7 +74,7 @@ describe("bundled plugin assets", () => {
     );
   });
 
-  it("discovers the Discord Embedded App SDK build hook", async () => {
+  it("discovers the Discord SDK hook for standalone asset preparation", async () => {
     const hooks = await readBundledPluginAssetHooks({
       phase: "build",
       plugins: ["discord"],
@@ -81,7 +83,7 @@ describe("bundled plugin assets", () => {
 
     expect(hooks).toMatchObject([
       {
-        command: "node --import tsx ../../scripts/build-discord-activity-sdk.mts",
+        command: "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts",
         packageName: "@openclaw/discord",
         phase: "build",
         pluginId: "discord",
@@ -178,62 +180,127 @@ describe("bundled plugin assets", () => {
     });
   });
 
-  it("bounds stalled asset hooks and reports the affected plugin safely", async () => {
+  it("keeps manifest writers early while deferring selected isolated hooks", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      fs.writeFileSync(path.join(rootDir, "package.json"), '{"name":"openclaw","version":"1.0.0"}');
+      for (const id of ["isolated", "manifest-writer", "unselected", "untracked"]) {
+        const directory = path.join(rootDir, "extensions", id);
+        fs.mkdirSync(directory);
+        fs.writeFileSync(
+          path.join(directory, "package.json"),
+          JSON.stringify({
+            name: `@fixture/${id}`,
+            openclaw: {
+              extensions: ["./index.ts"],
+              build: { bundledDist: false },
+              release: { publishToNpm: true },
+              assetScripts: {
+                build: "node build.mjs",
+                ...(id === "manifest-writer" ? { buildOutputs: ["openclaw.plugin.json"] } : {}),
+              },
+            },
+          }),
+        );
+        // Directory IDs own isolation even when a manifest advertises another alias.
+        fs.writeFileSync(
+          path.join(directory, "openclaw.plugin.json"),
+          JSON.stringify({ id: `${id}-alias` }),
+        );
+        fs.writeFileSync(path.join(directory, "index.ts"), "export {};\n");
+      }
+      execFileSync("git", ["init", "--quiet"], { cwd: rootDir });
+      execFileSync(
+        "git",
+        [
+          "add",
+          "extensions/canvas",
+          "extensions/isolated",
+          "extensions/manifest-writer",
+          "extensions/unselected",
+        ],
+        { cwd: rootDir },
+      );
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS", "canvas,isolated,manifest-writer");
+      vi.stubEnv("OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS", undefined);
+      try {
+        const readIds = async (deferIsolated = false) =>
+          (await readBundledPluginAssetHooks({ phase: "build", rootDir, deferIsolated })).map(
+            ({ pluginDir }) => path.basename(pluginDir),
+          );
+        expect(await readIds(true)).toEqual([
+          "canvas",
+          "manifest-writer",
+          "unselected",
+          "untracked",
+        ]);
+        expect(await readIds()).toEqual([
+          "canvas",
+          "isolated",
+          "manifest-writer",
+          "unselected",
+          "untracked",
+        ]);
+        vi.stubEnv("OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS", "isolated,manifest-writer");
+        expect(await readIds(true)).toEqual([
+          "canvas",
+          "isolated",
+          "manifest-writer",
+          "unselected",
+          "untracked",
+        ]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
+  it("awaits bounded asset execution and reports joined timeouts safely", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       const pluginDir = path.join(rootDir, "extensions", "canvas");
       const packagePath = path.join(pluginDir, "package.json");
       const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
         openclaw: { assetScripts: { build: string } };
       };
-      packageJson.openclaw.assetScripts.build = "node scripts/launch-stall.mjs";
+      packageJson.openclaw.assetScripts.build = "node scripts/private-asset-command.mjs";
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
-      fs.mkdirSync(path.join(pluginDir, "scripts"));
-      const pidFile = path.join(pluginDir, "stall.pid");
-      const readyFile = path.join(pluginDir, "stall.ready");
-      fs.writeFileSync(
-        path.join(pluginDir, "scripts", "stall.mjs"),
-        [
-          'import { writeFileSync } from "node:fs";',
-          'process.on("SIGTERM", () => {});',
-          `writeFileSync(${JSON.stringify(readyFile)}, String(process.pid));`,
-          "setInterval(() => {}, 100);",
-          "",
-        ].join("\n"),
-      );
-      fs.writeFileSync(
-        path.join(pluginDir, "scripts", "launch-stall.mjs"),
-        [
-          'import { spawn } from "node:child_process";',
-          'import { writeFileSync } from "node:fs";',
-          'process.on("SIGTERM", () => {});',
-          'const child = spawn(process.execPath, ["scripts/stall.mjs"], { stdio: "ignore" });',
-          `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-          "setInterval(() => {}, 100);",
-          "",
-        ].join("\n"),
-      );
-
-      let thrown: unknown;
-      let childPid = 0;
-      try {
-        await runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 500 });
-      } catch (error) {
-        thrown = error;
-      }
-      try {
-        childPid = Number(fs.readFileSync(pidFile, "utf8"));
-        // Timeout rejection must join cleanup, not leave the caller to poll for it.
-        expect(isProcessAlive(childPid)).toBe(false);
-        expect(fs.readFileSync(readyFile, "utf8")).toBe(String(childPid));
-        expect(thrown).toMatchObject({
-          code: "ETIMEDOUT",
-          message: "Bundled plugin asset build hook timed out after 500ms: canvas",
+      const started = createDeferred<Parameters<typeof managedCommands.runManagedCommand>[0]>();
+      const command = createDeferred<number>();
+      const runner = vi
+        .spyOn(managedCommands, "runManagedCommand")
+        .mockImplementationOnce((options) => {
+          started.resolve(options);
+          return command.promise;
         });
-        expect((thrown as Error).message).not.toContain("launch-stall.mjs");
+      const running = runBundledPluginAssetHooks({ phase: "build", rootDir });
+      const outcome = running.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        const options = await awaitGateBeforeSettlement(
+          started.promise,
+          running,
+          "Asset hooks completed before managed execution settled",
+        );
+        expect(options).toMatchObject({
+          bin: packageJson.openclaw.assetScripts.build,
+          cwd: pluginDir,
+          timeoutMs: 600_000,
+          requireProcessTreeExit: process.platform !== "win32",
+        });
+        const failure = Object.assign(new Error("Asset command cleanup completed"), {
+          code: "ETIMEDOUT",
+        });
+        command.reject(failure);
+        expect(await outcome).toMatchObject({
+          code: "ETIMEDOUT",
+          message: "Plugin asset build hook timed out after 600000ms: canvas",
+          cause: failure,
+        });
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        command.resolve(0);
+        await outcome;
+        runner.mockRestore();
       }
     });
   });
@@ -281,6 +348,14 @@ describe("bundled plugin assets", () => {
     expect(() =>
       parseBundledPluginAssetArgs(["--phase", "build", "--check", "--plugin=canvas"]),
     ).toThrow("--check cannot be combined with --plugin filters");
+    for (const args of [
+      ["--phase", "build", "--check", "--defer-isolated"],
+      ["--phase", "copy", "--defer-isolated"],
+    ]) {
+      expect(() => parseBundledPluginAssetArgs(args)).toThrow(
+        "--defer-isolated requires --phase build without --check",
+      );
+    }
   });
 
   it("reports declared generated outputs that differ from the committed bytes", async () => {
@@ -309,21 +384,3 @@ describe("bundled plugin assets", () => {
     });
   });
 });
-
-function isProcessAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
-}

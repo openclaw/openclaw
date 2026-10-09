@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -47,6 +50,8 @@ export const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
 export const STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS = 60_000;
 
 export type StartupMigrationLease = {
+  /** Publication guards may already hold the SQLite writer, so this check must stay read-only. */
+  assertOwned: () => void;
   assertOwnedInTransaction: (database: DatabaseSync, params?: { nowMs?: number }) => void;
   heartbeat: (params?: { nowMs?: number }) => void;
   release: () => void;
@@ -93,16 +98,7 @@ function writeStartupMigrationCheckpointDatabase<T>(
   );
 }
 
-function assertStartupMigrationLeaseOwnedInTransaction(params: {
-  database: DatabaseSync;
-  nowMs?: number;
-  owner: string;
-}): void {
-  const expiresAt = readOpenClawStateLeaseExpiry(
-    params.database,
-    { ...STARTUP_MIGRATION_LEASE, owner: params.owner },
-    params.nowMs,
-  );
+function assertStartupMigrationLeaseOwned(expiresAt: number | undefined): void {
   if (expiresAt === undefined) {
     throw new Error(
       "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
@@ -219,12 +215,17 @@ function acquireStartupMigrationLeaseFromDatabase(
 
   return {
     owner,
+    assertOwned: () =>
+      assertStartupMigrationLeaseOwned(
+        withExistingOpenClawStateDatabaseCurrentReadOnly(
+          ({ db }) => readOpenClawStateLeaseExpiry(db, identity),
+          { env },
+        ),
+      ),
     assertOwnedInTransaction: (database, assertionParams = {}) => {
-      assertStartupMigrationLeaseOwnedInTransaction({
-        database,
-        owner,
-        nowMs: assertionParams.nowMs,
-      });
+      assertStartupMigrationLeaseOwned(
+        readOpenClawStateLeaseExpiry(database, identity, assertionParams.nowMs),
+      );
     },
     heartbeat: (heartbeatParams = {}) => {
       const heartbeatNowMs = heartbeatParams.nowMs ?? Date.now();
@@ -236,11 +237,7 @@ function acquireStartupMigrationLeaseFromDatabase(
           undefined,
           heartbeatNowMs,
         );
-        if (renewed === undefined) {
-          throw new Error(
-            "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
-          );
-        }
+        assertStartupMigrationLeaseOwned(renewed);
       });
     },
     release: () => {

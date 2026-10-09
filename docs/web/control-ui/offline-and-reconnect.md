@@ -9,17 +9,28 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+Returning to a suspended tab or regaining network connectivity can recover a
+stale connection. These signals do not retry a connection that requires a page
+reload, corrected credentials, or a new pairing request. Follow the displayed
+recovery instructions; automatic document refresh remains available after an update.
+
+Agent names and avatars keep their last loaded values when an identity refresh
+fails. Reads for the same agent share one request across the sidebar and chat,
+including failures: subsequent reads back off from 500 ms to 5 seconds and honor
+longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
+can resume on the new connection.
+
 ## Busy initial connection
 
 If a WebSocket upgrade fails but the same-origin Gateway still answers its
-`/healthz` liveness probe, the sign-in screen shows **Gateway busy, retrying…**
+`/healthz` liveness check, the sign-in screen shows **Gateway busy, retrying…**
 with a countdown to the next automatic attempt. No click or credential change is
 needed when capacity becomes available. This can happen when many visitors share
 one venue IP and exhaust the [preauth connection budget](/gateway/security/rate-limiting#unauthenticated-websocket-connections).
 
-The probe sends no Gateway token and does not follow redirects. Unreachable or
+The check sends no Gateway token and does not follow redirects. Unreachable or
 unverified endpoints keep **Gateway unreachable** guidance; cross-origin Gateway
-connections are not probed. Authentication and pairing rejections retain their
+connections are not checked. Authentication and pairing rejections retain their
 specific recovery instructions.
 
 ## Warm reload
@@ -105,7 +116,9 @@ An open tab checks the active UI build when it returns to the foreground, comes 
 or is restored from browser history. If an update finished while the tab was suspended, it
 can recover without receiving the original update notification or opening a new tab.
 
-Automatic reloads wait for the page to be reachable and respect unsaved-work protection.
+Automatic build-recovery reloads spread their first page check over up to two seconds
+and reload only once per target build. Reloads wait for the page to be reachable
+and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
@@ -154,7 +167,8 @@ Server retry hints remain minimum waits and can extend beyond that normal cap, w
 intervals of silence before reconnecting. An individual request timeout does not
 reset a socket that is still receiving traffic. Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
-uncertain outcomes. Gateway startup hints keep their separate bounded timing.
+uncertain outcomes. Gateway startup hints keep their separate bounded timing
+(100–2000 ms), with up to 20% additional spread across reconnecting tabs.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
@@ -199,6 +213,8 @@ Opening a queued-message editor after the other pane releases its edit clears th
 edit-conflict notice.
 
 Editing an unsent queued message remains safe if the connection drops mid-edit.
+Confirming text with an input method keeps the queued-message editor open;
+press Enter again after composition finishes to save the edit.
 Open queued-message edits stay available when you switch conversations, even after
 visiting enough chats to replace older cached views. Finish or cancel the edit to
 release that retained conversation.
@@ -355,10 +371,10 @@ Older browser state may have combined several destinations into one bucket. The 
 metadata version 4 (`openclaw.control.chatComposer.v4:`), migrating version 1, 2, and 3 records
 directly when their destination is still identifiable. It verifies the new metadata before
 removing an older source, retaining complete sources when storage or recovery capacity blocks
-migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Ambiguous records appear under
-**Saved messages need a destination** and remain unsent. Open the intended non-Incognito conversation with
-an empty composer and queue, expand the notice, and choose **Restore here for review**. Confirm
-the displayed conversation key and agent. Recovered queued messages stay paused: check for
+migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Saved
+input awaiting review appears as compact **Unsent** or **Draft** rows directly above the composer.
+Open the intended non-Incognito conversation with an empty composer and queue, choose **Restore**,
+and confirm the displayed conversation. **Delete** asks before removing a saved copy. Recovered queued messages stay paused: check for
 previous delivery before using **Retry**. Recovered attachment drafts return to the composer
 without sending. Reconnect, a replacement session, or enabling Incognito while confirmation is
 open cancels the transfer; confirm again in the intended conversation. Older attachment drafts
@@ -368,14 +384,18 @@ both automatic migration and explicit destination recovery. Credential-bound mes
 only under their original Gateway credential scope, including when an older bucket contains
 messages from several scopes. Moving a message into or out of recovery does not delete its bytes;
 cleanup follows verified delivery or discard and accounts for retained recovery messages too.
+When the original conversation's loaded history proves a saved queued submission was delivered,
+its recovery copy is removed automatically. Proof requires the exact submission ID on a durable
+user message in the same conversation and, when recorded, the same physical session. Matching
+text or a local display copy is not proof. Any draft or other unconfirmed input in the row stays
+available; recovery never sends a message automatically.
 If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
 available rather than overwriting newer input. Do not clear browser site data
 while you still have saved messages or attachment drafts to recover.
 
 If the browser closes its draft database connection, the next storage operation
-opens a fresh connection automatically. A recovery error without any loaded entries
-appears as **Saved messages could not be loaded**; it does not mean that messages
-have lost their destinations or that browser storage is full. Reload to retry if
+opens a fresh connection automatically. Recovery storage errors appear above the composer;
+they do not mean that messages have lost their destinations or that browser storage is full. Reload to retry if
 the error persists, keeping site data intact.
 
 First opens and reloads without usable warm state show a small animated OpenClaw mark while the Gateway resolves the initial

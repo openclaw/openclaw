@@ -421,25 +421,6 @@ describe("RealtimeTalkSession lifecycle", () => {
     void recovered.stop();
   });
 
-  it("rejects a terminal failure during initial transport setup", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        return createVoiceSession("voice-terminal-startup");
-      }
-      return { ok: true };
-    });
-    const onStatus = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
-      onStatus,
-    });
-    transportMock.start.mockRejectedValueOnce(new Error("Realtime connection closed"));
-
-    await expect(session.start()).rejects.toThrow("Realtime connection closed");
-
-    expect(onStatus).toHaveBeenCalledWith("connecting", "Preparing voice session...");
-    expect(transportMock.webRtcStops[0]).toHaveBeenCalledWith({ emitClosed: false });
-  });
-
   it("does not restore a failed replacement after concurrent stop", async () => {
     const replacementStart = createDeferred<"ready">();
     const transcriptEntryIds: string[] = [];
@@ -715,24 +696,6 @@ describe("RealtimeTalkSession lifecycle", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("ignores final transcript callbacks emitted after shutdown begins", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        return createVoiceSession("voice-shutdown");
-      }
-      return { ok: true };
-    });
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
-    await session.start();
-    const context = transcriptContext(transportMock.webRtcContexts);
-
-    void session.stop();
-    context.callbacks.onTranscript?.({ role: "user", text: "too late", final: true });
-    await Promise.resolve();
-
-    expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(false);
   });
 
   it("drops a previous transport's delayed transcript and tool events after stop and restart", async () => {

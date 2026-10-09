@@ -11,6 +11,13 @@ title: "Bun"
 Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
+Desktop apps manage their own runtime: the native macOS app and fresh local
+Tauri installations on Linux use the same pinned OpenClaw Bun fork. Existing
+Linux Tauri installations retain their runtime across startup and app updates
+until you explicitly choose **Use bundled runtime…**. macOS Tauri keeps its
+existing behavior, separate from the native macOS app. See
+[Linux companion](/platforms/linux#adopt-the-bundled-runtime).
+
 Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
 
 ## Install
@@ -39,17 +46,26 @@ Bun remains usable as an optional package-script runner. The default package man
     To run onboarding under Bun and install the managed Gateway under Bun:
 
     ```sh
-    bun openclaw.mjs onboard --install-daemon --daemon-runtime bun
+    bun --no-install openclaw.mjs onboard --install-daemon --daemon-runtime bun
     ```
 
     For a managed node host, select Bun separately:
 
     ```sh
-    bun openclaw.mjs node install --runtime bun
+    bun --no-install openclaw.mjs node install --runtime bun
     ```
 
   </Step>
 </Steps>
+
+OpenClaw adds `--no-install` to its Bun service commands and owned runtime
+subprocesses, including plugin-integrated exec secret providers. Missing imports
+fail instead of fetching packages, even when the working directory's `bunfig.toml`
+sets `[install] auto = "fallback"`. Install required dependencies explicitly.
+Existing service definitions receive the flag during normal service reinstall or
+update; no state migration is needed. This does not control processes that
+third-party plugins launch themselves. Use `--no-install` when invoking stock Bun
+directly, as shown above.
 
 ## Bun-only global install
 
@@ -89,6 +105,10 @@ bun pm trust baileys protobufjs
 On macOS, run `brew install sqlite` for native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
+
+Repository npm packaging helpers run the packaged npm CLI directly under Bun,
+including on Windows. They do not require npm beside the Bun executable. An
+explicitly selected Node toolchain still uses its own adjacent npm installation.
 
 Gateway process inspection recognizes Bun's `--watch` and `--hot` flags. ACP bridge detection recognizes Bun and the current runtime executable, including custom filenames. Portable cloud worker archives target Node when built with either runtime, and worker inference errors omit runtime stack properties from their bounded diagnostic messages.
 

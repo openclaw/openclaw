@@ -86,10 +86,7 @@
 
 .run-inspector__section h3,
 .run-inspector__panel h3,
-.run-inspector__result-state h3 {
-  margin: 0;
-}
-
+.run-inspector__result-state h3,
 .run-inspector__facts,
 .run-inspector__values {
   margin: 0;

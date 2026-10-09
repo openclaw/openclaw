@@ -63,6 +63,7 @@ import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
+import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
@@ -200,9 +201,9 @@ export function bootstrapApplication(): ApplicationRuntime {
               : loadCurrentDeviceAuthToken(settings.gatewayUrl);
         })
       : null;
-  let warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
+  let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
-  if (warmBoot && bootRecord) {
+  if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey);
   }
   const stopWarmBootConnection = startsApplicationRouter
@@ -323,6 +324,9 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
   const shouldOpenExternally = () => theme.settings.openLinksExternally === true;
+  const mcpAppRouting = startMcpAppRouting({
+    navigate: (route, options) => context.navigate(route, options),
+  });
   const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot, {
     shouldOpenExternally,
   });
@@ -681,6 +685,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       linkReaderRouting.dispose();
+      mcpAppRouting.dispose();
       nativeLinkRouting.dispose();
       webPush.dispose();
       chatSubmissions.clear();

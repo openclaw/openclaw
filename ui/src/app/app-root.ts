@@ -3,6 +3,7 @@ import { buildControlUiFocusPath, type ControlUiFocusTarget } from "@openclaw/se
 import type { RouteLocation, RouteNotFound } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
@@ -125,7 +126,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       void import("../styles/native-embed.css");
     }
     void import("../components/session-progress-hovercard-registration.ts");
-    this.resetLoginSensitivePresentation();
+    this.loginShowGatewaySecret = false;
     this.runtime = bootstrapApplication();
     const runtime = this.runtime;
     this.startupPending = true;
@@ -182,7 +183,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginGatewaySource = null;
     this.loginConnectionClient = null;
     this.pendingGatewayUrl = null;
-    this.resetLoginSensitivePresentation();
+    this.loginShowGatewaySecret = false;
     super.disconnectedCallback();
   }
 
@@ -197,13 +198,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (sourceChanged) {
       this.loginGatewaySource = gateway;
       this.loginConnectionClient = null;
-      this.resetLoginSensitivePresentation();
+      this.loginShowGatewaySecret = false;
     }
     const snapshot = gateway.snapshot;
     const clientChanged = snapshot.client !== this.loginConnectionClient;
     if (clientChanged) {
       this.loginConnectionClient = snapshot.client;
-      this.resetLoginSensitivePresentation();
+      this.loginShowGatewaySecret = false;
     }
     if (sourceChanged || clientChanged) {
       this.syncLoginConnection(gateway);
@@ -221,10 +222,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginGatewayUrl = connection.gatewayUrl;
     this.loginToken = connection.token;
     this.loginPassword = connection.password;
-  }
-
-  private resetLoginSensitivePresentation() {
-    this.loginShowGatewaySecret = false;
   }
 
   private updateLoginGatewayUrl(value: string) {
@@ -276,26 +273,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => this.lazyCustomElements.close(),
       )}
     </main>`;
-  }
-
-  private renderApprovalDocument(runtime: ApplicationRuntime) {
-    const lazyState = this.lazyCustomElements.visibleState;
-    if (lazyState?.element === APPROVAL_PAGE_ELEMENT) {
-      return this.renderLazyDocumentState(APPROVAL_PAGE_ELEMENT);
-    }
-    const approvalId =
-      runtime.documentMode?.kind === "approval" ? runtime.documentMode.approvalId : "";
-    return html`<openclaw-approval-page .approvalId=${approvalId ?? ""}></openclaw-approval-page>`;
-  }
-
-  private renderQuestionDocument(runtime: ApplicationRuntime) {
-    const lazyState = this.lazyCustomElements.visibleState;
-    if (lazyState?.element === QUESTION_PAGE_ELEMENT) {
-      return this.renderLazyDocumentState(QUESTION_PAGE_ELEMENT);
-    }
-    const questionId =
-      runtime.documentMode?.kind === "question" ? runtime.documentMode.questionId : "";
-    return html`<openclaw-question-page .questionId=${questionId ?? ""}></openclaw-question-page>`;
   }
 
   private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
@@ -392,21 +369,22 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (route.kind === "loading") {
       return renderConnectingSplash(gatewayStartupStatus);
     }
-    if (route.kind === "not-found") {
-      return html`<main class="board-document">
-        <section class="board-document__state stack" role="status">
-          <span>${t("dashboardDocument.notFound")}</span>
-          ${this.renderFocusEscape(t("dashboardDocument.close"))}
-        </section>
-      </main>`;
-    }
-    if (route.kind === "error") {
-      return html`<main class="board-document">
-        <section class="board-document__state board-document__state--error stack" role="alert">
-          <span>${t("dashboardDocument.loadFailed", { error: route.message })}</span>
-          ${this.renderFocusEscape(t("dashboardDocument.close"))}
-        </section>
-      </main>`;
+    if (route.kind === "not-found" || route.kind === "error") {
+      const failed = route.kind === "error";
+      return keyed(
+        route.kind,
+        html`<main class="board-document">
+          <section
+            class=${failed ? "board-document__state board-document__state--error stack" : "board-document__state stack"}
+            role=${failed ? "alert" : "status"}
+          >
+            <span
+              >${failed ? t("dashboardDocument.loadFailed", { error: route.message }) : t("dashboardDocument.notFound")}</span
+            >
+            ${this.renderFocusEscape(t("dashboardDocument.close"))}
+          </section>
+        </main>`,
+      );
     }
     if (route.kind === "ambiguous") {
       return html`<main class="board-document">
@@ -513,78 +491,58 @@ export class OpenClawApp extends OpenClawLightDomElement {
         ${this.renderLazyDocumentState(BROWSER_DOCUMENT_ELEMENT)}
       `;
     }
-    // Focused terminals own the whole document. Keep the generic login gate
-    // out of this path or a connecting native session exposes Web UI chrome.
-    if (focusTarget?.kind === "terminal") {
-      const terminalAvailable = isTerminalAvailable(
-        gatewaySnapshot,
-        context.config.current.terminalEnabled ?? false,
+    // Focus documents keep their panel mounted while its chunk loads and use
+    // panel-specific availability instead of exposing the generic login gate.
+    if (focusTarget?.kind === "terminal" || focusTarget?.kind === "desktop") {
+      const terminal = focusTarget.kind === "terminal";
+      const available = terminal
+        ? isTerminalAvailable(gatewaySnapshot, context.config.current.terminalEnabled ?? false)
+        : isDesktopPanelAvailable(gatewaySnapshot);
+      const owner = context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId;
+      return keyed(
+        focusTarget.kind,
+        html`
+          ${
+            terminal
+              ? html`<openclaw-terminal-panel
+                    .client=${gatewayConnected ? gatewaySnapshot.client : null}
+                    .available=${available}
+                    .agentId=${owner ? normalizeAgentId(owner) : null}
+                    .themeMode=${context.theme.resolvedMode}
+                    fullscreen
+                  ></openclaw-terminal-panel>
+                  <openclaw-toast-host></openclaw-toast-host>`
+              : html`<openclaw-desktop-panel
+                  .client=${gatewayConnected ? gatewaySnapshot.client : null}
+                  .sessions=${context.sessions}
+                  .available=${available}
+                  .documentMode=${true}
+                  .requestedSource=${focusTarget.selector?.kind === "source" ? focusTarget.selector.value : null}
+                  .sessionKey=${focusTarget.selector?.kind === "session" ? focusTarget.selector.value : null}
+                  .documentControl=${focusTarget.control}
+                  .onDocumentClose=${() => this.closeDocument(context.basePath)}
+                ></openclaw-desktop-panel>`
+          }
+          ${
+            !gatewayConnected && gatewaySnapshot.lastError === null
+              ? renderConnectingSplash(gatewayStartupStatus)
+              : nothing
+          }
+          ${available ? this.renderLazyDocumentState(terminal ? TERMINAL_PANEL_ELEMENT : DESKTOP_PANEL_ELEMENT) : nothing}
+          ${
+            !available && (gatewayConnected || gatewaySnapshot.lastError)
+              ? html`<div
+                  class=${terminal ? "terminal-view-unavailable" : "desktop-view-unavailable"}
+                >
+                  <div class="stack">
+                    <span>${t(terminal ? "terminal.unavailable" : "desktop.unavailable")}</span>
+                    ${this.renderFocusEscape(t("common.back"))}
+                  </div>
+                </div>`
+              : nothing
+          }
+        `,
       );
-      const terminalOwner =
-        context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId;
-      const terminalAgentId = terminalOwner ? normalizeAgentId(terminalOwner) : null;
-      // Embedded clients query this host immediately; keep it stable while the chunk loads.
-      return html`
-        <openclaw-terminal-panel
-          .client=${gatewayConnected ? gatewaySnapshot.client : null}
-          .available=${terminalAvailable}
-          .agentId=${terminalAgentId}
-          .themeMode=${context.theme.resolvedMode}
-          fullscreen
-        ></openclaw-terminal-panel>
-        ${
-          !gatewayConnected && gatewaySnapshot.lastError === null
-            ? renderConnectingSplash(gatewayStartupStatus)
-            : nothing
-        }
-        ${terminalAvailable ? this.renderLazyDocumentState(TERMINAL_PANEL_ELEMENT) : nothing}
-        ${
-          !terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-            ? html`<div class="terminal-view-unavailable">
-                <div class="stack">
-                  <span>${t("terminal.unavailable")}</span>
-                  ${this.renderFocusEscape(t("common.back"))}
-                </div>
-              </div>`
-            : nothing
-        }
-      `;
-    }
-    // Desktop documents share the panel's connection owner but none of its
-    // dock or shell chrome. Native clients can therefore load this route as a
-    // standalone, mobile-shaped surface without changing the observe contract.
-    if (focusTarget?.kind === "desktop") {
-      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
-      const source = focusTarget.selector?.kind === "source" ? focusTarget.selector.value : null;
-      const session = focusTarget.selector?.kind === "session" ? focusTarget.selector.value : null;
-      return html`
-        <openclaw-desktop-panel
-          .client=${gatewayConnected ? gatewaySnapshot.client : null}
-          .sessions=${context.sessions}
-          .available=${desktopAvailable}
-          .documentMode=${true}
-          .requestedSource=${source}
-          .sessionKey=${session}
-          .documentControl=${focusTarget.control}
-          .onDocumentClose=${() => this.closeDocument(context.basePath)}
-        ></openclaw-desktop-panel>
-        ${
-          !gatewayConnected && gatewaySnapshot.lastError === null
-            ? renderConnectingSplash(gatewayStartupStatus)
-            : nothing
-        }
-        ${desktopAvailable ? this.renderLazyDocumentState(DESKTOP_PANEL_ELEMENT) : nothing}
-        ${
-          !desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-            ? html`<div class="desktop-view-unavailable">
-                <div class="stack">
-                  <span>${t("desktop.unavailable")}</span>
-                  ${this.renderFocusEscape(t("common.back"))}
-                </div>
-              </div>`
-            : nothing
-        }
-      `;
     }
     if (focusTarget?.kind === "dashboard") {
       return this.renderFocusDashboard(gatewaySnapshot, gatewayConnected, gatewayStartupStatus);
@@ -685,11 +643,23 @@ export class OpenClawApp extends OpenClawLightDomElement {
         ></openclaw-login-gate>
       `;
     }
-    if (runtime.documentMode?.kind === "approval") {
-      return this.pendingGatewayUrl ? nothing : this.renderApprovalDocument(runtime);
-    }
-    if (runtime.documentMode?.kind === "question") {
-      return this.renderQuestionDocument(runtime);
+    const documentMode = runtime.documentMode;
+    if (documentMode) {
+      const approval = documentMode.kind === "approval";
+      if (approval && this.pendingGatewayUrl) {
+        return nothing;
+      }
+      const element = approval ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
+      if (this.lazyCustomElements.visibleState?.element === element) {
+        return this.renderLazyDocumentState(element);
+      }
+      return documentMode.kind === "approval"
+        ? html`<openclaw-approval-page
+            .approvalId=${documentMode.approvalId ?? ""}
+          ></openclaw-approval-page>`
+        : html`<openclaw-question-page
+            .questionId=${documentMode.questionId ?? ""}
+          ></openclaw-question-page>`;
     }
     return html`
       <openclaw-link-reader-hovercard-provider
