@@ -2541,7 +2541,6 @@ export const en: TranslationMap & {
       stillRequired: "Sign-in is still required. Finish signing in, then check again.",
       unavailable: "Could not verify access. Check your connection and try again.",
     },
-    disconnectedTitle: "Disconnected",
     connecting: "Connecting…",
     starting: "Starting…",
     restoring: "Restoring…",

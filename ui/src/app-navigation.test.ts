@@ -118,19 +118,14 @@ describe("formatDocumentTitle", () => {
     expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");
   });
 
-  it("names the disconnected gateway without implying internet loss", () => {
-    expect(formatDocumentTitle({ context: "Usage", gatewayDisconnected: true })).toBe(
-      "(Disconnected) Usage — OpenClaw",
-    );
+  it("suffixes the brand after a destination", () => {
+    expect(formatDocumentTitle({ context: "Usage" })).toBe("Usage — OpenClaw");
   });
 
-  it("shows attention separately from the disconnected state", () => {
+  it("prefixes a pending attention count", () => {
     expect(formatDocumentTitle({ context: "Usage", attentionCount: 3 })).toBe(
       "(3) Usage — OpenClaw",
     );
-    expect(
-      formatDocumentTitle({ context: "Usage", attentionCount: 3, gatewayDisconnected: true }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 

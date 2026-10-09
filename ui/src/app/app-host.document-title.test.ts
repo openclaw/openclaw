@@ -257,12 +257,21 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("(2) Usage — OpenClaw");
   });
 
-  it("shows disconnected instead of a stale approval count", () => {
-    const shell = createShell(createContext({ connected: false, approvalCount: 2 }));
-    shell.routeState = { routeId: "usage" };
+  it.each(["reconnecting", "offline", "reload-required"] as const)(
+    "keeps the destination title without stale approvals while %s",
+    (phase) => {
+      const context = createContext({ phase, approvalCount: 2 });
+      const shell = createShell(context);
+      shell.routeState = { routeId: "usage" };
 
-    shell.syncDocumentTitle();
+      shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
-  });
+      expect(document.title).toBe("Usage — OpenClaw");
+
+      context.gateway.snapshot.phase = "connected";
+      shell.syncDocumentTitle();
+
+      expect(document.title).toBe("(2) Usage — OpenClaw");
+    },
+  );
 });

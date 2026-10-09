@@ -246,7 +246,6 @@ suite.define(() => {
         "Reconnecting…",
       );
       expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
-      await expect.poll(() => page.title()).toContain("(Disconnected)");
       await captureUnionProof(suite, page, "sidebar-account-footer", "feature-dark-offline.png", [
         footer,
       ]);
@@ -268,7 +267,6 @@ suite.define(() => {
       await expect
         .poll(() => footer.locator(".gateway-status").count(), { timeout: 10_000 })
         .toBe(0);
-      await expect.poll(() => page.title()).not.toContain("Disconnected");
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
       await gateway.emitGatewayEvent("shutdown", {
         reason: "gateway restart",
