@@ -496,13 +496,12 @@ extensions/matrix/src/matrix/sdk/crypto-facade.ts	1
 extensions/matrix/src/matrix/sdk/crypto-node.runtime.ts	1
 extensions/matrix/src/matrix/sdk/decrypt-bridge.ts	1
 extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
-extensions/matrix/src/matrix/sdk/idb-persistence.ts	3
 extensions/matrix/src/matrix/sdk/transport.ts	2
 extensions/matrix/src/matrix/send.ts	8
 extensions/matrix/src/matrix/send/chunking.ts	1
 extensions/matrix/src/matrix/send/formatting.ts	1
 extensions/matrix/src/matrix/thread-bindings.ts	2
-extensions/matrix/src/onboarding.ts	7
+extensions/matrix/src/onboarding.ts	4
 extensions/matrix/src/outbound.ts	1
 extensions/matrix/src/profile-update.ts	2
 extensions/matrix/src/setup-config.ts	6
@@ -811,11 +810,10 @@ extensions/slack/src/actions.ts	3
 extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/blocks-input.ts	2
-extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
 extensions/slack/src/channel.ts	5
-extensions/slack/src/client-delivery.ts	4
+extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
 extensions/slack/src/group-policy.ts	1

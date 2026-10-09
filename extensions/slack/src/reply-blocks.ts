@@ -383,25 +383,19 @@ function appendPresentationPart(
   questionOptionIndices?: AskUserQuestionOptionIndices,
 ): void {
   const currentBlocks = readLastBlockSegment(segments);
-  const currentRendered = buildSlackPresentationBlocksIfComplete(presentation, {
-    ...resolvePresentationRenderOptions(segments, "current"),
-    questionOptionIndices,
-  });
-  if (
-    currentRendered?.length &&
-    currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS
-  ) {
-    appendBlockSegment(segments, currentRendered);
-    return;
-  }
-
-  const freshRendered = buildSlackPresentationBlocksIfComplete(presentation, {
-    ...resolvePresentationRenderOptions(segments, "new-message"),
-    questionOptionIndices,
-  });
-  if (freshRendered?.length) {
-    appendBlockSegment(segments, freshRendered, true);
-    return;
+  for (const mode of ["current", "new-message"] as const) {
+    const rendered = buildSlackPresentationBlocksIfComplete(presentation, {
+      ...resolvePresentationRenderOptions(segments, mode),
+      questionOptionIndices,
+    });
+    const startNew = mode === "new-message";
+    if (
+      rendered?.length &&
+      (startNew || currentBlocks.length + rendered.length <= SLACK_MAX_BLOCKS)
+    ) {
+      appendBlockSegment(segments, rendered, startNew);
+      return;
+    }
   }
 
   appendTextSegment(
