@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Selectable } from "kysely";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -24,9 +25,10 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { readTrackedStateDatabaseIdentity } from "../state/openclaw-state-db-handle.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { PluginStateRow } from "./plugin-state-store.kernel.js";
 
+type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
 type Receipt = SqliteCommitReceipt<PluginStateRow>;
 type PluginStateChange =
