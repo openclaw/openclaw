@@ -276,6 +276,7 @@ it("preserves a symlink target when scratch is replaced after transaction retire
       }
     },
     {
+      isClosed: release.isClosed,
       beginRetirement: () => {
         release.beginRetirement();
         return scratch.release;

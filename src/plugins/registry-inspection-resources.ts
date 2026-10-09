@@ -12,6 +12,7 @@ import {
 } from "./registry-registration-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  createRecoverablePluginRelease,
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseCompletedError,
 } from "./runtime-close-error.js";
@@ -47,6 +48,9 @@ export class PluginRegistryInspectionResources {
   #registry?: PluginRegistry;
   #adoptedInvocations?: PluginInvocationScope;
   #release?: Promise<void>;
+  readonly #releaseClaim = createRecoverablePluginRelease(() =>
+    this.#claim.release().then(throwDisposalFailures),
+  );
 
   constructor(
     private readonly retire: (
@@ -157,17 +161,18 @@ export class PluginRegistryInspectionResources {
       throw new Error("Plugin inspection resources have been released");
     }
     const claim = this.#source.acquireClaim("borrower");
-    let release: Promise<void> | undefined;
-    return { release: () => (release ??= claim.release().then(throwDisposalFailures)) };
+    return {
+      release: createRecoverablePluginRelease(() => claim.release().then(throwDisposalFailures)),
+    };
   }
 
   release(): Promise<void> {
     if (!this.#release) {
       // Revocation can call back into release through synchronous abort listeners.
-      this.#release = this.#claim.release().then(throwDisposalFailures);
+      this.#release = this.#releaseClaim();
       markPluginRegistriesRetired(this.#registries);
       this.#registries.clear();
     }
-    return this.#release;
+    return this.#releaseClaim();
   }
 }

@@ -25,6 +25,11 @@ import { PluginInstance } from "./plugin-instance.js";
 import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  PluginRuntimeCloseRetainedError,
+  hasRetainedPluginRuntimeCloseError,
+  recoverPluginRuntimeCloseError,
+} from "./runtime-close-error.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);
@@ -166,7 +171,9 @@ it.each(["runtime", "setup"] as const)(
 );
 
 it("reports asynchronous artifact removal failure through setup cache retirement", async () => {
-  const { value, retire } = fixture("setup");
+  const { value, instance, retire } = fixture("setup");
+  const pluginCleanup = vi.fn();
+  instance.lifecycle.onDispose(pluginCleanup);
   const failure = new Error("artifact removal failed");
   const gate = gateRemoval(value.filename, [], failure);
   const retirement = retire();
@@ -174,8 +181,22 @@ it("reports asynchronous artifact removal failure through setup cache retirement
     await Promise.race([gate.entered, retirement]);
     expect(gate.directory()).toBeDefined();
     gate.resume.resolve();
-    await expect(retirement).resolves.toEqual([failure]);
+    const errors = await retirement;
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toBe(failure);
+    expect(errors[1]).toBeInstanceOf(PluginRuntimeCloseRetainedError);
+    expect(errors[1]).toMatchObject({ cause: failure });
+    const diagnostic = new AggregateError(errors);
+    expect(hasRetainedPluginRuntimeCloseError(diagnostic)).toBe(true);
+    expect(fs.existsSync(value.filename)).toBe(true);
     expect(nativeRequire.cache[value.filename]).toBeUndefined();
+    expect(() => value.read()).toThrow("reloaded or disabled");
+    vi.restoreAllMocks();
+    await recoverPluginRuntimeCloseError(diagnostic);
+    expect(hasRetainedPluginRuntimeCloseError(diagnostic)).toBe(false);
+    expect(fs.existsSync(value.filename)).toBe(false);
+    expect(pluginCleanup).toHaveBeenCalledOnce();
+    expect(errors[0]).toBe(failure);
     expect(() => value.read()).toThrow("reloaded or disabled");
   } finally {
     gate.resume.resolve();

@@ -20,7 +20,6 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
@@ -156,9 +155,15 @@ async function acquireRegistryResources(
         .map((instance) => instance.dispose()),
     );
     const failures: unknown[] = results.flatMap((result) =>
-      result.status === "rejected"
-        ? [new PluginRuntimeCloseRetainedError(result.reason)]
-        : result.value.errors,
+      result.status === "rejected" ? [result.reason] : result.value.errors,
+    );
+    // Recovery markers track release themselves; other resource failures remain blocking.
+    let retained = results.some(
+      (result) =>
+        result.status === "rejected" ||
+        result.value.retainedErrors?.some(
+          (error) => !(error instanceof PluginRuntimeCloseRetainedError),
+        ),
     );
     for (const instance of instances) {
       releasePluginCacheInstance(instance, cache);
@@ -166,15 +171,17 @@ async function acquireRegistryResources(
     try {
       const retired = await retirePluginCache(cache);
       failures.push(...retired.failures.map((failure) => failure.error));
+      retained ||= retired.failures.some(
+        (failure) =>
+          failure.retained && !(failure.error instanceof PluginRuntimeCloseRetainedError),
+      );
     } catch (reason) {
-      failures.push(new PluginRuntimeCloseRetainedError(reason));
+      failures.push(reason);
+      retained = true;
     }
     if (failures.length) {
       const error = new AggregateError(failures, "Plugin inspection instances failed to retire");
-      // Settled callback faults are diagnostics; timed-out disposal still owns physical cleanup.
-      throw failures.some((failure) => failure instanceof PluginInstanceDrainTimeoutError)
-        ? new PluginRuntimeCloseRetainedError(error)
-        : error;
+      throw retained ? new PluginRuntimeCloseRetainedError(error) : error;
     }
   });
   try {

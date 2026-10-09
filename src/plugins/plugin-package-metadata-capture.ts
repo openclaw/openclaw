@@ -674,6 +674,8 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
+  let released = false;
+  let payloadReleased = false;
   const acquire = <T>(capture: () => T) => {
     if (disposed) {
       throw new Error("Plugin module capture has been disposed");
@@ -698,10 +700,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       throw captureFailures.get(filename);
     }
   };
-  const captureAdmitted = <T>(run: () => T) => {
-    const capture = () => acquire(run);
-    return execute ? execute(capture) : capture();
-  };
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
@@ -716,10 +714,11 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     captureFailures.clear();
   };
   return {
+    isReleased: () => released,
     inputs,
     pendingInputs,
     additions,
-    capture: captureAdmitted,
+    capture: execute ? <T>(run: () => T) => execute(() => acquire(run)) : acquire,
     assertModuleAvailable,
     directory,
     outputRoot: override?.managedRoot ?? instance?.managedRoot,
@@ -731,17 +730,21 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     },
     dispose() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
+      if (!payloadReleased && !retainLoadedPluginSourceCapture(directory)) {
         fs.rmSync(directory, { recursive: true, force: true });
       }
+      payloadReleased = true;
       instance?.release();
+      released = true;
     },
     async disposeAsync() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
+      if (!payloadReleased && !retainLoadedPluginSourceCapture(directory)) {
         await fsPromises.rm(directory, { recursive: true, force: true });
       }
+      payloadReleased = true;
       await instance?.releaseAsync();
+      released = true;
     },
   };
 }

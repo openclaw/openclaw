@@ -15,6 +15,7 @@ export const SQLITE_STAGING_TOKEN_FILES = [
 
 export type SqliteStagingToken = ((retiring?: boolean) => void) & {
   beginRetirement: () => SqliteStagingToken;
+  isClosed: () => boolean;
 };
 
 export class SqliteStagingRetiredError extends Error {
@@ -129,7 +130,7 @@ export function acquireSqliteStagingToken(
     }
     db.close();
   };
-  const token = Object.assign(release, { beginRetirement });
+  const token = Object.assign(release, { beginRetirement, isClosed: () => !db.isOpen });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
     execute(sql`PRAGMA busy_timeout=0`);

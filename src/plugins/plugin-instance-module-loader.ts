@@ -95,7 +95,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   }
   bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
   params.instance.sourceDigest = artifact.sourceDigest;
-  params.instance.onModuleDispose(artifact.disposeAsync);
+  params.instance.onModuleDispose(artifact.disposeAsync, {
+    isReleased: artifact.isReleased,
+    recover: artifact.disposeAsync,
+  });
   const bindModuleLoader = preparePluginModuleLoaderRecovery(
     params,
     artifact,

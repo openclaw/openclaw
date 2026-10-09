@@ -98,16 +98,25 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   }
   instance.closing = true;
   let removalRoot = instance.root;
+  let failure: { error: unknown } | undefined;
   // Keep the exact native token available if retirement or close needs a retry.
   try {
     instance.token?.(true);
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
+    // A failed release must not delete replacement files, even if the handle closed.
+    if (hasErrnoCode(error, "ENOENT")) {
+      // Missing ownership permits closing our handle, never deleting replacement files.
+      try {
+        instance.token?.();
+      } catch (closeError) {
+        failure = { error: closeError };
+      }
+    } else {
+      failure = { error };
     }
-    // Enclosing state can disappear before deferred disposal. Missing ownership
-    // permits closing our handle, never deleting residual or replacement files.
-    instance.token?.();
+    if (failure && !instance.token?.isClosed()) {
+      throw failure.error;
+    }
     removalRoot = undefined;
   }
   if (instance.root) {
@@ -116,6 +125,9 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   instance.references.clear();
   instances.delete(key);
   scheduleCaptureCleanup(key, instance);
+  if (failure) {
+    throw failure.error;
+  }
   return removalRoot;
 }
 
@@ -515,24 +527,20 @@ export function retainPluginSourceCaptureInstance(
   instance.references.add(reference);
   scheduleCaptureCleanup(key, instance);
   const retained = instance;
-  let released = false;
   const retire = () => {
-    if (released) {
+    if (!retained.references.has(reference)) {
       return undefined;
     }
     if (retained.references.size > 1) {
       retained.references.delete(reference);
       scheduleCaptureCleanup(key, retained);
-      released = true;
       return undefined;
     }
-    const root = retireInstance(key, retained);
-    released = true;
-    return root;
+    return retireInstance(key, retained);
   };
   return {
     startMaintenance(ownerScheduler: GatewayScheduler) {
-      if (released || retained.closing) {
+      if (!retained.references.has(reference) || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
       ownerScheduler.signal.throwIfAborted();
@@ -546,13 +554,13 @@ export function retainPluginSourceCaptureInstance(
       return retained.managedRoot;
     },
     createDirectory(prefix = PLUGIN_SOURCE_CAPTURE_PREFIX) {
-      if (released || retained.closing) {
+      if (!retained.references.has(reference) || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
       return createCaptureDirectory(retained, prefix);
     },
     createNativeDirectory() {
-      if (released || retained.closing) {
+      if (!retained.references.has(reference) || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
       const directory = createCaptureDirectory(retained, "admission-", "native");
@@ -625,8 +633,8 @@ export function createPluginNativeCaptureRoot(
             fs.rmSync(root.directory, { recursive: true, force: true });
           }
           disposed = true;
-          instance.release();
         }
+        instance.release();
       },
       async disposeAsync() {
         if (!disposed) {
@@ -634,8 +642,8 @@ export function createPluginNativeCaptureRoot(
             await removeTemporaryArtifacts(root.directory, "Plugin native capture");
           }
           disposed = true;
-          await instance.releaseAsync();
         }
+        await instance.releaseAsync();
       },
     };
   } catch (error) {

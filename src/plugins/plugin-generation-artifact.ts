@@ -703,6 +703,7 @@ export function capturePluginGenerationArtifact(
         packages,
         directory,
       }),
+      isReleased: sourceCapture.isReleased,
       dispose: () => {
         sourceCapture.dispose();
         clearCaptures();
