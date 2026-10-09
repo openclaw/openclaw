@@ -59,7 +59,7 @@ export const ModelCompatSchema = z
      * Keeps per-turn runtime-context carriers in replayed history on an `openai-completions`
      * model without a provider-owned replay policy, so consecutive requests are pure appends for
      * backends whose automatic prefix cache only matches a byte-identical earlier request.
-     * Default: false.
+     * Operator-owned: kept on catalog-known routes, unlike capability flags. Default: false.
      */
     appendOnlyRuntimeContext: z.boolean().optional(),
     /** Opts this model into stored HTTP continuation on a verified compatible endpoint. */

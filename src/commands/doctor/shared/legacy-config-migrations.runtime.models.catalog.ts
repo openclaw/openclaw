@@ -6,6 +6,7 @@ import type {
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   modelTransportRoutesMatch,
+  OPERATOR_OWNED_MODEL_COMPAT_KEYS,
   resolveUniqueCatalogModelRoute,
 } from "../../../agents/model-compat-catalog.js";
 import { getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -167,7 +168,10 @@ function* inspectModelCompatOverrides(providersValue: unknown) {
     if (catalogRow) {
       const catalogCompat = catalogRow.compat ?? {};
       for (const [key, value] of Object.entries(compat)) {
-        if ((DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key)) {
+        if (
+          (DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key) ||
+          (OPERATOR_OWNED_MODEL_COMPAT_KEYS as readonly string[]).includes(key)
+        ) {
           continue;
         }
         (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])

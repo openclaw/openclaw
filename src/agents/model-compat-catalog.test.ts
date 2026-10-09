@@ -26,6 +26,34 @@ describe("catalog-owned model compat", () => {
     ).toEqual(catalogCompat);
   });
 
+  it("keeps operator-owned replay preferences on the catalog route", () => {
+    const resolve = (configuredCompat?: Record<string, unknown>) =>
+      resolveCatalogOwnedModelCompat({
+        catalogRoute,
+        catalogCompat,
+        configuredRoute: {},
+        configuredCompat,
+      });
+
+    expect(resolve({ supportsTools: false, appendOnlyRuntimeContext: true })).toEqual({
+      ...catalogCompat,
+      appendOnlyRuntimeContext: true,
+    });
+    expect(resolve({ appendOnlyRuntimeContext: false })).toEqual({
+      ...catalogCompat,
+      appendOnlyRuntimeContext: false,
+    });
+    expect(
+      resolveCatalogOwnedModelCompat({
+        catalogRoute,
+        catalogCompat: undefined,
+        configuredRoute: {},
+        configuredCompat: { appendOnlyRuntimeContext: true },
+      }),
+    ).toEqual({ appendOnlyRuntimeContext: true });
+    expect(resolve({ supportsTools: false })).toBe(catalogCompat);
+  });
+
   it("uses configured capabilities only when config selects a custom route", () => {
     const configuredCompat = { supportsTools: false };
 

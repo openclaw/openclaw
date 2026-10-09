@@ -212,6 +212,8 @@ without a global private-network override. For a LAN-hosted proxy, set
     ```
 
     Only the carrier retention changes; tool-id sanitizing and turn validation stay the same.
+    The flag is kept when LiteLLM model discovery also lists the model: discovered catalog rows own
+    capability flags, but not this replay preference.
     Earlier carriers then stay in context until compaction. Enable it per model after confirming
     the upstream behaves this way, for example by comparing `cacheRead` across consecutive turns.
 

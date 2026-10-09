@@ -69,6 +69,25 @@ describe("models-config merge", () => {
     },
   );
 
+  it("keeps a configured append-only replay preference on a discovered catalog route", () => {
+    const merged = mergeProviderModels(
+      provider({
+        api: "openai-completions",
+        models: [model({ compat: { supportsUsageInStreaming: true } })],
+      }),
+      provider({
+        api: "openai-completions",
+        models: [
+          model({ compat: { supportsUsageInStreaming: false, appendOnlyRuntimeContext: true } }),
+        ],
+      }),
+    );
+    expect(merged.models[0]?.compat).toEqual({
+      supportsUsageInStreaming: true,
+      appendOnlyRuntimeContext: true,
+    });
+  });
+
   it("drops invalid stale catalogs while retaining auth-only providers", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: { openai: provider() },

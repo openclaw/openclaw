@@ -86,6 +86,22 @@ describe("model compat catalog ownership", () => {
     expect(detect()).toEqual([false, false, true]);
   });
 
+  it("does not treat operator-owned replay preferences as catalog overrides", () => {
+    const raw = providerConfig({
+      anthropic: {
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com/v1",
+        models: [{ id: "claude-haiku-4-5", compat: { appendOnlyRuntimeContext: true } }],
+      },
+    });
+    expect(migrate.legacyRules?.map((rule) => rule.match?.(raw.models.providers, raw))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expectUnchanged(migrate, raw);
+  });
+
   it("preserves live compat for custom models and routes", () => {
     const raw = providerConfig({
       anthropic: {

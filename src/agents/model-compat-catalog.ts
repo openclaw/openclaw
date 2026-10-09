@@ -69,6 +69,28 @@ export function resolveUniqueCatalogModelRoute<T extends ModelTransportRoute>(
   return match;
 }
 
+/**
+ * Operator replay preferences that live in `compat` but describe no endpoint capability, so a
+ * provider catalog never owns them and cannot supply a replacement value.
+ */
+export const OPERATOR_OWNED_MODEL_COMPAT_KEYS = ["appendOnlyRuntimeContext"] as const;
+
+function withOperatorOwnedCompat(
+  catalogCompat: ModelCompatConfig | undefined,
+  configuredCompat: ModelCompatConfig | undefined,
+): ModelCompatConfig | undefined {
+  const operatorOwned: ModelCompatConfig = {};
+  for (const key of OPERATOR_OWNED_MODEL_COMPAT_KEYS) {
+    const value = configuredCompat?.[key];
+    if (value !== undefined) {
+      operatorOwned[key] = value;
+    }
+  }
+  return Object.keys(operatorOwned).length > 0
+    ? { ...catalogCompat, ...operatorOwned }
+    : catalogCompat;
+}
+
 /** Capabilities belong to the catalog route; config owns them only for a different/custom route. */
 export function resolveCatalogOwnedModelCompat(params: {
   catalogRoute?: ModelTransportRoute;
@@ -80,6 +102,6 @@ export function resolveCatalogOwnedModelCompat(params: {
     return params.configuredCompat;
   }
   return modelTransportRoutesMatch(params.catalogRoute, params.configuredRoute ?? {})
-    ? params.catalogCompat
+    ? withOperatorOwnedCompat(params.catalogCompat, params.configuredCompat)
     : params.configuredCompat;
 }
