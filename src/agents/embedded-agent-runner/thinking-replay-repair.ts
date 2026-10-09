@@ -67,17 +67,13 @@ async function rewriteRejectedReplayInSessionManager(
 export function repairRejectedThinkingReplayInSessionManager(
   params: ReplayRepairParams,
 ): Promise<ReplayRepairResult> {
-  const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
-  for (const entry of params.sessionManager.getBranch()) {
+  const replacements = params.sessionManager.getBranch().flatMap((entry) => {
     if (entry.type !== "message") {
-      continue;
+      return [];
     }
     const replacement = stripThinkingBlocksFromMessage(entry.message);
-    if (replacement === entry.message) {
-      continue;
-    }
-    replacements.push({ entryId: entry.id, message: replacement });
-  }
+    return replacement === entry.message ? [] : [{ entryId: entry.id, message: replacement }];
+  });
 
   return rewriteRejectedReplayInSessionManager(params, {
     replacements,

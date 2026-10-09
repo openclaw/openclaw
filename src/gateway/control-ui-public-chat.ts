@@ -3,16 +3,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
-import {
-  isPublicSessionShareActive,
-  readPublicSessionShare,
-} from "./control-ui-public-session-read.js";
 import {
   PUBLIC_SESSION_ENTRY_SCRIPT,
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
+import { servePublicSessionRepresentation } from "./control-ui-public-session-response.js";
 import {
   buildControlUiSessionEntryUrl,
   parseControlUiSessionReturnPath,
@@ -20,6 +18,7 @@ import {
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 const PROBE_HASH = createHash("sha256").update(PUBLIC_SESSION_ENTRY_SCRIPT).digest("base64");
@@ -32,10 +31,15 @@ export async function serveControlUiPublicChat(params: {
   ingress: GatewayAttributedIngress;
   projection?: SessionRowProjection;
   gate: ControlUiPublicSessionRequestGate;
+  auth: ResolvedGatewayAuth;
+  serveApp: (path: string) => Promise<boolean>;
 }): Promise<true> {
   const { req, res, basePath, config, projection, gate } = params;
   const url = new URL(req.url ?? "/", "http://localhost");
-  const target = parseControlUiSessionReturnPath(url.pathname, basePath);
+  const entryQuery = new URLSearchParams(url.searchParams);
+  entryQuery.delete("offset");
+  const entryPath = url.pathname + (entryQuery.size ? `?${entryQuery}` : "");
+  const target = parseControlUiSessionReturnPath(entryPath, basePath);
   const publicOrigin = resolveGatewayPublicOrigin(config);
   const origin = resolveControlUiShareOrigin(req, publicOrigin);
   res.setHeader("Cache-Control", "no-store");
@@ -57,10 +61,7 @@ export async function serveControlUiPublicChat(params: {
     !origin ||
     (req.method !== "GET" && req.method !== "HEAD") ||
     url.searchParams.getAll("offset").length > 1 ||
-    !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText) ||
-    url.searchParams.getAll("dashboard").length > 1 ||
-    (url.searchParams.has("dashboard") && url.searchParams.get("dashboard") !== "expanded") ||
-    [...url.searchParams.keys()].some((key) => key !== "offset" && key !== "dashboard")
+    !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText)
   ) {
     return end(404, "Not found");
   }
@@ -68,15 +69,26 @@ export async function serveControlUiPublicChat(params: {
     res.setHeader("Allow", "GET");
     return end(405, "");
   }
-  const admitted = gate.admitClient(params.ingress.rateLimit.subject.key);
-  if (admitted.kind === "rate-limited") {
-    res.setHeader("Retry-After", admitted.retryAfterSeconds);
-    return end(429, "Too many public session requests. Please retry later.");
-  }
-  const entryPath = url.pathname + (url.searchParams.has("dashboard") ? "?dashboard=expanded" : "");
   const entryUrl = buildControlUiSessionEntryUrl(entryPath, basePath);
-  const unavailable = () =>
-    end(
+  const clientAuthBasePath =
+    params.auth.mode === "token" || params.auth.mode === "password" ? basePath : undefined;
+  const secureIngress = isSecurePublicSessionIngress(req, params.ingress, publicOrigin);
+  if (!secureIngress && clientAuthBasePath !== undefined) {
+    // The shell contains no session data; token/password auth remains with the app.
+    await params.serveApp(entryPath);
+    return true;
+  }
+  const unavailable = (status: 404 | 429 | 503 = 404, retryAfterSeconds = 1) => {
+    if (status !== 404) {
+      res.setHeader("Retry-After", status === 429 ? retryAfterSeconds : "1");
+      return end(
+        status,
+        status === 429
+          ? "Too many public session requests. Please retry later."
+          : "This conversation is temporarily unavailable. Please retry.",
+      );
+    }
+    return end(
       404,
       renderPublicSessionDocument({
         title: "Conversation unavailable",
@@ -84,18 +96,21 @@ export async function serveControlUiPublicChat(params: {
         truncated: false,
         latestUrl: url.pathname,
         entryUrl,
+        clientAuthBasePath,
         cardUrl: `${origin}${basePath}/share/card.png`,
         unavailable: true,
       }),
     );
-  // A public transcript needs secure transport, but private deployments must
-  // retain their ordinary login path even when anonymous publication is unavailable.
-  if (!isSecurePublicSessionIngress(req, params.ingress, publicOrigin)) {
+  };
+  const admitted = gate.admitClient(params.ingress.rateLimit.subject.key);
+  if (admitted.kind === "rate-limited") {
+    return unavailable(429, admitted.retryAfterSeconds);
+  }
+  if (!secureIngress) {
     return unavailable();
   }
   if (!projection) {
-    res.setHeader("Retry-After", "1");
-    return end(503, "This conversation is temporarily unavailable. Please retry.");
+    return unavailable(503);
   }
   try {
     // No authentication happens on this path: all candidates are publication-filtered.
@@ -108,9 +123,14 @@ export async function serveControlUiPublicChat(params: {
     if (!selected) {
       return unavailable();
     }
-    const current = projection.sharingTargetState({ key: selected.key, agentId: selected.agentId });
-    const share =
-      current.status === "ready" ? resolveSessionPublicShare(current.target.entry) : undefined;
+    const query = { key: selected.key, agentId: selected.agentId };
+    const queries = () => [query];
+    const share = await withReadySessionRows(projection, queries, () => {
+      const current = projection.sharingTargetState(query);
+      return current.status === "ready"
+        ? resolveSessionPublicShare(current.target.entry)
+        : undefined;
+    });
     if (!share) {
       return unavailable();
     }
@@ -121,52 +141,31 @@ export async function serveControlUiPublicChat(params: {
       shareId: share.id,
     };
     const offset = Number(offsetText);
-    const result = await gate.run({
-      publicationKey: share.id,
-      sessionKey: selected.key,
-      config,
-      requestKey: JSON.stringify(["canonical", share.id, url.pathname, offset, origin, entryUrl]),
-      work: async () => {
-        const session = await readPublicSessionShare(config, locator, { offset, projection });
-        return session
-          ? renderPublicSessionDocument({
-              ...session,
-              latestUrl: url.pathname,
-              entryUrl,
-              canonicalUrl: `${origin}${url.pathname}`,
-              cardUrl: `${origin}${basePath}/share/card.png`,
-              isLatest: offset === 0,
-              ...(session.olderOffset !== undefined
-                ? { olderUrl: `${url.pathname}?offset=${session.olderOffset}` }
-                : {}),
-            })
-          : null;
+    return await servePublicSessionRepresentation({
+      ...params,
+      locator,
+      projection,
+      offset,
+      requestKey: JSON.stringify([
+        "canonical",
+        share.id,
+        url.pathname,
+        offset,
+        origin,
+        entryUrl,
+        clientAuthBasePath,
+      ]),
+      document: {
+        latestUrl: url.pathname,
+        entryUrl,
+        clientAuthBasePath,
+        canonicalUrl: `${origin}${url.pathname}`,
+        cardUrl: `${origin}${basePath}/share/card.png`,
       },
+      olderUrl: (olderOffset) => `${url.pathname}?offset=${olderOffset}`,
+      unavailable,
     });
-    if (result.kind === "rate-limited") {
-      res.setHeader("Retry-After", result.retryAfterSeconds);
-      return end(429, "Too many public session requests. Please retry later.");
-    }
-    if (result.kind === "unavailable") {
-      res.setHeader("Retry-After", "1");
-      return end(503, "This conversation is temporarily unavailable. Please retry.");
-    }
-    if (!result.value || !isPublicSessionShareActive(config, locator, projection)) {
-      return unavailable();
-    }
-    if (!result.value.isCurrent()) {
-      res.setHeader("Retry-After", "1");
-      return end(503, "This conversation is temporarily unavailable. Please retry.");
-    }
-    res.setHeader("ETag", result.value.etag);
-    if (req.headers["if-none-match"] === result.value.etag) {
-      res.statusCode = 304;
-      res.end();
-      return true;
-    }
-    return end(200, result.value.body);
   } catch {
-    res.setHeader("Retry-After", "1");
-    return end(503, "This conversation is temporarily unavailable. Please retry.");
+    return unavailable(503);
   }
 }

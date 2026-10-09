@@ -37,6 +37,7 @@ import {
   registerOutboundImageProjectionTests,
   registerOutboundPreparationMetadataTests,
 } from "./deliver.projection.test-support.js";
+import { registerOutboundQueueAckTests } from "./deliver.queue-ack.test-support.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
@@ -223,21 +224,22 @@ vi.mock("./delivery-queue-platform-lease.js", () => ({
 vi.mock("./delivery-queue-recovery.js", () => ({
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
-vi.mock("./delivery-completion.js", () => ({
+vi.mock("./delivery-completion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delivery-completion.js")>()),
   completeDurableDelivery: completionMocks.completeDurableDelivery,
   markDurableDeliveryQueued: completionMocks.markDurableDeliveryQueued,
-  rejectDurableDelivery: completionMocks.rejectDurableDelivery,
-  suppressDurableDelivery: completionMocks.suppressDurableDelivery,
   settleDurableDelivery: (
     completion: unknown,
-    evidence: { result: unknown } | { platformSendStarted: boolean },
+    evidence: { result: unknown } | { rejectionError: string } | { platformSendStarted: boolean },
     stateDir?: string,
   ) =>
     "result" in evidence
       ? completionMocks.completeDurableDelivery(completion, evidence.result, stateDir)
-      : evidence.platformSendStarted
-        ? completionMocks.failDurableDelivery(completion, stateDir)
-        : completionMocks.suppressDurableDelivery(completion, stateDir),
+      : "rejectionError" in evidence
+        ? completionMocks.rejectDurableDelivery(completion, evidence.rejectionError, stateDir)
+        : evidence.platformSendStarted
+          ? completionMocks.failDurableDelivery(completion, stateDir)
+          : completionMocks.suppressDurableDelivery(completion, stateDir),
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -1453,72 +1455,13 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("runs sent-result commit hooks when marker fallback ack precedes a partial failure", async () => {
-    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
-      new Error("unknown marker offline"),
-    );
-    const afterCommit = vi.fn();
-    const messageSendText = vi
-      .fn()
-      .mockResolvedValueOnce(createMatrixMessageSendResult("message-adapter-1"))
-      .mockRejectedValueOnce(new Error("second send failed"));
-    setMatrixMessageAdapter({
-      id: "matrix",
-      durableFinal: { capabilities: { text: true, afterCommit: true } },
-      send: { lifecycle: { afterCommit }, text: messageSendText },
-    });
-
-    const results = await deliverMatrix({
-      payloads: [{ text: "first" }, { text: "second" }],
-      bestEffort: true,
-      queuePolicy: "required",
-    });
-
-    expect(results).toHaveLength(1);
-    expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(1);
-    expect(afterCommit).toHaveBeenCalledTimes(1);
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-  });
-
-  it("retains unknown-after-send evidence when both the marker and direct ack fail", async () => {
-    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
-      new Error("unknown marker offline"),
-    );
-    queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
-
-    await deliverMatrix({
-      payloads: [{ text: "hi" }],
-      deps: { matrix: sendMatrix },
-      queuePolicy: "required",
-    });
-
-    expect(queueMocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("marker=unknown marker offline; ack=ack offline"),
-    );
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-  });
-
-  it("fails required delivery when queue ack fails after platform send", async () => {
-    queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
-
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "hi" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("ack offline");
-
-    expect(sendMatrix).toHaveBeenCalled();
-    expect(queueMocks.markDeliveryPlatformOutcomeUnknown).toHaveBeenCalledWith("mock-queue-id");
-    expect(queueMocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("failed to ack sent delivery: ack offline"),
-    );
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  registerOutboundQueueAckTests({
+    createMatrixMessageSendResult,
+    deliverMatrix,
+    hookMocks,
+    queueMocks,
+    setMatrixMessageAdapter,
+    setTestOutbound,
   });
 
   it.each(["best_effort"] as const)(

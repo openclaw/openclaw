@@ -682,7 +682,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const bunVitestFiles = [
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         workerMemoryTest,
-        "src/agents/code-mode-node.test.ts",
+        "src/shared/account-enabled.test.ts",
         vitestBunTarget,
         nativeCompilerTest,
         compilerGraphTest,
@@ -1043,6 +1043,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it.each([
     {
       config: embeddedRunConfig,
+      ownerIncludePatterns: ["**/*.test.ts"],
       targets: [
         transcriptLifecycleTarget,
         "src/agents/embedded-agent-runner/run/abortable.test.ts",
@@ -1051,11 +1052,30 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       config: "test/vitest/vitest.cli.config.ts",
+      ownerIncludePatterns: ["**/*.test.ts"],
       targets: [
         "src/cli/update-cli/update-command-mutable-signals.test.ts",
         "src/cli/daemon-cli/probe.test.ts",
       ],
       otherOwner: "src/cli/cli-process-child.test-helpers.test.ts",
+    },
+    {
+      config: agentsSupportConfig,
+      ownerIncludePatterns: ["src/agents/*/**/*.test.ts"],
+      targets: [
+        worktreeRecoveryTarget,
+        "src/agents/harness/gateway-question.authority-worker.test.ts",
+      ],
+      otherOwner: "src/agents/shell-snapshot.broker.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.gateway-methods.config.ts",
+      ownerIncludePatterns: ["src/gateway/server-methods/**/*.test.ts"],
+      targets: [
+        "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+        "test/plugins/team-reports-http.gateway.test.ts",
+      ],
+      otherOwner: "src/gateway/server-methods/transcripts.test.ts",
     },
   ])("admits the complete $config owner without changing adjacent ownership", (row) => {
     for (const policy of ["node", "bun-compatible", "dual"] as const) {
@@ -1068,7 +1088,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       for (const selection of [
         { configs: [row.config] },
         { configs: [row.config], includePatterns: row.targets },
-        { configs: [row.config], includePatterns: ["**/*.test.ts"] },
+        { configs: [row.config], includePatterns: row.ownerIncludePatterns },
         { targets: row.targets },
         ...row.targets.map((target) => ({ targets: [target] })),
       ]) {
@@ -1084,62 +1104,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     }
   });
 
-  it.each([
-    { policy: "node", expected: [{ runtime: "node" }] },
-    { policy: "bun-compatible", expected: [{ runtime: "bun" }] },
-    { policy: "dual", expected: [{ runtime: "node" }, { runtime: "bun" }] },
-  ] as const)("admits complete qualified worktree recovery selections under $policy", (row) => {
-    for (const selection of [
-      { targets: [worktreeRecoveryTarget] },
-      { configs: [agentsSupportConfig], includePatterns: [worktreeRecoveryTarget] },
-      {
-        configs: [agentsSupportConfig],
-        includePatterns: ["worktrees/service.removal-recovery.test.ts"],
-      },
-    ]) {
-      expect(resolveCiTestRuntimeSelections(selection, row.policy)).toEqual(row.expected);
-      expect(ciTestShardRequiresBun(selection, row.policy)).toBe(row.policy !== "node");
+  it("keeps exact Gateway aggregate targets on Node while admitting methods leaf selections", () => {
+    const target = "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts";
+    const plugin = "test/plugins/team-reports-http.gateway.test.ts";
+    for (const policy of ["node", "bun-compatible", "dual"] as const) {
+      const expected =
+        policy === "node"
+          ? [{ runtime: "node" }]
+          : policy === "dual"
+            ? [{ runtime: "node" }, { runtime: "bun" }]
+            : [{ runtime: "bun" }];
+      expect(
+        resolveCiTestRuntimeSelections(
+          {
+            configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+            includePatterns: [target, plugin],
+          },
+          policy,
+        ),
+      ).toEqual(expected);
+      for (const targets of [[target], [target, plugin]]) {
+        expect(resolveCiTestRuntimeSelections({ targets }, policy)).toEqual([{ runtime: "node" }]);
+      }
     }
-  });
-
-  it.each([
-    { name: "full config", includePatterns: undefined, bun: true },
-    { name: "empty group include list", includePatterns: [], bun: true },
-    {
-      name: "mixed exact files",
-      includePatterns: [
-        worktreeRecoveryTarget,
-        "src/agents/worktrees/service.remove-lease.test.ts",
-      ],
-      bun: true,
-    },
-    {
-      name: "repository-relative glob",
-      includePatterns: ["src/agents/worktrees/service.*.test.ts"],
-      bun: true,
-    },
-    { name: "scoped glob", includePatterns: ["worktrees/service.*.test.ts"], bun: true },
-    {
-      name: "unqualified sibling",
-      includePatterns: ["src/agents/worktrees/service.remove-lease.test.ts"],
-      bun: false,
-    },
-    {
-      name: "external scoped include",
-      includePatterns: ["src/channels/registry.test.ts"],
-      bun: false,
-    },
-  ])("preserves agents-support envelopes and dual coverage for $name", (row) => {
-    const selection = { configs: [agentsSupportConfig], includePatterns: row.includePatterns };
-    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible")).toEqual([
-      { runtime: "node" },
-    ]);
-    expect(ciTestShardRequiresBun(selection, "bun-compatible")).toBe(false);
-    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([
-      { runtime: "node" },
-      ...(row.bun ? [{ runtime: "bun", includePatterns: [worktreeRecoveryTarget] }] : []),
-    ]);
-    expect(ciTestShardRequiresBun(selection, "dual")).toBe(row.bun);
   });
 
   it.each([
@@ -1231,6 +1218,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       dir: "",
       targets: [
         "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/cli/admin-state-owner.process.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
         "src/infra/worker-cpu.test.ts",
       ],

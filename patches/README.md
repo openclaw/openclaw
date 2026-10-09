@@ -2,18 +2,6 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
-`@openclaw/proxyline@0.3.12` has an approved public export of its existing
-`ProxylineNodeProxyAgent` class. The shared Node adapter uses that dual-protocol
-agent to retain per-request `NO_PROXY` routing even when every configured proxy
-route is invalid. The patch changes only the package entrypoint and regenerated
-entrypoint declarations; proxy behavior and the package version are unchanged.
-The root package bundles the dependency so npm installations retain the export.
-Its pinned Undici peer is bundled too: npm infers that bundled peers are already
-present and otherwise skips installing Undici, even though the root requires it.
-Remove this patch, its registration, and both bundle entries when an upstream release
-exports the standalone agent and passes `extensions/whatsapp/src/session.media-upload.test.ts`
-and `src/infra/net/node-proxy-agent.test.ts` without the patch.
-
 `@awesome.me/webawesome@3.13.0` retains its approved dropdown, submenu, select, tooltip, and animation lifecycle repairs. The dropdown initializes focus after its popup becomes usable, before joining animation cleanup or completion, and preserves a newer composed focus target during popup rendering. Freshly mounted open menus also join the popup's initial anchor resolution before focusing; already anchored menus retain their existing visibility and native occlusion across reopen. Initial-focus handlers can close or disconnect the menu; the existing transition owner fences those reentrant paths before starting an animation. Opening completion never resets a newer item, submenu, or outside focus. Both published distributions carry the same owner. The tooltip trigger handler uses upstream's `containsComposedNode` helper to retain the 3.13 fix for hover across Shadow DOM slots; the port also preserves upstream overflow-tag size and pill styling.
 
 Remove the dropdown focus hunk when an upstream release passes `ui/src/e2e/chat-attachment-focus.e2e.test.ts`, the unchanged platform attachment menu suite, and both `web-awesome-dropdown*.browser.test.ts` lifecycle suites without a consumer animation wait. These tests use real CSS animation boundaries, native keyboard input, and the actual browser filechooser; mobile identities are emulated, not native OS-picker certification. Retain the other patch owners until their respective regressions pass upstream.

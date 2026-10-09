@@ -53,7 +53,6 @@ import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   disposeMcpRuntimesWithTimeout,
-  revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
@@ -107,6 +106,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       ...diffConfigPaths(committedConfig, nextConfig),
     ]);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
+    const refreshModelRuntimeSnapshots = (
+      config: OpenClawConfig,
+      isPublicationCurrent?: () => boolean,
+    ) =>
+      withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+        mrReload.refreshModelRuntimeAfterHotReload({
+          config,
+          agentIds: modelRuntimeAgentIds,
+          pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+          ...(isPublicationCurrent ? { isPublicationCurrent } : {}),
+        }),
+      );
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
@@ -156,6 +167,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ...(params.resolveGatewayContext
           ? { resolveGatewayContext: params.resolveGatewayContext }
           : {}),
+        resolvePluginRegistry: params.getPluginRegistry,
       });
       if (
         state.cronState.cronEnabled &&
@@ -228,16 +240,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (!preparedModelRuntimeReplacementGateId) {
             return;
           }
-          await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-            mrReload.refreshModelRuntimeAfterHotReload({
-              config: previousConfig,
-              agentIds: modelRuntimeAgentIds,
-              pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-              isPublicationCurrent: () =>
-                isCurrentGatewayReloadGeneration(myGeneration) &&
-                !isLifecycleReloadAborted() &&
-                !isRestartRetryStopped(),
-            }),
+          await refreshModelRuntimeSnapshots(
+            previousConfig,
+            () =>
+              isCurrentGatewayReloadGeneration(myGeneration) &&
+              !isLifecycleReloadAborted() &&
+              !isRestartRetryStopped(),
           );
         },
       };
@@ -290,7 +298,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
-        revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
         if (refreshModelRuntime) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
@@ -593,14 +600,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           // Failed activation leaves the committed registry authoritative. Restore its
           // model/reply owners independently, without clearing the plugin failure.
           try {
-            await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-              mrReload.refreshModelRuntimeAfterHotReload({
-                config: nextConfig,
-                agentIds: modelRuntimeAgentIds,
-                pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-                isPublicationCurrent: isReloadOwnerActive,
-              }),
-            );
+            await refreshModelRuntimeSnapshots(nextConfig, isReloadOwnerActive);
           } catch (refreshError) {
             rejectPendingPreparedModelRuntimeReplacement(
               preparedModelRuntimeReplacementGateId,
@@ -642,13 +642,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     try {
       if (refreshModelRuntime) {
-        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-          mrReload.refreshModelRuntimeAfterHotReload({
-            config: nextConfig,
-            agentIds: modelRuntimeAgentIds,
-            pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-          }),
-        );
+        await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);

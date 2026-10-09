@@ -87,9 +87,9 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it.each([
-    { name: "ASCII", text: "x".repeat(1207), maxChars: 1200 },
+    { name: "ASCII", text: "x".repeat(1207), maxChars: 1200, expectedLengths: [1200, 7] },
     { name: "a grapheme larger than the hard cap", text: "👨‍👩‍👧‍👦done", maxChars: 8 },
-  ])("retains progress and the hard cap for $name", ({ text, maxChars }) => {
+  ])("retains progress and the hard cap for $name", ({ text, maxChars, expectedLengths }) => {
     const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars });
     const chunks: string[] = [];
     for (const character of text) {
@@ -100,6 +100,9 @@ describe("EmbeddedBlockChunker", () => {
 
     expect(chunks.join("")).toBe(text);
     expectChunksWithinLength(chunks, maxChars);
+    if (expectedLengths) {
+      expect(chunks.map((chunk) => chunk.length)).toEqual(expectedLengths);
+    }
     expect(chunks).not.toContain("");
     expect(chunker.consumedLength).toBe(text.length);
     expect(chunker.bufferedText).toBe("");

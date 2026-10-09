@@ -8,6 +8,10 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  projectionLane,
+  rotateDatabaseWorkers,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -52,6 +56,8 @@ function writeSessionFixture(
   return patchSessionEntryCore(scope, () => patch, {
     skipMaintenance: true,
     fallbackEntry: createFallbackSessionEntry(patch),
+    // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+    assertCommitAllowed: () => {},
   });
 }
 
@@ -248,6 +254,8 @@ describe("direct session model catalogs", () => {
         });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
+        // Retire cached readers without releasing request-owned registrations.
+        await rotateDatabaseWorkers(projectionLane);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
     },
@@ -311,6 +319,8 @@ describe("direct session model catalogs", () => {
         await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
           preserveActivity: true,
           skipMaintenance: true,
+          // Keep the pending reader's lifetime independent of an idle writer generation.
+          assertCommitAllowed: () => {},
         });
         expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
         expect(readRow()).toEqual({
@@ -325,8 +335,9 @@ describe("direct session model catalogs", () => {
       const changed = await pending;
       const fresh = await f.request(params);
       expect(fresh.mock.calls).toEqual(control.mock.calls);
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       expect(changed.mock.calls).toEqual(control.mock.calls);
+      await rotateDatabaseWorkers(projectionLane);
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
 
@@ -339,6 +350,7 @@ describe("direct session model catalogs", () => {
     "catalog owner",
   ] as const)("revalidates the selected model catalog after %s", async (change) => {
     await withOpenClawTestState(isolated, async (state) => {
+      let closedStorePath: string | undefined;
       const f = fixture();
       await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
@@ -375,6 +387,7 @@ describe("direct session model catalogs", () => {
             openOpenClawAgentDatabase(scope);
           } else {
             closeOpenClawAgentDatabaseByPath(database.path);
+            closedStorePath = database.path;
           }
         } else if (change === "profile alias change") {
           publishUserProfileAliasChange();
@@ -410,7 +423,12 @@ describe("direct session model catalogs", () => {
             retryAfterMs: 0,
           }),
         );
+        if (closedStorePath) {
+          // Synchronous revocation precedes the async resource owner's settlement.
+          await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
+        }
       }
+      await rotateDatabaseWorkers(projectionLane);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
@@ -466,6 +484,7 @@ describe("direct session model catalogs", () => {
           await pending;
           expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
         }
+        await rotateDatabaseWorkers(projectionLane);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
     },

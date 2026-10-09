@@ -554,6 +554,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           storePath: sessionEntry.storePath,
           // The writer already published stored facts; this adapter only projects run state.
           scope: "runtime",
+          facts: { kind: "unchanged" },
         }),
     },
   );

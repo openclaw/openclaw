@@ -2728,7 +2728,8 @@ describe("active-memory plugin", () => {
   });
 
   it("returns partial transcript text after temporary SQLite recall rows are cleaned up", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    // Worker transcript timestamps and cleanup share the real wall clock.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     setTimeoutPartialDataGraceMsForTests(50);

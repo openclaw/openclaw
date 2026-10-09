@@ -62,7 +62,6 @@ export async function withSessionRowDatabaseFacts(
     revision: () => number | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
     env: NodeJS.ProcessEnv;
-    cfg: OpenClawConfig;
     selected?: ReadonlySet<string>;
   },
   consume: {

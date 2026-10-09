@@ -344,18 +344,13 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       if (!isCurrentTarget()) {
         return;
       }
-      if (result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id) {
-        this.sessionSuggestions = [
-          ...this.sessionSuggestions.filter((item) => item.id !== suggestion.id),
-          result.suggestion,
-        ].toSorted(
-          (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
-        );
-      } else {
-        this.sessionSuggestions = this.sessionSuggestions.filter(
-          (item) => item.id !== suggestion.id,
-        );
-      }
+      const remaining = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
+      this.sessionSuggestions =
+        result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id
+          ? [...remaining, result.suggestion].toSorted(
+              (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+            )
+          : remaining;
     } catch (error) {
       if (isCurrentTarget()) {
         if (

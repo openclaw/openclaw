@@ -37,6 +37,26 @@ Check the selected account as well as the runtime. An API key explicitly selecte
 for Claude CLI still uses separate API billing. A Claude CLI selection does not
 silently switch to the direct API if the executable cannot run.
 
+## Claude Haiku 5.5
+
+Select `anthropic/claude-haiku-5-5` for API access or
+`claude-cli/claude-haiku-5-5` for an existing Claude Code login. The `haiku`
+alias and Anthropic's default utility model use Haiku 5.5; explicit Haiku 4.5
+refs remain available.
+
+Haiku 5.5 supports text and image input, a 1M context window, and up to 128K
+output tokens. Thinking defaults to adaptive at medium effort. Available levels
+are `off`, `low`, `medium`, `high`, `xhigh`, and `max`; `minimal` maps to `low`.
+OpenClaw omits unsupported sampling parameters and preserves signed thinking
+for same-model replay. It does not enable native fast mode, Priority Tier, or
+server-side fallback for this model.
+
+API pricing is $0.10 / $0.50 per million input / output tokens for prompts up
+to 100K tokens and $0.50 / $2.50 above that threshold. Cache reads and writes
+use the corresponding tier. Claude CLI retains subscription accounting.
+See Anthropic's [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide)
+for the new tokenizer and account-bound thinking requirements.
+
 ## Usage and cost tracking
 
 OpenClaw detects the available Anthropic credential and selects the matching usage surface:
@@ -411,13 +431,13 @@ Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
 blocks. On direct Anthropic API-key Messages routes, OpenClaw enables
 `inHistorySystemUpdates` for Opus 4.8, Opus 5/5.5, Sonnet 5/5.5, Fable 5/5.1,
-and Mythos 5/5.1. It pins the stable system prefix and appends changed, added,
+and Mythos 5/5.1. It pins the complete system prompt and appends changed, added,
 or removed prompt sections as system messages after the current user turn.
 Workspace instructions, skills, and permission changes therefore preserve the
-earlier prefix. Changing the provider, model, or transport, or compacting the
-session, starts a new prefix series. After a Gateway restart, the series
-continues only when the current stable prefix matches the last saved rendered
-prefix.
+earlier prefix. Changing the provider, model, transport, or selected personal
+profile, or compacting the session, starts a new prefix series. After a Gateway restart, the saved series
+continues and any refreshed sections arrive as appended updates. Dynamic suffix
+changes use the same update path.
 
 These routes also keep runtime context append-only as turn-scoped system
 messages, without user-message delimiters. OpenClaw sends
@@ -603,16 +623,20 @@ for the node command and security boundary.
 ## Live model discovery
 
 With an Anthropic API key configured, OpenClaw refreshes the Claude catalog from
-Anthropic's models endpoint, so newly published snapshots of supported model
-families appear without an OpenClaw release. Models the shipped catalog already
-describes always keep their published metadata and pricing.
+Anthropic's models endpoint, so newly published models appear without an
+OpenClaw release. Models the shipped catalog already describes keep their
+published metadata and pricing.
 
-A newly discovered model is only offered when Anthropic's advertised
-capabilities match the request shaping OpenClaw would apply to it. A brand-new
-model generation therefore stays hidden until OpenClaw adds support for it,
-rather than appearing in the picker and failing every request. Discovery is
-advisory: without an API key, or if the endpoint is unreachable, the shipped
-catalog is used unchanged.
+Each listed row carries the thinking and effort capabilities Anthropic
+advertises for it (adaptive thinking, whether thinking can be disabled, and
+`xhigh`/`max` effort) as `params.claudeCapabilities` on the catalog row.
+Request shaping and the offered thinking levels follow those capabilities, so a
+new model gets the request shape it accepts on its first turn. Rows without
+them (shipped models absent from the listing, configured rows, and catalogs
+saved before discovery ran) keep OpenClaw's model-id rules. An unknown model
+whose listing carries no capability data stays hidden.
+Discovery is advisory: without an API key, or if the endpoint is unreachable,
+the shipped catalog is used unchanged.
 
 <a id="thinking-defaults-(claude-opus-5%2C-sonnet-5%2C-mythos-5%2C-fable-5%2C-4.8%2C-and-4.6)" />
 <a id="thinking-defaults-claude-opus-5-sonnet-5-mythos-5-fable-5-4-8-and-4-6" />
@@ -952,7 +976,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.1, and
+    Claude Haiku 5.5, Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.1, and
     Fable 5 have an exact 1,000,000-token input window and support up to 128,000 output tokens.
     Anthropic's 1M context window is also GA on Claude 4.x models with adaptive
     thinking: Opus 4.8,

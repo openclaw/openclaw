@@ -63,7 +63,7 @@ describe("configured catalog registry composition", () => {
         config,
         agentDir: "captured:agent",
         authCredentials: {},
-        modelRegistry: registry,
+        models: registry.getAll(),
         metadataSnapshot,
         includeProviderPluginAugmentation: false,
       });

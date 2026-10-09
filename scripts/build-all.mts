@@ -134,6 +134,10 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Limit overlapping Rolldown native allocations, which Node's heap limit
+      // does not cap. Individual bundles retain their internal parallelism.
+      "--concurrency",
+      "1",
     ),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
   },
@@ -205,15 +209,14 @@ const CI_ARTIFACT_STEP_LABELS = [
   "write-plugin-sdk-entry-dts",
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
-const FULL_COMPILER_STEP_LABELS = [
-  "tsdown-ai",
-  "tsdown-packages",
-  "tsdown-unified",
-  "write-unified-entry-dts",
-] as const;
-// The full declaration generation includes SDK outputs and has its own runtime-independent cache.
+// Isolated plugins finish generating source assets before declarations capture
+// their resolution namespace, so the first build seals reusable cache inputs.
 const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
-  step === "tsdown" ? FULL_COMPILER_STEP_LABELS : [step],
+  step === "tsdown"
+    ? ["tsdown-ai", "tsdown-packages", "tsdown-unified"]
+    : step === "external-plugins:local-dist"
+      ? [step, "write-unified-entry-dts"]
+      : [step],
 );
 const FULL_BUILD_STEP_LABELS = [
   "native-protocol",
@@ -228,8 +231,7 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
   // Smoke builds retain typed compilation and publication checks without the UI/metadata tail.
   strictSmoke: [...FULL_RUNTIME_STEP_LABELS, "check-plugin-sdk-exports"],
   pluginSdkStrictSmoke: [
-    ...FULL_COMPILER_STEP_LABELS,
-    ...RUNTIME_STEP_LABELS,
+    ...FULL_RUNTIME_STEP_LABELS.filter((step) => !step.startsWith("plugins:assets:")),
     "check-plugin-sdk-exports",
   ],
   gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
@@ -245,23 +247,17 @@ const FULL_RUNTIME_ONLY_STEPS = [
   ...BUILD_METADATA_STEP_LABELS,
 ];
 
+const FULL_BUILD_PROFILE_STEP_ENV = {
+  tsdown: {
+    OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+  },
+  "tsdown-unified": {
+    OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+  },
+};
 const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
-  full: {
-    tsdown: {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "tsdown-unified": {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-  },
-  package: {
-    tsdown: {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "tsdown-unified": {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-  },
+  full: FULL_BUILD_PROFILE_STEP_ENV,
+  package: FULL_BUILD_PROFILE_STEP_ENV,
   ciArtifacts: {
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR

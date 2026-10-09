@@ -429,7 +429,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         return;
       }
       const report = {
-        message: data.message.slice(0, 500),
+        message: truncateUtf16Safe(data.message, 500).toWellFormed(),
         line: typeof data.line === "number" && Number.isInteger(data.line) ? data.line : undefined,
         column:
           typeof data.column === "number" && Number.isInteger(data.column)

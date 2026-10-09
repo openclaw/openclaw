@@ -9,6 +9,11 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+Returning to a suspended tab or regaining network connectivity can recover a
+stale connection. These signals do not retry a connection that requires a page
+reload, corrected credentials, or a new pairing request. Follow the displayed
+recovery instructions; automatic document refresh remains available after an update.
+
 Agent names and avatars keep their last loaded values when an identity refresh
 fails. Reads for the same agent share one request across the sidebar and chat,
 including failures: subsequent reads back off from 500 ms to 5 seconds and honor

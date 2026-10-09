@@ -5,6 +5,7 @@ import {
   resolveAgentDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   formatMemoryIndexRebuildGuidance,
   MEMORY_CHUNKING_VERSION,
@@ -23,11 +24,12 @@ import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
-import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
+import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import {
   resolveMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
+  resolveMemoryPrimaryProviderRequest,
 } from "./manager-provider-state.js";
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import {
@@ -43,10 +45,6 @@ import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
 import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
-import {
-  markMemoryTargetArchiveFilesDirty,
-  runMemoryTargetedSessionSync,
-} from "./manager-targeted-sync.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
@@ -121,6 +119,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected abstract retireCurrentProvider(): Promise<void>;
+
+  protected createConfiguredEmbeddingProvider(
+    request = resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+  ) {
+    return createEmbeddingProvider({
+      createProvider: this.createProvider,
+      config: this.cfg,
+      agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+      ...request,
+    });
+  }
 
   private createSyncProgress(
     onProgress: (update: MemorySyncProgressUpdate) => void,
@@ -292,10 +302,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         needsFullReindex || this.sessionsFullRetryDirty || isSearchBootstrap;
       if (indexIdentity.status !== "valid" && !needsFullReindex) {
         this.dirty = true;
-        const sessionsDirty = markMemoryTargetArchiveFilesDirty({
-          sessionsDirtyFiles: this.sessionsDirtyFiles,
-          targetArchiveFiles,
-        });
+        const sessionsDirty = this.markTargetArchiveFilesDirty(targetArchiveFiles);
         if (sessionsDirty) {
           this.sessionsDirty = true;
         }
@@ -303,34 +310,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
       if (!needsFullSessionReindex) {
         if (this.sources.has("sessions") && targetArchiveFiles) {
-          this.sessionsDirty = markMemoryTargetArchiveFilesDirty({
-            sessionsDirtyFiles: this.sessionsDirtyFiles,
-            targetArchiveFiles,
-          });
+          this.sessionsDirty = this.markTargetArchiveFilesDirty(targetArchiveFiles);
         }
-        const targetedSessionSync = await runMemoryTargetedSessionSync({
-          hasSessionSource: this.sources.has("sessions"),
-          targetArchiveFiles,
-          progress: progress ?? undefined,
-          sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-          sessionsReconcileDirty: this.sessionsReconcileDirty,
-          sessionsDirtyFiles: this.sessionsDirtyFiles,
-          syncArchiveFiles: async (targetedParams) => {
-            await this.syncArchiveFiles({
-              ...targetedParams,
-              corpusEntries: targetSessionSync?.corpusEntries,
-            });
-          },
-          activateFallbackProvider: async (reason) => {
-            this.endSyncProviderGeneration();
-            return await this.activateFallbackProvider(reason);
-          },
-        });
-        if (targetedSessionSync.handled) {
-          this.sessionsDirty = targetedSessionSync.sessionsDirty;
-          if (targetedSessionSync.failure) {
-            this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
-          }
+        if (
+          await this.syncTargetedSessions(
+            targetArchiveFiles,
+            targetSessionSync?.corpusEntries,
+            progress,
+          )
+        ) {
           return;
         }
       }
@@ -385,6 +373,55 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         await this.pruneEmbeddingCacheIfNeeded();
       }
     }
+  }
+
+  protected markTargetArchiveFilesDirty(targetArchiveFiles?: Iterable<string> | null): boolean {
+    for (const file of targetArchiveFiles ?? []) {
+      this.sessionsDirtyFiles.add(file);
+    }
+    return this.sessionsDirtyFiles.size > 0;
+  }
+
+  protected async syncTargetedSessions(
+    targetArchiveFiles: Set<string> | null,
+    corpusEntries?: readonly SessionTranscriptCorpusEntry[],
+    progress?: MemorySyncProgressState,
+  ): Promise<boolean> {
+    if (!this.sources.has("sessions") || !targetArchiveFiles) {
+      return false;
+    }
+    const { sessionsDirtyFiles, sessionsFullRetryDirty, sessionsReconcileDirty } = this;
+    let failure: { error: unknown } | undefined;
+    try {
+      await this.syncArchiveFiles({
+        needsFullReindex: false,
+        targetArchiveFiles: Array.from(targetArchiveFiles),
+        progress,
+        corpusEntries,
+      });
+      for (const file of targetArchiveFiles) {
+        sessionsDirtyFiles.delete(file);
+      }
+    } catch (error) {
+      const reason = formatErrorMessage(error);
+      const shouldFallback = isMemoryEmbeddingOperationError(error);
+      if (shouldFallback) {
+        this.endSyncProviderGeneration();
+      }
+      if (!shouldFallback || !(await this.activateFallbackProvider(reason))) {
+        throw error;
+      }
+      for (const file of targetArchiveFiles) {
+        sessionsDirtyFiles.add(file);
+      }
+      failure = { error };
+    }
+    this.sessionsDirty =
+      sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
+    if (failure) {
+      this.syncOutcomes.recordActiveFailure(failure.error);
+    }
+    return true;
   }
 
   protected resolveBatchConfig(): MemoryEmbeddingBatchConfig {
@@ -447,13 +484,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
     let fallbackResult;
     try {
-      fallbackResult = await createEmbeddingProvider({
-        createProvider: this.createProvider,
-        config: this.cfg,
-        agentDir: resolveAgentDir(this.cfg, this.agentId),
-        ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-        ...fallbackRequest,
-      });
+      fallbackResult = await this.createConfiguredEmbeddingProvider(fallbackRequest);
     } catch (err) {
       // Retirement already removed the primary before fallback construction.
       // Make the configured provider retryable instead of stranding FTS-only mode.
@@ -564,7 +595,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
 
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-        await withMemoryIndexPublishGeneration(dbPath, async () => {
+        await withMemoryIndexGeneration(dbPath, "write", async () => {
           await this.publishedDatabase.publishShadow(
             {
               sourcePath: tempDbPath,

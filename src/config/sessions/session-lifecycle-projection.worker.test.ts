@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -91,6 +92,9 @@ function fixture() {
   const initial = {
     sessionId: "lifecycle-original",
     updatedAt: Date.now(),
+    createdAt: 123,
+    createdVia: "operator" as const,
+    createdActor: { type: "human" as const, source: "profile" as const, id: "creator" },
     skillsSnapshot: { prompt: "original saved prompt", skills: [] },
     sessionDiffBaseline: {
       version: 1 as const,
@@ -164,19 +168,12 @@ async function runMaintenanceDrift(
       },
     );
   } else {
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          if (
-            delivery.currentCommand === "session.lifecycle.project" &&
-            request.stage === "commit"
-          ) {
-            changed();
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (delivery.currentCommand === "session.lifecycle.project" && request.stage === "commit") {
+        changed();
+      }
+      callback(request, grant);
+    });
   }
   try {
     const operation = applySessionEntryLifecycleMutation({
@@ -234,6 +231,11 @@ it("moves lifecycle counts and snapshot writes off the host while preserving mai
       sql.restore();
     }
     expect(f.read()?.skillsSnapshot).toEqual(f.upserts[0].entry.skillsSnapshot);
+    expect(f.read()).toMatchObject({
+      createdAt: f.initial.createdAt,
+      createdVia: f.initial.createdVia,
+      createdActor: f.initial.createdActor,
+    });
     expect(f.read()?.sessionDiffBaseline).toBeUndefined();
     expect(f.read(f.siblingKey)).toMatchObject({ archiveReason: "active-session-cap" });
     expect(f.read(f.createdKey)).toMatchObject({ sessionId: "new-session" });
@@ -276,20 +278,13 @@ it.each(["transaction", "commit"] as const)(
       const committed = vi.fn();
       let live = true;
       let revokedAtGrant = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (
-              delivery.currentCommand === "session.lifecycle.project" &&
-              request.stage === stage
-            ) {
-              live = false;
-              revokedAtGrant = true;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (delivery.currentCommand === "session.lifecycle.project" && request.stage === stage) {
+          live = false;
+          revokedAtGrant = true;
+        }
+        callback(request, grant);
+      });
       const operation = applySessionEntryLifecycleMutation({
         ...f.scope,
         activeSessionKey: f.scope.sessionKey,

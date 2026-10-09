@@ -90,6 +90,7 @@ export async function handleChatHistoryRequest({
     messageId: wireMessageId,
     sessionId: wireSessionId,
     maxChars,
+    toolResultMaxChars,
     maxBytes,
     pendingBefore,
     inputRunIds,
@@ -135,6 +136,13 @@ export async function handleChatHistoryRequest({
   if (!selection) {
     return;
   }
+  const respondReadError = (error: unknown) => {
+    const message = resolveSessionHistoryUnavailableMessage(error);
+    if (message === undefined) {
+      throw error;
+    }
+    respondChatHistoryUnavailable(method, respond, message);
+  };
   try {
     const {
       selectedSession,
@@ -248,6 +256,7 @@ export async function handleChatHistoryRequest({
                     maxHistoryBytes,
                     responseHistoryBytes: maxResponseBytes,
                     effectiveMaxChars,
+                    toolResultMaxChars,
                     offset,
                     messageId,
                     ...(pageCursor ? { pageCursor } : {}),
@@ -265,11 +274,7 @@ export async function handleChatHistoryRequest({
               },
             );
     } catch (error) {
-      const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);
-      if (unavailableMessage === undefined) {
-        throw error;
-      }
-      respondChatHistoryUnavailable(method, respond, unavailableMessage);
+      respondReadError(error);
       return;
     }
     const responsePage = historyPage.encodedResponse
@@ -484,6 +489,7 @@ export async function handleChatHistoryRequest({
             };
             delta = await readChatHistoryDelta(
               {
+                toolResultMaxChars,
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,
@@ -495,11 +501,7 @@ export async function handleChatHistoryRequest({
               signal,
             );
           } catch (error) {
-            const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);
-            if (unavailableMessage === undefined) {
-              throw error;
-            }
-            respondChatHistoryUnavailable(method, respond, unavailableMessage);
+            respondReadError(error);
             return undefined;
           }
           return withReadySessionRows(rowProjection, queries, (publicationRead) => {
@@ -615,7 +617,7 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { shortId, slugHint, agentId, limit, maxBytes } = opts.params;
+    const { shortId, slugHint, agentId, limit, maxBytes, toolResultMaxChars } = opts.params;
     const projection = getSessionRowProjection(opts.context);
     if (!projection) {
       respondChatHistoryUnavailable(
@@ -655,7 +657,13 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
     }
     await handleChatHistoryRequest({
       ...opts,
-      params: { sessionKey: resolution.key, agentId: resolution.agentId, limit, maxBytes },
+      params: {
+        sessionKey: resolution.key,
+        agentId: resolution.agentId,
+        limit,
+        maxBytes,
+        toolResultMaxChars,
+      },
       method: "chat.startup",
       respond: (ok, payload, error, meta) =>
         opts.respond(ok, ok ? { ...asOptionalRecord(payload), resolution } : payload, error, meta),

@@ -54,22 +54,21 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
         const event = pending.values().next().value!;
         pending.delete(event);
         await new Promise<void>((resolve, reject) => {
+          const finishWrite = (error?: Error | null) => {
+            writing = false;
+            rejectWrite = undefined;
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          };
           rejectWrite = reject;
           writing = true;
           try {
-            output.write(JSON.stringify(event) + "\n", (error) => {
-              writing = false;
-              rejectWrite = undefined;
-              if (error) {
-                reject(error);
-              } else {
-                resolve();
-              }
-            });
+            output.write(JSON.stringify(event) + "\n", finishWrite);
           } catch (error) {
-            writing = false;
-            rejectWrite = undefined;
-            reject(
+            finishWrite(
               error instanceof Error
                 ? error
                 : new Error("File watch output write failed", { cause: error }),

@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
@@ -22,11 +23,11 @@ export function getDispatchTestMocks() {
   return dispatchTestMocks;
 }
 
-vi.mock("../../agents/worktrees/service.js", () => ({
-  managedWorktrees: {
-    findLiveByOwner: dispatchTestMocks.findLiveByOwner,
-  },
-}));
+beforeEach(() => {
+  vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(async (...args) =>
+    dispatchTestMocks.findLiveByOwner(...args),
+  );
+});
 
 vi.mock("../../process/exec.js", async () => {
   const actual =

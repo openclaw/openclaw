@@ -26,7 +26,7 @@ import { prepareEmbeddedAttemptPromptContext } from "./run/attempt-prompt-build.
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
   clearEmbeddedSessionPromptStates,
-  cloneToolResultPromptProjectionState,
+  createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
@@ -1205,7 +1205,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       100,
       projectionState,
     );
-    const stateWithStaleOccurrence = cloneToolResultPromptProjectionState(projectionState);
+    const stateWithStaleOccurrence = createToolResultPromptProjectionState(projectionState);
     expect(stateWithStaleOccurrence.frozen.size).toBe(2);
 
     await preparePromptProjectionStateForTest({
@@ -1392,7 +1392,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       48_000,
       projectionState,
     ).messages[0];
-    const staleProjectionState = cloneToolResultPromptProjectionState(projectionState);
+    const staleProjectionState = createToolResultPromptProjectionState(projectionState);
 
     const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),

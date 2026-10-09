@@ -4,7 +4,12 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeUiAppearancePreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  normalizeUiAppearancePreference,
+  type TabIconPreference,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -33,7 +38,6 @@ const NAV_WIDTH_DEFAULT = 258;
 const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
-const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
 export function settingsKeyForGateway(gatewayUrl: string): string {
@@ -88,10 +92,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
     return undefined;
   }
   const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
+  if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {
     return undefined;
   }
   if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
@@ -146,16 +147,9 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 100;
   }
-  let best: TextScaleStop = TEXT_SCALE_STOPS[0];
-  let bestDist = Math.abs(value - best);
-  for (const stop of TEXT_SCALE_STOPS) {
-    const dist = Math.abs(value - stop);
-    if (dist < bestDist) {
-      best = stop;
-      bestDist = dist;
-    }
-  }
-  return best;
+  return TEXT_SCALE_STOPS.reduce((best, stop) =>
+    Math.abs(value - stop) < Math.abs(value - best) ? stop : best,
+  );
 }
 
 export const UI_APPEARANCE_DEFAULTS = {
@@ -187,6 +181,7 @@ export type UiSettings = {
   // Browser typeface overrides; undefined = theme default.
   fontUi?: TypefaceId;
   fontChat?: TypefaceId;
+  tabIcon?: TabIconPreference;
   // Device-local: custom terminal faces must be installed on the browser computer.
   terminalFontFamily?: string;
   chatShowThinking: boolean;
@@ -241,9 +236,10 @@ function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
 }
 
-function normalizeBooleanSetting<T extends boolean | undefined>(value: unknown, fallback: T) {
-  return typeof value === "boolean" ? value : fallback;
-}
+type BooleanSettingKey = {
+  [K in keyof UiPreferences]-?: UiPreferences[K] extends boolean | undefined ? K : never;
+}[keyof UiPreferences] &
+  keyof PersistedUiSettings;
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -317,7 +313,7 @@ function readSettingsForGateway(
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
-  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
+  return `${CONTROL_UI_TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 function resolveScopedSessionSelection(
@@ -493,6 +489,10 @@ export function loadUiPreferences(
             ),
           )
         : null;
+    const booleanSetting = <K extends BooleanSettingKey>(key: K) => {
+      const value = parsed[key];
+      return typeof value === "boolean" ? value : defaults[key];
+    };
     const settings: UiPreferences = {
       gatewayUrl,
       sessionKey: scopedSessionSelection.sessionKey,
@@ -503,33 +503,19 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
+      tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
-      chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
-      chatShowToolCalls: normalizeBooleanSetting(
-        parsed.chatShowToolCalls,
-        defaults.chatShowToolCalls,
-      ),
-      chatPersistCommentary: normalizeBooleanSetting(
-        parsed.chatPersistCommentary,
-        defaults.chatPersistCommentary,
-      ),
-      chatShowTaskProgress: normalizeBooleanSetting(
-        parsed.chatShowTaskProgress,
-        defaults.chatShowTaskProgress,
-      ),
-      chatCollapseTaskProgress: normalizeBooleanSetting(
-        parsed.chatCollapseTaskProgress,
-        defaults.chatCollapseTaskProgress,
-      ),
+      chatShowThinking: booleanSetting("chatShowThinking"),
+      chatShowToolCalls: booleanSetting("chatShowToolCalls"),
+      chatPersistCommentary: booleanSetting("chatPersistCommentary"),
+      chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
+      chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
-      composerHoldToRecord: normalizeBooleanSetting(
-        parsed.composerHoldToRecord,
-        defaults.composerHoldToRecord,
-      ),
+      composerHoldToRecord: booleanSetting("composerHoldToRecord"),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -553,15 +539,9 @@ export function loadUiPreferences(
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
-      sidebarLiveActivity: normalizeBooleanSetting(
-        parsed.sidebarLiveActivity,
-        defaults.sidebarLiveActivity,
-      ),
+      sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
-      showAdvancedSettings: normalizeBooleanSetting(
-        parsed.showAdvancedSettings,
-        defaults.showAdvancedSettings,
-      ),
+      showAdvancedSettings: booleanSetting("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
       textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,
@@ -658,6 +638,7 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     accent: normalizeAccentColor(next.accent),
     fontUi: normalizeTypefaceOverride(next.fontUi),
     fontChat: normalizeTypefaceOverride(next.fontChat),
+    tabIcon: normalizeTabIconPreference(next.tabIcon),
     terminalFontFamily: normalizeTerminalFontFamily(next.terminalFontFamily),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,

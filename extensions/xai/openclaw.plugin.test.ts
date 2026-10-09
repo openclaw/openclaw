@@ -9,6 +9,7 @@ const manifest = JSON.parse(
     providers?: Record<string, { aliases?: Record<string, string> }>;
   };
   modelCatalog?: {
+    aliases?: Record<string, { provider?: string }>;
     suppressions?: Array<{ provider?: string; model?: string }>;
   };
   mediaUnderstandingProviderMetadata?: Record<string, { defaultModels?: Record<string, string> }>;
@@ -25,8 +26,10 @@ const XAI_MULTI_AGENT_MODELS = [
 ] as const;
 
 describe("xAI plugin manifest", () => {
-  it("owns the shipped x-ai auth alias", () => {
+  it("owns the shipped x-ai auth and catalog aliases", () => {
     expect(manifest.providerAuthAliases).toEqual({ "x-ai": "xai" });
+    // Discovery also answers under x-ai; the catalog must publish those rows as xai.
+    expect(manifest.modelCatalog?.aliases).toEqual({ "x-ai": { provider: "xai" } });
   });
 
   it("normalizes the Grok Build latest alias to Grok 4.5", () => {

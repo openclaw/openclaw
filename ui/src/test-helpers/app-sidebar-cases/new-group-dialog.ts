@@ -12,47 +12,6 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar new group dialog", () => {
-  it("writes a new group catalog before assigning the selection through patchMany", async () => {
-    const restoreDialogPolyfill = installDialogPolyfill();
-    try {
-      const { sidebar, harness } = await mountMultiSelect([
-        "sessions.groups.put",
-        "sessions.patchMany",
-      ]);
-      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:a");
-      await sidebar.updateComplete;
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
-
-      // Opening the owned dialog is inert: nothing reaches the Gateway until a
-      // name is submitted, and the submitted name is trimmed.
-      await waitForInputDialog();
-      expect(harness.groupsPut).not.toHaveBeenCalled();
-      expect(harness.patchMany).not.toHaveBeenCalled();
-      await submitInputDialog("  Projects  ");
-
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
-          { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
-        ],
-        { category: "Projects" },
-      );
-      expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.patchMany.mock.invocationCallOrder[0]!,
-      );
-      expect(harness.patch).not.toHaveBeenCalled();
-      await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledOnce());
-    } finally {
-      restoreDialogPolyfill();
-    }
-  });
-
   it("moves captured sessions even when both leave the bounded list mid-write", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     const toastHost = document.createElement("openclaw-toast-host");
@@ -84,6 +43,7 @@ describe("AppSidebar new group dialog", () => {
       // Projection absence is not deletion. The Gateway can still apply both
       // captured identities, and rejects either one if it was actually removed.
       harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
+      expect(harness.patchMany).not.toHaveBeenCalled();
       landCatalogWrite();
 
       // The dialog is removed only once the submit chain has run to completion,

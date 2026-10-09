@@ -605,6 +605,38 @@ describe("resolveInstalledBinaryCommandInvocation", () => {
 });
 
 describe("collectInstalledRootDependencyManifestErrors", () => {
+  it("finishes vendor call graphs while retaining root dependency checks", () => {
+    const packageRoot = makeInstalledPackageRoot();
+    writePackageFile(packageRoot, "package.json", { name: "openclaw", dependencies: {} });
+    const calls = ["const value0 = opaque();"];
+    for (let index = 1; index <= 28; index++) {
+      calls.push(`const value${index} = opaque(value${index - 1}, value${index - 1});`);
+    }
+    writeInstalledFile(
+      packageRoot,
+      "dist/vendor.js",
+      `${calls.join("\n")}\nrequire("root-runtime");`,
+    );
+    // A subprocess deadline is necessary because the original synchronous graph scan never yields.
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        'import { collectInstalledRootDependencyManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts"; console.log(JSON.stringify(collectInstalledRootDependencyManifestErrors(process.argv[1]))); process.exit(0);',
+        packageRoot,
+      ],
+      { encoding: "utf8", timeout: 3000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      "installed package root is missing declared runtime dependency 'root-runtime' for dist importers: vendor.js. Add it to package.json dependencies/optionalDependencies.",
+    ]);
+  });
+
   function makeCompanionImportFixture(params: {
     source?: string;
     fileName?: string;

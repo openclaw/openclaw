@@ -14,6 +14,12 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
+On Windows, plain drive/UNC paths and their extended-length (`\\?\`) spellings
+identify the same shared-state database owner. Opens, write admission, retained
+connections, and cleanup use the same path identity; native SQLite opens still
+support long filenames. This requires no schema or stored-data migration and
+does not change update backups or rollback.
+
 The shared-state database retains `task_runs`, `task_delivery_state`, and `flow_runs`, including their existing columns and indexes. The Tasks and TaskFlow runtime, tools, and UI are removed; their non-Cron rows remain untouched and unused by the runtime. Cron owns only the `runtime = 'cron'` rows in `task_runs` through its history store. It does not move history to another table. Native execution and completion remain with the subagent registry and harness-binding owners; native Codex pending assignments use metadata in the existing parent binding, not a new table. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 In agent schema 23, `transcript_events` retains original event JSON as either
@@ -115,6 +121,33 @@ session node owns their retention and deletion; no migration is required.
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
+
+### User-turn model prompt projections
+
+Canonical user messages may include the optional private field
+`__openclaw.modelPromptProjection: { version: 1, text: string }`. The user-turn
+transcript recorder stores the first model-facing text, including prompt-hook
+prepend/append context or a model-prompt replacement, before provider dispatch.
+The ordinary `content` remains the original user transcript. Projection text is
+stored after transcript redaction and before deterministic timestamp and sender
+normalization. Both the first dispatch and replay use that recorded text, then
+apply the same normalization.
+
+The existing transcript writer binds capture to the exact active user message
+and rechecks live authority before committing. Capture is immutable: repeats
+can only confirm identical text. Later media cannot change a sent projection
+or copy it onto the media's new user message. Compaction retires the projection
+with its source message, and reset or replacement cannot transfer it to another
+turn. No separate table, cache, sidecar, or configuration option is added.
+
+Messages without the field retain legacy replay behavior. The version-1 reader
+rejects malformed or unsupported projection formats before provider dispatch
+and asks for a compatible OpenClaw version or a new session. This stored-shape
+addition leaves the numeric database schema version unchanged. Older builds
+that do not understand the optional field can still read the original user
+content, but cannot reproduce the recorded model prompt and may lose prompt
+cache reuse. Downgrading therefore does not preserve this replay guarantee;
+resume affected sessions with a compatible build or start a new session.
 
 ### Transcript search row ownership
 
@@ -449,6 +482,22 @@ The normal handoff parent prepares this database before launching its sealed
 helper. The helper receives the captured database identity and operates only on
 that existing database, without resolving installation packages or recreating
 missing or empty state.
+Package recovery helpers are also self-contained: their status and recovery
+commands do not need neighboring installation assets or service controllers.
+
+Current update, Doctor, and handoff owners serialize coordinator writes before
+pinning a read snapshot. They prepare an existing-directory capability and use
+the coordinator's existing lock file, carrying the remaining five-second wait
+budget into SQLite. Other installations can still inspect their leases while a
+writer is active. SQLite admission remains non-waiting while the protective
+snapshot is held, so it cannot deadlock a writer's commit or replay a hot journal.
+Already-published synchronous helpers retain that conservative SQLite refusal;
+the new serialization does not change their protocol or lease rows.
+When an older update or Doctor holds SQLite, the current caller explains the
+contention and asks the operator to wait for it to finish, then rerun the command.
+If a holder removes its lock during inspection, admission re-observes the absent
+slot through the same directory capability and remaining budget. A replacement
+sidecar that is still present or a changed directory identity is refused.
 
 File creation applies private permissions before SQLite opens the file, including
 a protected ACL on Windows. Initialization follows the existing directory-durability

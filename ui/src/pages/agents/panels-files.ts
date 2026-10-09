@@ -12,16 +12,11 @@ import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
-import {
-  countLines,
-  countWords,
-  estimateReadingTimeLabel,
-  resetAgentFilePreview,
-  setPreviewExpandButtonState,
-} from "./agent-file-preview-state.ts";
+import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 import { agentFilePreview } from "./agent-file-preview.ts";
 import { renderAgentFileError } from "./file-conflict-callout.ts";
 import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
+import { renderAgentPanelAction } from "./panel-ui.ts";
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -51,6 +46,15 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
 function toDomId(value: string) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "preview";
+}
+
+function renderPreviewFact(value: string | number, label: string, secondary = false) {
+  return html`
+    <div class="md-preview-dialog__chip" data-priority=${secondary ? "secondary" : "essential"}>
+      <strong>${value}</strong>
+      <span>${label}</span>
+    </div>
+  `;
 }
 
 function closeAgentFilePreview(event: Event, focusEditor = false) {
@@ -98,9 +102,10 @@ export function renderAgentFiles(
   const conflictName = active && params.agentFileConflict === active ? active : null;
   const showMissing = activeEntry?.missing && !conflictName;
   const hasContent = active ? hasAgentFileContent(params, active) : false;
-  const hasBase = active ? Object.hasOwn(params.agentFileContents, active) : false;
-  const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
-  const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
+  const editor = active ? params.agentFileEditors[active] : undefined;
+  const hasBase = Boolean(editor && Object.hasOwn(editor, "content"));
+  const baseContent = editor?.content ?? "";
+  const draft = editor?.draft ?? baseContent;
   const isDirty = hasContent && (!hasBase || draft !== baseContent);
 
   return html`
@@ -120,13 +125,7 @@ export function renderAgentFiles(
               <code>${list.workspace}</code>`
           : t("agents.files.coreFilesSubtitle"),
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${params.agentFilesLoading}
-            @click=${() => params.onLoadFiles(params.agentId)}
-          >
-            ${params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
-          </button>
+          ${renderAgentPanelAction(params.agentFilesLoading ? t("common.loading") : t("common.refresh"), params.agentFilesLoading, () => params.onLoadFiles(params.agentId))}
         `,
       },
       !list
@@ -217,13 +216,7 @@ export function renderAgentFiles(
                               >
                                 ${icons.eye} ${t("agents.files.preview")}
                               </button>
-                              <button
-                                class="btn btn--sm"
-                                ?disabled=${!params.canWrite || !hasBase || !isDirty}
-                                @click=${() => params.onFileReset(activeEntry.name)}
-                              >
-                                ${t("common.reset")}
-                              </button>
+                              ${renderAgentPanelAction(t("common.reset"), !params.canWrite || !hasBase || !isDirty, () => params.onFileReset(activeEntry.name))}
                               <button
                                 class="btn btn--sm primary"
                                 ?disabled=${!params.canWrite || !hasContent || params.agentFileSaving || !isDirty}
@@ -285,23 +278,30 @@ export function renderAgentFiles(
                                 const draftByteSize = formatBytes(
                                   new TextEncoder().encode(draft).length,
                                 );
-                                const draftWordCount = countWords(draft);
-                                const draftLineCount = countLines(draft);
+                                const trimmedDraft = draft.trim();
+                                const draftWordCount = trimmedDraft
+                                  ? trimmedDraft.split(/\s+/).length
+                                  : 0;
+                                const draftLineCount =
+                                  draft.length === 0 ? 0 : draft.split(/\r?\n/).length;
+                                const readingTimeLabel =
+                                  draftWordCount <= 0
+                                    ? t("agents.files.emptyDraft")
+                                    : t("agents.files.minRead", {
+                                        count: String(
+                                          Math.max(1, Math.round(draftWordCount / 220)),
+                                        ),
+                                      });
                                 const activePathLabel = formatWorkspaceRelativePath(
                                   activeEntry.path,
                                   list?.workspace,
                                 );
                                 const previewTitleId = `agent-file-preview-title-${toDomId(activeEntry.name)}`;
-                                const previewStatusLabel = showMissing
-                                  ? t("agents.files.willCreateOnSave")
+                                const [previewStatusLabel, previewStatusClass] = showMissing
+                                  ? [t("agents.files.willCreateOnSave"), "is-missing"]
                                   : isDirty || conflictName
-                                    ? t("agents.files.liveDraftPreview")
-                                    : t("agents.files.savedPreview");
-                                const previewStatusClass = showMissing
-                                  ? "is-missing"
-                                  : isDirty || conflictName
-                                    ? "is-dirty"
-                                    : "is-synced";
+                                    ? [t("agents.files.liveDraftPreview"), "is-dirty"]
+                                    : [t("agents.files.savedPreview"), "is-synced"];
                                 const previewUpdatedLabel = activeEntry?.updatedAtMs
                                   ? t("agents.files.updated", {
                                       time: formatRelativeTimestamp(activeEntry.updatedAtMs),
@@ -360,26 +360,25 @@ export function renderAgentFiles(
                                           >
                                         </button>
                                       </openclaw-tooltip>
-                                      <openclaw-tooltip .content=${t("agents.files.editFile")}>
-                                        <button
-                                          type="button"
-                                          class="btn btn--sm md-preview-icon-btn"
-                                          aria-label=${t("agents.files.editFile")}
-                                          @click=${(event: Event) => closeAgentFilePreview(event, true)}
-                                        >
-                                          <span aria-hidden="true">${icons.edit}</span>
-                                        </button>
-                                      </openclaw-tooltip>
-                                      <openclaw-tooltip .content=${t("agents.files.closePreview")}>
-                                        <button
-                                          type="button"
-                                          class="btn btn--sm md-preview-icon-btn"
-                                          aria-label=${t("agents.files.closePreview")}
-                                          @click=${closeAgentFilePreview}
-                                        >
-                                          <span aria-hidden="true">${icons.x}</span>
-                                        </button>
-                                      </openclaw-tooltip>
+                                      ${(
+                                        [
+                                          ["editFile", icons.edit, true],
+                                          ["closePreview", icons.x, false],
+                                        ] as const
+                                      ).map(
+                                        ([label, icon, focusEditor]) => html`
+                                          <openclaw-tooltip .content=${t(`agents.files.${label}`)}>
+                                            <button
+                                              type="button"
+                                              class="btn btn--sm md-preview-icon-btn"
+                                              aria-label=${t(`agents.files.${label}`)}
+                                              @click=${(event: Event) => closeAgentFilePreview(event, focusEditor)}
+                                            >
+                                              <span aria-hidden="true">${icon}</span>
+                                            </button>
+                                          </openclaw-tooltip>
+                                        `,
+                                      )}
                                     </div>
                                   </div>
                                   <div class="md-preview-dialog__meta">
@@ -389,22 +388,9 @@ export function renderAgentFiles(
                                     >
                                       <strong>${previewStatusLabel}</strong>
                                     </div>
-                                    <div class="md-preview-dialog__chip" data-priority="essential">
-                                      <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
-                                      <span
-                                        >${t("agents.files.words", {
-                                          count: String(draftWordCount),
-                                        })}</span
-                                      >
-                                    </div>
-                                    <div class="md-preview-dialog__chip" data-priority="secondary">
-                                      <strong>${draftLineCount}</strong>
-                                      <span>${t("agents.files.lines")}</span>
-                                    </div>
-                                    <div class="md-preview-dialog__chip" data-priority="essential">
-                                      <strong>${draftByteSize}</strong>
-                                      <span>${previewUpdatedLabel}</span>
-                                    </div>
+                                    ${renderPreviewFact(readingTimeLabel, t("agents.files.words", { count: String(draftWordCount) }))}
+                                    ${renderPreviewFact(draftLineCount, t("agents.files.lines"), true)}
+                                    ${renderPreviewFact(draftByteSize, previewUpdatedLabel)}
                                   </div>
                                   <div class="md-preview-dialog__body">
                                     <article class="md-preview-dialog__reader sidebar-markdown">

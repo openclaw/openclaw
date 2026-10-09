@@ -7,8 +7,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-delta.js";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import * as sqliteScope from "./session-accessor.sqlite-scope.js";
 import {
@@ -20,6 +22,7 @@ import { prepareSessionTranscriptHydration } from "./session-transcript-hydratio
 import {
   historyLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -50,6 +53,31 @@ function input() {
     },
   };
 }
+
+// These lifecycle checks retain one already-admitted history lane.
+function useAdmittedHistoryReader() {
+  vi.spyOn(agentExecution, "captureExistingOpenClawAgentDatabaseExecution").mockImplementation(
+    (options) => {
+      const claim = { identity: "history", incarnation: "history", assertCurrent() {} };
+      return {
+        agentId: "main",
+        path: options.path,
+        fileIdentity: undefined,
+        assertCurrent() {},
+        captureGenerationClaim: () => claim,
+        capturePreparedGenerationClaim: () => claim,
+        async prepare() {
+          throw new Error("Readonly history must not prepare a writer");
+        },
+        async runExisting() {
+          throw new Error("Readonly history must not open a writer");
+        },
+        async release() {},
+      };
+    },
+  );
+}
+
 function installWorkerTransport() {
   observed.run.mockImplementation(async (request, options) => {
     const posted = createDeferredCore<unknown>();
@@ -122,7 +150,7 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await rotateDatabaseWorkers(historyLane);
+  await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });
@@ -325,6 +353,7 @@ it.each(
 );
 
 it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  useAdmittedHistoryReader();
   const pressure = channel("openclaw.memory.critical");
   const request = input();
   const retirement = createDeferredCore();
@@ -353,8 +382,13 @@ it.each([
   { retired: false, fails: false },
   { retired: false, fails: true },
 ])(
-  "settles failed reads after their own retirement (already retired=$retired, failure=$fails)",
+  "settles failed reads after pool retirement (already retired=$retired, failure=$fails)",
   async ({ retired, fails }) => {
+    const earlier = input();
+    observed.run.mockResolvedValueOnce({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(earlier.database, (owner) =>
+      owner.readEntryPresence(earlier.scope),
+    );
     const primary = new WorkerTaskError(
       "worker response failed",
       retired ? "unavailable" : "failed",
@@ -381,22 +415,14 @@ it.each([
       .finally(() => {
         settled = true;
       });
-    if (retired) {
-      try {
-        expect(
-          await Promise.race([
-            pending.then(() => "settled"),
-            entered.promise.then(() => "rotating successor"),
-          ]),
-        ).toBe("settled");
-        expect(await pending).toBe(primary);
-      } finally {
-        retirement.resolve();
-        await pending;
-      }
-      return;
+    try {
+      expect(
+        await Promise.race([pending.then(() => "settled"), entered.promise.then(() => "rotating")]),
+      ).toBe("rotating");
+    } catch (error) {
+      retirement.resolve();
+      throw error;
     }
-    await entered.promise;
     expect(settled).toBe(false);
     expect(observed.unregister).not.toHaveBeenCalled();
     if (fails) {
@@ -414,12 +440,13 @@ it.each([
       expect(observed.unregister).not.toHaveBeenCalled();
     } else {
       expect(failure).toBe(primary);
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
+      expect(observed.unregister).toHaveBeenCalledTimes(2);
     }
   },
 );
 
 it("retains aliases until native cleanup and preserves later read custody", async () => {
+  useAdmittedHistoryReader();
   const request = input();
   const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
   const cleanupEntered = createDeferredCore();
@@ -459,9 +486,12 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   );
   cleanup.resolve();
   await discovery;
-  expect(observed.closeResources).toHaveBeenCalledWith(
-    JSON.stringify([{ path: request.database.path }]),
-  );
+  expect(decodeAgentDatabaseReaderRequest(observed.closeResources.mock.calls[0]?.[0])).toEqual({
+    kind: "close",
+    candidates: [{ path: request.database.path }],
+    retainedPaths: [request.database.path],
+    deleted: false,
+  });
   expect(observed.unregister).toHaveBeenCalledTimes(1);
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
@@ -478,6 +508,7 @@ it.each([
 ])(
   "joins idle cleanup and retains failed custody (fails=$fails, capable=$capable)",
   async ({ fails, capable }) => {
+    useAdmittedHistoryReader();
     closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
     const request = input();
     observed.run.mockResolvedValue({ ok: true, value: false });
@@ -702,7 +733,12 @@ it.each([false, true])(
         registeredDatabases: [],
       });
     });
-    const result = discovery.catch((error: unknown) => error);
+    let settled = false;
+    const result = discovery
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     await cleanupEntered.promise;
     const alias = observed.resources.find((resource) => !resource.agentId);
     assert(alias?.revoke);
@@ -711,18 +747,24 @@ it.each([false, true])(
     await retirementEntered.promise;
     try {
       cleanup.resolve();
-      expect(await result).toMatchObject({ message: "Session target discovery was revoked" });
+      await cleanup.promise;
+      expect(settled).toBe(false);
       expect(observed.unregister).not.toHaveBeenCalled();
+      const revoked = { message: "Session reader custody was revoked during discovery cleanup" };
       if (fails) {
         const failure = new Error("overlapping retirement failed");
         retirement.reject(failure);
         expect(await closing).toBe(failure);
+        const error = await result;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error).toMatchObject({ errors: [revoked, failure], cause: failure });
         expect(observed.unregister).not.toHaveBeenCalled();
         observed.rotate.mockResolvedValueOnce(undefined);
         await alias.close();
       } else {
         retirement.resolve();
         await closing;
+        expect(await result).toMatchObject(revoked);
       }
       expect(observed.unregister).toHaveBeenCalledTimes(1);
     } finally {

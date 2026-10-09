@@ -36,12 +36,11 @@ type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   for (const candidate of payload.urls ?? [payload.url]) {
     const parsed = new URL(candidate);
-    if (parsed.protocol === "wss:") {
-      parsed.protocol = "https:";
-      return parsed;
-    }
-    if (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname)) {
-      parsed.protocol = "http:";
+    if (
+      parsed.protocol === "wss:" ||
+      (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname))
+    ) {
+      parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
       return parsed;
     }
   }

@@ -21,7 +21,10 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
-  admitFactory(factory: (...args: never[]) => unknown): void;
+  admitFactory(
+    factory: (...args: never[]) => unknown,
+    resultCallbacks?: readonly PropertyKey[],
+  ): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
@@ -36,7 +39,11 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     registry?: PluginRegistry,
     kind?: "work" | "custody",
   ): PluginInstanceConsumer;
-  runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
+  runInRegistry<T>(
+    registry: PluginRegistry | undefined,
+    run: () => T,
+    options?: { joinDisposal?: boolean },
+  ): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
   drain(options?: {
     includeConsumers?: boolean;

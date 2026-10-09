@@ -21,6 +21,7 @@ import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
 import {
+  canReuseSqliteSchemaInTransaction,
   migrateSqliteSchemaToStrict,
   migrateSqliteSchemaToStrictInTransaction,
 } from "./openclaw-runtime-sqlite.js";
@@ -111,24 +112,24 @@ function tableHasExactColumns(
   db: DatabaseSync,
   tableName: string,
   expected: readonly string[],
+  preparedColumns?: TableColumnInfo[],
 ): boolean {
-  const columns = new Set(tableColumnInfo(db, tableName).map((row) => row.name));
+  const columns = new Set(
+    (preparedColumns ?? tableColumnInfo(db, tableName)).map((row) => row.name),
+  );
   return columns.size === expected.length && expected.every((column) => columns.has(column));
-}
-
-function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  return tableColumnInfo(db, tableName)
-    .filter((row) => row.pk > 0)
-    .toSorted((left, right) => left.pk - right.pk)
-    .map((row) => row.name);
 }
 
 function tableHasPrimaryKey(
   db: DatabaseSync,
   tableName: string,
   expectedColumns: readonly string[],
+  preparedColumns?: TableColumnInfo[],
 ): boolean {
-  const columns = tablePrimaryKeyColumns(db, tableName);
+  const columns = (preparedColumns ?? tableColumnInfo(db, tableName))
+    .filter((row) => row.pk > 0)
+    .toSorted((left, right) => left.pk - right.pk)
+    .map((row) => row.name);
   return (
     columns.length === expectedColumns.length &&
     columns.every((column, index) => column === expectedColumns[index])
@@ -181,8 +182,12 @@ function tableHasNoDeclaredCollations(db: DatabaseSync, tableName: string): bool
   return typeof row?.sql === "string" && !/\bCOLLATE\b/iu.test(row.sql);
 }
 
-function tableHasSourceColumnContract(db: DatabaseSync, nullableColumn?: string): boolean {
-  return tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).every(
+function tableHasSourceColumnContract(
+  db: DatabaseSync,
+  nullableColumn?: string,
+  preparedColumns?: TableColumnInfo[],
+): boolean {
+  return (preparedColumns ?? tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE)).every(
     (column) =>
       (column.type === MEMORY_INDEX_SOURCE_COLUMN_TYPES.get(column.name) ||
         (column.name === "mtime" && column.type === "INTEGER")) &&
@@ -192,11 +197,17 @@ function tableHasSourceColumnContract(db: DatabaseSync, nullableColumn?: string)
   );
 }
 
-function tableHasIntegerRowIdPrimaryKey(db: DatabaseSync): boolean {
-  const idColumn = tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).find(
+function tableHasIntegerRowIdPrimaryKey(
+  db: DatabaseSync,
+  preparedColumns?: TableColumnInfo[],
+): boolean {
+  const idColumn = (preparedColumns ?? tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE)).find(
     (column) => column.name === "id",
   );
-  if (idColumn?.type !== "INTEGER" || !tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["id"])) {
+  if (
+    idColumn?.type !== "INTEGER" ||
+    !tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["id"], preparedColumns)
+  ) {
     return false;
   }
   // INTEGER PRIMARY KEY DESC and WITHOUT ROWID tables expose a PK index;
@@ -219,10 +230,14 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
   if (!tableExists(db, MEMORY_INDEX_SOURCES_TABLE)) {
     return;
   }
-  if (tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS)) {
+  // These predicates precede all migration writes and share the same transaction snapshot.
+  const columns = canReuseSqliteSchemaInTransaction(db)
+    ? tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE)
+    : undefined;
+  if (tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS, columns)) {
     if (
-      tableHasSourceColumnContract(db, "id") &&
-      tableHasIntegerRowIdPrimaryKey(db) &&
+      tableHasSourceColumnContract(db, "id", columns) &&
+      tableHasIntegerRowIdPrimaryKey(db, columns) &&
       tableHasNoDeclaredCollations(db, MEMORY_INDEX_SOURCES_TABLE) &&
       tableHasUniqueIndex(db, MEMORY_INDEX_SOURCES_TABLE, ["path", "source"])
     ) {
@@ -230,18 +245,27 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
     }
     throw new Error("canonical memory source identity schema is invalid");
   }
-  if (!tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, LEGACY_MEMORY_INDEX_SOURCE_COLUMNS)) {
+  if (
+    !tableHasExactColumns(
+      db,
+      MEMORY_INDEX_SOURCES_TABLE,
+      LEGACY_MEMORY_INDEX_SOURCE_COLUMNS,
+      columns,
+    )
+  ) {
     throw new Error("canonical memory source identity schema is invalid");
   }
-  const hasPathPrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"]);
-  const hasPathSourcePrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, [
-    "path",
-    "source",
-  ]);
+  const hasPathPrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"], columns);
+  const hasPathSourcePrimaryKey = tableHasPrimaryKey(
+    db,
+    MEMORY_INDEX_SOURCES_TABLE,
+    ["path", "source"],
+    columns,
+  );
   if (!hasPathPrimaryKey && !hasPathSourcePrimaryKey) {
     throw new Error("canonical memory source identity schema is invalid");
   }
-  if (!tableHasSourceColumnContract(db, hasPathPrimaryKey ? "path" : undefined)) {
+  if (!tableHasSourceColumnContract(db, hasPathPrimaryKey ? "path" : undefined, columns)) {
     throw new Error("canonical memory source identity schema is invalid");
   }
 

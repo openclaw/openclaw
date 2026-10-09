@@ -1,10 +1,10 @@
 import type { Command } from "commander";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BrowserNetworkRequest, BrowserPageError } from "../browser/pw-session-contracts.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
+  printBrowserList,
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
@@ -44,17 +44,12 @@ export function registerBrowserDebugCommands(
           targetId: normalizeOptionalString(opts.targetId),
           clear: Boolean(opts.clear),
         },
-        print: (result) => {
-          if (!result.errors.length) {
-            defaultRuntime.log("No page errors.");
-            return;
-          }
-          defaultRuntime.log(
-            result.errors
-              .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(
+            result.errors,
+            "No page errors.",
+            (e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`,
+          ),
       });
     });
 
@@ -74,22 +69,13 @@ export function registerBrowserDebugCommands(
           filter: normalizeOptionalString(opts.filter),
           clear: Boolean(opts.clear),
         },
-        print: (result) => {
-          if (!result.requests.length) {
-            defaultRuntime.log("No requests recorded.");
-            return;
-          }
-          defaultRuntime.log(
-            result.requests
-              .map((r) => {
-                const status = typeof r.status === "number" ? ` ${r.status}` : "";
-                const ok = r.ok === true ? " ok" : r.ok === false ? " fail" : "";
-                const fail = r.failureText ? ` (${r.failureText})` : "";
-                return `${r.timestamp} ${r.method}${status}${ok} ${r.url}${fail}`;
-              })
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(result.requests, "No requests recorded.", (r) => {
+            const status = typeof r.status === "number" ? ` ${r.status}` : "";
+            const ok = r.ok === true ? " ok" : r.ok === false ? " fail" : "";
+            const fail = r.failureText ? ` (${r.failureText})` : "";
+            return `${r.timestamp} ${r.method}${status}${ok} ${r.url}${fail}`;
+          }),
       });
     });
 

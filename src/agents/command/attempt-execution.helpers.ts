@@ -1,7 +1,8 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import {
@@ -120,14 +121,8 @@ async function scanJsonlFile(filePath: string): Promise<JsonlFileScan> {
         if (recordCount > CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS) {
           break;
         }
-        let obj: unknown;
-        try {
-          obj = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const rec = obj as Record<string, unknown> | null;
-        if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
+        const message = safeParseJsonRecord(line)?.message;
+        if (isRecord(message) && message.role === "assistant") {
           return { fileExists: true, hasAssistant: true };
         }
       }
@@ -239,17 +234,11 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
       if (!line.trim()) {
         continue;
       }
-      let obj: unknown;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const rec = obj as Record<string, unknown> | null;
+      const rec = safeParseJsonRecord(line);
       if (rec?.isSidechain === true) {
         continue;
       }
-      const message = rec?.message as Record<string, unknown> | undefined;
+      const message = asOptionalRecord(rec?.message);
       const role = message?.role;
       if (role === "assistant") {
         lastAssistantToolUseIds = new Set();
@@ -429,9 +418,8 @@ export function buildClaudeCliFallbackContextPrelude(params: {
 
 /** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
 export function createAcpVisibleTextAccumulator() {
-  let pendingSilentPrefix = "";
   let visibleText = "";
-  let rawVisibleText = "";
+  let rawText = "";
   const resolveNextCandidate = (base: string, chunk: string): string => {
     if (!base) {
       return chunk;
@@ -456,33 +444,30 @@ export function createAcpVisibleTextAccumulator() {
       }
 
       if (!visibleText) {
-        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+        const leadCandidate = resolveNextCandidate(rawText, chunk);
+        rawText = leadCandidate;
         const trimmedLeadCandidate = leadCandidate.trim();
         if (
           isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
         ) {
-          pendingSilentPrefix = leadCandidate;
           return null;
         }
         const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
           ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
           : leadCandidate;
         if (!text) {
-          pendingSilentPrefix = leadCandidate;
           return null;
         }
-        pendingSilentPrefix = "";
-        rawVisibleText = leadCandidate;
         visibleText = text;
         return { text, delta: text };
       }
 
       const delta =
-        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
-          ? chunk.slice(rawVisibleText.length)
+        chunk.startsWith(rawText) && chunk.length > rawText.length
+          ? chunk.slice(rawText.length)
           : chunk;
-      rawVisibleText += delta;
+      rawText += delta;
       visibleText += delta;
       return { text: visibleText, delta };
     },
@@ -495,7 +480,7 @@ export function createAcpVisibleTextAccumulator() {
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
       return buildAgentRunTerminalReplySnapshot({
         visibleText,
-        rawText: pendingSilentPrefix,
+        rawText: visibleText ? "" : rawText,
       });
     },
   };

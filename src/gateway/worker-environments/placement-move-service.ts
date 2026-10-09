@@ -1,3 +1,6 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import { assertRequiredWorkerMove } from "../../config/required-worker-profile.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerActiveDispatchPlacement,
   WorkerDispatchEnvironmentService,
@@ -65,7 +68,10 @@ export function createWorkerPlacementMoveService(options: {
     authorize?: WorkerPlacementAuthorization,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ) => Promise<WorkerReclaimPlacement>;
-  validateAbandonSource: (request: WorkerPlacementMoveRequest) => void;
+  validateAbandonSource: (
+    request: WorkerPlacementMoveRequest,
+    placement: WorkerDispatchPlacement | undefined,
+  ) => void;
   abandonSource: (
     request: WorkerPlacementReclaimRequest,
     intent: WorkerPlacementMoveIntent,
@@ -79,8 +85,8 @@ export function createWorkerPlacementMoveService(options: {
     params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
   ) => Promise<void>;
 }) {
-  const recordError = (intent: WorkerPlacementMoveIntent, error: unknown): void => {
-    options.placements.recordPlacementMoveError({
+  const recordError = async (intent: WorkerPlacementMoveIntent, error: unknown): Promise<void> => {
+    await options.placements.recordPlacementMoveError({
       operationId: intent.operationId,
       sessionId: intent.sessionId,
       error: error instanceof Error ? error.message : String(error),
@@ -93,16 +99,14 @@ export function createWorkerPlacementMoveService(options: {
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerMovePlacement> => {
-    const assertCurrent = signal
-      ? () => {
-          signal.throwIfAborted();
-          authorize?.();
-        }
-      : authorize;
+    const assertCurrent = composePlacementAuthorization(authorize, () => {
+      signal?.throwIfAborted();
+      assertRequiredWorkerMove(getRuntimeConfig(), request.target);
+    });
     let intent: WorkerPlacementMoveIntent | undefined;
     let local: WorkerReclaimPlacement | undefined;
     try {
-      signal?.throwIfAborted();
+      assertCurrent();
       if (request.abandonSource && request.target.kind !== "gateway") {
         throw new Error("Source abandonment is available only when continuing on the Gateway");
       }
@@ -113,6 +117,7 @@ export function createWorkerPlacementMoveService(options: {
       if (request.target.kind !== "gateway" && !destination) {
         throw new Error(`Session ${request.sessionKey} worker move target is unavailable`);
       }
+      assertCurrent();
       const begun = await options.runMoveBarrier({
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
@@ -129,22 +134,34 @@ export function createWorkerPlacementMoveService(options: {
           };
           // Existing durable decisions own retries. Prepare only a new intent, outside
           // the synchronous commit, so both branches publish their owner before yielding.
-          if (request.abandonSource && !options.placements.getPlacementMove(request.sessionId)) {
-            options.validateAbandonSource(request);
-            const placement = options.placements.get(request.sessionId);
-            const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
-            if (claim && prepareNew) {
-              await prepareNew(claim.runId);
-              const current = options.placements.get(request.sessionId);
-              if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
-                throw new Error(
-                  `Session ${request.sessionKey} abandonment worker turn changed; retry`,
-                );
+          if (request.abandonSource) {
+            const { placement, move: existingMove } = await options.placements.getWithMoveAsync(
+              request.sessionId,
+            );
+            if (!existingMove) {
+              options.validateAbandonSource(request, placement);
+              const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+              if (claim && prepareNew) {
+                await prepareNew(claim.runId);
+                const current = await options.placements.getAsync(request.sessionId);
+                if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
+                  throw new Error(
+                    `Session ${request.sessionKey} abandonment worker turn changed; retry`,
+                  );
+                }
+                options.validateAbandonSource(request, current);
               }
-              options.validateAbandonSource(request);
             }
           }
-          const started = options.placements.beginPlacementMove(moveRequest);
+          assertCurrent();
+          const started = await options.placements.beginPlacementMove(moveRequest, {
+            assertCurrent,
+            ...(request.abandonSource
+              ? {
+                  assertNewSource: (placement) => options.validateAbandonSource(request, placement),
+                }
+              : {}),
+          });
           if (
             started.placement.state !== "draining" &&
             !(request.abandonSource && isForceAbandonedWorkerPlacement(started.placement))
@@ -164,6 +181,9 @@ export function createWorkerPlacementMoveService(options: {
       if (request.abandonSource) {
         reportPlacementTransition(onTransition, local);
       }
+      if (local.state === "reclaimed") {
+        assertRequiredWorkerMove(getRuntimeConfig(), intent.target);
+      }
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
       }
@@ -182,13 +202,16 @@ export function createWorkerPlacementMoveService(options: {
         assertCurrent,
         signal,
       );
-      const completed = options.placements.completePlacementMoveToWorker({
-        operationId: intent.operationId,
-        sessionId: request.sessionId,
-        expectedGeneration: active.generation,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      });
+      const completed = await options.placements.completePlacementMoveToWorker(
+        {
+          operationId: intent.operationId,
+          sessionId: request.sessionId,
+          expectedGeneration: active.generation,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        { assertCurrent },
+      );
       if (completed.state !== "active") {
         throw new Error(`Session ${request.sessionKey} move did not finish active`);
       }
@@ -196,22 +219,20 @@ export function createWorkerPlacementMoveService(options: {
     } catch (error) {
       // Source cleanup is settled. A canceled, unpublished destination leaves this
       // exact local completion for Stop; unrelated errors or replacements still fail.
-      if (
-        intent &&
-        local?.state === "local" &&
-        signal?.aborted &&
-        error === signal.reason &&
-        matchesWorkerPlacementTarget(options.placements.get(request.sessionId), local)
-      ) {
-        options.placements.cancelPlacementMove({
+      if (intent && local?.state === "local" && signal?.aborted && error === signal.reason) {
+        const cancelled = await options.placements.cancelPlacementMove({
           operationId: intent.operationId,
           sessionId: request.sessionId,
+          expectedLocalGeneration: local.generation,
         });
-        return local;
+        if (cancelled) {
+          return local;
+        }
       }
-      const durableIntent = intent ?? options.placements.getPlacementMove(request.sessionId);
+      const durableIntent =
+        intent ?? (await options.placements.getPlacementMoveAsync(request.sessionId));
       if (durableIntent) {
-        recordError(durableIntent, error);
+        await recordError(durableIntent, error);
       }
       throw error;
     }
@@ -231,6 +252,7 @@ export function createWorkerPlacementMoveService(options: {
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,
       };
+      const assertDestination = () => assertRequiredWorkerMove(getRuntimeConfig(), intent.target);
       if (intent.abandonSource) {
         if (intent.target.kind !== "gateway") {
           throw new Error(
@@ -238,10 +260,11 @@ export function createWorkerPlacementMoveService(options: {
           );
         }
         if (placement.state === "local") {
-          options.placements.cancelPlacementMove(intent);
+          await options.placements.cancelPlacementMove(intent);
           return;
         }
-        await options.abandonSource(identity, intent);
+        assertDestination();
+        await options.abandonSource(identity, intent, assertDestination);
         return;
       }
       if (placement.state === "failed") {
@@ -255,10 +278,14 @@ export function createWorkerPlacementMoveService(options: {
             `Session ${identity.sessionKey} failed move environment must finish teardown before retry`,
           );
         }
-        options.placements.cancelPlacementMove(intent);
+        await options.placements.cancelPlacementMove(intent);
         return;
       } else if (placement.state === "draining") {
-        const local = await options.reclaimSource(identity, intent);
+        assertDestination();
+        const local = await options.reclaimSource(identity, intent, assertDestination);
+        if (local.state === "reclaimed") {
+          return;
+        }
         if (local.state !== "local") {
           throw new Error(`Session ${identity.sessionKey} move recovery did not return local`);
         }
@@ -270,26 +297,31 @@ export function createWorkerPlacementMoveService(options: {
         }
         const source = placement;
         const assertCurrent = () => {
-          const current = options.placements.get(intent.sessionId);
+          assertDestination();
+          const { placement: current, move: currentMove } =
+            options.placements.readCurrentMoveAuthority(intent.sessionId);
           if (
             !matchesWorkerPlacementTarget(current, source) ||
-            options.placements.getPlacementMove(intent.sessionId)?.operationId !==
-              intent.operationId
+            currentMove?.operationId !== intent.operationId
           ) {
             throw new Error(`Session ${identity.sessionKey} move recovery lost its source owner`);
           }
         };
+        assertCurrent();
         if (intent.target.kind === "gateway") {
           // Teardown can survive a restart before the source checkout is materialized.
           // Publish local placement only after its accepted repository state exists locally.
           await options.prepareGatewayMove?.({ ...identity, assertCurrent });
           assertCurrent();
         }
-        placement = options.placements.completePlacementMoveSourceToLocal({
-          operationId: intent.operationId,
-          sessionId: intent.sessionId,
-          expectedGeneration: placement.generation,
-        });
+        placement = await options.placements.completePlacementMoveSourceToLocal(
+          {
+            operationId: intent.operationId,
+            sessionId: intent.sessionId,
+            expectedGeneration: placement.generation,
+          },
+          { assertCurrent },
+        );
       } else if (placement.state === "active") {
         const stillSource =
           placement.environmentId === intent.source.environmentId &&
@@ -297,7 +329,7 @@ export function createWorkerPlacementMoveService(options: {
         if (stillSource) {
           throw new Error(`Session ${identity.sessionKey} move recovery found an active source`);
         }
-        options.placements.completePlacementMoveToWorker({
+        await options.placements.completePlacementMoveToWorker({
           operationId: intent.operationId,
           sessionId: intent.sessionId,
           expectedGeneration: placement.generation,
@@ -311,8 +343,8 @@ export function createWorkerPlacementMoveService(options: {
         return;
       }
       if (intent.target.kind === "gateway") {
-        if (options.placements.getPlacementMove(intent.sessionId)) {
-          options.placements.cancelPlacementMove(intent);
+        if (await options.placements.getPlacementMoveAsync(intent.sessionId)) {
+          await options.placements.cancelPlacementMove(intent);
         }
         return;
       }
@@ -321,9 +353,9 @@ export function createWorkerPlacementMoveService(options: {
         expectedGeneration: placement.generation,
         recoveryError: RESTART_AUTHORITY_EXPIRED,
       });
-      options.placements.cancelPlacementMove(intent);
+      await options.placements.cancelPlacementMove(intent);
     } catch (error) {
-      recordError(intent, error);
+      await recordError(intent, error);
       throw error;
     }
   };

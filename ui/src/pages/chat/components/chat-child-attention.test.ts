@@ -39,6 +39,7 @@ function mount(rows: GatewaySessionRow[] = [child]) {
       subagentParentKey: parentKey,
       messages: [{ role: "assistant", content: "The diagnostic is running." }],
       subagentSessions: rows,
+      subagentSessionsRead: true,
       onOpenSubagent: open,
     }),
     container,

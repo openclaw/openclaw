@@ -10,8 +10,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
-import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { toDatabaseOptions, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 

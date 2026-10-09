@@ -1,4 +1,3 @@
-import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
@@ -39,10 +38,8 @@ export type AgentDatabaseGenerationClaim = {
   assertCurrent(): void;
 };
 
-export type AgentDatabaseExecutionScope = Pick<
-  SqliteWorkerStore<AgentDatabaseOperations>,
-  "execute"
->;
+export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations>;
+export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execute">;
 
 export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;
@@ -63,7 +60,16 @@ export type OpenClawAgentDatabaseExecution = {
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    options?: { retireNativeOnFailure: true },
+    options?:
+      | { retireNativeOnFailure: true; withAdmission?: never }
+      | {
+          retireNativeOnFailure?: never;
+          /** Track read admission; cancellation removes only a waiting host-queue task. */
+          withAdmission: <Result>(
+            run: () => Promise<Result>,
+            signal: AbortSignal,
+          ) => Promise<Result>;
+        },
   ): Promise<T | undefined>;
   /**
    * Join this reference's work; native cleanup failures remain with its resource owner.
@@ -129,19 +135,6 @@ export type AgentDatabaseIncognitoOpen = {
 export type AgentDatabaseExecutionOpen =
   | AgentDatabaseFileExecutionOpen
   | AgentDatabaseIncognitoOpen;
-
-type AgentDatabaseIncognitoMemory = {
-  agentId: string;
-  /** SQLite page allocation only, excluding allocator, decoded results, and transport memory. */
-  databaseBytes: number;
-  pageCount: number;
-  pageSize: number;
-};
-
-/** Inactive actor operations; production routing changes only at the complete cutover. */
-export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
-  "database.incognito.memory": { input: undefined; output: AgentDatabaseIncognitoMemory };
-};
 
 export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
 

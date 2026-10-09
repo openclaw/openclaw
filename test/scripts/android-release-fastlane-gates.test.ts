@@ -217,7 +217,7 @@ function runRuby(fixtureRoot: string, source: string): unknown {
   ];
   const result = spawnSync(
     useBundle ? "bundle" : "ruby",
-    useBundle ? ["_4.0.21_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+    useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
     {
       encoding: "utf8",
       cwd: rootDir,

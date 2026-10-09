@@ -195,11 +195,7 @@ export function broadcastApprovalResolvedEvent<TPayload>(params: {
     params.approvalKind === "system-agent"
       ? "openclaw.approval.resolved"
       : `${params.approvalKind}.approval.resolved`;
-  const recipientConnIds = resolveApprovalRequestRecipientConnIds({
-    approvalKind: params.approvalKind,
-    context: params.context,
-    record: params.record,
-  });
+  const recipientConnIds = resolveApprovalRequestRecipientConnIds(params);
   if (recipientConnIds) {
     params.context.broadcastToConnIds(eventName, params.event, recipientConnIds, {
       dropIfSlow: true,
@@ -413,9 +409,7 @@ export async function handlePendingApprovalRequest<
     if (
       params.requireDeliveryRoute !== false &&
       !params.keepPendingWithoutRoute &&
-      !hasApprovalClients &&
-      !hasTurnSourceRoute &&
-      !delivered
+      deliveryRoute === "none"
     ) {
       try {
         noRouteWon = await params.manager.expire(params.record.id, "no-approval-route");
@@ -516,13 +510,15 @@ export async function handleApprovalResolve<
       respondApprovalStorageUnavailable({ ...params, operation: "resolve", error });
     }
   };
-  const custody = params.reviewer
-    ? prepareApprovalChannelCustody({
-        cfg: params.context.getRuntimeConfig(),
-        approvalKind: params.approvalKind,
-        reviewer: params.reviewer,
-      })
-    : null;
+  const readCustody = () =>
+    params.reviewer
+      ? prepareApprovalChannelCustody({
+          cfg: params.context.getRuntimeConfig(),
+          approvalKind: params.approvalKind,
+          reviewer: params.reviewer,
+        })
+      : null;
+  const custody = readCustody();
   if (params.reviewer && !custody) {
     respondUnknownOrExpiredApproval(params.respond);
     return;
@@ -593,13 +589,7 @@ export async function handleApprovalResolve<
     family: params.authority.guard.family,
     assertCurrent: () => {
       params.authority.assertCommitCurrent();
-      const currentCustody = params.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: params.context.getRuntimeConfig(),
-            approvalKind: params.approvalKind,
-            reviewer: params.reviewer,
-          })
-        : null;
+      const currentCustody = readCustody();
       if (
         params.manager.getLocalSnapshot(resolved.approvalId) !== resolved.snapshot ||
         resolved.snapshot.request.sessionKey !== sourceSessionKey ||

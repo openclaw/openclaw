@@ -26,13 +26,11 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
 import type { SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-import {
-  resolveSystemAgentVerifiedInferenceRoute,
-  type SystemAgentVerifiedInferenceBinding,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 
@@ -244,15 +242,12 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    try {
-      const route = await resolveSystemAgentVerifiedInferenceRoute(binding, this.options.deps);
-      if (route) {
-        return route;
-      }
-    } catch (error) {
-      return this.throwInferenceUnavailable([error]);
-    }
-    return this.throwInferenceUnavailable();
+    return await requireSystemAgentInferenceRoute(
+      binding,
+      this.options.deps,
+      "conversation",
+      (failures) => this.throwInferenceUnavailable(failures),
+    );
   }
 
   private async requirePersistentApplyInference(runtime: RuntimeEnv) {

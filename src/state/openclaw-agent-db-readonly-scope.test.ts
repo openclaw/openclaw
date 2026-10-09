@@ -13,6 +13,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/k
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -41,53 +42,98 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   },
 }));
 
-it("reuses admitted metadata between commits while scoped reads observe foreign writes", async () => {
+it.each([false, true])(
+  "reuses admitted metadata and observes foreign commits (snapshot=%s)",
+  async (snapshot) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const { path } = openOpenClawAgentDatabase(options);
+      await closeOpenClawAgentDatabaseByPathAsync(path);
+      const scope = new OpenClawAgentDatabaseReadOnlyScope();
+      const writer = new (requireNodeSqlite().DatabaseSync)(path);
+      try {
+        scope.run({ agentId: "main", path }, () => {
+          withOpenClawAgentDatabaseReadOnly(({ db }) => {
+            const query = getNodeSqliteKysely<{
+              schema_meta: { meta_key: string; updated_at: number };
+            }>(db)
+              .selectFrom("schema_meta")
+              .select("updated_at")
+              .where("meta_key", "=", "primary");
+            const prepare = vi.spyOn(db, "prepare");
+            const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+            try {
+              for (let stamp = 1; stamp <= 20; stamp++) {
+                writer
+                  .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
+                  .run(stamp);
+                for (let read = 0; read < 2; read++) {
+                  expect(
+                    withOpenClawAgentDatabaseReadOnly(
+                      (database) =>
+                        runSqliteReadOperationSync(
+                          database.db,
+                          () => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
+                        ),
+                      options,
+                      { snapshot },
+                    ),
+                  ).toEqual({ found: true, value: stamp });
+                }
+              }
+              const preparations = prepare.mock.calls.filter(
+                ([sql]) => sql === query.compile().sql,
+              );
+              expect(preparations.length).toBeLessThanOrEqual(2);
+              expect(
+                observation.queries.filter((sql) =>
+                  /PRAGMA data_version|FROM main\.pragma_data_version\(\)/iu.test(sql),
+                ),
+              ).toHaveLength(40);
+              expect(
+                observation.queries.filter((sql) =>
+                  /^SELECT role, schema_version, agent_id/iu.test(sql),
+                ),
+              ).toHaveLength(20);
+            } finally {
+              observation.restore();
+              prepare.mockRestore();
+            }
+          }, options);
+        });
+      } finally {
+        writer.close();
+        scope.close();
+      }
+    });
+  },
+);
+
+it("pins admission and rows together before a foreign ownership change", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const { path } = openOpenClawAgentDatabase(options);
     await closeOpenClawAgentDatabaseByPathAsync(path);
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     const writer = new (requireNodeSqlite().DatabaseSync)(path);
+    const readOwner = (db: DatabaseSync) =>
+      db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get()?.agent_id;
     try {
       scope.run({ agentId: "main", path }, () => {
-        withOpenClawAgentDatabaseReadOnly(({ db }) => {
-          const query = getNodeSqliteKysely<{
-            schema_meta: { meta_key: string; updated_at: number };
-          }>(db)
-            .selectFrom("schema_meta")
-            .select("updated_at")
-            .where("meta_key", "=", "primary");
-          const prepare = vi.spyOn(db, "prepare");
-          const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-          try {
-            for (let stamp = 1; stamp <= 20; stamp++) {
-              writer
-                .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
-                .run(stamp);
-              for (let read = 0; read < 2; read++) {
-                expect(
-                  withOpenClawAgentDatabaseReadOnly(
-                    (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
-                    options,
-                  ),
-                ).toEqual({ found: true, value: stamp });
-              }
-            }
-            const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
-            expect(preparations.length).toBeLessThanOrEqual(2);
-            expect(
-              observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql)),
-            ).toHaveLength(40);
-            expect(
-              observation.queries.filter((sql) =>
-                /^SELECT role, schema_version, agent_id/iu.test(sql),
-              ),
-            ).toHaveLength(20);
-          } finally {
-            observation.restore();
-            prepare.mockRestore();
-          }
-        }, options);
+        const read = () =>
+          withOpenClawAgentDatabaseReadOnly(({ db }) => readOwner(db), options, { snapshot: true });
+        expect(read()).toEqual({ found: true, value: "main" });
+        expect(
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) => {
+              writer.exec("UPDATE schema_meta SET agent_id = 'other' WHERE meta_key = 'primary'");
+              return readOwner(db);
+            },
+            options,
+            { snapshot: true },
+          ),
+        ).toEqual({ found: true, value: "main" });
+        expect(read).toThrow("belongs to agent other");
       });
     } finally {
       writer.close();
@@ -402,6 +448,15 @@ it("closes generic and explicit candidate-family readers without releasing unrel
     const closeReaders = () =>
       applyAgentDatabaseReaderRequest({ kind: "close", candidates, deleted: false });
     try {
+      await applyAgentDatabaseReaderRequest({
+        kind: "close",
+        candidates,
+        deleted: false,
+        retainedPaths: [sibling],
+      });
+      expect(selected.isOpen).toBe(false);
+      expect(explicit.isOpen).toBe(true);
+      expect(retained.isOpen).toBe(true);
       await closeReaders();
       expect(selected.isOpen).toBe(false);
       expect(explicit.isOpen).toBe(false);

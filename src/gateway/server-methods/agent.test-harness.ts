@@ -138,16 +138,17 @@ export function mockMainSessionEntry(
   entry: Record<string, unknown>,
   cfg: Record<string, unknown> = {},
 ) {
+  const sessionEntry = buildExistingMainStoreEntry(entry);
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
+    agentId: "main",
     storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
-    entry: {
-      sessionId: "existing-session-id",
-      updatedAt: Date.now(),
-      ...entry,
-    },
+    store: { "agent:main:main": sessionEntry },
+    storeKeys: ["agent:main:main"],
+    entry: sessionEntry,
     canonicalKey: "agent:main:main",
-  });
+    legacyKey: undefined,
+  } satisfies ReturnType<typeof import("../session-utils.js").loadSessionEntry>);
 }
 
 export function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {

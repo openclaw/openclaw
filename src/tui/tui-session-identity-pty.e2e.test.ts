@@ -400,7 +400,7 @@ it("hides a stale approval when startup restores the remembered session", async 
       STARTUP_TIMEOUT_MS,
     );
 
-    expect(rows.join("\n")).not.toContain("workspace skill approval");
+    expect(rows.join("\n")).not.toContain("plugin approval");
   } finally {
     await fixture.cleanup();
   }

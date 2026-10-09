@@ -98,6 +98,9 @@ beforeAll(async () => {
     await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
     ignoreVariants.set(pattern, await git(source, "rev-parse", "HEAD"));
   }
+  const remote = path.join(root, "origin.git");
+  await git(root, "clone", "--quiet", "--bare", source, remote);
+  await git(source, "remote", "add", "origin", remote);
   await write(source, ".env.local", "synthetic host-only credential\n");
   await write(source, ".npmrc", "synthetic host-only registry credential\n");
   await git(source, "config", "credential.helper", "!echo synthetic-host-credential");

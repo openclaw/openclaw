@@ -12,6 +12,11 @@ sidebarTitle: "Sessions and sidebar"
 
 The sidebar organizes every session, and the New session page starts new ones.
 
+New session previews the first prompt immediately while the Gateway accepts it.
+The submitted browser draft is retired before the confirmed conversation URL is
+committed, so closing the tab does not restore a sent prompt. Saved worktree-name
+preferences can finish clearing alongside navigation.
+
 ## New session names
 
 In **New session**, pausing typing for one second prepares a session name in the
@@ -284,6 +289,11 @@ Opening a session as a viewer leaves its unread marker intact, including shared 
 
 **Delete** removes the confirmed selection from loaded session lists immediately and leaves any deleted conversation that is open. The Gateway finishes deletion in the background, safely stopping and reclaiming an attached cloud worker first. If deletion fails, the affected session can reappear with an error; other successful deletions and any navigation you made in the meantime are preserved. Browser drafts are retired only after deletion is confirmed, not while the request is pending. In-memory draft handoffs are retired immediately on confirmation. Switching Gateways during storage cleanup preserves the other Gateway's drafts and queued messages. If the connection or signed-in owner changes before storage cleanup starts, or recovery readiness takes more than ten seconds, stored drafts remain untouched and the UI reports the cleanup failure.
 
+Deleting a nested session keeps the remaining child list usable while the request
+is pending. A session hidden by pending deletion does not make an otherwise complete
+child list incomplete. If the Gateway cannot return a complete child list after
+bounded retries, the sidebar still shows the list error and offers **Retry**.
+
 On the Sessions page, checkbox selections survive paging through the loaded list.
 When the list refreshes, sessions that have disappeared, left the current filter,
 or been replaced are deselected. A replacement never inherits the old session's
@@ -291,6 +301,8 @@ selection. Bulk deletion remains bound to the sessions you selected, including
 while its confirmation dialog is open.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
+
+Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. Empty or quote-only model output uses a readable crustacean-themed fallback name.
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 
@@ -529,7 +541,7 @@ For a remote target, the Control UI creates the repository or managed-worktree s
 
 Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
-The model picker opens with the selected model’s provider section expanded, including when you reopen it after collapsing that section. Other provider sections start collapsed. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
+The model picker initially opens with the selected model’s provider section expanded and other provider sections collapsed. Closing and reopening the same picker preserves your provider expansion choices and clears the search. Reloading the page initializes provider sections from the selected model again. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
@@ -568,7 +580,8 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
-`projects.list` returns recorded projects without checking Git. Operators with
+`projects.list` returns recorded projects without checking Git. Recent projects
+and folders do not wait for session display details to refresh. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
 checkouts from visible sessions and managed worktrees. Concurrent discovery of
 the same checkout set shares one bounded Git pass; subsequent requests read

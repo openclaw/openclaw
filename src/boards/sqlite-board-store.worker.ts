@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readRefusedSessionSource } from "../config/sessions/session-entry-patch.worker.js";
 import type { SessionSourcePredicate } from "../config/sessions/session-source-authority.js";
+import { readSessionSourceValidation } from "../config/sessions/session-source-predicate.worker.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
@@ -33,8 +33,6 @@ export type BoardWorkerInput =
     }
   | undefined;
 
-export type BoardSourceRefusal = NonNullable<ReturnType<typeof readRefusedSessionSource>>;
-
 export function bindSqliteWorkerBackend(
   input: BoardWorkerInput,
   context: SqliteWorkerDatabaseContext & {
@@ -55,19 +53,23 @@ export function bindSqliteWorkerBackend(
   const admission = {
     ...context,
     admit(stage: "transaction" | "commit") {
-      const refused = input && canonical && readRefusedSessionSource(canonical, input.sources);
+      const validation =
+        input && canonical && readSessionSourceValidation(canonical, input.sources);
       context.admit(
         stage,
-        refused
+        validation
           ? (request, dispatch) => {
               if (!isRecord(request.facts)) {
                 throw new Error("Board admission omitted its database identity");
               }
-              dispatch({ ...request, facts: { ...request.facts, boardSourceRefused: refused } });
+              dispatch({
+                ...request,
+                facts: { ...request.facts, boardSourceValidation: validation },
+              });
             }
           : undefined,
       );
-      if (refused) {
+      if (validation?.refusedSource) {
         throw new Error("Board source refusal was not rejected");
       }
     },

@@ -1,6 +1,7 @@
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
+  WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
 import {
   readPendingWorktreesInDatabase,
@@ -31,16 +32,23 @@ import {
   abortWorktreeRemovalInDatabase,
   insertRegistryWorktreeInDatabase,
   updateRegistryWorktreeInDatabase,
+  deleteRegistryWorktreeInDatabase,
+  assertWorktreeRegistryPredicates,
 } from "./registry-run-end.worker.js";
 import { reapWorktreeRunLeasesInDatabase } from "./run-lease-owner.js";
 import {
   admitWorktreeRunLeaseInDatabase,
   releaseWorktreeRunLeaseInDatabase,
+  type WorktreeRunLeaseRowInput,
 } from "./run-lease-store.kernel.js";
-import { worktreeRunLeaseOperation } from "./run-lease-store.worker.js";
-import type { ManagedWorktreeOwnerKind } from "./types.js";
+import type { ManagedWorktreeOwnerKind, WorktreeRegistryPredicate } from "./types.js";
 
 export const worktreeOperations = {
+  "worktrees.assertPredicates": (
+    { predicates }: { predicates: readonly WorktreeRegistryPredicate[] },
+    { open },
+  ) => assertWorktreeRegistryPredicates(open().db, predicates),
+  "worktrees.delete": worktreeRunEndMutation("worktrees.delete", deleteRegistryWorktreeInDatabase),
   "worktrees.slotCount": (_input: undefined, { open }) =>
     readWorktreeSlotCountInDatabase(open().db),
   "worktrees.pendingSlots": (_input: undefined, { open }) =>
@@ -73,6 +81,17 @@ export const worktreeOperations = {
   ) => findLiveRegistryWorktreeByOwnerInDatabase(open().db, ownerKind, ownerId),
   "worktrees.get": ({ id }: { id: string }, { open }) =>
     getRegistryWorktreeInDatabase(open().db, id),
+  "worktrees.sessionBinding": (
+    { boundId, ownerId }: { boundId?: string; ownerId: string },
+    { open },
+  ) => {
+    const { db } = open();
+    const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
+    if (bound && bound.removedAt === undefined) {
+      return bound;
+    }
+    return findLiveRegistryWorktreeByOwnerInDatabase(db, "session", ownerId);
+  },
   "worktrees.findLiveByPath": ({ path }: { path: string }, { open }) =>
     findLiveRegistryWorktreeByPathInDatabase(open().db, path),
   "worktrees.list": (input: WorktreeRegistryListOptions, { open }) =>
@@ -99,19 +118,21 @@ export const worktreeOperations = {
     input: Parameters<typeof deferWorktreeCleanupInWorker>[0],
     { open, stateOptions },
   ) => deferWorktreeCleanupInWorker(input, { ...stateOptions(), database: open() }),
-  "worktrees.admitRunLease": worktreeRunLeaseOperation(
-    "worktrees.admitRunLease",
-    admitWorktreeRunLeaseInDatabase,
-  ),
-  "worktrees.releaseRunLease": worktreeRunLeaseOperation(
-    "worktrees.releaseRunLease",
-    (db, { worktreeId, token }: { worktreeId: string; token: string }) =>
-      releaseWorktreeRunLeaseInDatabase(db, worktreeId, token),
-  ),
-  "worktrees.reapRunLeases": worktreeRunLeaseOperation(
-    "worktrees.reapRunLeases",
-    (db, { scopes }: { scopes: string[] }) => reapWorktreeRunLeasesInDatabase(db, scopes),
-  ),
-} satisfies WorkerOperationHandlers;
+  "worktrees.admitRunLease": (input: WorktreeRunLeaseRowInput, { writeAdmitted }) =>
+    writeAdmitted(({ db }) => admitWorktreeRunLeaseInDatabase(db, input), {
+      operationLabel: "worktrees.admitRunLease",
+    }),
+  "worktrees.releaseRunLease": (
+    { worktreeId, token }: { worktreeId: string; token: string },
+    { writeAdmitted },
+  ) =>
+    writeAdmitted(({ db }) => releaseWorktreeRunLeaseInDatabase(db, worktreeId, token), {
+      operationLabel: "worktrees.releaseRunLease",
+    }),
+  "worktrees.reapRunLeases": ({ scopes }: { scopes: string[] }, { writeAdmitted }) =>
+    writeAdmitted(({ db }) => reapWorktreeRunLeasesInDatabase(db, scopes), {
+      operationLabel: "worktrees.reapRunLeases",
+    }),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type WorktreeWorkerOperations = WorkerOperations<typeof worktreeOperations>;

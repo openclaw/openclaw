@@ -11,7 +11,12 @@ import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-pol
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { resolveChannelPromptCapabilities } from "./channel-tools.js";
+import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
+import {
+  resolveChannelMessageToolHints,
+  resolveChannelPromptCapabilities,
+  resolveChannelReactionGuidance,
+} from "./channel-tools.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
 const THREAD_BOUND_ACP_SPAWN_CAPABILITY = "threadbound-acp-spawn";
@@ -72,4 +77,20 @@ export function collectRuntimeChannelCapabilities(params: {
     ...internalChannelCapabilities,
     ...threadSpawnCapabilities,
   ]);
+}
+
+/** Shared channel facts for ordinary and compaction system prompts. */
+export function resolveRuntimeChannelPromptContext(
+  params: Parameters<typeof collectRuntimeChannelCapabilities>[0],
+) {
+  const runtimeChannel = normalizeMessageChannel(params.channel);
+  const context = { cfg: params.cfg, channel: runtimeChannel, accountId: params.accountId };
+  const runtimeCapabilities = collectRuntimeChannelCapabilities(context);
+  return {
+    runtimeChannel,
+    runtimeCapabilities,
+    reactionGuidance:
+      runtimeChannel && params.cfg ? resolveChannelReactionGuidance(context) : undefined,
+    messageToolHints: runtimeChannel ? resolveChannelMessageToolHints(context) : undefined,
+  };
 }

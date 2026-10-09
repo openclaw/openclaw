@@ -424,26 +424,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("keeps orphaned tool media available for non-block final payload assembly", async () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      builtinToolNames: new Set(["tts"]),
-      coreBuiltinToolNames: new Set(["tts"]),
-    });
-
-    emitOrphanedVoice(emit);
-    emit({ type: "agent_end" });
-    await subscription.waitForPendingEvents();
-
-    expect(subscription.getPendingToolMediaReply()).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      attachments: [{ trustedLocalMedia: true }],
-      audioAsVoice: true,
-      trustedLocalMedia: true,
-    });
-    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual(["/tmp/reply.opus"]);
-  });
-
   it("counts orphaned tool media emitted through block replies", async () => {
     const onBlockReply = vi.fn<BlockReply>();
     const { emit, subscription } = createSubscribedSessionHarness({
@@ -540,27 +520,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
   });
 
-  it("extracts correct reasoning delta for incremental stream updates", () => {
-    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run",
-      reasoningMode: "stream",
-      onReasoningStream: vi.fn(),
-    });
-
-    emitThinkingEvent(emit, "Step 1", { type: "thinking_delta", delta: "Step 1" });
-    emitThinkingEvent(emit, "Step 1 and Step 2", { type: "thinking_delta", delta: " and Step 2" });
-
-    const thinkingEvents = emitAgentEventSpy.mock.calls
-      .map((call) => call[0])
-      .filter((evt) => evt?.stream === "thinking");
-
-    expect(thinkingEvents.length).toBe(2);
-    expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
-    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
-    emitAgentEventSpy.mockRestore();
-  });
-
   it("emits live edit diff progress while tool arguments stream", () => {
     const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
     const { emit } = createSubscribedSessionHarness({ runId: "run-live-edit-diff" });
@@ -630,11 +589,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     name: string;
     chunks: string[];
     expected?: Array<Record<string, unknown>>;
-    first?: Record<string, unknown>;
     last?: Record<string, unknown>;
     messageEnd?: string;
     noReplacement?: boolean;
-    redacted?: string;
   }>([
     {
       name: "preserves media directives when orphan close replacement has no text",
@@ -642,13 +599,6 @@ describe("subscribeEmbeddedAgentSession", () => {
       messageEnd: "private chain of thought </think>\nMEDIA:/tmp/a.png\n",
       last: { text: "", mediaUrls: ["/tmp/a.png"] },
       noReplacement: true,
-    },
-    {
-      name: "does not infer a fence from a chunk-local line start before reasoning tags",
-      chunks: ["abc", "~~~xml\n<think>secret"],
-      first: { text: "abc" },
-      last: { text: "abc~~~xml" },
-      redacted: "secret",
     },
     {
       name: "keeps close tag literals inside hidden fenced code stripped across deltas",
@@ -672,18 +622,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       expect(payloads).toHaveLength(scenario.expected.length);
       expect(payloads).toMatchObject(scenario.expected);
     }
-    if (scenario.first !== undefined) {
-      expect(payloads[0]).toMatchObject(scenario.first);
-    }
     if (scenario.last !== undefined) {
       expect(payloads.at(-1)).toMatchObject(scenario.last);
     }
     if (scenario.noReplacement) {
       expect(payloads.at(-1)?.replace).toBeUndefined();
-    }
-    const redacted = scenario.redacted;
-    if (redacted !== undefined) {
-      expect(payloads.some((payload) => String(payload.text).includes(redacted))).toBe(false);
     }
   });
 

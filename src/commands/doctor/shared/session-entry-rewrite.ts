@@ -1,5 +1,5 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import type { DoctorSessionScanScope } from "../../../config/sessions/session-accessor.sqlite-canonical-inventory.js";
@@ -47,15 +47,6 @@ export function iterateDoctorSessionKeyBatches(sessionKeys: readonly string[]): 
   return chunkItems(uniqueStrings(sessionKeys).toSorted(), DOCTOR_SESSION_REWRITE_BATCH_SIZE);
 }
 
-function parseDoctorSessionEntryRecord(entryJson: string): Record<string, unknown> | undefined {
-  try {
-    const entry: unknown = JSON.parse(entryJson);
-    return isRecord(entry) ? entry : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Select legacy state before loading raw rows into canonical validation or runtime projection. */
 export function scanDoctorSessionEntryRecords(
   scope: DoctorSessionScanScope,
@@ -81,7 +72,7 @@ export function scanDoctorSessionEntryRecords(
           ) ELSE 1 END`,
         ),
     )) {
-      const entry = parseDoctorSessionEntryRecord(row.entry_json);
+      const entry = safeParseJsonRecord(row.entry_json);
       if (entry) {
         assertSupportedSessionStoreEntry(entry);
         visit({ sessionKey: row.session_key, entry });
@@ -161,10 +152,13 @@ export function rewriteDoctorSessionEntries(
     params.assertCurrent?.();
     rewritten += runOpenClawAgentWriteTransaction(
       (database) => {
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        const assertRepairCurrent = () => {
+          params.assertCurrent?.();
+          if (params.expectedIdentity) {
+            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
+          }
+        };
+        assertRepairCurrent();
         const db = getSessionKysely(database.db);
         let batchRewritten = 0;
         for (const sessionKey of batch) {
@@ -192,7 +186,7 @@ export function rewriteDoctorSessionEntries(
           let snapshots: ReturnType<typeof splitSessionEntrySnapshots>["snapshots"] | undefined;
           let entryValid = row.entry_valid;
           if (params.rawTransform) {
-            const entry = parseDoctorSessionEntryRecord(row.entry_json);
+            const entry = safeParseJsonRecord(row.entry_json);
             if (!entry) {
               continue;
             }
@@ -265,10 +259,7 @@ export function rewriteDoctorSessionEntries(
               runOutcome = nextEntry;
             }
           }
-          params.assertCurrent?.();
-          if (params.expectedIdentity) {
-            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-          }
+          assertRepairCurrent();
           invalidateSessionEntryMaintenanceAgeFact(database.db);
           const runProjection = runOutcome
             ? {
@@ -317,10 +308,7 @@ export function rewriteDoctorSessionEntries(
           publishSessionEntryCacheInvalidation(database, { sessionKey });
           batchRewritten += 1;
         }
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        assertRepairCurrent();
         return batchRewritten;
       },
       databaseOptions,

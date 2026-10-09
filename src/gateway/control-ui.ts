@@ -1,14 +1,9 @@
-import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isWithinDir } from "@openclaw/fs-safe/path";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
-import {
-  asDateTimestampMs,
-  resolveTimestampMsToIsoString,
-} from "@openclaw/normalization-core/number-coercion";
 import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import {
@@ -28,7 +23,6 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
-import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -49,8 +43,9 @@ import {
 } from "./assistant-media-errors.js";
 import {
   resolveAssistantMediaPolicy,
-  type AssistantMediaSession,
-  type AssistantMediaReader,
+  createAssistantMediaTicket,
+  verifyAssistantMediaTicket,
+  type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
 import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
@@ -83,6 +78,7 @@ import {
   respondHeadForControlUiFile,
   serveControlUiAsset,
 } from "./control-ui-static.js";
+import { prepareHttpUserProfileCatalog } from "./http-auth-user-profile.js";
 import {
   createGatewayByteStream,
   resolveByteResponse,
@@ -98,11 +94,8 @@ import { readControlUiRootAsset, type ControlUiRootState } from "./server-contro
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
-const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
-const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
-const controlUiAssistantMediaTicketSecret = randomBytes(32);
 const loadAvatarThumbnail = createLazyRuntimeModule(
   () => import("./assistant-avatar-thumbnail.runtime.js"),
 );
@@ -182,94 +175,6 @@ function normalizeAssistantMediaSource(source: string): string | null {
     return resolveUserPath(trimmed);
   }
   return trimmed;
-}
-
-type AssistantMediaTicketPayload = {
-  scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
-  source: string;
-  exp: number;
-  session?: AssistantMediaSession;
-  reader: AssistantMediaReader;
-  agentId?: string;
-  file?: { realPath: string; dev: string; ino: string };
-};
-
-function signAssistantMediaTicketPayload(encodedPayload: string): string {
-  return createHmac("sha256", controlUiAssistantMediaTicketSecret)
-    .update(encodedPayload)
-    .digest("base64url");
-}
-
-function createAssistantMediaTicket(
-  payloadFields: Omit<AssistantMediaTicketPayload, "scope" | "exp">,
-  nowMs = Date.now(),
-) {
-  const now = asDateTimestampMs(nowMs);
-  if (now === undefined) {
-    return {};
-  }
-  const exp = asDateTimestampMs(now + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS);
-  if (exp === undefined) {
-    return {};
-  }
-  const payload: AssistantMediaTicketPayload = {
-    scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
-    ...payloadFields,
-    exp,
-  };
-  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const sig = signAssistantMediaTicketPayload(encodedPayload);
-  return {
-    mediaTicket: `v1.${encodedPayload}.${sig}`,
-    mediaTicketExpiresAt: resolveTimestampMsToIsoString(exp),
-  };
-}
-
-function verifyAssistantMediaTicket(
-  ticket: string | null,
-  source: string | undefined,
-  agentId: string | undefined,
-  nowMs = Date.now(),
-): AssistantMediaTicketPayload | undefined {
-  const now = asDateTimestampMs(nowMs);
-  if (now === undefined) {
-    return undefined;
-  }
-  const parts = ticket?.split(".");
-  if (!parts || parts.length !== 3 || parts[0] !== "v1") {
-    return undefined;
-  }
-  const [, encodedPayload, sig] = parts;
-  if (!encodedPayload || !sig) {
-    return undefined;
-  }
-  const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
-  if (!safeEqualSecret(sig, expectedSig)) {
-    return undefined;
-  }
-  try {
-    const payload = JSON.parse(
-      Buffer.from(encodedPayload, "base64url").toString("utf8"),
-    ) as Partial<AssistantMediaTicketPayload>;
-    const valid =
-      payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
-      typeof payload.source === "string" &&
-      (source === undefined || payload.source === source) &&
-      payload.agentId === agentId &&
-      typeof payload.reader?.authMethod === "string" &&
-      Array.isArray(payload.reader.operatorScopes) &&
-      (payload.file === undefined ||
-        (typeof payload.file?.realPath === "string" &&
-          typeof payload.file.dev === "string" &&
-          typeof payload.file.ino === "string")) &&
-      typeof payload.exp === "number" &&
-      Number.isFinite(payload.exp) &&
-      payload.exp >= now;
-    // SAFETY: This process alone mints payloads; their signature and requested scope are verified above.
-    return valid ? (payload as AssistantMediaTicketPayload) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
@@ -437,6 +342,27 @@ export async function handleControlUiAssistantMediaRequest(
       : undefined;
   if ((isMetaRequest || !ticketCandidate) && !requestAuth) {
     return true;
+  }
+  if (
+    requestAuth?.authenticatedUserProfile?.profileId ||
+    (!isMetaRequest && ticketCandidate?.reader.profileId)
+  ) {
+    if (
+      !(await prepareHttpUserProfileCatalog(res)) ||
+      requestAuth?.hasCurrentClientAuthority?.() === false ||
+      (!isMetaRequest &&
+        ticketCandidate &&
+        !verifyAssistantMediaTicket(
+          url.searchParams.get("mediaTicket"),
+          relativeSource ? undefined : source,
+          agentId,
+        ))
+    ) {
+      if (!res.destroyed && !res.writableEnded) {
+        respondControlUiNotFound(res);
+      }
+      return true;
+    }
   }
   const policyParams = { config: opts?.config ?? {}, sessionKey, agentId };
   const policy = resolveAssistantMediaPolicy({

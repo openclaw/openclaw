@@ -6,12 +6,14 @@ import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-stat
 import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
+import { assertReadableGitMetadata } from "./schema-preflight.js";
 import {
   normalizeTag,
   readPackageVersion,
@@ -33,11 +35,9 @@ import {
   inspectUpdateDatabaseContexts,
   revalidateUpdateDatabaseContexts,
 } from "./update-command-database-context.js";
-import { preparePackageDoctorContext } from "./update-command-doctor-context.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   admitSourceUpdateArtifacts,
-  assertReadableGitTarget,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
@@ -93,7 +93,6 @@ export async function executeMutableUpdate(
     : undefined;
   const databaseContextOptions = {
     ...params,
-    updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
     jsonMode: Boolean(opts.json),
     timeoutMs: updateStepTimeoutMs,
     candidateAdmissionChecks,
@@ -149,15 +148,13 @@ export async function executeMutableUpdate(
       versions,
     );
     admittedTargetSchemaVersions = versions;
+    return admission;
   };
   const preflightPlugins = (targetVersion: string | null) =>
     preflightUpdateCandidatePlugins(params, {
       targetVersion,
       candidateAdmissionChecks,
-      readAdmission: async () => {
-        await recheckSchemas(admittedTargetSchemaVersions);
-        return admission!;
-      },
+      readAdmission: () => recheckSchemas(admittedTargetSchemaVersions),
     });
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
@@ -190,21 +187,33 @@ export async function executeMutableUpdate(
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let validatedConfigSnapshot: Awaited<ReturnType<typeof readUpdateCandidateSource>> | undefined;
   let validatedCandidateRoot: string | undefined;
+  const readCandidateConfig = (env: NodeJS.ProcessEnv) =>
+    readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation });
   const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () => {
     doctorEntered = true;
-    return preparePackageDoctorContext({
-      capable: doctorConfigWrites,
-      runId: originalRun?.runId,
-      executorFence: originalRun?.executorFence,
-      requester: requesterAuthority?.requester,
-      inputHash: validatedConfigSnapshot?.hash,
+    const runId = originalRun?.runId;
+    const executorFence = originalRun?.executorFence;
+    const requester = requesterAuthority?.requester;
+    const inputHash = validatedConfigSnapshot?.hash;
+    const context = {
+      requester,
       changes: doctorConfigChanges,
       databaseBackup: databaseCapture?.backup,
       originalRecoveryCapture: originalRun?.originalRecoveryCapture,
       assertCurrent: assertExecutionCurrent,
       assertBoundChildCurrent,
       onStateHandoff,
-    });
+    };
+    assertExecutionCurrent();
+    if (!doctorConfigWrites) {
+      return undefined;
+    }
+    if (!runId || !executorFence || inputHash === undefined) {
+      throw new Error(
+        "Validated Doctor requires its live update executor and captured config hash.",
+      );
+    }
+    return { ...context, runId, executorFence, inputHash };
   };
   const originalRecovery = () => readOriginalUpdateRecovery(params, updateStepTimeoutMs);
   const gitMutationRoots =
@@ -218,9 +227,6 @@ export async function executeMutableUpdate(
     phase: "inspect" | "prepare" = "prepare",
   ) => {
     if (admission?.foreground) {
-      return;
-    }
-    if (params.updateInstallKind !== "package" && params.updateInstallKind !== "git") {
       return;
     }
     try {
@@ -343,24 +349,16 @@ export async function executeMutableUpdate(
       root: params.root,
       runId: opts.run?.runId,
     });
-    if (serviceEnvBlock) {
+    const blockMessage = serviceEnvBlock?.message ?? preManagedServiceStop?.blockMessage ?? "";
+    if (serviceEnvBlock || blockMessage) {
       params.stop();
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        formatUpdateAncestryBlockMessage(serviceEnvBlock.message),
-        serviceEnvBlock,
-      );
-    }
-
-    if (preManagedServiceStop?.blockMessage) {
-      params.stop();
-      throw new UpdatePreMutationError(
-        "managed-service-preflight",
-        formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
-        {
+        formatUpdateAncestryBlockMessage(blockMessage),
+        serviceEnvBlock ?? {
           failureFacts:
-            preManagedServiceStop.blockFailureFacts ??
-            collectServiceInspectionFailureFacts(preManagedServiceStop.serviceUpdateVerdict),
+            preManagedServiceStop?.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(preManagedServiceStop?.serviceUpdateVerdict),
         },
       );
     }
@@ -375,17 +373,14 @@ export async function executeMutableUpdate(
     await recordPhase("validating");
     assertExecutionCurrent();
     try {
-      if (params.updateInstallKind === "package") {
-        // The staged manifest owns schema support, including artifacts without registry metadata.
-        await recheckSchemas(
-          parsePackageOpenClawSchemaVersions(
-            await tryReadJson<unknown>(path.join(root, "package.json")),
-          ) ?? admittedTargetSchemaVersions,
-        );
-      } else {
-        // Git builds can outlive admission; refresh before rehearsing migrations.
-        await recheckSchemas(admittedTargetSchemaVersions);
-      }
+      // Staged manifests own package schema support; Git builds refresh their admitted versions.
+      const versions =
+        params.updateInstallKind === "package"
+          ? (parsePackageOpenClawSchemaVersions(
+              await tryReadJson<unknown>(path.join(root, "package.json")),
+            ) ?? admittedTargetSchemaVersions)
+          : admittedTargetSchemaVersions;
+      await recheckSchemas(versions);
       if (stagedPluginAdmission) {
         // Explicit artifacts acquire their version before rehearsal or activation.
         await preflightPlugins(await readPackageVersion(root));
@@ -408,9 +403,7 @@ export async function executeMutableUpdate(
       }
       throw error;
     }
-    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
-      configValidation,
-    });
+    const snapshot = await readCandidateConfig(env);
     const validation = await validateUpdateCandidateWithProgress(
       {
         root,
@@ -449,11 +442,7 @@ export async function executeMutableUpdate(
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     refreshCandidate ??= createUpdateCandidateConfigRefresh({
       read: () =>
-        readUpdateCandidateSource(
-          ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env,
-          params.legacyConfigPlan,
-          { configValidation },
-        ),
+        readCandidateConfig(ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env),
       getValidated: () => validatedConfigSnapshot,
       validate: () => validateCandidate(validatedCandidateRoot!),
       assertCurrent: assertExecutionCurrent,
@@ -568,6 +557,7 @@ export async function executeMutableUpdate(
   };
   const installOptions = {
     root: params.root,
+    restart: opts.restart,
     installKind: params.installKind,
     startedAt: params.startedAt,
     progress: params.progress,
@@ -578,13 +568,11 @@ export async function executeMutableUpdate(
     getDoctorContext,
   };
   try {
-    if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
-      admission = await inspectUpdateDatabaseContexts({
-        ...databaseContextOptions,
-        roots: gitMutationRoots ?? [params.root],
-        expectedForeground: opts.run?.completionOwner === "gateway-restart" || undefined,
-      });
-    }
+    admission = await inspectUpdateDatabaseContexts({
+      ...databaseContextOptions,
+      roots: gitMutationRoots ?? [params.root],
+      expectedForeground: opts.run?.completionOwner === "gateway-restart" || undefined,
+    });
     if (params.updateInstallKind === "package") {
       if (!stagedPluginAdmission) {
         await preflightPlugins(params.packageTargetVersion ?? null);
@@ -619,10 +607,10 @@ export async function executeMutableUpdate(
         onTransaction,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
-      result = await withMutableUpdateForwardScope(opts, async () =>
+      result = await withMutableUpdateForwardScope(opts, () =>
         params.stagedPackage
-          ? await params.stagedPackage.run(packageUpdate)
-          : await runPackageInstallUpdate(packageUpdate),
+          ? params.stagedPackage.run(packageUpdate)
+          : runPackageInstallUpdate(packageUpdate),
       );
     } else {
       const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
@@ -664,7 +652,7 @@ export async function executeMutableUpdate(
           assertUpdateCandidateSteps(await validateCandidate(candidateRoot));
         },
         beforeGitMutation: async (target) => {
-          assertReadableGitTarget(target);
+          assertReadableGitMetadata(target.metadataUnreadable);
           admittedTargetSchemaVersions = target.schemaVersions;
           await beforeActivate(gitMutationRoots ?? [params.root]);
         },
@@ -687,6 +675,13 @@ export async function executeMutableUpdate(
   }
 
   result = recordMutableUpdateInterruption(opts, result);
+  if (
+    result.status === "ok" &&
+    opts.restart === false &&
+    result.steps.some(isUpdatePostInstallVerificationDeferred)
+  ) {
+    result = { ...result, status: "skipped", reason: "gateway-readiness-unverified" };
+  }
   if (candidateFailureReason && result.status === "error") {
     result.reason = candidateFailureReason;
   }

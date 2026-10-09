@@ -227,7 +227,8 @@ export class ModelProviderLoginController implements ReactiveController {
         this.options.canContinue()
       );
     };
-    this.picker = { phase: "loading", providers, providerId: "", query: "", isCurrent };
+    const picker = { providers, providerId: "", query: "", isCurrent };
+    this.picker = { ...picker, phase: "loading" };
     this.focusPicker = null;
     this.message = undefined;
     this.host.requestUpdate();
@@ -246,12 +247,10 @@ export class ModelProviderLoginController implements ReactiveController {
             ? available[0]
             : undefined;
         this.picker = {
+          ...picker,
           phase: "ready",
-          providers,
           authStatus,
           providerId: provider?.id ?? "",
-          query: "",
-          isCurrent,
         };
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
@@ -261,11 +260,8 @@ export class ModelProviderLoginController implements ReactiveController {
     } catch (error) {
       if (isCurrent()) {
         this.picker = {
+          ...picker,
           phase: "error",
-          isCurrent,
-          providers,
-          providerId: "",
-          query: "",
           message: formatUiError(error, t("modelProviders.requestFailed")),
         };
       }
@@ -317,6 +313,32 @@ export class ModelProviderLoginController implements ReactiveController {
     if (picker) {
       const canSelect = () =>
         this.picker === picker && picker.phase === "ready" && picker.isCurrent();
+      const renderLoginOption = (options: {
+        label: string;
+        hint?: string;
+        onClick: () => void;
+        provider?: string;
+        apiKey?: boolean;
+      }) => {
+        return html`<button
+          type="button"
+          class="btn model-provider-login__option"
+          data-models-login-provider=${options.provider ?? nothing}
+          ?data-models-login-api-key=${options.apiKey}
+          ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
+          @click=${() => {
+            if (canSelect()) {
+              options.onClick();
+            }
+          }}
+        >
+          ${options.provider !== undefined ? renderProviderBrandIcon(options.provider, { className: "model-providers__icon" }) : nothing}
+          <span class="model-provider-login__copy">
+            <strong>${options.label}</strong>
+            ${options.hint !== undefined ? html`<span>${options.hint}</span>` : nothing}
+          </span>
+        </button>`;
+      };
       const groups =
         picker.phase === "ready" ? this.loginProviders(picker.providers, picker.authStatus) : [];
       const provider = groups.find((group) => group.id === picker.providerId);
@@ -400,60 +422,41 @@ export class ModelProviderLoginController implements ReactiveController {
                           <section class="model-provider-login__methods" ${ref(this.methodChoices)}>
                             <h3>${t("modelProviders.login.connectAccount")}</h3>
                             <div data-models-login-choice>
-                              ${provider.choices.map(
-                                (selected) => html`
-                                  <button
-                                    type="button"
-                                    class="btn model-provider-login__option"
-                                    ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
-                                    @click=${() => {
-                                      if (!canSelect()) {
-                                        return;
-                                      }
-                                      if (selected.kind === "setup-secret") {
-                                        this.reset();
-                                        this.options.onManualProvider?.(selected.id);
-                                        return;
-                                      }
-                                      this.picker = null;
-                                      this.mode = "auth";
-                                      this.refreshWarning = null;
-                                      this.runner.prepareSignIn(selected.kind, selected.label);
-                                      void this.run(() =>
-                                        this.runner.start(selected.id, "models.authLogin"),
-                                      );
-                                    }}
-                                  >
-                                    <span class="model-provider-login__copy">
-                                      <strong>${selected.label}</strong>
-                                      ${selected.hint ? html`<span>${selected.hint}</span>` : nothing}
-                                    </span>
-                                  </button>
-                                `,
+                              ${provider.choices.map((selected) =>
+                                renderLoginOption({
+                                  label: selected.label,
+                                  hint: selected.hint || undefined,
+                                  onClick: () => {
+                                    if (selected.kind === "setup-secret") {
+                                      this.reset();
+                                      this.options.onManualProvider?.(selected.id);
+                                      return;
+                                    }
+                                    this.picker = null;
+                                    this.mode = "auth";
+                                    this.refreshWarning = null;
+                                    this.runner.prepareSignIn(selected.kind, selected.label);
+                                    void this.run(() =>
+                                      this.runner.start(selected.id, "models.authLogin"),
+                                    );
+                                  },
+                                }),
                               )}
                             </div>
                             ${
                               provider.apiKeyProvider
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn model-provider-login__option"
-                                      data-models-login-api-key
-                                      ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
-                                      @click=${() => {
-                                        if (!canSelect() || !provider.apiKeyProvider) {
-                                          return;
-                                        }
-                                        this.reset();
-                                        this.options.onApiKey?.(provider.apiKeyProvider);
-                                      }}
-                                    >
-                                      <span class="model-provider-login__copy">
-                                        <strong>${t("modelProviders.status.apiKey")}</strong>
-                                        <span>${t("modelProviders.login.apiKeyHint")}</span>
-                                      </span>
-                                    </button>
-                                  `
+                                ? renderLoginOption({
+                                    label: t("modelProviders.status.apiKey"),
+                                    hint: t("modelProviders.login.apiKeyHint"),
+                                    apiKey: true,
+                                    onClick: () => {
+                                      if (!provider.apiKeyProvider) {
+                                        return;
+                                      }
+                                      this.reset();
+                                      this.options.onApiKey?.(provider.apiKeyProvider);
+                                    },
+                                  })
                                 : nothing
                             }
                             <a
@@ -487,37 +490,24 @@ export class ModelProviderLoginController implements ReactiveController {
                             aria-label=${t("modelSetup.manual.provider")}
                           >
                             ${matches.map(
-                              (group) => html`
-                                <li>
-                                  <button
-                                    type="button"
-                                    class="btn model-provider-login__option"
-                                    data-models-login-provider=${group.id}
-                                    ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
-                                    @click=${() => {
-                                      if (!canSelect()) {
-                                        return;
-                                      }
+                              (group) =>
+                                html`<li>
+                                  ${renderLoginOption({
+                                    provider: group.id,
+                                    label: group.label,
+                                    hint: [
+                                      ...group.choices.map((choice) => choice.label),
+                                      ...(group.apiKeyProvider
+                                        ? [t("modelProviders.status.apiKey")]
+                                        : []),
+                                    ].join(" · "),
+                                    onClick: () => {
                                       picker.providerId = group.id;
                                       this.focusPicker = "method";
                                       this.host.requestUpdate();
-                                    }}
-                                  >
-                                    ${renderProviderBrandIcon(group.id, { className: "model-providers__icon" })}
-                                    <span class="model-provider-login__copy">
-                                      <strong>${group.label}</strong>
-                                      <span>
-                                        ${[
-                                          ...group.choices.map((choice) => choice.label),
-                                          ...(group.apiKeyProvider
-                                            ? [t("modelProviders.status.apiKey")]
-                                            : []),
-                                        ].join(" · ")}
-                                      </span>
-                                    </span>
-                                  </button>
-                                </li>
-                              `,
+                                    },
+                                  })}
+                                </li>`,
                             )}
                           </ul>
                           ${

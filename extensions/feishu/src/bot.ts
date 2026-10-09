@@ -4,6 +4,7 @@ import {
   recordChannelBotPairLoopAndCheckSuppression,
   resolveEnvelopeFormatOptions,
   toInboundMediaFactsWithMetadata,
+  type ChannelInboundEventRunnerParams,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
@@ -47,7 +48,6 @@ import {
 import {
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
-  normalizeMentions,
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
@@ -71,6 +71,7 @@ import {
   extractMentionTargets,
   isFeishuBroadcastMention,
   isMentionForwardRequest,
+  normalizeMentions,
 } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
@@ -923,6 +924,15 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
 
+    const fetchedContextPolicy = {
+      cfg,
+      accountId: account.accountId,
+      chatId: ctx.chatId,
+      isGroup,
+      allowFrom: effectiveGroupSenderAllowFrom,
+      mode: contextVisibilityMode,
+    };
+
     // Do not enqueue inbound user previews as system events.
     // System events are prepended to future prompts and can be misread as
     // authoritative transcript turns.
@@ -963,12 +973,7 @@ export async function handleFeishuMessage(params: {
         if (
           quotedMessageInfo &&
           (await shouldIncludeFetchedGroupContextMessage({
-            cfg,
-            accountId: account.accountId,
-            chatId: ctx.chatId,
-            isGroup,
-            allowFrom: effectiveGroupSenderAllowFrom,
-            mode: contextVisibilityMode,
+            ...fetchedContextPolicy,
             kind: "quote",
             senderId: quotedMessageInfo.senderId,
             senderType: quotedMessageInfo.senderType,
@@ -1189,12 +1194,7 @@ export async function handleFeishuMessage(params: {
       if (
         rootMsg &&
         !(await shouldIncludeFetchedGroupContextMessage({
-          cfg,
-          accountId: account.accountId,
-          chatId: ctx.chatId,
-          isGroup,
-          allowFrom: effectiveGroupSenderAllowFrom,
-          mode: contextVisibilityMode,
+          ...fetchedContextPolicy,
           kind: "thread",
           senderId: rootMsg.senderId,
           senderType: rootMsg.senderType,
@@ -1230,12 +1230,7 @@ export async function handleFeishuMessage(params: {
           [ctx.senderOpenId, senderUserId].filter((id): id is string => Boolean(id)),
         );
         const allowlistedMessages = await filterFetchedGroupContextMessages(threadMessages, {
-          cfg,
-          accountId: account.accountId,
-          chatId: ctx.chatId,
-          isGroup,
-          allowFrom: effectiveGroupSenderAllowFrom,
-          mode: contextVisibilityMode,
+          ...fetchedContextPolicy,
           kind: "history",
         });
         const relevantMessages = senderScoped
@@ -1477,6 +1472,27 @@ export async function handleFeishuMessage(params: {
         messageCreateTimeMs,
       });
 
+    const runAgentTurn = (
+      ctxPayload: Awaited<ReturnType<typeof buildCtxPayloadForAgent>>,
+      resolveTurn: ChannelInboundEventRunnerParams<FeishuMessageContext>["adapter"]["resolveTurn"],
+    ) =>
+      core.channel.inbound.run({
+        channel: "feishu",
+        accountId: route.accountId,
+        raw: ctx,
+        adapter: {
+          ingest: () => ({
+            id: ctx.messageId,
+            timestamp: messageCreateTimeMs,
+            rawText: ctx.content,
+            textForAgent: ctxPayload.BodyForAgent,
+            textForCommands: ctxPayload.CommandBody,
+            raw: ctx,
+          }),
+          resolveTurn,
+        },
+      });
+
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
@@ -1623,43 +1639,28 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: broadcast ${dispatcher ? "active" : "observer"} dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
 
-          const turnResult = await core.channel.inbound.run({
+          const turnResult = await runAgentTurn(agentCtx, () => ({
+            cfg,
             channel: "feishu",
             accountId: route.accountId,
-            raw: ctx,
-            adapter: {
-              ingest: () => ({
-                id: ctx.messageId,
-                timestamp: messageCreateTimeMs,
-                rawText: ctx.content,
-                textForAgent: agentCtx.BodyForAgent,
-                textForCommands: agentCtx.CommandBody,
-                raw: ctx,
-              }),
-              resolveTurn: () => ({
-                cfg,
-                channel: "feishu",
-                accountId: route.accountId,
-                route: { agentId, sessionKey: agentSessionKey },
-                ctxPayload: agentCtx,
-                record: agentRecord,
-                ...(!dispatcher
-                  ? {
-                      admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
-                      delivery: { deliver: async () => ({ visibleReplySent: false }) },
-                      replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
-                    }
-                  : {
-                      dispatcherOptions: dispatcher.dispatcherOptions,
-                      delivery: dispatcher.delivery,
-                      replyOptions: {
-                        ...dispatcher.replyOptions,
-                        ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
-                      },
-                    }),
-              }),
-            },
-          });
+            route: { agentId, sessionKey: agentSessionKey },
+            ctxPayload: agentCtx,
+            record: agentRecord,
+            ...(!dispatcher
+              ? {
+                  admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
+                  delivery: { deliver: async () => ({ visibleReplySent: false }) },
+                  replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                }
+              : {
+                  dispatcherOptions: dispatcher.dispatcherOptions,
+                  delivery: dispatcher.delivery,
+                  replyOptions: {
+                    ...dispatcher.replyOptions,
+                    ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                  },
+                }),
+          }));
           if (
             dispatcher &&
             turnResult.dispatched &&
@@ -1749,53 +1750,38 @@ export async function handleFeishuMessage(params: {
         });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.inbound.run({
+      const turnResult = await runAgentTurn(ctxPayload, () => ({
+        cfg: effectiveCfg,
         channel: "feishu",
         accountId: route.accountId,
-        raw: ctx,
-        adapter: {
-          ingest: () => ({
-            id: ctx.messageId,
-            timestamp: messageCreateTimeMs,
-            rawText: ctx.content,
-            textForAgent: ctxPayload.BodyForAgent,
-            textForCommands: ctxPayload.CommandBody,
-            raw: ctx,
-          }),
-          resolveTurn: () => ({
-            cfg: effectiveCfg,
-            channel: "feishu",
+        route: { agentId: route.agentId, sessionKey: route.sessionKey },
+        ctxPayload,
+        record: {
+          updateLastRoute: buildFeishuInboundLastRouteUpdate({
+            sessionKey: route.sessionKey,
             accountId: route.accountId,
-            route: { agentId: route.agentId, sessionKey: route.sessionKey },
-            ctxPayload,
-            record: {
-              updateLastRoute: buildFeishuInboundLastRouteUpdate({
-                sessionKey: route.sessionKey,
-                accountId: route.accountId,
-              }),
-              onRecordError: (err) => {
-                log(
-                  `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
-                );
-              },
-            },
-            history: {
-              isGroup,
-              historyKey,
-              historyMap: chatHistories,
-              limit: historyLimit,
-            },
-            dispatcherOptions,
-            delivery,
-            replyOptions: {
-              ...replyOptions,
-              ...(turnAdoptionLifecycle
-                ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
-                : {}),
-            },
           }),
+          onRecordError: (err) => {
+            log(
+              `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
+            );
+          },
         },
-      });
+        history: {
+          isGroup,
+          historyKey,
+          historyMap: chatHistories,
+          limit: historyLimit,
+        },
+        dispatcherOptions,
+        delivery,
+        replyOptions: {
+          ...replyOptions,
+          ...(turnAdoptionLifecycle
+            ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
+            : {}),
+        },
+      }));
       if (!turnResult.dispatched) {
         return;
       }

@@ -9,7 +9,8 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import * as gitOwner from "./git.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -288,15 +289,21 @@ describe("managed removal custody", () => {
     await expect(
       service.remove({ id: created.id, reason: "archive", allowSnapshotLoss: true }),
     ).rejects.toThrow("injected pending-ref deletion failure");
+    fault.mockRestore();
     expect(getRegistryWorktree(env, created.id)).toMatchObject({ removedAt: now });
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
     expect(await git(repo, "rev-parse", pendingRef)).toBe(head);
 
     now += 31 * 24 * 60 * 60 * 1000;
-    const failed = await service.gc();
-    expect(failed.snapshotsPruned).toBe(0);
-    expect(getRegistryWorktree(env, created.id)).toBeDefined();
-    fault.mockRestore();
+    const lock = path.join(repo, ".git", `${pendingRef}.lock`);
+    await fs.writeFile(lock, "", { flag: "wx" });
+    try {
+      const failed = await service.gc();
+      expect(failed.snapshotsPruned).toBe(0);
+      expect(getRegistryWorktree(env, created.id)).toBeDefined();
+    } finally {
+      await fs.unlink(lock);
+    }
     const retried = await service.gc();
     expect(retried.snapshotsPruned).toBe(1);
     expect(getRegistryWorktree(env, created.id)).toBeUndefined();

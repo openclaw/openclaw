@@ -133,6 +133,8 @@ export async function loadLogbook(
     state.dayPinned = false;
   }
   const generation = ++state.loadGeneration;
+  const isCurrent = () =>
+    ownsClient(state, client, clientGeneration) && generation === state.loadGeneration;
   const requestedDay = state.day;
   if (!opts?.silent) {
     state.loadingGeneration = generation;
@@ -146,11 +148,7 @@ export async function loadLogbook(
       client.request<LogbookDaysPayload>("logbook.days", {}),
       client.request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay }),
     ]);
-    if (
-      !ownsClient(state, client, clientGeneration) ||
-      generation !== state.loadGeneration ||
-      state.day !== requestedDay
-    ) {
+    if (!isCurrent() || state.day !== requestedDay) {
       return;
     }
     state.status = status;
@@ -163,11 +161,7 @@ export async function loadLogbook(
       const todayTimeline = await client.request<LogbookTimelinePayload>("logbook.timeline", {
         day: status.today,
       });
-      if (
-        !ownsClient(state, client, clientGeneration) ||
-        generation !== state.loadGeneration ||
-        state.day !== status.today
-      ) {
+      if (!isCurrent() || state.day !== status.today) {
         return;
       }
       state.timeline = todayTimeline;
@@ -176,12 +170,11 @@ export async function loadLogbook(
     }
     state.error = null;
   } catch (err) {
-    if (ownsClient(state, client, clientGeneration) && generation === state.loadGeneration) {
+    if (isCurrent()) {
       state.error = formatUiError(err);
     }
   } finally {
-    let shouldNotify =
-      ownsClient(state, client, clientGeneration) && generation === state.loadGeneration;
+    let shouldNotify = isCurrent();
     if (state.loadingGeneration === generation) {
       state.loadingGeneration = null;
       state.loading = false;
@@ -231,16 +224,20 @@ function refreshLogbookSilently(
   return refresh;
 }
 
-/** Stops background polling; wired into tab-switch and disconnect cleanup. */
-export function stopLogbookPolling(host: object): void {
-  const state = logbookStates.get(host);
-  if (state?.pollTimer) {
+function clearLogbookPolling(state: LogbookControllerState): void {
+  if (state.pollTimer) {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
+  state.pollClient = null;
+  state.backgroundRefreshQueued = false;
+}
+
+/** Stops background polling; wired into tab-switch and disconnect cleanup. */
+export function stopLogbookPolling(host: object): void {
+  const state = logbookStates.get(host);
   if (state) {
-    state.pollClient = null;
-    state.backgroundRefreshQueued = false;
+    clearLogbookPolling(state);
     // PluginPage retires this host immediately after stop returns. Let its loads
     // settle; host identity keeps their results out of the replacement view.
   }
@@ -251,12 +248,7 @@ export function configureLogbookPolling(
   client: GatewayBrowserClient | null,
 ): void {
   if (!client) {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
-    state.pollClient = null;
-    state.backgroundRefreshQueued = false;
+    clearLogbookPolling(state);
     // Unlike stopLogbookPolling's detached-host path, this state can render
     // again after reconnect. Retire every old async owner before reuse.
     bindClient(state, null);

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage, CompactionPreparation, StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -26,8 +26,23 @@ import {
   setCompactionSafeguardCancellation,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "./compaction-safeguard.js";
-import { testing } from "./compaction-safeguard.test-support.js";
+import {
+  testing,
+  structuredSummary,
+  stubSessionManager,
+  createAnthropicModelFixture,
+  configuredSession,
+  modelSession,
+  toolResultMessage,
+  userMessage,
+  toolCallMessage,
+  createQualityGuardSessionManager,
+  createCompactionHandler,
+  createCompactionEvent,
+  createCompactionContext,
+  runCompactionScenario,
+  expectCompactionResult,
+} from "./compaction-safeguard.test-support.js";
 
 const { compactionLogger } = vi.hoisted(() => {
   const logger = {
@@ -75,22 +90,6 @@ const actualCompactionQualityModule = await vi.importActual<typeof compactionQua
 );
 const mockAuditSummaryQuality = vi.mocked(compactionQualityModule.auditSummaryQuality);
 
-function structuredSummary(
-  values: Partial<Record<"decisions" | "todos" | "rules" | "asks" | "identifiers", string>> = {},
-): string {
-  return [
-    "## Decisions",
-    values.decisions ?? "Keep current flow.",
-    "## Open TODOs",
-    values.todos ?? "None.",
-    "## Constraints/Rules",
-    values.rules ?? "Preserve exact context.",
-    "## Pending user asks",
-    values.asks ?? "None.",
-    "## Exact identifiers",
-    values.identifiers ?? "None.",
-  ].join("\n");
-}
 function headingTemplate(prefix: string): string {
   return `${prefix}\n${structuredSummary({ decisions: "alpha", todos: "beta", rules: "gamma", asks: "delta", identifiers: "epsilon" })}`;
 }
@@ -160,213 +159,6 @@ function installCompactionProviderForTest(
   requireActivePluginRegistry().compactionProviders.push({
     provider: { id, label: id, summarize },
   });
-}
-
-function stubSessionManager(): ExtensionContext["sessionManager"] {
-  return {
-    getCwd: () => "/stub",
-    getSessionId: () => "stub-id",
-    getSessionTarget: () => undefined,
-    getLeafId: () => null,
-    getAppendParentId: () => null,
-    getAppendMode: () => undefined,
-    getLeafEntry: () => undefined,
-    getEntry: () => undefined,
-    getLabel: () => undefined,
-    getBranch: () => [],
-    getHeader: () => null,
-    getEntries: () => [],
-    getTree: () => [],
-    getSessionName: () => undefined,
-  };
-}
-
-function createAnthropicModelFixture(overrides: Partial<Model> = {}): Model {
-  return {
-    id: "claude-opus-4-5",
-    name: "Claude Opus 4.5",
-    provider: "anthropic",
-    api: "anthropic" as const,
-    baseUrl: "https://api.anthropic.com",
-    contextWindow: 200000,
-    maxTokens: 4096,
-    reasoning: false,
-    input: ["text"] as const,
-    cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-    ...overrides,
-  };
-}
-
-type SafeguardRuntime = NonNullable<Parameters<typeof setCompactionSafeguardRuntime>[1]>;
-
-function configuredSession(runtime: SafeguardRuntime) {
-  const sessionManager = stubSessionManager();
-  setCompactionSafeguardRuntime(sessionManager, runtime);
-  return sessionManager;
-}
-
-function modelSession(runtime: SafeguardRuntime = {}) {
-  return configuredSession({ model: createAnthropicModelFixture(), ...runtime });
-}
-
-function toolResultMessage(
-  toolCallId: string,
-  text: string,
-  overrides: Partial<
-    Pick<
-      Extract<AgentMessage, { role: "toolResult" }>,
-      "toolName" | "timestamp" | "isError" | "details"
-    >
-  > = {},
-): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    timestamp: 1,
-    isError: false,
-    ...overrides,
-  };
-}
-
-function userMessage(content: string, timestamp: number): AgentMessage {
-  return { role: "user", content, timestamp };
-}
-
-function toolCallMessage(id: string, name: string, timestamp: number): AgentMessage {
-  return castAgentMessage({
-    role: "assistant",
-    content: [{ type: "toolCall", id, name, arguments: {} }],
-    timestamp,
-  });
-}
-
-function createQualityGuardSessionManager(
-  overrides: SafeguardRuntime = {},
-): ExtensionContext["sessionManager"] {
-  return modelSession({
-    recentTurnsPreserve: 0,
-    qualityGuardEnabled: true,
-    qualityGuardMaxRetries: 1,
-    ...overrides,
-  });
-}
-
-type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
-const createCompactionHandler = () => {
-  let compactionHandler: CompactionHandler | undefined;
-  const mockApi = {
-    on: vi.fn((event: string, handler: CompactionHandler) => {
-      if (event === "session_before_compact") {
-        compactionHandler = handler;
-      }
-    }),
-  } as unknown as ExtensionAPI;
-  compactionSafeguardExtension(mockApi);
-  if (!compactionHandler) {
-    throw new Error("Expected compaction safeguard to register a handler.");
-  }
-  return compactionHandler;
-};
-
-const createCompactionEvent = (
-  params: {
-    messageText?: string;
-    tokensBefore?: number;
-    preparation?: Partial<Omit<CompactionPreparation, "fileOps" | "settings">> & {
-      settings?: { reserveTokens: number };
-    };
-    customInstructions?: string;
-    signal?: AbortSignal;
-  } = {},
-) => ({
-  preparation: {
-    messagesToSummarize: [
-      { role: "user", content: params.messageText ?? "summarize me", timestamp: Date.now() },
-    ] as AgentMessage[],
-    turnPrefixMessages: [] as AgentMessage[],
-    firstKeptEntryId: "entry-1",
-    tokensBefore: params.tokensBefore ?? 1_500,
-    fileOps: {
-      read: [],
-      edited: [],
-      written: [],
-    },
-    settings: { reserveTokens: 4_000 },
-    isSplitTurn: false,
-    ...params.preparation,
-  },
-  customInstructions: params.customInstructions ?? "",
-  signal: params.signal ?? new AbortController().signal,
-});
-
-const createCompactionContext = (params: {
-  sessionManager: ExtensionContext["sessionManager"];
-  getApiKeyAndHeadersMock: ReturnType<typeof vi.fn>;
-}) => ({
-  model: undefined,
-  sessionManager: params.sessionManager,
-  modelRegistry: { getApiKeyAndHeaders: params.getApiKeyAndHeadersMock },
-});
-
-type CompactionEvent = ReturnType<typeof createCompactionEvent>;
-
-function withLatestUnresolvedUserRequest(event: CompactionEvent): CompactionEvent {
-  const { preparation } = event;
-  if ("latestUnresolvedUserRequest" in preparation) {
-    return event;
-  }
-  const latestUser = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages]
-    .toReversed()
-    .find((message) => message.role === "user");
-  const latestUnresolvedUserRequest =
-    typeof latestUser?.content === "string" ? latestUser.content.trim() : "";
-  return {
-    ...event,
-    preparation: {
-      ...preparation,
-      ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
-    },
-  };
-}
-
-async function runCompactionScenario(
-  sessionManager: ExtensionContext["sessionManager"],
-  event: CompactionEvent,
-  {
-    apiKey = "test-key",
-    latestUnresolvedUserRequest = false,
-  }: { apiKey?: string | null; latestUnresolvedUserRequest?: boolean } = {},
-) {
-  const getApiKeyAndHeadersMock = vi
-    .fn()
-    .mockResolvedValue(
-      apiKey !== null ? { ok: true, apiKey } : { ok: false, error: "missing auth" },
-    );
-  const result = (await createCompactionHandler()(
-    latestUnresolvedUserRequest ? withLatestUnresolvedUserRequest(event) : event,
-    createCompactionContext({ sessionManager, getApiKeyAndHeadersMock }),
-  )) as {
-    cancel?: boolean;
-    compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number };
-  };
-  return { result, getApiKeyAndHeadersMock };
-}
-
-function expectCompactionResult(result: {
-  cancel?: boolean;
-  compaction?: {
-    summary: string;
-    firstKeptEntryId: string;
-    tokensBefore: number;
-  };
-}) {
-  expect(result.cancel).not.toBe(true);
-  if (!result.compaction) {
-    throw new Error("Expected compaction result");
-  }
-  return result.compaction;
 }
 
 const CANONICAL_SUMMARY_HEADINGS = [
@@ -1059,18 +851,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
       expect(result.cancel).not.toBe(true);
       expect(result.compaction?.summary).toContain("provider summary");
       expect(result.compaction?.summary).not.toContain("Earlier deployment decision");
-      expect(providerPrompts).toHaveLength(1);
+      expect(providerPrompts).toHaveLength(prefix ? 2 : 1);
       expect(providerPrompts[0]).toContain("[User]: summarize me");
       expect(providerPrompts[0]).toContain("receipt_90210");
       expect(providerPrompts[0]).toContain("Keep the deployment decision.");
       expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
       expect(providerPrompts[0]).not.toContain("## Goal");
       expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
-      expect(providerPrompts[0]).toContain(prefix ? "## Original Request" : "## Pending user asks");
-      expect(providerPrompts[0]).not.toContain(
-        prefix ? "## Pending user asks" : "## Original Request",
-      );
-      expect(providerBudgets).toEqual([prefix ? 2_000 : 3_200]);
+      expect(providerPrompts[0]).toContain("## Pending user asks");
+      expect(providerPrompts[0]).not.toContain("## Original Request");
+      if (prefix) {
+        expect(providerPrompts[1]).toContain("## Original Request");
+        expect(providerPrompts[1]).not.toContain("## Pending user asks");
+      }
+      expect(providerBudgets).toEqual(prefix ? [3_200, 2_000] : [3_200]);
       if (!prefix) {
         expect(providerPrompts[0]).toContain("Earlier deployment decision: use canary staging.");
       }
@@ -1609,8 +1403,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
         `Implementation remains. Preserve ${identifier}.`,
         ...(pendingAsk ? ["## Pending user asks", pendingAsk] : []),
       ].join("\n");
+    const mainSummary = structuredSummary({ asks: latestAsk, identifiers: identifier });
     mockSummarizeInStages
+      .mockResolvedValueOnce(mainSummary)
       .mockResolvedValueOnce(prefixSummary(latestAsk))
+      .mockResolvedValueOnce(mainSummary)
       .mockResolvedValueOnce(prefixSummary());
 
     const sessionManager = createQualityGuardSessionManager();
@@ -1640,8 +1437,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const finalSummary = expectCompactionResult(result).summary;
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const retry = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(4);
+    const retry = requireRecord(mockCallArg(mockSummarizeInStages, 2));
     expect(retry.customInstructions).toContain("retained_turn_ask_marked_pending");
     expect(finalSummary).toContain(
       `## Pending user asks\nLatest user request context: ${JSON.stringify(latestAsk)}`,
@@ -1752,7 +1549,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.summary).toContain("## Decisions");
   });
 
-  it("normalizes legacy split-turn headings when history is carried forward", async () => {
+  it("normalizes legacy split-turn headings before re-distilling preserved history", async () => {
+    mockSummarizeInStages.mockResolvedValue(
+      structuredSummary({
+        decisions: "Keep the existing architecture.",
+        identifiers: "/tmp/migration.log /tmp/latest.log",
+      }),
+    );
     const sessionManager = modelSession({
       recentTurnsPreserve: 12,
     });
@@ -1786,10 +1589,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const { result } = await runCompactionScenario(sessionManager, event);
 
     expect(result.cancel).not.toBe(true);
-    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
+    const input = JSON.stringify(mockSummarizeInStages.mock.calls[0]?.[0].messages);
+    expect(input).toContain("### Decisions\nInspect the latest result.".replaceAll("\n", "\\n"));
     const summary = result.compaction?.summary ?? "";
     expectCanonicalSummaryHeadingsOnce(summary);
-    expect(summary).toContain("### Decisions\nInspect the latest result.");
     expect(summary).toContain("## Recent turns preserved verbatim");
     expect(summary).toContain("/tmp/migration.log");
     expect(summary).toContain("/tmp/latest.log");

@@ -14,15 +14,29 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
-import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
+import {
+  IncognitoSessionMissingError,
+  IncognitoSessionSyncAccessError,
+} from "../../state/incognito-session-error.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  beginRestartRecoveryTerminalDelivery,
+  cancelRestartRecoveryTerminalDelivery,
+  completeRestartRecoveryTerminalDelivery,
+} from "./restart-recovery-receipt.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
-import { withIncognitoSessionActor } from "./session-incognito-binding.js";
+import {
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 import {
@@ -32,10 +46,11 @@ import {
   finalizeSessionSuggestionClaimInWorker,
   releaseSessionSuggestionDispatchInWorker,
 } from "./session-metadata-write.async.js";
+import { setSessionReactionAsync } from "./session-reaction-store.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import {
   addSessionMember,
-  listSessionMembersInWorker,
+  readSessionMembersInWorker,
   removeSessionMember,
 } from "./session-sharing-store.js";
 import { listSessionSuggestions } from "./session-suggestion-store.read.js";
@@ -62,6 +77,80 @@ afterAll(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("keeps fresh actor absence separate from the unbound native owner", async () => {
+  const agentId = "absent-collaboration";
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+  const scope = {
+    agentId,
+    storePath,
+    env,
+    sessionKey: `agent:${agentId}:dashboard:incognito-test`,
+  };
+  const entry = { sessionId: "native-control", updatedAt: 1, incognito: true as const };
+  try {
+    await replaceSessionEntry(scope, entry);
+    await addSessionMember(scope, { identityId: "native-member", addedBy: "owner" });
+    await addSessionSuggestionInWorker(scope, {
+      id: "native-suggestion",
+      authorId: "native-member",
+      text: "Native private suggestion",
+    });
+    expect((await readSessionMembersInWorker(scope)).members).toMatchObject([
+      { identityId: "native-member" },
+    ]);
+    const foreignEnv = { OPENCLAW_STATE_DIR: tempDirs.make("native-collaboration-foreign-root-") };
+    await withEnvAsync(foreignEnv, async () => {
+      const noEnv = { ...scope, env: undefined };
+      expect((await readSessionMembersInWorker(noEnv)).members).toMatchObject([
+        { identityId: "native-member" },
+      ]);
+      expect(await listSessionSuggestions(noEnv)).toMatchObject([{ id: "native-suggestion" }]);
+      expect(captureOpenClawAgentDatabaseExecution.listIncognito(foreignEnv)).toEqual([]);
+    });
+    expect(
+      captureOpenClawAgentDatabaseExecution
+        .listIncognito(env)
+        .some((owner) => owner.agentId === agentId),
+    ).toBe(false);
+    await withIncognitoSessionBinding({ kind: "absent", agentId, env, authority }, async () => {
+      const sql = observeMainThreadSql();
+      try {
+        expect(await readSessionMembersInWorker(scope)).toEqual({ entry: undefined, members: [] });
+        expect(await listSessionSuggestions(scope)).toEqual([]);
+        await expect(
+          addSessionMember(scope, { identityId: "other", addedBy: "owner" }),
+        ).rejects.toBeInstanceOf(IncognitoSessionMissingError);
+        await expect(replaceSessionEntry(scope, entry)).rejects.toBeInstanceOf(
+          IncognitoSessionMissingError,
+        );
+        await expect(
+          setSessionReactionAsync(scope, {
+            expectedSessionId: entry.sessionId,
+            messageId: "missing-message",
+            emoji: "👍",
+            identityId: "viewer",
+          }),
+        ).rejects.toBeInstanceOf(IncognitoSessionMissingError);
+        const delivery = {
+          ...scope,
+          sessionId: entry.sessionId,
+          sourceTurnId: "source",
+          toolCallId: "tool",
+        };
+        expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
+        expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
+        expect(await cancelRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+    });
+    expect((await readSessionMembersInWorker(scope)).members).toHaveLength(1);
+  } finally {
+    await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+  }
+});
+
 async function fixture(name: string, source = authority) {
   const sessionKey = `agent:main:dashboard:incognito-${name}`;
   const entry = {
@@ -81,6 +170,34 @@ async function fixture(name: string, source = authority) {
   } satisfies SessionCollaborationScope;
   return { scope, entry };
 }
+
+it("rereads non-mutating actor delivery receipts without native SQL or replay", async () => {
+  const { scope, entry } = await fixture("delivery-receipt");
+  await withIncognitoSessionActor(actor, async () => {
+    await replaceSessionEntry(scope, {
+      ...entry,
+      restartRecoveryDeliveryRunId: "recovery",
+      restartRecoveryDeliverySourceRunId: "source",
+    });
+    const delivery = {
+      ...scope,
+      sessionId: entry.sessionId,
+      sourceTurnId: "source",
+      toolCallId: "tool",
+    };
+    const sql = observeMainThreadSql();
+    try {
+      expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("started");
+      expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("delivery-ambiguous");
+      expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("recorded");
+      expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("recorded");
+      expect(await cancelRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+});
 
 it("composes sharing, delivery, steering and presence from current actor facts without host SQL", async () => {
   const { scope, entry: initial } = await fixture("authority-composition");
@@ -221,6 +338,45 @@ it("composes suggestion FIFO, claims, release and resolution without caller SQL"
 });
 
 it.each(["members", "suggestions"] as const)(
+  "honors explicit %s custody and refuses canceled ambient reads",
+  async (kind) => {
+    const { scope } = await fixture(`read-custody-${kind}`);
+    await addSessionMember(scope, { identityId: "reader", addedBy: "owner" });
+    await addSessionSuggestionInWorker(scope, {
+      id: `custody-suggestion-${kind}`,
+      authorId: "reader",
+      text: "Retained private suggestion",
+    });
+    const read = async (target: SessionCollaborationScope) =>
+      kind === "members" ? readSessionMembersInWorker(target) : listSessionSuggestions(target);
+    const foreignEnv = { OPENCLAW_STATE_DIR: tempDirs.make("unrelated-absent-binding-") };
+    await withEnvAsync(foreignEnv, async () => {
+      const noEnv = { ...scope, env: undefined };
+      const expected =
+        kind === "members"
+          ? { members: [{ identityId: "reader" }] }
+          : [{ id: `custody-suggestion-${kind}` }];
+      const explicit = await withIncognitoSessionBinding(
+        { kind: "absent", agentId: actor.agentId, env: foreignEnv, authority },
+        () => read(noEnv),
+      );
+      expect(explicit).toMatchObject(expected);
+      expect(
+        await withIncognitoSessionActor(actor, () => read({ ...noEnv, incognito: undefined })),
+      ).toMatchObject(expected);
+      await expect(read({ ...scope, env: foreignEnv })).rejects.toThrow("state root");
+    });
+    const controller = new AbortController();
+    const failure = new Error("synthetic collaboration read canceled");
+    const pending = withIncognitoSessionBinding({ actor, admissionSignal: controller.signal }, () =>
+      read({ ...scope, incognito: undefined }),
+    );
+    controller.abort(failure);
+    await expect(pending).rejects.toBe(failure);
+  },
+);
+
+it.each(["members", "suggestions"] as const)(
   "refuses %s disclosure after its borrowed actor releases inside an accepted composition",
   async (kind) => {
     const { scope } = await fixture(`released-${kind}`);
@@ -258,7 +414,7 @@ it.each(["members", "suggestions"] as const)(
         borrowed.sessions.withSharedState(async () => {
           const value =
             kind === "members"
-              ? await listSessionMembersInWorker(captured)
+              ? await readSessionMembersInWorker(captured)
               : await listSessionSuggestions(captured);
           disclosed(value);
         }),
@@ -347,7 +503,7 @@ it("publishes actor membership, owner, participant and category changes through 
   try {
     await withIncognitoSessionActor(actor, async () => {
       await addSessionMember(scope, { identityId: "alice", addedBy: "creator", addedAt: 1 });
-      expect(await listSessionMembersInWorker(scope)).toEqual([
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([
         { identityId: "alice", addedBy: "creator", addedAt: 1 },
       ]);
       await assignSessionOwnerInWorker(scope, {
@@ -364,7 +520,7 @@ it("publishes actor membership, owner, participant and category changes through 
       ).toBe("inserted");
       expect(await updateSessionGroupCategoriesInWorker({ scope, from: entry.category })).toBe(1);
       await removeSessionMember(scope, "alice");
-      expect(await listSessionMembersInWorker(scope)).toEqual([]);
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
       const current = await actor.sessions.read(authority, { sessionKey: scope.sessionKey });
       expect(current.entry).toMatchObject({ owner: { actor: { type: "human", id: "alice" } } });
       expect(current.entry?.category).toBeUndefined();
@@ -499,5 +655,6 @@ it("refuses a captured actor belonging to another physical store", async () => {
       },
       { authorId: "alice", text: "Must not be rerouted" },
     ),
-  ).rejects.toThrow("Collaboration target differs from its captured incognito actor");
+  ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
+  expect(await listSessionSuggestions(scope)).toEqual([]);
 });

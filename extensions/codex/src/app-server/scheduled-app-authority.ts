@@ -328,10 +328,10 @@ export async function captureScheduledCodexAppAuthority(params: {
         : CODEX_APP_AUTHORITY_CAPTURE_TIMEOUT_MS,
     ),
   );
-  const deadlineMs = Date.now() + timeoutMs;
+  const deadlineMs = performance.now() + timeoutMs;
   const boundedClient = {
     request: ((method: string, requestParams: unknown) => {
-      const remainingTimeoutMs = deadlineMs - Date.now();
+      const remainingTimeoutMs = deadlineMs - performance.now();
       if (remainingTimeoutMs <= 0) {
         throw new CodexScheduledAppAuthorityCaptureTimeoutError();
       }
@@ -514,11 +514,8 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const appsPatch = asOptionalRecord(configPatch.apps);
   for (const [appId, captured] of capturedById) {
     const appPatch = asOptionalRecord(appsPatch?.[appId]);
-    if (!appPatch || !Object.hasOwn(apps, appId)) {
-      continue;
-    }
-    const currentApp = apps[appId];
-    if (!currentApp) {
+    const currentApp = Object.hasOwn(apps, appId) ? apps[appId] : undefined;
+    if (!appPatch || !currentApp) {
       continue;
     }
     if (currentApp.destructiveApprovalMode === "ask") {

@@ -33,14 +33,8 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
-/**
- * Agent runtime surface used by realtime voice consults.
- */
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
-/**
- * Speakable text returned to the realtime voice bridge after an agent consult.
- */
 export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 
 const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
@@ -55,9 +49,6 @@ const REALTIME_VOICE_YIELD_ACK_FALLBACK =
  */
 export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
 
-/**
- * Controls whether voice consults run in a fresh session or fork context from the requester.
- */
 type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
 
 type RealtimeVoiceAgentConsultRunRegistration = {
@@ -362,9 +353,6 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
-/**
- * Runs an embedded agent consult and returns concise speakable text for realtime voice playback.
- */
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;

@@ -43,7 +43,11 @@ export function publishPluginHelpContext(
     setting: previous?.reference.id === plugin.id ? previous.reference.setting : undefined,
   });
   if (!reference) {
-    clearPluginHelpContext(context, owner);
+    if (state.publication?.owner === owner) {
+      state.publication = undefined;
+      state.selectionEpoch += 1;
+      notifyPluginHelp(state);
+    }
     return () => undefined;
   }
   const publication: Publication = {
@@ -75,15 +79,6 @@ export function publishPluginHelpContext(
       notifyPluginHelp(state);
     }
   };
-}
-
-function clearPluginHelpContext(context: PluginHelpContext, owner: object): void {
-  const state = pluginHelpState(context);
-  if (state.publication?.owner === owner) {
-    state.publication = undefined;
-    state.selectionEpoch += 1;
-    notifyPluginHelp(state);
-  }
 }
 
 export function createPluginHelpRequest(

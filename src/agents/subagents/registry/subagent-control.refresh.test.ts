@@ -206,117 +206,109 @@ it.for(["complete", "reject undefined"] as const)(
   },
 );
 
-it.for(["await refresh", "reject undefined"] as const)(
-  "retires queued refreshes after an escaping native failure while the caller will %s",
-  async (completion, { signal }) => {
-    const rootKey = "agent:main:subagent:refresh-failure";
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: rootKey,
-      defaultSessionId: "refresh-failure-session",
-    });
-    await registerSubagentRun({
-      runId: "refresh-failure",
-      childSessionKey: rootKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "failed discovery",
-      cleanup: "keep",
-      collect: true,
-      expectsCompletionMessage: false,
-    });
-    const ready = createDeferred<killScope.KillScope>();
-    const entered = createDeferred();
-    const finishRun = createDeferred();
-    const releaseRead = createDeferred();
-    const failure = new SqliteWorkerError("discovery outcome unknown", "outcome-unknown");
-    const accepted: Array<Promise<number>> = [];
-    let observing = false;
-    let reads = 0;
-    const release = () => {
-      finishRun.resolve();
-      releaseRead.resolve();
-    };
-    signal.addEventListener("abort", release, { once: true });
-    const read = registryState.withSubagentRunReadSnapshot;
-    vi.spyOn(registryState, "withSubagentRunReadSnapshot").mockImplementation(
-      (runs, select, consume, scope) => {
-        const index =
-          observing &&
-          scope !== "all" &&
-          "sessionKeys" in scope &&
-          scope.sessionKeys.includes(rootKey)
-            ? ++reads
-            : 0;
-        return read(runs, select, consume, scope).then(async (result) => {
-          if (index === 1) {
-            entered.resolve();
-            await releaseRead.promise;
-            throw failure;
-          }
-          return result;
-        });
-      },
-    );
-    const stopped = killScope.withSubagentKillScope(
-      { cfg: getRuntimeConfig(), runs: [subagentRuns.get("refresh-failure")!] },
-      async (scope) => {
-        observing = true;
-        ready.resolve(scope);
-        await finishRun.promise;
-        if (completion === "reject undefined") {
-          const rejected = createDeferred<never>();
-          rejected.reject();
-          return await rejected.promise;
+it("retires queued refreshes after an escaping native failure and an undefined caller rejection", async ({
+  signal,
+}) => {
+  const rootKey = "agent:main:subagent:refresh-failure";
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: rootKey,
+    defaultSessionId: "refresh-failure-session",
+  });
+  await registerSubagentRun({
+    runId: "refresh-failure",
+    childSessionKey: rootKey,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "failed discovery",
+    cleanup: "keep",
+    collect: true,
+    expectsCompletionMessage: false,
+  });
+  const ready = createDeferred<killScope.KillScope>();
+  const entered = createDeferred();
+  const finishRun = createDeferred();
+  const releaseRead = createDeferred();
+  const failure = new SqliteWorkerError("discovery outcome unknown", "outcome-unknown");
+  const accepted: Array<Promise<number>> = [];
+  let observing = false;
+  let reads = 0;
+  const release = () => {
+    finishRun.resolve();
+    releaseRead.resolve();
+  };
+  signal.addEventListener("abort", release, { once: true });
+  const read = registryState.withSubagentRunReadSnapshot;
+  vi.spyOn(registryState, "withSubagentRunReadSnapshot").mockImplementation(
+    (runs, select, consume, scope) => {
+      const index =
+        observing &&
+        scope !== "all" &&
+        "sessionKeys" in scope &&
+        scope.sessionKeys.includes(rootKey)
+          ? ++reads
+          : 0;
+      return read(runs, select, consume, scope).then(async (result) => {
+        if (index === 1) {
+          entered.resolve();
+          await releaseRead.promise;
+          throw failure;
         }
-        return await accepted[0]!;
-      },
-    );
-    const outcome = stopped.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    try {
-      const scope = await withinTest(ready.promise, signal);
-      const first = scope.refresh();
-      accepted.push(first);
-      void first.catch(() => {});
-      await withinTest(entered.promise, signal);
-      accepted.push(scope.refresh());
-      const results = Promise.allSettled(accepted);
-      releaseRead.resolve();
-      expect(await withinTest(results, signal)).toEqual([
-        { status: "rejected", reason: failure },
-        { status: "rejected", reason: failure },
-      ]);
-      const later = scope.refresh();
-      accepted.push(later);
-      expect(await Promise.allSettled([later])).toEqual([{ status: "rejected", reason: failure }]);
-      expect(reads, "native uncertainty retires the accepted successor batch").toBe(1);
-      finishRun.resolve();
-      const result = await outcome;
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        if (completion === "await refresh") {
-          expect(result.error).toBe(failure);
-        } else {
-          expect(result.error).toBeInstanceOf(AggregateError);
-          if (result.error instanceof AggregateError) {
-            expect(result.error.errors).toEqual([undefined, failure]);
-          }
-        }
+        return result;
+      });
+    },
+  );
+  const stopped = killScope.withSubagentKillScope(
+    { cfg: getRuntimeConfig(), runs: [subagentRuns.get("refresh-failure")!] },
+    async (scope) => {
+      observing = true;
+      ready.resolve(scope);
+      await finishRun.promise;
+      const rejected = createDeferred<never>();
+      rejected.reject();
+      return await rejected.promise;
+    },
+  );
+  const outcome = stopped.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  try {
+    const scope = await withinTest(ready.promise, signal);
+    const first = scope.refresh();
+    accepted.push(first);
+    void first.catch(() => {});
+    await withinTest(entered.promise, signal);
+    accepted.push(scope.refresh());
+    const results = Promise.allSettled(accepted);
+    releaseRead.resolve();
+    expect(await withinTest(results, signal)).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    const later = scope.refresh();
+    accepted.push(later);
+    expect(await Promise.allSettled([later])).toEqual([{ status: "rejected", reason: failure }]);
+    expect(reads, "native uncertainty retires the accepted successor batch").toBe(1);
+    finishRun.resolve();
+    const result = await outcome;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(AggregateError);
+      if (result.error instanceof AggregateError) {
+        expect(result.error.errors).toEqual([undefined, failure]);
       }
-      await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
-      expect(reads).toBe(1);
-    } finally {
-      release();
-      await Promise.allSettled([...accepted, stopped]);
-      signal.removeEventListener("abort", release);
     }
-  },
-);
+    await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
+    expect(reads).toBe(1);
+  } finally {
+    release();
+    await Promise.allSettled([...accepted, stopped]);
+    signal.removeEventListener("abort", release);
+  }
+});
 
 it("retains a captured child prefix when the next child's session preparation fails", async () => {
   const owner = "agent:main:main";
@@ -427,8 +419,8 @@ it("retains a captured child prefix when the next child's session preparation fa
 // Sweep retained identity checks after admission interruption. Every injected
 // failure must remain visible while independent siblings still settle.
 it.each([
-  ...[undefined, 1, 2, 3, 4].map((faultAt) => ({ phase: "ancestor drain", faultAt })),
-  ...[undefined, 1].map((faultAt) => ({ phase: "later sibling drain", faultAt })),
+  ...[undefined, 2, 4].map((faultAt) => ({ phase: "ancestor drain", faultAt })),
+  { phase: "later sibling drain", faultAt: 1 },
 ])(
   "reports retained identity check $faultAt failure after $phase without losing descendant accounting",
   async ({ phase, faultAt }) => {

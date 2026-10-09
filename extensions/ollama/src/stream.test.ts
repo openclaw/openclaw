@@ -195,6 +195,64 @@ describe("createOllamaStreamFn thinking events", () => {
     return events;
   }
 
+  it("gives successive narrated tool rounds distinct commentary identities", async () => {
+    const signatures: string[] = [];
+    for (const path of ["README.md", "NOTES.md"]) {
+      const narration = `Let me read ${path}.`;
+      const events = await streamOllamaEvents(
+        [
+          makeOllamaResponse({
+            content: narration,
+            tool_calls: [{ function: { name: "read", arguments: { path } } }],
+          }),
+        ],
+        {},
+        {
+          messages: [{ role: "user", content: "Read both files." }],
+          tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+        } as never,
+      );
+      const done = events.find((event) => event.type === "done") as {
+        message?: { content?: Array<{ type: string; text?: string; textSignature?: string }> };
+      };
+      const text = expectDefined(
+        done.message?.content?.find((block) => block.type === "text"),
+        "terminal Ollama text",
+      );
+      expect(text.text).toBe(narration);
+      const signature = JSON.parse(expectDefined(text.textSignature, "commentary signature"));
+      expect(signature).toMatchObject({ v: 1, id: expect.any(String), phase: "commentary" });
+      signatures.push(signature.id);
+    }
+    expect(signatures[0]).not.toBe(signatures[1]);
+  });
+
+  it.each(["stop", "length"])(
+    "keeps text before reasoning deliverable at a %s terminal",
+    async (done_reason) => {
+      const events = await streamOllamaEvents([
+        { ...makeOllamaResponse({ content: "Visible answer" }), done: false },
+        makeOllamaResponse({ thinking: "Late reasoning", done_reason }),
+      ]);
+      expect(events.find((event) => event.type === "done")).toMatchObject({
+        reason: done_reason,
+        message: {
+          stopReason: done_reason,
+          content: [
+            { type: "thinking", thinking: "Late reasoning" },
+            { type: "text", text: "Visible answer" },
+          ],
+        },
+      });
+      const done = events.find((event) => event.type === "done") as {
+        message?: { content?: Array<{ type: string; textSignature?: string }> };
+      };
+      expect(
+        done.message?.content?.find((block) => block.type === "text")?.textSignature,
+      ).toBeUndefined();
+    },
+  );
+
   it("emits thinking_start, thinking_delta, and thinking_end events for thinking content", async () => {
     const thinkingChunks = [
       {

@@ -10,10 +10,8 @@ export function agentTerminalOwnerMatches(
   owner: TerminalOwner | null,
   expected: AgentTerminalOwner,
 ): boolean {
-  if (owner?.kind !== "agent") {
-    return false;
-  }
   return (
+    owner?.kind === "agent" &&
     owner.agentSessionKey === expected.agentSessionKey &&
     owner.agentSessionId === expected.agentSessionId &&
     owner.agentId === expected.agentId

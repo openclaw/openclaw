@@ -5,7 +5,7 @@ import { resolveAssistantAgentId } from "./assistant-identity.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import {
-  createControlUiPublicSessionRoute,
+  serveControlUiPublicSession,
   isControlUiPublicSessionPath,
 } from "./control-ui-public-session.js";
 import { controlUiSessionEntryPath } from "./control-ui-session-entry-path.js";
@@ -27,7 +27,6 @@ export function createControlUiSessionRoutes(options: {
 }) {
   const basePath = normalizeControlUiBasePath(options.controlUiBasePath);
   let gate: ReturnType<typeof createControlUiPublicSessionRequestGate> | undefined;
-  let legacy: ReturnType<typeof createControlUiPublicSessionRoute> | undefined;
   const publicGate = () => (gate ??= createControlUiPublicSessionRequestGate());
   return {
     matches(pathname: string, rawUrl?: string) {
@@ -68,9 +67,29 @@ export function createControlUiSessionRoutes(options: {
       const { req, res, config } = params;
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
       const projection = getSessionRowProjection(options.getGatewayRequestContext?.());
+      const serveApp = async (path: string, isCurrent?: () => boolean) => {
+        // Select only the SPA document and preloads, never another HTTP handler.
+        // Authenticated handoffs additionally recheck their live authority.
+        const originalUrl = req.url;
+        req.url = path;
+        try {
+          return await (
+            await getControlUiModule()
+          ).handleControlUiHttpRequest(req, res, {
+            ...params,
+            basePath,
+            root: options.controlUiRoot,
+            terminalEnabled: options.isTerminalEnabled?.() ?? isTerminalConfigEnabled(config),
+            agentId: resolveAssistantAgentId(config),
+            sessionEntryPath: path,
+            isSessionEntryCurrent: isCurrent,
+          });
+        } finally {
+          req.url = originalUrl;
+        }
+      };
       if (isControlUiPublicSessionPath(pathname, basePath)) {
-        legacy ??= createControlUiPublicSessionRoute(publicGate());
-        return legacy.serve({ ...params, basePath, projection });
+        return serveControlUiPublicSession({ ...params, basePath, projection, gate: publicGate() });
       }
       if (pathname !== controlUiSessionEntryPath(basePath)) {
         return (await import("./control-ui-public-chat.js")).serveControlUiPublicChat({
@@ -78,33 +97,14 @@ export function createControlUiSessionRoutes(options: {
           basePath,
           projection,
           gate: publicGate(),
+          serveApp,
         });
       }
       return (await import("./control-ui-session-entry.js")).serveControlUiSessionEntry({
         ...params,
         basePath,
         projection,
-        serveApp: async (path, isCurrent) => {
-          // The protected request supplies authority; the path selects only the
-          // existing SPA document and preloads, never another HTTP handler.
-          const originalUrl = req.url;
-          req.url = path;
-          try {
-            return await (
-              await getControlUiModule()
-            ).handleControlUiHttpRequest(req, res, {
-              ...params,
-              basePath,
-              root: options.controlUiRoot,
-              terminalEnabled: options.isTerminalEnabled?.() ?? isTerminalConfigEnabled(config),
-              agentId: resolveAssistantAgentId(config),
-              sessionEntryPath: path,
-              isSessionEntryCurrent: isCurrent,
-            });
-          } finally {
-            req.url = originalUrl;
-          }
-        },
+        serveApp,
       });
     },
   };

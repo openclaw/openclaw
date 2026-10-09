@@ -39,10 +39,6 @@ import {
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
-import {
-  reserveSkillCommandNames,
-  resolveConfiguredDirectiveAliases,
-} from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
@@ -120,19 +116,16 @@ export async function resolveReplyDirectives(params: {
     defaultModel,
     primaryProvider,
     primaryModel,
-    provider: initialProvider,
-    model: initialModel,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
     skillFilter,
   } = params;
+  let { provider, model } = params;
   const agentEntry = listAgentEntries(cfg).find(
     (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-  let provider = initialProvider;
-  let model = initialModel;
 
   const commandText = sessionCtx.commandText;
   const command = buildCommandContext({
@@ -170,11 +163,10 @@ export async function resolveReplyDirectives(params: {
   }
 
   const rawAliases = hasConfiguredModelAliases
-    ? resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash,
-        reservedCommands,
-      })
+    ? Object.values(cfg.agents?.defaults?.models ?? {})
+        .map((entry) => normalizeOptionalString(entry.alias))
+        .filter((alias): alias is string => Boolean(alias))
+        .filter((alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)))
     : [];
   const skillCommandContext = {
     workspaceDir,
@@ -196,7 +188,9 @@ export async function resolveReplyDirectives(params: {
           skillFilter,
         })
       : [];
-  reserveSkillCommandNames({ reservedCommands, skillCommands });
+  for (const skill of skillCommands) {
+    reservedCommands.add(normalizeLowercaseStringOrEmpty(skill.name));
+  }
 
   const allSkillCommands =
     hasSkillReferences && skillFilter !== undefined
@@ -326,10 +320,8 @@ export async function resolveReplyDirectives(params: {
   const resolvedVerboseLevel =
     directives.verboseLevel ??
     (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (agentCfg?.verboseDefault as VerboseLevel | undefined);
-  const configuredReasoningDefault =
-    (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
-    (agentCfg?.reasoningDefault as ReasoningLevel | undefined);
+    agentCfg?.verboseDefault;
+  const configuredReasoningDefault = agentEntry?.reasoningDefault ?? agentCfg?.reasoningDefault;
   const canUseReasoningState =
     command.isAuthorizedSender ||
     command.senderIsOwner ||
@@ -339,23 +331,15 @@ export async function resolveReplyDirectives(params: {
     | null
     | undefined;
   const sessionReasoningLevel = canUseReasoningState ? rawSessionReasoningLevel : undefined;
-  const blockedSessionReasoningLevel =
-    rawSessionReasoningLevel !== undefined &&
-    rawSessionReasoningLevel !== null &&
-    !canUseReasoningState;
-  const reasoningUsesConfiguredDefault =
-    directives.reasoningLevel === undefined &&
-    sessionReasoningLevel == null &&
-    configuredReasoningDefault != null;
-  let resolvedReasoningLevel: ReasoningLevel =
-    directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off";
-  if (reasoningUsesConfiguredDefault && !canUseReasoningState) {
-    resolvedReasoningLevel = "off";
-  }
+  const blockedSessionReasoningLevel = rawSessionReasoningLevel != null && !canUseReasoningState;
+  const resolvedReasoningLevel: ReasoningLevel =
+    !canUseReasoningState && directives.reasoningLevel === undefined
+      ? "off"
+      : (directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off");
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (targetSessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
+      agentCfg?.elevatedDefault ??
       "on")
     : "off";
   const blockStreamingEnabled =
@@ -411,8 +395,7 @@ export async function resolveReplyDirectives(params: {
     }
     return { kind: "reply" as const, reply: { text: error.message, isError: true } };
   }
-  provider = modelState.provider;
-  model = modelState.model;
+  ({ provider, model } = modelState);
 
   let contextTokens = useFastReplyRuntime
     ? DEFAULT_CONTEXT_TOKENS
@@ -460,10 +443,7 @@ export async function resolveReplyDirectives(params: {
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
     return { kind: "reply" as const, reply: markCommandReplyForDelivery(applyResult.reply) };
   }
-  directives = applyResult.directives;
-  provider = applyResult.provider;
-  model = applyResult.model;
-  contextTokens = applyResult.contextTokens;
+  ({ directives, provider, model, contextTokens } = applyResult);
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg,
     provider,
@@ -483,13 +463,12 @@ export async function resolveReplyDirectives(params: {
   // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
   // or when thinking was explicitly disabled.
   const hasAgentReasoningDefault =
-    (agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null) ||
-    (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
+    agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null;
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     unauthorizedReasoningDirectiveAttempt ||
     blockedSessionReasoningLevel ||
-    (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
+    sessionReasoningLevel != null ||
     hasAgentReasoningDefault;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const resolvedFastModeState = resolveFastModeState({

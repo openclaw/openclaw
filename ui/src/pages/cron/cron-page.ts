@@ -87,7 +87,6 @@ class CronPage extends OpenClawLightDomElement {
     return scope
       ? {
           client: scope.client,
-          epoch: this.gateway.epoch,
           isCurrent: () => this.gateway.isCurrent(scope) && this.cron === cron,
         }
       : null;
@@ -132,7 +131,7 @@ class CronPage extends OpenClawLightDomElement {
       // Hello and roster hydration refine the filter, not the operator's route
       // or draft. Keep its state owner and supersede reads for the previous scope.
       this.cron.cronAgentId = scopeId;
-      void this.refreshCron({ tableFilters: true });
+      void this.refreshCron();
       void this.loadModelSuggestions(this.cron);
       if (
         (this.cron.cronEditingJob || this.cron.cronCreateOpen) &&
@@ -189,7 +188,7 @@ class CronPage extends OpenClawLightDomElement {
             this.gateway.client
           ) {
             if (event.event === "cron") {
-              void this.refreshCron({ tableFilters: true, coalesce: true });
+              void this.refreshCron({ coalesce: true });
             } else if (modelCatalogEventInvalidation(event)) {
               void this.loadModelSuggestions(this.cron);
             }
@@ -237,7 +236,7 @@ class CronPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     if (forceRefresh || (!this.cron.cronStatus && !this.cron.cronLoading)) {
-      void this.refreshCron({ tableFilters: true, coalesce: true });
+      void this.refreshCron({ coalesce: true });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns();
     }
@@ -325,7 +324,7 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private async refreshCron(options: { tableFilters: boolean; coalesce?: boolean }) {
+  private async refreshCron(options: { coalesce?: boolean } = {}) {
     const cronState = this.cron;
     if (!this.canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
       return;
@@ -334,14 +333,19 @@ class CronPage extends OpenClawLightDomElement {
     void this.context.channels.refresh(false);
     await Promise.all([
       this.runCronTask((current) => loadCronStatus(current, options)),
-      this.runCronTask((current) =>
-        loadCronJobsPage(current, { tableFilters: options.tableFilters }),
-      ),
+      this.runCronTask((current) => loadCronJobsPage(current, { tableFilters: true })),
     ]);
   }
 
   private loadRuns(coalesce = false) {
     return this.runCronTask((cronState) => loadCronRuns(cronState, { coalesce }));
+  }
+
+  private updateJobsFilters(patch: Parameters<typeof updateCronJobsFilter>[1]) {
+    void this.runCronTask(async (cronState) => {
+      updateCronJobsFilter(cronState, patch);
+      await loadCronJobsPage(cronState, { append: false, tableFilters: true });
+    });
   }
 
   private async loadModelSuggestions(cronState: CronState) {
@@ -430,13 +434,17 @@ class CronPage extends OpenClawLightDomElement {
       void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
     }
     void this.runCronTask(async (cronState) => {
-      updateCronRunsFilter(cronState, { cronRunsScope: "job" });
       // Claim the run pane before awaiting: loadCronRuns drops responses whose
       // job no longer matches, so a slower earlier selection cannot overwrite
       // this task's history.
-      cronState.cronRunsJobId = job.id;
-      await loadCronRuns(cronState);
+      await this.refreshRunsScope(cronState, job.id);
     });
+  }
+
+  private refreshRunsScope(cronState: CronState, jobId: string | null) {
+    updateCronRunsFilter(cronState, { cronRunsScope: jobId === null ? "all" : "job" });
+    cronState.cronRunsJobId = jobId;
+    return loadCronRuns(cronState);
   }
 
   private clearHeartbeatScratch() {
@@ -475,18 +483,21 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
+  private resetEditor(createOpen: boolean) {
+    this.clearHeartbeatScratch();
+    this.pendingRouteData = null;
+    // Retire the outgoing editor's discovery before resetting its form so
+    // late saves, deletions, and directory failures cannot affect its successor.
+    this.deliveryDirectory.retireEditor();
+    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
+    this.cron.cronCreateOpen = createOpen;
+  }
+
   private openCreate(patch?: Partial<CronFormState>) {
     if (!this.canManageCron) {
       return;
     }
-    this.clearHeartbeatScratch();
-    this.pendingRouteData = null;
-    // Opening the create form exits whatever editor was open, so the outgoing
-    // editor's directory retires with it and a delete or save still awaiting
-    // from that editor can no longer clear this one's.
-    this.deliveryDirectory.retireEditor();
-    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
-    this.cron.cronCreateOpen = true;
+    this.resetEditor(true);
     if (patch) {
       this.patchForm(patch);
       return;
@@ -565,29 +576,20 @@ class CronPage extends OpenClawLightDomElement {
       // Removing the selected task drops the panel back to overview;
       // the runs scope must follow or recent activity stays empty.
       if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
-        updateCronRunsFilter(current, { cronRunsScope: "all" });
-        await loadCronRuns(current);
+        await this.refreshRunsScope(current, null);
       }
     });
   }
 
   private closePanel() {
-    this.clearHeartbeatScratch();
-    this.pendingRouteData = null;
-    // Back is a confirmed editor exit: retire discovery so a pending or
-    // published directory failure cannot surface on the overview.
-    this.deliveryDirectory.retireEditor();
-    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
-    this.cron.cronCreateOpen = false;
+    this.resetEditor(false);
     this.requestCronUpdate();
     void this.runCronTask(async (cronState) => {
-      updateCronRunsFilter(cronState, { cronRunsScope: "all" });
-      cronState.cronRunsJobId = null;
-      await loadCronRuns(cronState);
+      await this.refreshRunsScope(cronState, null);
     });
   }
 
-  private submitForm(options: { runNow?: boolean } = {}) {
+  private submitForm(runNow = false) {
     const connectionScope = this.gateway.capture();
     const editorGeneration = this.deliveryDirectory.generation;
     this.runCronAdminTask(async (cronState) => {
@@ -610,7 +612,7 @@ class CronPage extends OpenClawLightDomElement {
       if (stillEditing) {
         return;
       }
-      if (options.runNow && result.jobId) {
+      if (runNow && result.jobId) {
         // Create & run now: kick the new task once so the first result arrives
         // immediately instead of waiting for the first scheduled tick.
         await runCronJob(cronState, result.jobId, "force");
@@ -619,9 +621,7 @@ class CronPage extends OpenClawLightDomElement {
       // Creating from a selected task drops back to overview; recent activity
       // must cover all tasks again, not the previously selected job.
       if (cronState.cronRunsScope === "job") {
-        updateCronRunsFilter(cronState, { cronRunsScope: "all" });
-        cronState.cronRunsJobId = null;
-        await loadCronRuns(cronState);
+        await this.refreshRunsScope(cronState, null);
       }
     });
   }
@@ -724,9 +724,9 @@ class CronPage extends OpenClawLightDomElement {
             this.detailTab = tab;
           },
           onFormChange: (patch) => this.patchForm(patch),
-          onRefresh: () => void this.refreshCron({ tableFilters: true }),
+          onRefresh: () => void this.refreshCron(),
           onSubmit: () => this.submitForm(),
-          onSubmitRunNow: () => this.submitForm({ runNow: true }),
+          onSubmitRunNow: () => this.submitForm(true),
           onSelectJob: (job) => this.selectJob(job),
           onOpenCreate: (patch) => this.openCreate(patch),
           onClosePanel: () => this.closePanel(),
@@ -740,21 +740,14 @@ class CronPage extends OpenClawLightDomElement {
             void this.runCronTask((cronState) =>
               loadCronJobsPage(cronState, { append: true, tableFilters: true }),
             ),
-          onJobsFiltersChange: (patch) =>
-            void this.runCronTask(async (cronState) => {
-              updateCronJobsFilter(cronState, patch);
-              await loadCronJobsPage(cronState, { append: false, tableFilters: true });
-            }),
+          onJobsFiltersChange: (patch) => this.updateJobsFilters(patch),
           onJobsFiltersReset: () =>
-            void this.runCronTask(async (cronState) => {
-              updateCronJobsFilter(cronState, {
-                cronJobsScheduleKindFilter: "all",
-                cronJobsLastStatusFilter: "all",
-                cronJobsTriggerFilter: "all",
-                cronJobsSortBy: "nextRunAtMs",
-                cronJobsSortDir: "asc",
-              });
-              await loadCronJobsPage(cronState, { append: false, tableFilters: true });
+            this.updateJobsFilters({
+              cronJobsScheduleKindFilter: "all",
+              cronJobsLastStatusFilter: "all",
+              cronJobsTriggerFilter: "all",
+              cronJobsSortBy: "nextRunAtMs",
+              cronJobsSortDir: "asc",
             }),
           onLoadMoreRuns: () => void this.runCronTask((cronState) => loadMoreCronRuns(cronState)),
           onRunsFiltersChange: (patch) =>

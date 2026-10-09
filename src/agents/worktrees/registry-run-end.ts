@@ -14,10 +14,15 @@ import type {
 } from "./registry-run-end.worker.js";
 import {
   captureWorktreeRunEndContext,
+  captureWorktreeRegistryMutation,
   retainWorktreeRunEndFailure,
   withWorktreeRunEnd,
+  type WorktreeRegistryChange,
+  type WorktreeRegistryField,
+  worktreeOwnerSelectionKey,
+  WORKTREE_UNKNOWN_OWNER_SELECTION,
 } from "./run-end-lifecycle.js";
-import type { WorktreeWorkerAuthority } from "./types.js";
+import type { WorktreeRegistryPredicate, WorktreeWorkerAuthority } from "./types.js";
 
 type RunEndCommands = Pick<
   OpenClawStateWorkerOperations,
@@ -27,6 +32,7 @@ type RunEndCommands = Pick<
   | "worktrees.abortRemoval"
   | "worktrees.insert"
   | "worktrees.update"
+  | "worktrees.delete"
   | "worktrees.reservePending"
   | "worktrees.releasePending"
   | "worktrees.recoverPending"
@@ -35,6 +41,109 @@ type LeaseSetAdmission = Parameters<
   Parameters<typeof withOpenClawStateLeasesWorkerAdmission>[2]
 >[0];
 
+function commandChanges(
+  command: SqliteWorkerCommand<RunEndCommands>,
+  predicates: readonly WorktreeRegistryPredicate[] = [],
+): WorktreeRegistryChange[] {
+  switch (command.type) {
+    case "worktrees.reservePending":
+    case "worktrees.releasePending":
+    case "worktrees.recoverPending":
+      // Pending slots do not publish registry rows.
+      return [];
+    case "worktrees.insert":
+    case "worktrees.delete":
+      return [
+        {
+          id:
+            command.type === "worktrees.insert"
+              ? command.input.value.record.id
+              : command.input.value.id,
+          fields: [
+            "identity",
+            "fingerprint",
+            "activity",
+            "removal",
+            "snapshot",
+            "provisioned",
+            "cleanup",
+            "leases",
+          ],
+        },
+        { id: "*", fields: ["identity"] },
+        ...(command.type === "worktrees.insert" && command.input.value.record.ownerId !== undefined
+          ? [
+              {
+                id: worktreeOwnerSelectionKey(
+                  command.input.value.record.ownerKind,
+                  command.input.value.record.ownerId,
+                ),
+                fields: ["identity"] as const,
+              },
+            ]
+          : []),
+      ];
+    case "worktrees.update": {
+      const { id, patch } = command.input.value;
+      const fields: WorktreeRegistryField[] = [];
+      if (patch.repositoryIdentity) {
+        const binding = predicates.flatMap((predicate) =>
+          predicate.kind === "binding" && predicate.record.id === id ? [predicate.record] : [],
+        )[0];
+        // The transaction checks this exact binding before applying repository normalization.
+        if (binding?.repoRoot !== patch.repositoryIdentity.repoRoot) {
+          fields.push("identity");
+        }
+        if (binding?.repoFingerprint !== patch.repositoryIdentity.repoFingerprint) {
+          fields.push("fingerprint");
+        }
+      }
+      if ("lastActiveAt" in patch) {
+        fields.push("activity");
+      }
+      if ("removedAt" in patch) {
+        fields.push("removal");
+      }
+      if ("snapshotRef" in patch) {
+        fields.push("snapshot");
+      }
+      if ("runEndCleanup" in patch) {
+        fields.push("cleanup");
+      }
+      if ("provisionedPaths" in patch || "provisionedState" in patch) {
+        fields.push("provisioned");
+      }
+      const owner = predicates.flatMap((predicate) =>
+        "record" in predicate &&
+        predicate.record.id === id &&
+        predicate.record.ownerId !== undefined
+          ? [predicate.record]
+          : [],
+      )[0];
+      const selection =
+        "removedAt" in patch && patch.removedAt === undefined
+          ? [
+              {
+                id:
+                  owner?.ownerId !== undefined
+                    ? worktreeOwnerSelectionKey(owner.ownerKind, owner.ownerId)
+                    : WORKTREE_UNKNOWN_OWNER_SELECTION,
+                fields: ["identity"] as const,
+              },
+            ]
+          : [];
+      return [{ id, fields }, ...selection];
+    }
+    case "worktrees.writeProvisionedSnapshot":
+      return [{ id: command.input.value.worktreeId, fields: ["provisioned"] }];
+    case "worktrees.claimRemoval":
+    case "worktrees.finalizeRemoval":
+    case "worktrees.abortRemoval":
+      return [{ id: command.input.value.worktreeId, fields: ["leases"] }];
+  }
+  throw new Error(`Unknown worktree command: ${String(command satisfies never)}`);
+}
+
 export function runWorktreeRunEndCommand(
   context: OpenClawStateWorkerContext,
   command: SqliteWorkerCommand<RunEndCommands>,
@@ -42,9 +151,11 @@ export function runWorktreeRunEndCommand(
 ): Promise<void> {
   const captured = structuredClone(command);
   const predicates = structuredClone(authority.predicates);
-  const assertCurrent = authority.assertCurrent;
+  const assertCaller = authority.assertCurrent;
   const leaseSet = authority.leaseSet;
   return withWorktreeRunEnd(context.environment, async () => {
+    const mutation = captureWorktreeRegistryMutation(context, commandChanges(captured, predicates));
+    const assertCurrent = () => mutation.assertAuthority(() => assertCaller?.());
     context.admission.assertCurrent();
     if (
       leaseSet &&
@@ -67,6 +178,7 @@ export function runWorktreeRunEndCommand(
               input: { ...captured.input, predicates, leases: leases?.identities },
             }),
           {
+            signal: authority.signal,
             assertCurrent: leases?.assertCurrent ?? assertCurrent,
             createAdmission(operation) {
               settled = operation.settled;
@@ -81,6 +193,11 @@ export function runWorktreeRunEndCommand(
                     }),
                   };
               admission = result.admission;
+              admission.observeRequests((request) => {
+                if (request.stage === "transaction") {
+                  mutation.observeTransaction();
+                }
+              });
               return result;
             },
           },
@@ -89,6 +206,7 @@ export function runWorktreeRunEndCommand(
         failure = { error };
       }
       const outcome = await settled;
+      mutation.settle(outcome?.kind === "unknown");
       if (outcome?.kind === "unknown") {
         throw Object.assign(
           new SqliteWorkerError(

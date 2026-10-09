@@ -109,6 +109,11 @@ const canonicalReadScope = resolveGlobalSingleton<{ current?: CanonicalReadScope
   () => ({}),
 );
 
+function requireCanonicalReadSnapshot(scope: CanonicalReadScope): never {
+  scope.snapshotRequired ??= new Error("Canonical session read requires an admission snapshot");
+  throw scope.snapshotRequired;
+}
+
 /** Only first admission needs a shared snapshot; warm materialized reads keep their existing cost. */
 export function readWithCanonicalSessionAdmission<T>(
   database: { db: DatabaseSync },
@@ -485,15 +490,23 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   database: { agentId: string; db: DatabaseSync; path?: string },
   collectMetadata = false,
 ): ValidatedSessionMetadata | undefined {
-  const incremental = hasCanonicalSessionValidationProjection(database);
+  const readScope = canonicalReadScope.current;
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const pathname = database.path ?? identity?.filename;
   const physicalValidation = pathname
     ? getOpenClawAgentDatabaseValidation({ ...database, path: pathname })
     : undefined;
+  if (
+    physicalValidation &&
+    readScope?.database === database.db &&
+    !database.db.isTransaction &&
+    !readerAdmissions.get(database.db)?.proof
+  ) {
+    requireCanonicalReadSnapshot(readScope);
+  }
+  const incremental = hasCanonicalSessionValidationProjection(database);
   const storedMainKey = readCanonicalSessionMainKey(database);
   const canonicalReady = hasOpenClawAgentCanonicalValidation(database);
-  const readScope = canonicalReadScope.current;
   const continuation = readScope?.database === database.db ? readScope.continuation : undefined;
   if (
     readScope &&
@@ -517,10 +530,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
     return undefined;
   }
   if (readScope?.database === database.db && !database.db.isTransaction) {
-    readScope.snapshotRequired ??= new Error(
-      "Canonical session read requires an admission snapshot",
-    );
-    throw readScope.snapshotRequired;
+    requireCanonicalReadSnapshot(readScope);
   }
   const remember = () =>
     rememberReaderAdmission(database.db, {
@@ -532,7 +542,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
     const inMemory = typeof identity?.identity === "symbol";
     if (!inMemory && !canonicalReady) {
       // A copied clean projection is not first-admission proof for an unknown file.
-      deferCanonicalSessionValidation(database);
+      deferCanonicalSessionValidation(database, true);
       const metadata: ValidatedSessionMetadata | undefined = collectMetadata
         ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
         : undefined;
@@ -547,7 +557,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
       remember();
       return undefined;
     }
-    deferCanonicalSessionValidation(database);
+    deferCanonicalSessionValidation(database, false);
     if (!collectMetadata) {
       const query = canonicalSessionValidationQuery(database).where(
         "session_nodes.session_key",

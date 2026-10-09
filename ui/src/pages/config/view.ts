@@ -35,7 +35,7 @@ import {
   resetConfigEphemeralState,
   toggleSensitivePathReveal,
 } from "./view-state.ts";
-import type { ConfigProps } from "./view-types.ts";
+import type { ConfigDiffEntry, ConfigProps } from "./view-types.ts";
 
 registerSettingsEnglish();
 
@@ -51,7 +51,6 @@ export function renderConfig(props: ConfigProps) {
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
-  const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
@@ -222,6 +221,9 @@ export function renderConfig(props: ConfigProps) {
     props.activeSection === null &&
     Boolean(include?.has("__appearance__"));
 
+  const renderDiffValue = (change: ConfigDiffEntry, side: "from" | "to") =>
+    renderRawDiffValue(change.path, change[side], props.uiHints, viewState.rawRevealed);
+
   const rawDiffPanel = hasRawChanges
     ? html`<details
         class="config-diff"
@@ -257,23 +259,9 @@ export function renderConfig(props: ConfigProps) {
                   (change) => html`<div class="config-diff__item">
                     <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
                     <div class="config-diff__values">
-                      <span class="config-diff__from"
-                        >${renderRawDiffValue(
-                          change.path,
-                          change.from,
-                          props.uiHints,
-                          viewState.rawRevealed,
-                        )}</span
-                      >
+                      <span class="config-diff__from">${renderDiffValue(change, "from")}</span>
                       <span class="config-diff__arrow">→</span>
-                      <span class="config-diff__to"
-                        >${renderRawDiffValue(
-                          change.path,
-                          change.to,
-                          props.uiHints,
-                          viewState.rawRevealed,
-                        )}</span
-                      >
+                      <span class="config-diff__to">${renderDiffValue(change, "to")}</span>
                     </div>
                   </div>`,
                 )
@@ -296,7 +284,7 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
   const showToolbar = showModeToggle || showSectionTabs;
-  const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
+  const showValidityWarning = props.valid === false && !viewState.validityDismissed;
   const showLead =
     showToolbar || settingsLayout === "accordion" || showValidityWarning || Boolean(channelGroup);
 
@@ -464,10 +452,11 @@ export function renderConfig(props: ConfigProps) {
                             activeSubsection: null,
                             showAdvanced: effectiveShowAdvanced,
                             forceAdvancedSection: props.forceAdvancedSection,
-                            onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                            onShowAdvanced: () =>
+                              props.onAppearanceChange({ showAdvancedSettings: true }),
                             onHideAdvanced: props.forceShowAdvanced
                               ? undefined
-                              : () => props.setShowAdvancedSettings(false),
+                              : () => props.onAppearanceChange({ showAdvancedSettings: false }),
                             sectionActions:
                               props.activeSection === "env"
                                 ? html`<button
