@@ -25,6 +25,32 @@ const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, succe
 
 describe("mutable update execution", () => {
   registerServiceCollectionTests();
+  it.each(["package", "git"] as const)(
+    "records deferred %s verification as a non-failure",
+    async (kind) => {
+      const options = executionParams(kind);
+      options.opts.restart = options.shouldRestart = false;
+      const deferred = {
+        name: "post-install-verify",
+        command: "verify installed package",
+        cwd: options.root,
+        exitCode: null,
+        durationMs: 0,
+        advisory: {
+          kind: "recoverable-maintenance" as const,
+          message: "State verification deferred to the operator restart.",
+        },
+      };
+      const install = kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate;
+      install.mockResolvedValueOnce({ ...successfulUpdate, steps: [deferred] });
+      const execution = await executeMutableUpdate(await bindExecutionGuards(options));
+      expect(execution?.result).toMatchObject({
+        status: "skipped",
+        reason: "gateway-readiness-unverified",
+        steps: [deferred],
+      });
+    },
+  );
   it.each(
     (["root", "include"] as const).flatMap((source) =>
       (["after-validation", "after-stop", "after-git-transfer"] as const).flatMap((phase) =>

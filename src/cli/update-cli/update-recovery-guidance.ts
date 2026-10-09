@@ -42,6 +42,12 @@ export function resolveUpdateResultNextAction(params: {
   environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
+  if (result.status === "skipped" && result.reason === "gateway-readiness-unverified") {
+    const deferred = result.steps.find((step) => step.name === "post-install-verify")?.advisory;
+    if (deferred) {
+      return deferred.message;
+    }
+  }
   if (isUpdateGatewayReadinessPending(result)) {
     return `The readiness observation ended without confirmation. Leave the Gateway starting and keep recovery backups; check current progress with \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
   }

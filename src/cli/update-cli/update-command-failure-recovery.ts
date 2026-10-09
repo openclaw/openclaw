@@ -116,6 +116,21 @@ export async function verifyUpdateFailureRecovery(params: {
         });
         return;
       }
+      if (params.opts.restart === false && !params.serviceStopped) {
+        result.steps.push({
+          name: "gateway recovery verification",
+          command: "gateway verification",
+          cwd: root,
+          durationMs: 0,
+          exitCode: null,
+          advisory: {
+            kind: "recoverable-maintenance",
+            message:
+              "Gateway recovery verification deferred because --no-restart leaves activation to the operator. Resolve the recorded update failure before restarting the Gateway through its service owner, then run openclaw update status and openclaw doctor.",
+          },
+        });
+        return;
+      }
       if (params.serviceStopped) {
         try {
           result.verification = {
@@ -157,7 +172,7 @@ export async function verifyUpdateFailureRecovery(params: {
         expectedVersion: version,
         expectedBuildId: buildId ?? undefined,
         timeoutMs: params.timeoutMs,
-        waitForStartup: params.opts.restart === false ? false : params.waitForStartup,
+        waitForStartup: params.waitForStartup,
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent?.();

@@ -556,6 +556,7 @@ export async function executeMutableUpdate(
   };
   const installOptions = {
     root: params.root,
+    restart: opts.restart,
     installKind: params.installKind,
     startedAt: params.startedAt,
     progress: params.progress,
@@ -673,6 +674,13 @@ export async function executeMutableUpdate(
   }
 
   result = recordMutableUpdateInterruption(opts, result);
+  if (
+    result.status === "ok" &&
+    !params.shouldRestart &&
+    result.steps.some((step) => step.name === "post-install-verify" && step.advisory)
+  ) {
+    result = { ...result, status: "skipped", reason: "gateway-readiness-unverified" };
+  }
   if (candidateFailureReason && result.status === "error") {
     result.reason = candidateFailureReason;
   }
