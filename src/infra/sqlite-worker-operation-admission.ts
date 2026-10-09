@@ -503,7 +503,11 @@ export function withSqliteWorkerOperationAdmission<T>(
 }
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */
-export function deferSqliteWorkerCommitReceipt(database: DatabaseSync, facts: unknown): void {
+export function deferSqliteWorkerCommitReceipt(
+  database: DatabaseSync,
+  facts: unknown,
+  delivery: "commit" | "settlement" = "commit",
+): void {
   const scope = currentAdmission.getStore();
   if (!scope?.active) {
     throw new SqliteWorkerError("SQLite receipt requires its retained admission", "unavailable");
@@ -530,7 +534,9 @@ export function deferSqliteWorkerCommitReceipt(database: DatabaseSync, facts: un
         };
         nativeCommitReceipts.set(scope.owner, receipt);
         scope.owner.committed = { facts: captured };
-        scope.owner.port.postMessage({ kind: "native-commit", committed: receipt }, []);
+        if (delivery === "commit") {
+          scope.owner.port.postMessage({ kind: "native-commit", committed: receipt }, []);
+        }
       },
     })
   ) {

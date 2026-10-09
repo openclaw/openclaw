@@ -74,15 +74,6 @@ export function resolveUsableAgentCredentialModes(
   return Object.freeze(modes);
 }
 
-function secretRefPlaceholder(
-  options: ResolveAgentCredentialMapOptions | undefined,
-): AgentCredential | null {
-  if (options?.includeSecretRefPlaceholders === true) {
-    return { type: "api_key", key: AGENT_SECRET_REF_CONFIGURED_MARKER };
-  }
-  return null;
-}
-
 function convertAuthProfileCredentialToAgent(
   cred: AuthProfileCredential,
   options?: ResolveAgentCredentialMapOptions,
@@ -98,7 +89,9 @@ function convertAuthProfileCredentialToAgent(
     if (!key) {
       // A configured ref proves existence, never authority to resolve its secret here.
       const ref = cred.type === "api_key" ? cred.keyRef : cred.tokenRef;
-      return parseSecretRef(ref) !== null ? secretRefPlaceholder(options) : null;
+      return parseSecretRef(ref) !== null && options?.includeSecretRefPlaceholders === true
+        ? { type: "api_key", key: AGENT_SECRET_REF_CONFIGURED_MARKER }
+        : null;
     }
     return { type: "api_key", key };
   }
