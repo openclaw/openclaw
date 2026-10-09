@@ -72,15 +72,12 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
     if (approval.status === "allowed") {
       return `✅ OpenClaw change approved. Applying: ${truncateDetail(approval.presentation.description)}`;
     }
-    if (approval.status === "cancelled") {
-      return "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.";
-    }
-    if (approval.status === "denied") {
-      return "❌ OpenClaw change denied. No change was made.";
-    }
-    if (approval.status === "expired") {
-      return "⏱️ OpenClaw change expired. No change was made.";
-    }
+    return {
+      cancelled:
+        "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.",
+      denied: "❌ OpenClaw change denied. No change was made.",
+      expired: "⏱️ OpenClaw change expired. No change was made.",
+    }[approval.status];
   }
   const approvalId = approval.id || params.fallbackApprovalId;
   const lines = [

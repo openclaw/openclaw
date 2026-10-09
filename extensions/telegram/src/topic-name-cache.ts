@@ -30,21 +30,6 @@ type TopicNameCacheState = {
   stores: Map<string, TopicNameStoreState>;
 };
 
-function createTopicNameStoreState(namespace: string): TopicNameStoreState {
-  return {
-    lastUpdatedAt: 0,
-    store: new Map(),
-    persistentStore: getTelegramRuntime().state.openKeyedStore<TopicEntry>({
-      namespace,
-      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
-    }),
-  };
-}
-
-function getTopicNameCacheState(): TopicNameCacheState {
-  return resolveGlobalSingleton(TOPIC_NAME_CACHE_STATE_KEY, () => ({ stores: new Map() }));
-}
-
 function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
 }
@@ -86,13 +71,23 @@ function isTopicEntry(value: unknown): value is TopicEntry {
 }
 
 function getTopicStoreState(scope?: string): TopicNameStoreState {
-  const state = getTopicNameCacheState();
+  const state = resolveGlobalSingleton<TopicNameCacheState>(TOPIC_NAME_CACHE_STATE_KEY, () => ({
+    stores: new Map(),
+  }));
   const stateKey = scope ?? DEFAULT_TOPIC_NAME_CACHE_SCOPE;
   const existing = state.stores.get(stateKey);
   if (existing) {
     return existing;
   }
-  const next = createTopicNameStoreState(resolveTopicNameCacheNamespace(stateKey));
+  const namespace = resolveTopicNameCacheNamespace(stateKey);
+  const next: TopicNameStoreState = {
+    lastUpdatedAt: 0,
+    store: new Map(),
+    persistentStore: getTelegramRuntime().state.openKeyedStore<TopicEntry>({
+      namespace,
+      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
+    }),
+  };
   state.stores.set(stateKey, next);
   return next;
 }

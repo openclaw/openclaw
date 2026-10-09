@@ -449,16 +449,12 @@ export function createTelegramCallbackRouter({
 
         if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
           const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
-          if (!listSelection) {
+          const modelSet = listSelection && byProvider.get(listSelection.provider);
+          if (!listSelection || !modelSet || modelSet.size === 0) {
             await showChangedModelPicker();
             return;
           }
           const { provider, page } = listSelection;
-          const modelSet = byProvider.get(provider);
-          if (!modelSet || modelSet.size === 0) {
-            await showChangedModelPicker();
-            return;
-          }
           const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
           const totalPages = calculateTotalPages(models.length);
           const safePage = Math.max(1, Math.min(page, totalPages));
@@ -524,14 +520,13 @@ export function createTelegramCallbackRouter({
           const sessionStore = { [sessionState.sessionKey]: sessionEntry };
           const currentModelRef = sessionState.model?.trim();
           const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
-          const currentProvider =
+          const currentSelection =
             currentModelRef && currentModelSeparator > 0
-              ? currentModelRef.slice(0, currentModelSeparator)
-              : resolvedDefault.provider;
-          const currentModel =
-            currentModelRef && currentModelSeparator > 0
-              ? currentModelRef.slice(currentModelSeparator + 1)
-              : resolvedDefault.model;
+              ? {
+                  provider: currentModelRef.slice(0, currentModelSeparator),
+                  model: currentModelRef.slice(currentModelSeparator + 1),
+                }
+              : resolvedDefault;
           const applied = await retryModelAction(() =>
             applySessionModelSelection({
               cfg: runtimeCfg,
@@ -543,8 +538,8 @@ export function createTelegramCallbackRouter({
               allowCreate: sessionEntryMissing,
               defaultProvider: resolvedDefault.provider,
               defaultModel: resolvedDefault.model,
-              currentProvider,
-              currentModel,
+              currentProvider: currentSelection.provider,
+              currentModel: currentSelection.model,
               modelCatalog: modelData.modelCatalog,
               canPersistStickyModelSelection: false,
               request: {

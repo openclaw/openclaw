@@ -886,7 +886,6 @@ extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
-extensions/telegram/src/bot-message-context.session.ts	1
 extensions/telegram/src/bot-message-context.ts	2
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
@@ -917,7 +916,7 @@ extensions/telegram/src/request-timeouts.ts	1
 extensions/telegram/src/rich-message.ts	1
 extensions/telegram/src/security-audit.ts	3
 extensions/telegram/src/send-actions.ts	2
-extensions/telegram/src/send-context.ts	2
+extensions/telegram/src/send-context.ts	1
 extensions/telegram/src/send-edit.ts	1
 extensions/telegram/src/send-location.ts	2
 extensions/telegram/src/send-outbound.ts	1
