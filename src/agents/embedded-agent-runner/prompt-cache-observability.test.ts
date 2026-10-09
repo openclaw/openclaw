@@ -663,38 +663,67 @@ describe("prompt cache observability", () => {
     });
   });
 
-  it("reports visible schema changes even when tool names and count are unchanged", () => {
+  it.each([
+    {
+      change: "schema",
+      override: { parameters: { type: "number" } },
+      detail: '1 -> 1 tools; schema: "read"',
+    },
+    {
+      change: "description",
+      override: { description: "Read a workspace file" },
+      detail: '1 -> 1 tools; description: "read"',
+    },
+    {
+      change: "replacement",
+      override: { name: "write" },
+      detail: '1 -> 1 tools; added: "write"; removed: "read"',
+    },
+    { change: "removal", override: undefined, detail: '1 -> 0 tools; removed: "read"' },
+  ])("attributes a tool $change to the changed definition", ({ override, detail }) => {
     const sessionId = scopedKey("changed-tool-schema");
-    const initialTools = collectPromptCacheTools([
-      {
-        name: "read",
-        description: "Read a file",
-        parameters: { type: "object", properties: { path: { type: "string" } } },
-      },
-    ]);
+    const tool = {
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    };
     beginOpenAIObservation({
       sessionId,
-      tools: initialTools,
+      tools: collectPromptCacheTools([tool]),
     });
     completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
 
     const next = beginOpenAIObservation({
       sessionId,
-      tools: collectPromptCacheTools([
-        {
-          name: "read",
-          description: "Read a file",
-          parameters: { type: "object", properties: { path: { type: "number" } } },
-        },
-      ]),
+      tools: collectPromptCacheTools(override ? [{ ...tool, ...override }] : []),
     });
 
-    expect(next.changes).toEqual([{ code: "tools", detail: "tool set changed with same count" }]);
+    expect(next.changes).toEqual([{ code: "tools", detail }]);
     expect(completePromptCacheObservation({ sessionId, usage: { cacheRead: 0 } })).toEqual({
       previousCacheRead: 8_000,
       cacheRead: 0,
-      changes: [{ code: "tools", detail: "tool set changed with same count" }],
+      changes: [{ code: "tools", detail }],
     });
+  });
+
+  it("bounds and escapes names in tool-change diagnostics without exposing descriptor content", () => {
+    const sessionId = scopedKey("bounded-tool-change");
+    beginOpenAIObservation({ sessionId, tools: [] });
+    const next = beginOpenAIObservation({
+      sessionId,
+      tools: collectPromptCacheTools(
+        Array.from({ length: 6 }, (_, index) => ({
+          name: `${index}\n${"x".repeat(500)}`,
+          description: "private descriptor",
+        })),
+      ),
+    });
+    const detail = next.changes?.[0]?.detail ?? "";
+    expect(detail).toContain('added: "0\\n');
+    expect(detail).toContain("(+1 more)");
+    expect(detail).not.toContain("\n");
+    expect(detail).not.toContain("private descriptor");
+    expect(detail.length).toBeLessThan(500);
   });
 
   it("starts a fresh diagnostic baseline when a cache affinity rotates sessions", () => {
