@@ -40,8 +40,8 @@ export async function withSessionTranscriptDeltaReader<T>(
     sessionId: scope.sessionId,
   });
   const admission = receipt && structuredClone(receipt);
-  const source = captureIncognitoSessionSource(scope);
-  const absent = source && "kind" in source ? source : undefined;
+  const incognitoSource = captureIncognitoSessionSource(scope);
+  const absent = incognitoSource && "kind" in incognitoSource ? incognitoSource : undefined;
   const incognito = absent ? undefined : captureIncognitoSessionHistoryBinding(scope);
   let active = true;
   const assertActive = () => {

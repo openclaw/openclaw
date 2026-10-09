@@ -343,7 +343,7 @@ describe("active-memory plugin", () => {
           getSessionEntryByIdAsync: vi.fn(async (params: { sessionId: string }) => {
             const match = Object.entries(hoisted.sessionStore)
               .filter(([, entry]) => entry.sessionId === params.sessionId)
-              .sort(([, a], [, b]) => Number(b.updatedAt) - Number(a.updatedAt))[0];
+              .toSorted(([, a], [, b]) => Number(b.updatedAt) - Number(a.updatedAt))[0];
             return match ? { sessionKey: match[0], entry: match[1] } : undefined;
           }),
           patchSessionEntry: vi.fn(

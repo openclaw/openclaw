@@ -36,8 +36,10 @@ describe("plugin registry runtime session ownership", () => {
       const entry = { sessionId: "managed", updatedAt: 1 };
       runtime.agent.session.getSessionEntryAsync = () => pending.promise;
       runtime.agent.session.getSessionEntryByIdAsync = async () => {
-        const entry = await pending.promise;
-        return entry ? { sessionKey: "agent:main:managed", entry } : undefined;
+        const selectedEntry = await pending.promise;
+        return selectedEntry
+          ? { sessionKey: "agent:main:managed", entry: selectedEntry }
+          : undefined;
       };
       const registry = createRuntimeTestRegistry(runtime);
       const record = createPluginRecord({

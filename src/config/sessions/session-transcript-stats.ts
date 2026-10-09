@@ -16,9 +16,9 @@ import type { SessionTranscriptStatsOperations } from "./session-transcript-stat
 
 /** Read hot and cold statistics through the captured database's existing executor. */
 export function readTranscriptStatsAsync(scope: SessionTranscriptReadScope) {
-  const source = captureIncognitoSessionSource(scope);
-  if (source && "kind" in source) {
-    source.assertCurrent();
+  const incognitoSource = captureIncognitoSessionSource(scope);
+  if (incognitoSource && "kind" in incognitoSource) {
+    incognitoSource.assertCurrent();
     return Promise.resolve({ eventCount: 0, maxSeq: 0, sizeBytes: 0 });
   }
   const incognito = captureIncognitoSessionHistoryBinding(scope);

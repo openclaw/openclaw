@@ -152,7 +152,9 @@ export function registerIncognitoSdkHistoryTests(fixture: HistoryWiringFixture) 
           ...missing,
           authority: {
             assertCurrent() {
-              if (!current) throw new Error("absence revoked");
+              if (!current) {
+                throw new Error("absence revoked");
+              }
             },
           },
         },
