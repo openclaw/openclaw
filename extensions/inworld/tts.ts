@@ -45,7 +45,13 @@ export const INWORLD_TTS_MODELS = [
   "inworld-tts-1.5-mini",
   "inworld-tts-1-max",
   "inworld-tts-1",
+  "inworld-tts-2",
+  "inworld-tts-2-flash",
 ] as const;
+
+// Inworld TTS-2 models replace `temperature` with a delivery preset.
+export const INWORLD_DELIVERY_MODES = ["STABLE", "BALANCED", "CREATIVE"] as const;
+export type InworldDeliveryMode = (typeof INWORLD_DELIVERY_MODES)[number];
 
 export type InworldAudioEncoding =
   | "MP3"
@@ -87,7 +93,9 @@ export async function inworldTTS(params: {
   modelId?: string;
   audioEncoding?: InworldAudioEncoding;
   sampleRateHertz?: number;
+  speakingRate?: number;
   temperature?: number;
+  deliveryMode?: InworldDeliveryMode;
   timeoutMs?: number;
 }): Promise<Buffer> {
   const { canonicalizeBase64, MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
@@ -102,8 +110,10 @@ export async function inworldTTS(params: {
     audioConfig: {
       audioEncoding: params.audioEncoding ?? "MP3",
       ...(params.sampleRateHertz && { sampleRateHertz: params.sampleRateHertz }),
+      ...(params.speakingRate != null && { speakingRate: params.speakingRate }),
     },
     ...(params.temperature != null && { temperature: params.temperature }),
+    ...(params.deliveryMode && { deliveryMode: params.deliveryMode }),
   });
   const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
 

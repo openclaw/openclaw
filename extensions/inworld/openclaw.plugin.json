@@ -30,7 +30,7 @@
       "id": "voice-generation",
       "title": "Voice generation",
       "order": 20,
-      "properties": ["voiceId", "modelId", "temperature"]
+      "properties": ["voiceId", "modelId", "temperature", "speakingRate", "deliveryMode"]
     }
   ],
   "configSchema": {
@@ -51,13 +51,24 @@
       },
       "modelId": {
         "type": "string",
-        "description": "TTS model id (default inworld-tts-1.5-max)."
+        "description": "TTS model id (default inworld-tts-1.5-max; also inworld-tts-2, inworld-tts-2-flash)."
       },
       "temperature": {
         "type": "number",
         "minimum": 0,
         "maximum": 2,
         "description": "Sampling temperature 0..2."
+      },
+      "speakingRate": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 1.5,
+        "description": "Speaking rate 0.5..1.5 (1.0 is the voice's native speed)."
+      },
+      "deliveryMode": {
+        "type": "string",
+        "enum": ["STABLE", "BALANCED", "CREATIVE"],
+        "description": "Delivery preset for inworld-tts-2 models (replaces temperature there; ignored by other models)."
       }
     }
   }
