@@ -33,6 +33,8 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
+  runBatchWithTimeoutRetry,
+  runEmbeddingOperationWithTimeout,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -53,7 +55,6 @@ import type {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
-import { createPausedDeadline } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -78,12 +79,6 @@ type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
 };
 
-// Retry attempts are host control state. Provider-thrown values stay opaque so
-// they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult =
-  | { kind: "success"; value: number[][] | null }
-  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
-
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const item of items) {
@@ -99,51 +94,6 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
       .map(([source, count]) => `${source}=${count}`)
       .join(",") || "none"
   );
-}
-
-async function runEmbeddingOperationWithTimeout<T>(params: {
-  timeoutMs: number;
-  message: string;
-  /** Caller-owned cancellation, merged with the per-call watchdog abort. */
-  signal?: AbortSignal;
-  /** Managed readiness pauses this watchdog, while caller cancellation stays active. */
-  deadlineControl?: MemorySearchDeadlineControl;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
-  if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(signal);
-  }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const timeoutError = new Error(params.message);
-  const timeout = createDeferred<never>();
-  const deadline = createPausedDeadline({
-    kind: "embedding",
-    timeoutMs,
-    signal,
-    control: params.deadlineControl,
-    expire: () => {
-      timeout.reject(timeoutError);
-      controller.abort(timeoutError);
-    },
-  });
-  deadline.start();
-  try {
-    const operation = params.run(signal);
-    const result = await Promise.race([operation, timeout.promise]);
-    params.signal?.throwIfAborted();
-    // An overdue watchdog can run after provider success following an event-loop stall.
-    if (deadline.isExpired()) {
-      controller.abort(timeoutError);
-      throw timeoutError;
-    }
-    return result;
-  } finally {
-    deadline.close();
-  }
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCacheOps {
@@ -280,8 +230,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
     const batchResult = this.batch.enabled
-      ? await this.runBatchWithTimeoutRetry({
-          provider: provider.id,
+      ? await runBatchWithTimeoutRetry({
+          onRetry: () =>
+            log.warn(`memory embeddings: ${provider.id} batch timed out; retrying once`),
           run: () =>
             batchEmbed({
               agentId: this.agentId,
@@ -521,24 +472,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
   }
 
-  private async runBatchWithTimeoutRetry(params: {
-    provider: string;
-    run: () => Promise<number[][] | null>;
-  }): Promise<MemoryBatchRetryResult> {
-    let attempts: 1 | 2 = 1;
-    while (true) {
-      try {
-        return { kind: "success", value: await params.run() };
-      } catch (error) {
-        if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
-          return { kind: "failure", error, attempts };
-        }
-      }
-      log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-      attempts = 2;
-    }
-  }
-
   protected getIndexConcurrency(): number {
     if (this.batch.enabled) {
       return this.batch.concurrency;
@@ -648,14 +581,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         loadError: this.vector.loadError,
         warn: (message) => log.warn(message),
       });
-      if (retained) {
-        log.debug("memory sync: incremental session chunk delta", {
-          path: entry.path,
-          new: chunks.length,
-          kept: retained.length,
-          drift: published.retainedDrift,
-        });
-      }
       return !published.retainedDrift;
     });
   }

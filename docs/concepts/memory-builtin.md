@@ -176,6 +176,9 @@ the agent's current embedding settings; status inspection remains read-only.
 Search-triggered maintenance applies pending memory and session changes
 incrementally while searches remain available. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+Growing session transcripts retain unchanged indexed chunks and embed only new
+or changed chunks, even when the embedding cache is disabled. An explicit full
+rebuild still replaces the complete index.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.

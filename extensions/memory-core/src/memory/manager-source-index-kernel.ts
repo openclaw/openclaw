@@ -1,9 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  hashText,
-  type MemoryEntryProvenance,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
@@ -54,9 +50,7 @@ export type MemorySourceIndexRow = {
   retained?: boolean;
 };
 /** Drift means a retained row vanished before the write lock and nothing was written. */
-export type MemorySourceIndexWriteResult = { retainedDrift: boolean };
-
-type RetainedRow = { id: string; provenance: MemoryEntryProvenance | undefined };
+type MemorySourceIndexWriteResult = { retainedDrift: boolean };
 
 type SourceIndexDatabase = {
   memory_index_sources: {
@@ -71,13 +65,6 @@ type SourceIndexDatabase = {
     path: string;
     source: MemorySource;
     embedding: Uint8Array;
-  };
-  memory_index_chunk_provenance: {
-    chunk_id: string;
-    origin_class: MemoryEntryProvenance["originClass"];
-    session_kind: MemoryEntryProvenance["sessionKind"];
-    observed_at: number;
-    supersedes_key: string | null;
   };
 };
 
@@ -145,39 +132,38 @@ export class MemorySourceIndexKernel {
     // omits. Live ids are read under the write lock, so a writer that committed
     // after planning cannot leave unknown rows behind.
     const liveIds =
-      params.source === "sessions" && params.delta ? this.readIds(entry.path, source) : undefined;
+      params.source === "sessions" && params.delta
+        ? new Set(readMemorySourceChunks(this.database, source, entry.path).map((row) => row.id))
+        : undefined;
     if (!liveIds) {
       this.clear(entry.path, source);
     }
     const desiredIds = new Set<string>();
-    const retained: RetainedRow[] = [];
-    let retainedSettled = !liveIds;
-    let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
+    const retained: Array<{ id: string; chunk: IndexedMemoryChunk }> = [];
+    let written = false;
+    const writeChunk = createMemoryChunkWriter(this.database, {
+      path: entry.path,
+      source,
+      model,
+      now,
+    });
     let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
     let hasEmbeddings = false;
     for (const { chunk, embedding, retained: keep } of rows) {
       const id = memoryChunkRowId(source, entry.path, chunk, model);
       desiredIds.add(id);
       if (keep) {
-        if (retainedSettled) {
+        if (!liveIds || written) {
           throw new Error("Memory publication retained rows must precede written rows");
         }
-        retained.push({ id, provenance: chunk.provenance });
-        continue;
-      }
-      if (!retainedSettled) {
-        retainedSettled = true;
-        if (!this.hasAll(liveIds, retained)) {
+        if (!liveIds.has(id)) {
           return { retainedDrift: true };
         }
+        retained.push({ id, chunk });
+        continue;
       }
+      written = true;
       hasEmbeddings ||= embedding.length > 0;
-      writeChunk ??= createMemoryChunkWriter(this.database, {
-        path: entry.path,
-        source,
-        model,
-        now,
-      });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
         writeVector ??= createMemoryVectorWriter(this.database);
@@ -185,10 +171,9 @@ export class MemorySourceIndexKernel {
       }
     }
     if (liveIds) {
-      if (!retainedSettled && !this.hasAll(liveIds, retained)) {
-        return { retainedDrift: true };
+      for (const { id, chunk } of retained) {
+        writeChunk(id, chunk);
       }
-      this.refreshProvenance(retained, now);
       this.deleteIds(
         entry.path,
         source,
@@ -238,82 +223,6 @@ export class MemorySourceIndexKernel {
         .where("source", "=", params.source),
     );
     return true;
-  }
-
-  private readIds(pathname: string, source: MemorySource): Set<string> {
-    return new Set(
-      executeSqliteQuerySync(
-        this.database,
-        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-          .selectFrom("memory_index_chunks")
-          .select("id")
-          .where("path", "=", pathname)
-          .where("source", "=", source),
-      ).rows.map((row) => row.id),
-    );
-  }
-
-  private hasAll(liveIds: Set<string> | undefined, rows: RetainedRow[]): boolean {
-    return !liveIds || rows.every(({ id }) => liveIds.has(id));
-  }
-
-  // Chunk identity excludes provenance, so a trust-only transcript rewrite keeps
-  // its rows. Only changed provenance is written to keep ordinary appends low-churn.
-  private refreshProvenance(rows: RetainedRow[], now: number): void {
-    if (rows.length === 0) {
-      return;
-    }
-    const update = prepareSqliteQuerySync<{ id: string; provenance: MemoryEntryProvenance }>(
-      this.database,
-      (parameter) =>
-        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-          .updateTable("memory_index_chunk_provenance")
-          .set({
-            origin_class: parameter((row) => row.provenance.originClass),
-            session_kind: parameter((row) => row.provenance.sessionKind),
-            observed_at: parameter((row) => row.provenance.observedAt),
-            supersedes_key: parameter((row) => row.provenance.supersedesKey ?? null),
-          })
-          .where(
-            "chunk_id",
-            "=",
-            parameter((row) => row.id),
-          )
-          .where((eb) =>
-            eb.or([
-              eb(
-                "origin_class",
-                "is not",
-                parameter((row) => row.provenance.originClass),
-              ),
-              eb(
-                "session_kind",
-                "is not",
-                parameter((row) => row.provenance.sessionKind),
-              ),
-              eb(
-                "observed_at",
-                "is not",
-                parameter((row) => row.provenance.observedAt),
-              ),
-              eb(
-                "supersedes_key",
-                "is not",
-                parameter((row) => row.provenance.supersedesKey ?? null),
-              ),
-            ]),
-          ),
-    );
-    for (const { id, provenance } of rows) {
-      update({
-        id,
-        provenance: provenance ?? {
-          originClass: "untrusted",
-          sessionKind: "unknown",
-          observedAt: now,
-        },
-      });
-    }
   }
 
   private deleteIds(pathname: string, source: MemorySource, ids: string[]): void {

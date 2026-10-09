@@ -3,6 +3,7 @@ import type {
   MemoryPublicationFragment,
 } from "./manager-publication-task.js";
 import type {
+  MemorySourceIndexHeader,
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
@@ -90,6 +91,22 @@ function* rowFragments(
   if (pending) {
     yield pending;
   }
+}
+
+export function memoryPublicationHeader(replacement: MemorySourceIndexReplacement): {
+  header: MemorySourceIndexHeader;
+  rows: number;
+} {
+  const { chunks, embeddings: _embeddings, ...fields } = replacement;
+  if (fields.source !== "sessions") {
+    return { header: fields, rows: chunks.length };
+  }
+  // Retained rows travel in the bounded transfer, never the header.
+  const { retained = [], ...header } = fields;
+  return {
+    header: { ...header, delta: retained.length > 0 },
+    rows: chunks.length + retained.length,
+  };
 }
 
 export function* memoryPublicationBatches(

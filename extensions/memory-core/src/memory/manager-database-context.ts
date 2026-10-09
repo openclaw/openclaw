@@ -50,16 +50,14 @@ import type {
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationHeader,
 } from "./manager-publication-transfer.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
   type MemoryShadowConnection,
 } from "./manager-shadow-task.js";
-import type {
-  MemorySourceIndexHeader,
-  MemorySourceIndexReplacement,
-} from "./manager-source-index-kernel.js";
+import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
@@ -532,16 +530,7 @@ export class MemoryIndexDatabase {
     const run = () =>
       this.runPublication(async (scope) => {
         const operation = randomUUID();
-        const { chunks, embeddings: _embeddings, ...fields } = replacement;
-        let header: MemorySourceIndexHeader = fields;
-        let retained = 0;
-        if (fields.source === "sessions") {
-          // Retained rows travel as staged rows; the header carries only delta mode.
-          const { retained: kept = [], ...session } = fields;
-          retained = kept.length;
-          header = { ...session, delta: retained > 0 };
-        }
-        const rows = chunks.length + retained;
+        const { header, rows } = memoryPublicationHeader(replacement);
         await scope.execute({
           type: "stage.start",
           input: { operation, header, rows },
