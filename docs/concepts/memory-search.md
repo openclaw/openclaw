@@ -135,6 +135,11 @@ before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
+A failed local embedding request preserves keyword access to a matching index
+and records the degraded provider in memory status and Gateway logs. A real model
+or index-configuration mismatch still pauses search instead of serving
+mismatched data.
+
 **Explicit provider unavailable.** If you name any other provider explicitly
 (for example `openai`, `ollama`, `gemini`) and it becomes unavailable at
 request time (bad auth, network failure), `memory_search` reports memory as
