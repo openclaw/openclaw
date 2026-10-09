@@ -16,10 +16,8 @@ import {
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
 } from "../sessions/session-state-events.js";
-import {
-  readSessionUpstreamLink,
-  upsertSessionUpstreamLink,
-} from "../sessions/session-upstream-links.js";
+import { upsertSessionUpstreamLink } from "../sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -259,8 +257,8 @@ it("joins accepted notices, signal cleanup, and upstream deletion after the Gate
         )
         .get(watcher, target),
     ).toEqual({ notified_sequence: 3 });
-    expect(readSessionUpstreamLink(deletedTarget, "main", options)).toBeUndefined();
     const reopened = openOpenClawStateDatabase(options).db;
+    expect(readSessionUpstreamLinkInDatabase(reopened, deletedTarget, "main")).toBeUndefined();
     expect(
       reopened
         .prepare("SELECT 1 FROM session_watch_cursors WHERE watcher_session_key = ?")

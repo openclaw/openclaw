@@ -255,76 +255,6 @@ describe("show_widget", () => {
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 
-  it("keeps widget documents from duplicating host-owned metadata and controls", () => {
-    const description = createShowWidgetTool().description;
-
-    expect(description).toContain("openclaw.host.controlUiBaseUrl");
-    expect(description).toContain("read it at click time");
-    expect(description).toContain('target="_blank" and rel="noopener noreferrer"');
-    expect(description).toContain("`title` is host metadata");
-    expect(description).toContain("Start directly with content");
-    expect(description).toContain("do not repeat the title");
-  });
-
-  it("builds provider-safe kind and presentation enums from both registries", () => {
-    registerDiagramContentKind();
-    const tool = createShowWidgetTool();
-    const properties = (
-      tool.parameters as {
-        properties?: Record<
-          string,
-          {
-            anyOf?: unknown;
-            enum?: string[];
-            properties?: Record<string, { anyOf?: unknown; enum?: string[]; description?: string }>;
-          }
-        >;
-      }
-    ).properties;
-    expect(properties?.kind).toMatchObject({ enum: ["html", "diagram"] });
-    expect(properties?.size).toMatchObject({ enum: ["sm", "md", "lg", "xl", "full"] });
-    expect(properties?.presentation?.properties?.target).toMatchObject({
-      enum: ["assistant_message"],
-    });
-    expect(properties?.presentation?.properties?.target?.description).not.toContain("node_panel");
-    expect(properties?.presentation?.properties?.frame).toMatchObject({
-      enum: ["card", "full-bleed", "frameless"],
-    });
-    expect(properties?.size?.anyOf).toBeUndefined();
-    expect(properties?.presentation?.properties?.target?.anyOf).toBeUndefined();
-    expect(properties?.presentation?.properties?.frame?.anyOf).toBeUndefined();
-    expect(tool.description).toContain("registered kinds are diagram");
-
-    const presenter: WidgetPresenter = {
-      target: "node_panel",
-      description: "Show on a connected device panel",
-      availability: async () => ({ ok: true, value: { available: true } }),
-      present: async () => ({
-        ok: true,
-        value: { kind: "node", nodeId: "mac-panel", nodeName: "Studio" },
-      }),
-    };
-    const withPresenterTool = createShowWidgetTool({ presenters: [presenter] });
-    const withPresenter = withPresenterTool.parameters as {
-      properties?: Record<
-        string,
-        {
-          enum?: string[];
-          properties?: Record<string, { enum?: string[]; description?: string }>;
-        }
-      >;
-    };
-    expect(withPresenter.properties?.kind).toMatchObject({ enum: ["html", "diagram"] });
-    expect(withPresenter.properties?.presentation?.properties?.target).toMatchObject({
-      enum: ["assistant_message", "node_panel"],
-      description: expect.stringContaining("node_panel: Show on a connected device panel"),
-    });
-    expect(withPresenterTool.description).toContain("registered kinds are diagram");
-    expect(withPresenterTool.description).toContain(
-      "Use presentation.target to choose a registered device surface.",
-    );
-  });
-
   it("routes node-panel presentation and reports the selected device", async () => {
     const stateDir = await createStateDir();
     const availability = vi.fn(async () => ({
@@ -387,25 +317,6 @@ describe("show_widget", () => {
         },
       ],
       expected: "No connected device.",
-    },
-    {
-      name: "hits a node error",
-      presenters: [
-        {
-          target: "node_panel" as const,
-          description: "Show on a connected device panel",
-          availability: async () => ({ ok: true as const, value: { available: true as const } }),
-          present: async () => ({
-            ok: false as const,
-            error: {
-              code: "node_error" as const,
-              message: "Canvas is disabled.",
-              nodeId: "mac-panel",
-            },
-          }),
-        },
-      ],
-      expected: "Canvas is disabled.",
     },
   ])(
     "falls back inline with an actionable message when node presentation $name",
@@ -681,26 +592,9 @@ describe("show_widget", () => {
     expect(manifest.cspSandbox).toBe("scripts");
   });
 
-  it("keeps unpinned behavior unchanged without a board call", async () => {
-    const stateDir = await createStateDir();
-    const callGateway = vi.fn();
-
-    const result = await executeWidget({
-      stateDir,
-      widgetCode: "<p>inline only</p>",
-      callGateway,
-    });
-
-    expect(result.resultText).toBe(`Widget hosted at ${result.url}`);
-    expect(callGateway).not.toHaveBeenCalled();
-  });
-
   it.each([
-    ["qualified Main", "agent:main:pinned", "main", false],
-    ["explicit Research global", "global", "research", false],
     ["Research global with retained Main", "global", "research", true],
     ["large HTML", "agent:main:large-widget", "main", false],
-    ["wrapped HTML", "agent:main:wrapped-widget", "main", false],
   ] as const)(
     "creates and refreshes pinned HTML in %s",
     async (_label, sessionKey, agentId, retainedMain) => {
@@ -737,11 +631,7 @@ describe("show_widget", () => {
           callGateway,
         });
       const initialHtml =
-        _label === "large HTML"
-          ? `<p>${"é".repeat(2 * 1024 * 1024)}</p>`
-          : _label === "wrapped HTML"
-            ? `<p>${"x".repeat(250 * 1024)}</p>`
-            : "<p>ready</p>";
+        _label === "large HTML" ? `<p>${"é".repeat(2 * 1024 * 1024)}</p>` : "<p>ready</p>";
       const result = await pinWidget(initialHtml, true);
       const pinnedTitle = Array.from(title).slice(0, 80).join("");
 

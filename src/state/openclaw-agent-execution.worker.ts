@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -49,7 +50,6 @@ import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionOpen,
   AgentDatabaseFileExecutionOpen,
-  AgentDatabaseIncognitoOperations,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import {
@@ -99,7 +99,7 @@ export function createSqliteWorkerBackend(
   opening: { databasePath: string },
 ):
   | SqliteWorkerPreparedBackend<AgentDatabaseOperations>
-  | SqliteWorkerPreparedBackend<AgentDatabaseIncognitoOperations> {
+  | SqliteWorkerPreparedBackend<IncognitoSessionOperations> {
   if (input.kind === "ephemeral") {
     return createIncognitoAgentDatabaseBackend(input, opening);
   }

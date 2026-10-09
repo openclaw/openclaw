@@ -88,6 +88,10 @@ custom policy values with an advisory while refreshing recognized old defaults.
 For example, `TimeoutStartSec=45` stays unchanged while the old installer value
 `TimeoutStopSec=30` becomes `330`. Existing identity and command checks still apply.
 Maintenance stops also read the resident Gateway's recorded shutdown budget.
+If rollback finds the service already stopped, the Gateway cannot be reached,
+and its local port is free, it proceeds directly through the guarded native stop
+to restoration instead of waiting for the drain deadline. Running Gateways and
+unverified service or port states keep the normal drain checks.
 Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
 their first stop therefore uses the short/unknown-budget path. The Gateway's
 lifecycle owner fences admission and reports drain progress until idle or the

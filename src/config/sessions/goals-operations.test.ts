@@ -605,19 +605,27 @@ describe("typed Goal operation persistence", () => {
     expect(loadSessionEntry(scope())?.goal?.objective).toBe("second");
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "rolls back management and its receipt after %s authority revocation",
-    async (stage) => {
+  it.each([
+    { stage: "transaction", failure: "revocation" },
+    { stage: "commit", failure: "revocation" },
+    { stage: "commit", failure: "expiry" },
+  ] as const)(
+    "rolls back management and its receipt after $stage $failure",
+    async ({ stage, failure }) => {
       const goal = await createSessionGoal({ ...scope(), objective: "finish" });
       const operation = {
-        ...identity(`pause-${stage}`),
+        ...identity(`pause-${stage}-${failure}`),
         action: "pause" as const,
         goalId: goal.id,
       };
-      let live = true;
+      let admitted = false;
+      const clock = vi.spyOn(Date, "now");
       const assertCurrent = () => {
-        if (!live) {
-          throw new Error("Goal caller closed");
+        if (admitted) {
+          if (failure === "revocation") {
+            throw new Error("Goal caller closed");
+          }
+          clock.mockReturnValue(operation.issuedAtMs + 24 * 60 * 60 * 1000);
         }
       };
       probe.admission(workerAdmission, (request, grant, callback) => {
@@ -628,12 +636,12 @@ describe("typed Goal operation persistence", () => {
           request.facts.publication.kind ===
             (stage === "commit" ? "session-entry-patch-committed" : "session-entry-patch-transfer")
         ) {
-          live = false;
+          admitted = true;
         }
         callback(request, grant);
       });
-      await expect(
-        mutateSessionGoal({
+      try {
+        const mutation = mutateSessionGoal({
           ...scope(),
           expectedSessionId: sessionId,
           operation,
@@ -642,57 +650,20 @@ describe("typed Goal operation persistence", () => {
               return { assertCurrent, checks: [] };
             },
           }),
-        }),
-      ).rejects.toThrow("Goal caller closed");
-      expect(live).toBe(false);
+        });
+        if (failure === "revocation") {
+          await expect(mutation).rejects.toThrow("Goal caller closed");
+        } else {
+          await expect(mutation).rejects.toMatchObject({ code: "expired" });
+        }
+      } finally {
+        clock.mockRestore();
+      }
+      expect(admitted).toBe(true);
       expect(loadSessionEntry(scope())?.goal).toEqual(goal);
       expect(
         await lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
       ).toBeUndefined();
     },
   );
-
-  it("refuses an operation that expires while waiting for its commit grant", async () => {
-    const goal = await createSessionGoal({ ...scope(), objective: "finish" });
-    const operation = { ...identity("pause-expiring"), action: "pause" as const, goalId: goal.id };
-    let committing = false;
-    const clock = vi.spyOn(Date, "now");
-    const assertCurrent = () => {
-      if (committing) {
-        clock.mockReturnValue(operation.issuedAtMs + 24 * 60 * 60 * 1000);
-      }
-    };
-    probe.admission(workerAdmission, (request, grant, callback) => {
-      if (
-        request.stage === "commit" &&
-        isRecord(request.facts) &&
-        isRecord(request.facts.publication) &&
-        request.facts.publication.kind === "session-entry-patch-committed"
-      ) {
-        committing = true;
-      }
-      callback(request, grant);
-    });
-    try {
-      await expect(
-        mutateSessionGoal({
-          ...scope(),
-          expectedSessionId: sessionId,
-          operation,
-          assertCurrent: Object.assign(assertCurrent, {
-            async prepareSessionSource() {
-              return { assertCurrent, checks: [] };
-            },
-          }),
-        }),
-      ).rejects.toMatchObject({ code: "expired" });
-    } finally {
-      clock.mockRestore();
-    }
-    expect(committing).toBe(true);
-    expect(loadSessionEntry(scope())?.goal).toEqual(goal);
-    expect(
-      await lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
-    ).toBeUndefined();
-  });
 });
