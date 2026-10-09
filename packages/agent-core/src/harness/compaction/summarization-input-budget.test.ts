@@ -3,7 +3,7 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
@@ -81,7 +81,10 @@ function createCapturingStream(overflowAbove?: (prompt: string) => boolean): {
   return { streamFn, prompts };
 }
 
-function toolCallMessage(calls: Array<{ id: string; name: string; cmd: string }>): AgentMessage {
+function toolCallMessage(
+  calls: Array<{ id: string; name: string; cmd: string }>,
+  stopReason: "toolUse" | "aborted" = "toolUse",
+): AgentMessage {
   return {
     role: "assistant",
     content: calls.map(({ id, name, cmd }) => ({
@@ -101,7 +104,7 @@ function toolCallMessage(calls: Array<{ id: string; name: string; cmd: string }>
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "toolUse",
+    stopReason,
     timestamp: 1,
   };
 }
@@ -509,7 +512,7 @@ describe("summary request input budget", () => {
 
   it("never labels a result with a call an earlier turn left unanswered", () => {
     const messages: AgentMessage[] = [
-      { ...toolCallMessage([{ id: "0", name: "exec", cmd: "delete A" }]), stopReason: "aborted" },
+      toolCallMessage([{ id: "0", name: "exec", cmd: "delete A" }], "aborted"),
       toolCallMessage([{ id: "0", name: "exec", cmd: "write B" }]),
       toolResultMessage("0", "exec", "done"),
       { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
@@ -658,7 +661,12 @@ describe("summary request input budget", () => {
       undefined,
       undefined,
       streamFn,
-      { internalUsageSink: (entry) => usage.push(entry) },
+      {
+        completeSimple: vi.fn(),
+        internalUsageSink: (entry) => {
+          usage.push(entry);
+        },
+      },
     );
 
     expect(prompts).toHaveLength(1);
