@@ -128,16 +128,14 @@ function buildManagedDreamingPatch(
   desired: ManagedCronJobCreate,
 ): ManagedCronJobPatch | null {
   const patch: ManagedCronJobPatch = {};
-
-  if (normalizeOptionalString(job.name) !== desired.name) {
-    patch.name = desired.name;
-  }
-  if (normalizeOptionalString(job.description) !== desired.description) {
-    patch.description = desired.description;
-  }
-  if (job.enabled !== true) {
-    patch.enabled = true;
-  }
+  const copyChanged = <K extends keyof ManagedCronJobPatch>(key: K, current: unknown) => {
+    if (current !== desired[key]) {
+      patch[key] = desired[key];
+    }
+  };
+  copyChanged("name", normalizeOptionalString(job.name));
+  copyChanged("description", normalizeOptionalString(job.description));
+  copyChanged("enabled", job.enabled);
 
   const scheduleKind = normalizeLowercaseStringOrEmpty(job.schedule?.kind);
   const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
@@ -150,14 +148,8 @@ function buildManagedDreamingPatch(
     patch.schedule = desired.schedule;
   }
 
-  const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
-  if (sessionTarget !== desired.sessionTarget) {
-    patch.sessionTarget = desired.sessionTarget;
-  }
-  const wakeMode = normalizeLowercaseStringOrEmpty(job.wakeMode);
-  if (wakeMode !== "now") {
-    patch.wakeMode = "now";
-  }
+  copyChanged("sessionTarget", normalizeLowercaseStringOrEmpty(job.sessionTarget));
+  copyChanged("wakeMode", normalizeLowercaseStringOrEmpty(job.wakeMode));
 
   const payloadNeedsUpdate =
     normalizeOptionalString(job.payload?.message) !== desired.payload.message ||

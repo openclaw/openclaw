@@ -411,10 +411,7 @@ async function withStagingLock<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const previous = stagingLocks.get(uploadDir) ?? Promise.resolve();
-  let release = () => {};
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: current, resolve: release } = Promise.withResolvers<void>();
   const tail = previous.then(() => current);
   stagingLocks.set(uploadDir, tail);
   // A cancelled waiter must keep its predecessor visible until the entire tail settles.
