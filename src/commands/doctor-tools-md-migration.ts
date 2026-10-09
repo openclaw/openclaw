@@ -46,6 +46,10 @@ type MigrationFileSnapshot = {
 
 type PosixFilePermissions = Pick<syncFs.Stats, "uid" | "gid" | "mode">;
 
+function sameFileIdentity(left?: syncFs.Stats, right?: syncFs.Stats): boolean {
+  return left?.dev === right?.dev && left?.ino === right?.ino;
+}
+
 function samePosixPermissions(left: PosixFilePermissions, right: PosixFilePermissions): boolean {
   return (
     left.uid === right.uid &&
@@ -84,8 +88,7 @@ async function assertSourceReadersPreserved(
   if (
     current.content !== source.content ||
     !current.stat ||
-    current.stat.dev !== source.stat.dev ||
-    current.stat.ino !== source.stat.ino ||
+    !sameFileIdentity(current.stat, source.stat) ||
     !samePosixPermissions(current.stat, source.stat)
   ) {
     throw new Error("TOOLS.md changed during migration");
@@ -119,10 +122,8 @@ async function readMigrationFileSnapshot(
   const currentStat = await fs.lstat(filePath);
   if (
     file.stat.nlink !== 1 ||
-    file.stat.dev !== stat.dev ||
-    file.stat.ino !== stat.ino ||
-    currentStat.dev !== file.stat.dev ||
-    currentStat.ino !== file.stat.ino
+    !sameFileIdentity(file.stat, stat) ||
+    !sameFileIdentity(currentStat, file.stat)
   ) {
     throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
   }
@@ -279,8 +280,7 @@ async function writeAgentsAtomically(params: {
     const current = await readMigrationFileSnapshot(params.agentsPath, true);
     if (
       current.content !== params.expected ||
-      current.stat?.dev !== stat?.dev ||
-      current.stat?.ino !== stat?.ino ||
+      !sameFileIdentity(current.stat, stat) ||
       (process.platform !== "win32" &&
         current.stat &&
         stat &&
@@ -302,21 +302,18 @@ async function writeAgentsAtomically(params: {
 async function recoverInterruptedAgentsWrite(agentsPath: string): Promise<void> {
   const dir = path.dirname(agentsPath);
   const prefix = `${path.basename(agentsPath)}.doctor-writing-`;
-  const entries = await fs.readdir(dir).catch(() => [] as string[]);
-  let removed = false;
+  const entries = (await fs.readdir(dir).catch(() => [] as string[])).filter((entry) =>
+    entry.startsWith(prefix),
+  );
   for (const entry of entries) {
-    if (!entry.startsWith(prefix)) {
-      continue;
-    }
     const tempPath = path.join(dir, entry);
     const stat = await fs.lstat(tempPath);
     if (!stat.isFile() || stat.nlink !== 1) {
       throw new Error(`interrupted AGENTS.md write must be an unlinked regular file: ${tempPath}`);
     }
     await fs.rm(tempPath);
-    removed = true;
   }
-  if (removed) {
+  if (entries.length > 0) {
     await syncDirectoryIfSupported(dir);
   }
 }
@@ -331,10 +328,8 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
   const currentStat = syncFs.lstatSync(source.path);
   if (
     !current.stat ||
-    currentStat.dev !== current.stat.dev ||
-    currentStat.ino !== current.stat.ino ||
-    currentStat.dev !== source.stat.dev ||
-    currentStat.ino !== source.stat.ino
+    !sameFileIdentity(currentStat, current.stat) ||
+    !sameFileIdentity(currentStat, source.stat)
   ) {
     throw new Error("TOOLS.md changed during migration");
   }

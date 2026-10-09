@@ -160,13 +160,13 @@ export async function minimaxUnderstandImage(params: {
     // All response fields below are provider-controlled and may reflect the
     // authenticated request, so sanitize them before any error branch uses them.
     const traceId = redactErrorText(res.headers.get("Trace-Id") ?? "");
+    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     if (!res.ok) {
       const body = await readResponseBodySnippet(res, {
         maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
         maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
         redact: redactErrorText,
       });
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(
         `MiniMax VLM request failed (${res.status} ${redactErrorText(res.statusText)}).${trace}${
           body ? ` Body: ${body}` : ""
@@ -179,7 +179,6 @@ export async function minimaxUnderstandImage(params: {
       : "MiniMax VLM response";
     const json = await readProviderJsonResponse<unknown>(res, responseLabel);
     if (!isRecord(json)) {
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM response was not JSON.${trace}`);
     }
 
@@ -187,13 +186,11 @@ export async function minimaxUnderstandImage(params: {
     const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
     if (code !== 0) {
       const msg = redactErrorText((baseResp.status_msg ?? "").trim());
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
     }
 
     const content = typeof json.content === "string" ? json.content.trim() : "";
     if (!content) {
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM returned no content.${trace}`);
     }
 

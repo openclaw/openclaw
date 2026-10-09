@@ -92,6 +92,48 @@ This foundation adds no SQL, schema validation, persistent storage, SDK
 deprecation, or migration. Admission continues to own validation; receipt
 installation consumes the physical facts already captured by that owner.
 
+### Conversation and plugin-state receipt coverage
+
+Plugin-state keyed mutations publish stored JSON postimages and exact deleted
+keys through the same postcommit phases. Expiry sweeps, capacity eviction,
+conditional deletion, atomic consume/register-if-absent, namespace clear,
+replacement, retained moves, journal writes, and Doctor import prefixes share
+the mutation kernels. `RETURNING` captures affected rows without a follow-up
+query. Ordinary lookup/list/count operations remain read-only. Worker operations
+carry the committed transaction's facts before their reply; pending operations
+and unknown settlement invalidate coverage, and a late receipt cannot restore a
+newer native deletion. An oversized receipt retires coverage instead of failing
+an otherwise valid write. Receipt values are private, never log payloads.
+Empty plugin-state receipts travel with native settlement instead of an additional
+early commit frame. They remain recorded at COMMIT and install before the operation
+completes. Nonempty and unknown-coverage receipts still publish immediately after
+COMMIT.
+
+Catalogue and binding receipts use the same overflow rule, including large
+expiry batches whose ordinary result is empty. Private fact subscribers only
+install or invalidate prepared facts; work that can mutate storage belongs in
+postcommit observers, after the batch's fact installation.
+
+Current conversation bindings publish bind, rebind, touch, expire, and removal
+postimages or tombstones, including expiry performed by resolve/list operations.
+Changed reverse-session scopes identify both previous and current owners; these
+are exact invalidations, not a claim to have read every member of a reverse set.
+ClickClack channel lookups verify that the persisted binding still matches the
+requested channel. Discussion tools validate the persisted target directly; no
+discussion reverse index remains. Replacing a primary key cannot reuse an obsolete
+channel or discussion route.
+
+Coverage remains scoped to these managed kernels. Session-entry worker envelopes
+still need to compose conversation association facts and compound native-binding
+deletion/compensation facts with their session receipt. Raw handles, trigger or
+cascade side effects outside the named kernels, external adapters, foreign
+processes, and whole reverse-set certification remain incomplete. Native final
+authority guards stay in place until those owners and foreign-refresh handling
+are complete. The synchronous SDK methods and native Promise wrappers remain
+synchronous compatibility paths; receipt publication does not migrate their SQL
+to a worker. There is no schema, stored-byte, retention, durability, permission,
+or update-format change.
+
 ### Foreign observation and recertification
 
 The shared-state current-reader owner retains one unpinned probe connection per

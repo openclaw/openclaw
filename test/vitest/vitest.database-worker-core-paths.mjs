@@ -1048,6 +1048,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-store.runtime.test.ts",
   "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",
+  "src/plugin-state/plugin-state-publication.test.ts",
   "test/visitor-access-revocation.test.ts",
   "src/agents/tools/cron-tool.output-contract.test.ts",
   "src/plugins/services.cron.test.ts",
