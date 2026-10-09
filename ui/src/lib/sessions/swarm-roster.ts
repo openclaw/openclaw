@@ -112,6 +112,9 @@ export class SwarmRosterHydrator {
   private children: ReturnType<SessionCapability["observeList"]> | null = null;
   private childResult: SessionsListResult | null = null;
   private childRows: GatewaySessionRow[] = [];
+  private childrenLoading = false;
+  private childReadVersion = 0;
+  private requiredChildReadVersion = 0;
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
   private parentRefreshForced = false;
@@ -221,6 +224,8 @@ export class SwarmRosterHydrator {
       this.requestedChildren.add(key);
     }
     this.hydrated = false;
+    // An already-running read cannot cover children named after it started.
+    this.requiredChildReadVersion = this.childReadVersion + 1;
     this.refreshChildren();
   }
 
@@ -350,6 +355,10 @@ export class SwarmRosterHydrator {
   }
 
   private applyChildren(snapshot: SessionListSnapshot): void {
+    if (snapshot.loading && !this.childrenLoading) {
+      this.childReadVersion += 1;
+    }
+    this.childrenLoading = snapshot.loading;
     const params = this.params;
     const result = snapshot.result;
     if (snapshot.error && !snapshot.loading) {
@@ -390,6 +399,7 @@ export class SwarmRosterHydrator {
       void this.readParent(true);
     }
     const generation = this.generation;
+    const childReadVersion = this.childReadVersion;
     const isCurrent = () => generation === this.generation && this.childResult === result;
     void hydrateSwarmSessionRows({
       sessions: params.sessions,
@@ -405,7 +415,7 @@ export class SwarmRosterHydrator {
         this.childRows = rows;
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
         this.childrenRead = true;
-        this.hydrated = true;
+        this.hydrated = childReadVersion >= this.requiredChildReadVersion;
         this.recovered("children");
         // A child launched during this read is still missing from it.
         this.refreshNewChildren();
@@ -431,6 +441,9 @@ export class SwarmRosterHydrator {
     this.children = null;
     this.childResult = null;
     this.childRows = [];
+    this.childrenLoading = false;
+    this.childReadVersion = 0;
+    this.requiredChildReadVersion = 0;
     this.parentRequest = null;
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;

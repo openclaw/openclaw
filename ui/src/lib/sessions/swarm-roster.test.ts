@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { childSessionListQuery } from "./child-session-data.ts";
 import type { SessionCapability, SessionListOptions } from "./index.ts";
 import {
   createGatewayHarness,
@@ -519,6 +520,72 @@ describe("SwarmRosterHydrator", () => {
       hydrator.dispose();
     }
   });
+
+  it.each([0, 1, 2])(
+    "keeps the roster incomplete when a new child is named during a read holding %i children",
+    async (count) => {
+      vi.useFakeTimers();
+      let children = Array.from({ length: count }, (_, index) => row(index));
+      let held = createDeferred();
+      held.resolve();
+      const list = vi.fn(async () => {
+        const answer = result(children, 0, children.length);
+        await held.promise;
+        return answer;
+      });
+      const sessions = sessionSource(list);
+      const hydrator = new SwarmRosterHydrator();
+      const hydration: boolean[] = [];
+      try {
+        hydrator.update({
+          sessions,
+          readParent: async () => ({
+            ...parentRow(),
+            childSessions: children.map((child) => child.key),
+          }),
+          parentKey: parentRow().key,
+          sourceEpoch: 1,
+          currentRows: () => [],
+          onRows: () => hydration.push(hydrator.hydrated),
+        });
+        await vi.advanceTimersByTimeAsync(250);
+        expect(hydrator.hydrated).toBe(true);
+
+        const previousRead = createDeferred();
+        held = previousRead;
+        const refresh = sessions.refreshList({
+          ...childSessionListQuery(parentRow().key, 10_000),
+          force: true,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const reads = list.mock.calls.length;
+
+        children = [...children, row(count)];
+        held = createDeferred();
+        sessions.invalidateParent();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hydrator.hydrated).toBe(false);
+        expect(list).toHaveBeenCalledTimes(reads);
+
+        hydration.length = 0;
+        previousRead.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list).toHaveBeenCalledTimes(reads + 1);
+        expect(hydrator.hydrated).toBe(false);
+        expect(hydration.length).toBeGreaterThan(0);
+        expect(hydration.every((loaded) => !loaded)).toBe(true);
+        expect(hydrator.childrenRead).toBe(true);
+
+        held.resolve();
+        await refresh;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hydrator.hydrated).toBe(true);
+        expect(hydrator.rows.map((child) => child.key)).toContain(row(count).key);
+      } finally {
+        hydrator.dispose();
+      }
+    },
+  );
 
   it("asks once for a named child the list never returns and stays hydrated afterwards", async () => {
     vi.useFakeTimers();
