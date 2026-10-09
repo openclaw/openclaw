@@ -130,33 +130,6 @@ function mapToolChoice(choice: unknown, mapName: (name: string) => string): unkn
   return mapFunction(choice);
 }
 
-function mapManagedTooling(
-  prompt: string | undefined,
-  mapName: (name: string) => string,
-  toolCallAlias: string | undefined,
-): string | undefined {
-  if (!prompt?.startsWith("<!-- openclaw:attempt:STABLE -->\n")) {
-    return prompt;
-  }
-  const toolingStart = prompt.indexOf("\n## Tooling\n");
-  if (toolingStart < 0 || prompt.indexOf("\n## ") !== toolingStart) {
-    return prompt;
-  }
-  // system-prompt-tool-list owns this block. Workspace instructions and examples
-  // outside it are data, so translating arbitrary occurrences would corrupt them.
-  return prompt.replace(
-    /(\n## Tooling\nTools policy-filtered\. Names case-sensitive; call exact\.\n)([\s\S]*?)(?=\n## |$)/u,
-    (_match, heading: string, body: string) => {
-      const mapped = body.replace(/^(?:- [^\n]*(?:\n|$))+/u, (list) =>
-        list.replace(/^- (\S+?)(?=: |$)/gmu, (_line, name: string) => `- ${mapName(name)}`),
-      );
-      return (
-        heading + (toolCallAlias ? mapped.replace(TOOL_CALL_REFERENCE_RE, toolCallAlias) : mapped)
-      );
-    },
-  );
-}
-
 export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
   const underlying = baseFn ?? streamSimple;
   return (model, context, options) => {
@@ -187,20 +160,17 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
       .filter(([name]) => activeNames.has(name))
       .map(([name, alias]) => `${name}: use ${alias}`);
     const toolCallAlias = activeNames.has("tool_call") ? toWire.get("tool_call") : undefined;
-    const systemPrompt = instructions.length
-      ? mapManagedTooling(context.systemPrompt, mapName, toolCallAlias)
-      : context.systemPrompt;
     const wireContext: Context = {
       ...context,
       systemPrompt: instructions.length
         ? [
-            systemPrompt,
+            context.systemPrompt,
             "## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:",
             ...instructions,
           ]
             .filter(Boolean)
             .join("\n")
-        : systemPrompt,
+        : context.systemPrompt,
       tools: context.tools?.map((tool) => ({
         ...tool,
         name: mapName(tool.name),

@@ -183,7 +183,7 @@ it.each(["ls", "call", "tool_calls", "function", "TOOL_CALLS", "name"])(
   },
 );
 
-it("translates managed Tooling instructions without rewriting project text or unrelated descriptions", async () => {
+it("preserves the system prompt while appending wire names and translating tool references", async () => {
   const input = context(["ls", "tool_call", "tool_search", "exec", "custom-tool_call"]);
   const projectText =
     "## Workspace\nRun ls; preserve the literal tool_call example.\n## Tooling\n- tool_call";
@@ -212,12 +212,9 @@ it("translates managed Tooling instructions without rewriting project text or un
   respond("openclaw_tool_call");
   await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
   const request = readRequest();
-  expect(request.messages[0].content).toContain(
-    "- openclaw_ls: List directories\n- openclaw_tool_call\n",
+  expect(request.messages[0].content).toBe(
+    `${input.systemPrompt}\n## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:\nls: use openclaw_ls\ntool_call: use openclaw_tool_call`,
   );
-  expect(request.messages[0].content).toContain("Call openclaw_tool_call with the result id");
-  expect(request.messages[0].content).toContain("- custom-tool_call\n");
-  expect(request.messages[0].content).toContain(projectText);
   expect(request.tools).toContainEqual({
     type: "function",
     function: {
@@ -236,17 +233,6 @@ it("translates managed Tooling instructions without rewriting project text or un
   });
   expect(input).toEqual(original);
 });
-
-it.each(["", "<!-- openclaw:attempt:STABLE -->\n## Workspace\n"])(
-  "preserves a non-managed Tooling example after %j",
-  async (prefix) => {
-    const input = context(["tool_call"]);
-    input.systemPrompt = `${prefix}## Tooling\nTools policy-filtered. Names case-sensitive; call exact.\n- tool_call`;
-    respond("openclaw_tool_call");
-    await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
-    expect(readRequest().messages[0].content.startsWith(input.systemPrompt)).toBe(true);
-  },
-);
 
 it("recovers aliased plain-text calls before restoring the canonical tool name", async () => {
   fetchMock.mockResolvedValue({
