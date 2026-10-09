@@ -266,6 +266,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/skills.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
+  "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
 ];

@@ -6,14 +6,7 @@ export NO_COLOR=1
 
 source scripts/lib/openclaw-e2e-instance.sh
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-openclaw_e2e_install_trash_shim
-
-export NPM_CONFIG_PREFIX="$HOME/.npm-global"
-export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-export npm_config_loglevel=error
-export npm_config_fund=false
-export npm_config_audit=false
+source scripts/e2e/lib/release-scenarios/setup.sh
 
 dump_debug_logs() {
   local status="$1"

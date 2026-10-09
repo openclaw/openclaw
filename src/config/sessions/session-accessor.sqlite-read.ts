@@ -36,6 +36,7 @@ import {
   type SessionSqliteTargetResolutionCache,
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
 import {
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
@@ -282,25 +283,6 @@ export function loadTranscriptEventRowsAfterSeqSync(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return loadTranscriptEventRowsAfterSeqInDatabase(database, resolved.sessionId, afterSeq);
-}
-
-export function loadTranscriptEventRowsAfterSeqInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-  afterSeq: number,
-): SessionTranscriptEventRow[] {
-  return readHotSessionTranscriptSnapshot(database, sessionId, "incremental", () => {
-    const db = getSessionKysely(database.db);
-    const query = db
-      .selectFrom("transcript_events")
-      .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
-      .where("session_id", "=", sessionId)
-      .where("seq", ">", afterSeq);
-    return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
-      event: JSON.parse(row.event_json) as TranscriptEvent,
-      seq: sqliteNumber(row.seq),
-    }));
-  });
 }
 
 /** Reads one checkpoint row so incremental consumers can reject transcript rewrites. */

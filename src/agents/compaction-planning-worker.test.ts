@@ -442,6 +442,8 @@ describe("compaction planning worker", () => {
         },
       }));
     `);
+    // Isolate clamping from elapsed admission time in the absolute worker deadline.
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       await runCompactionPlanningWorker({
@@ -461,6 +463,7 @@ describe("compaction planning worker", () => {
       expect(Math.max(...delays)).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS - 1_000);
     } finally {
       setTimeoutSpy.mockRestore();
+      clock.mockRestore();
     }
   });
 

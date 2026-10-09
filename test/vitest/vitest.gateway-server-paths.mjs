@@ -187,6 +187,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/sessions-read-diagnostics.test.ts",
   "src/gateway/server-methods/sessions-read-visibility.test.ts",
   "src/gateway/server-methods/sessions-read.test.ts",
+  "src/gateway/server-methods/sessions-sharing.patch-worker.test.ts",
   "src/gateway/server-methods/sessions-sharing.test.ts",
   "src/gateway/server-methods/skills-library.test.ts",
   "src/gateway/server-methods/skills.remote.test.ts",

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import {
@@ -60,45 +59,38 @@ export async function prepareAcpSessionMutation(
         let phase: "transaction" | "commit" | "settled" = "transaction";
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           const facts = request.facts;
-          const port =
-            isRecord(facts) && facts.preparationPort instanceof MessagePort
-              ? facts.preparationPort
-              : undefined;
-          try {
+          assertCurrent();
+          if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
+            throw new Error("ACP callback differs from its retained transaction");
+          }
+          authorize?.(request.stage === "transaction" ? "transaction" : "commit");
+          if (request.stage === "transaction") {
+            if (decision) {
+              throw new Error("ACP callback has no unique decision");
+            }
+            // SAFETY: this private worker supplies this operation's authoritative row snapshot.
+            const prepared = facts.preparation as AcpSessionMutationPreparation;
+            const next = mutate(
+              prepared.current,
+              prepared.current
+                ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
+                : prepared.entry,
+            );
+            decision =
+              next === undefined
+                ? { kind: "keep" }
+                : next === null
+                  ? { kind: "clear" }
+                  : { kind: "set", meta: next };
             assertCurrent();
-            if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
-              throw new Error("ACP callback differs from its retained transaction");
-            }
-            authorize?.(request.stage === "transaction" ? "transaction" : "commit");
-            if (request.stage === "transaction") {
-              if (!port || decision) {
-                throw new Error("ACP callback has no unique decision port");
-              }
-              // SAFETY: this private worker supplies this operation's authoritative row snapshot.
-              const prepared = facts.preparation as AcpSessionMutationPreparation;
-              const next = mutate(
-                prepared.current,
-                prepared.current
-                  ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
-                  : prepared.entry,
-              );
-              decision =
-                next === undefined
-                  ? { kind: "keep" }
-                  : next === null
-                    ? { kind: "clear" }
-                    : { kind: "set", meta: next };
-              assertCurrent();
-              port.postMessage(decision, []);
-              phase = "commit";
-            } else {
-              phase = "settled";
-            }
-            if (!grant()) {
-              throw new Error("ACP callback admission expired");
-            }
-          } finally {
-            port?.close();
+            // Reject uncloneable metadata before any canonical entry mutation.
+            structuredClone(decision);
+            phase = "commit";
+          } else {
+            phase = "settled";
+          }
+          if (!grant()) {
+            throw new Error("ACP callback admission expired");
           }
         });
         return {

@@ -520,17 +520,19 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   const unguardedSessionManager =
     attempt.sessionManager ??
     (attempt.sessionTarget
-      ? await SessionManager.openAsync(
-          attempt.sessionTarget as SessionTranscriptRuntimeTarget,
-          input.effectiveCwd,
-          resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget),
-          attempt.abortSignal,
+      ? await input.withOwnedTranscriptWrite(() =>
+          SessionManager.openAsync(
+            attempt.sessionTarget as SessionTranscriptRuntimeTarget,
+            input.effectiveCwd,
+            resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget),
+            attempt.abortSignal,
+          ),
         )
       : SessionManager.inMemory(input.effectiveCwd));
   // Publish ownership before awaiting preparation; outer cleanup must receive
   // this same manager even when replay validation or bootstrap fails.
   input.onSessionManagerCreated(unguardedSessionManager);
-  const prepareInitialUserTurnReplay = await input.withOwnedTranscriptWrite(() =>
+  const preparedReplay = await input.withOwnedTranscriptWrite(() =>
     preparePersistedCurrentUserTurn({
       sessionManager: unguardedSessionManager,
       message: preparedUserTurnMessage,
@@ -539,6 +541,12 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       signal: attempt.abortSignal,
     }),
   );
+  const prepareInitialUserTurnReplay: InitialUserTurnReplayPreparation | undefined =
+    preparedReplay &&
+    (async (signal) => {
+      const consume = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
+      return consume && ((onAdmitted) => input.withOwnedTranscriptWrite(() => consume(onAdmitted)));
+    });
   const sessionManager = guardSessionManager(unguardedSessionManager, {
     agentId: input.sessionAgentId,
     runId: attempt.runId,

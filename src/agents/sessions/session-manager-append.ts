@@ -25,7 +25,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
 import {
-  prepareCurrentTurnReplayWitness,
+  prepareCurrentTurnReplaySelection,
   resolveCurrentTurnEntryId,
   sessionManagerPrepareCurrentTurnReplay,
 } from "./session-manager-current-turn.js";
@@ -487,7 +487,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     matchesUser: (entry: SessionEntry | undefined) => boolean,
     signal?: AbortSignal,
   ) {
-    return prepareCurrentTurnReplayWitness(
+    return prepareCurrentTurnReplaySelection(
       () => {
         this.assertTranscriptViewAvailable();
         return {
@@ -498,6 +498,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           remainingAncestors:
             this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
           isInterruptedTail,
+          pendingDeliberateAppend: this.pendingDeliberateAppend,
         };
       },
       matchesUser,

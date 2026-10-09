@@ -51,8 +51,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
   // Ownership is row data: schema facts alone cannot witness a foreign owner change.
-  // A fresh snapshot with the same data/mutation revisions can reuse these admitted facts.
-  if (revision) {
+  if (revision && getSqliteReadScopeRevision(db) === revision) {
     if (!admitted) {
       // Weak reader references can keep closed keys alive through a long microtask drain.
       const unregister = registerNodeSqliteDisposeCallback(db, () => {
