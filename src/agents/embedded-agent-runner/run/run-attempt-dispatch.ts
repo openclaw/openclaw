@@ -545,6 +545,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelRegistry,
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
+    thinkingExplicit: params.thinkingExplicit,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

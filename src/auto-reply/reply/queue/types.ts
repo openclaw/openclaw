@@ -223,6 +223,7 @@ export type FollowupRun = {
     | "authProfileId"
     | "authProfileIdSource"
     | "thinkLevel"
+    | "thinkingExplicit"
     | "fastMode"
     | "fastModeAutoOnSeconds"
     | "verboseLevel"

@@ -1,11 +1,14 @@
 import type { resolveOpenAIRequestReasoning } from "../providers/openai-request-reasoning.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
-import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import {
+  type OpenAIModeModel,
+  resolveChatTemplateReasoningEffort,
+} from "./openai-transport-shared.js";
 
 export function applyCompletionsReasoningAndRouting(
   params: Record<string, unknown>,
   model: OpenAIModeModel,
-  reasoning: ReturnType<typeof resolveOpenAIRequestReasoning>,
+  reasoning: ReturnType<typeof resolveOpenAIRequestReasoning> & { thinkingExplicit?: boolean },
   compat: ResolvedOpenAICompletionsCompat,
   mode: "direct" | "managed",
 ): void {
@@ -21,9 +24,11 @@ export function applyCompletionsReasoningAndRouting(
       params.enable_thinking = enabled;
       allowScalarEffort = false;
     } else if (compat.thinkingFormat === "qwen-chat-template") {
+      const chatTemplateReasoningEffort = resolveChatTemplateReasoningEffort(model, reasoning);
       params.chat_template_kwargs = {
         enable_thinking: enabled,
         ...(direct ? { preserve_thinking: true } : {}),
+        ...(chatTemplateReasoningEffort ? { reasoning_effort: chatTemplateReasoningEffort } : {}),
       };
       allowScalarEffort = false;
     } else if (

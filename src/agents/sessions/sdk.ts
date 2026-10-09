@@ -46,6 +46,7 @@ export interface CreateAgentSessionOptions extends Omit<
   model: Model;
   /** Admitted thinking level, clamped to the selected model capabilities. */
   thinkingLevel: ThinkingLevel;
+  thinkingExplicit?: boolean;
 
   /** Runtime-owned allowlist; extensions cannot expand it. */
   tools: string[];
@@ -235,8 +236,9 @@ export async function createAgentSession(
       optionsLocal?.signal?.throwIfAborted();
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
+      const providerOptions = {
         ...optionsLocal,
+        openclawThinkingExplicit: options.thinkingExplicit,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
         maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
@@ -244,7 +246,8 @@ export async function createAgentSession(
           attributionHeaders || auth.headers || optionsLocal?.headers
             ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
             : undefined,
-      });
+      };
+      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
     },
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;

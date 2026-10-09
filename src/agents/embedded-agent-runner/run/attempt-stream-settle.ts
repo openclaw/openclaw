@@ -492,7 +492,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
   });
-  session.agent.streamFn = streamFn;
+  // A direct provider transport replaces the session SDK stream, so attach
+  // turn-owned thinking provenance to the selected transport as well.
+  session.agent.streamFn = (model, context, options) => {
+    const providerOptions = {
+      ...options,
+      openclawThinkingExplicit: attempt.thinkingExplicit,
+    };
+    return streamFn(model, context, providerOptions);
+  };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({

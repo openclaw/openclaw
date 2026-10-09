@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
+  it.each([undefined, false, true])(
+    "preserves requester thinking provenance %s",
+    (thinkingExplicit) => {
+      const context = buildEmbeddedAttemptToolRunContext({
+        thinkLevel: "high",
+        thinkingExplicit,
+      });
+
+      expect(context.requesterThinkingLevel).toBe("high");
+      expect(context.requesterThinkingExplicit).toBe(thinkingExplicit);
+    },
+  );
+
   it("projects originating capabilities without copying execution or session ownership", () => {
     const input = {
       clientCaps: ["inline-widgets"],

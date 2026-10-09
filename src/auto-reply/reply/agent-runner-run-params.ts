@@ -178,6 +178,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
+    thinkingExplicit: params.run.thinkingExplicit,
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,

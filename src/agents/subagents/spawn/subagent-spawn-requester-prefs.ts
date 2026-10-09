@@ -8,7 +8,10 @@ import {
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
-import { resolveThinkingDefault } from "../../model-thinking-default.js";
+import {
+  resolveConfiguredThinkingDefault,
+  resolveThinkingDefault,
+} from "../../model-thinking-default.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./subagent-spawn.runtime.js";
 
 type RequesterPreferencesContext = {
@@ -65,16 +68,32 @@ export async function readRequesterPreferences(params: RequesterPreferencesConte
   params.assertActive?.();
   const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
   const model = selectedModel ?? defaultModel;
+  const persistedThinkingLevel =
+    typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()
+      ? entry.thinkingLevel.trim()
+      : undefined;
+  const configuredThinkingLevel =
+    persistedThinkingLevel === undefined
+      ? resolveConfiguredThinkingDefault({
+          cfg: params.cfg,
+          agentId: params.requesterAgentId,
+          provider: model.provider,
+          model: model.model,
+        })
+      : undefined;
+  const thinkingLevel =
+    persistedThinkingLevel ??
+    configuredThinkingLevel ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      agentId: params.requesterAgentId,
+      provider: model.provider,
+      model: model.model,
+    });
   return {
     model: selectedModel ?? undefined,
-    thinkingLevel:
-      (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) ||
-      resolveThinkingDefault({
-        cfg: params.cfg,
-        agentId: params.requesterAgentId,
-        provider: model.provider,
-        model: model.model,
-      }),
+    thinkingLevel,
+    thinkingExplicit: persistedThinkingLevel !== undefined || configuredThinkingLevel !== undefined,
   };
 }
 

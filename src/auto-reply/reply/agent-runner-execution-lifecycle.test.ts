@@ -289,6 +289,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       followupRun.run.provider = "openai";
       followupRun.run.model = "gpt-5.6-sol";
       followupRun.run.thinkLevel = "ultra";
+      followupRun.run.thinkingExplicit = override === "ultra";
       if (override !== undefined) {
         followupRun.run = {
           ...followupRun.run,
@@ -328,6 +329,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         "ultra",
         "ultra",
       ]);
+      expect(
+        state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkingExplicit),
+      ).toEqual([override === "ultra", override === "ultra"]);
       expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
     },
   );

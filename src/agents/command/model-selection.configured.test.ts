@@ -168,6 +168,34 @@ function createRestrictedFixture() {
 }
 
 describe("command selection with configured model facts", () => {
+  it.each(["unset", "turn", "session", "agent", "model", "global", "off"] as const)(
+    "retains thinking selection intent from %s",
+    async (source) => {
+      const fixture = createFixture();
+      const model = fixture.custom.models.find((entry) => entry.id === "child")!;
+      model.reasoning = true;
+      model.compat = {
+        thinkingFormat: "qwen-chat-template",
+        supportedReasoningEfforts: ["low", "medium", "xhigh"],
+        reasoningEffortMap: { high: "xhigh" },
+      };
+      if (source === "agent") {
+        fixture.cfg.agents!.entries!.main!.thinkingDefault = "high";
+      } else if (source === "model") {
+        fixture.defaults.models = { "custom/child": { params: { thinking: "high" } } };
+      } else if (source === "global") {
+        fixture.defaults.thinkingDefault = "high";
+      }
+      const selected = await fixture.select({
+        requestedThinkLevel:
+          source === "off" ? "off" : source === "turn" || source === "session" ? "high" : undefined,
+      });
+      expect(selected.thinkingExplicit).toBe(source !== "unset");
+      expect(selected.effectiveTurnThinkLevel).toBe(source === "off" ? "off" : "high");
+      expect(fixture.entry()).not.toHaveProperty("thinkingExplicit");
+    },
+  );
+
   it.each(["fallback", "automatic"] as const)(
     "constrains stored %s selection without probing a role-denied primary",
     async (source) => {

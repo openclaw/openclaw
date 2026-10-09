@@ -63,6 +63,10 @@ import {
   supportsModelTools,
 } from "./transport-utils.js";
 
+type OpenAIThinkingProvenanceOptions = {
+  openclawThinkingExplicit?: boolean;
+};
+
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
   if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
     return true;
@@ -421,7 +425,16 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const openclawThinkingExplicit =
+    // SAFETY: The host adds only an optional runtime bit; omitted values preserve legacy behavior.
+    (options as (OpenAICompletionsOptions & OpenAIThinkingProvenanceOptions) | undefined)
+      ?.openclawThinkingExplicit;
+  const reasoning = {
+    ...resolveOpenAIRequestReasoning(model, requestedEffort),
+    ...(openclawThinkingExplicit !== undefined
+      ? { thinkingExplicit: openclawThinkingExplicit }
+      : {}),
+  };
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =

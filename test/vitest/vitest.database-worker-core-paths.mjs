@@ -394,6 +394,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry-running-registration.native.test.ts",
   "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.thinking-provenance.test.ts",
   "src/agents/subagents/spawn/subagent-spawn-session-patch.test.ts",
   "src/agents/cli-runner/prepare.test.ts",
   "src/agents/cli-runner/prepare.durable-context.test.ts",

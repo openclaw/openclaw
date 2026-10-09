@@ -324,6 +324,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         resolveModelLevels: async () => ({
           resolvedThinkLevel: undefined,
           resolvedReasoningLevel: "off",
+          thinkingExplicit: false,
         }),
         resolvedVerboseLevel: "off",
         resolvedElevatedLevel: "off",

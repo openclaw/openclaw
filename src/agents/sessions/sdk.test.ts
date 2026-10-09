@@ -42,6 +42,36 @@ const testModel: Model = {
   maxTokens: 1000,
 };
 
+describe("createAgentSession run-scoped thinking intent", () => {
+  it.each([true, false, undefined])(
+    "carries run-scoped thinking intent (%s)",
+    async (thinkingExplicit) => {
+      streamMocks.streamSimple.mockReset().mockImplementation(createRecoveredAssistantStream);
+      const sessionManager = SessionManager.inMemory();
+      const { session } = await createSdkSession({
+        thinkingExplicit,
+        modelRegistry: createTestModelRegistry(),
+        sessionManager,
+      });
+      try {
+        const stream = await session.agent.streamFn?.(
+          testModel,
+          { messages: [], systemPrompt: "", tools: [] },
+          {},
+        );
+        await stream?.result();
+        expect(streamMocks.streamSimple.mock.lastCall?.[2]).toMatchObject({
+          openclawThinkingExplicit: thinkingExplicit,
+        });
+        expect(session.agent.state).not.toHaveProperty("thinkingExplicit");
+        expect(JSON.stringify(sessionManager.getEntries())).not.toContain("thinkingExplicit");
+      } finally {
+        session.dispose();
+      }
+    },
+  );
+});
+
 function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
   const { baseUrl: _baseUrl, ...model } = { ...testModel, ...overrides };
   return model as unknown as Model;

@@ -12,6 +12,27 @@ const selection = {
   reasoningExplicit: false,
 };
 
+describe("reply thinking selection provenance", () => {
+  it.each([
+    { name: "model default", thinkLevel: undefined, thinkingExplicit: false, expected: "high" },
+    { name: "selected high", thinkLevel: "high", thinkingExplicit: true, expected: "high" },
+    { name: "configured default", thinkLevel: undefined, thinkingExplicit: true, expected: "high" },
+    { name: "off", thinkLevel: "off", thinkingExplicit: true, expected: "off" },
+  ] as const)("retains the source of $name", async ({ thinkLevel, thinkingExplicit, expected }) => {
+    const resolver = createReplyModelLevelResolver({
+      selection: { ...selection, thinkLevel, thinkingExplicit },
+      modelState: {
+        resolveDefaultThinkingLevel: vi.fn(async () => "high" as const),
+        resolveDefaultReasoningLevel: vi.fn(async () => "off" as const),
+      },
+    });
+    await expect(resolver()).resolves.toMatchObject({
+      resolvedThinkLevel: expected,
+      thinkingExplicit,
+    });
+  });
+});
+
 describe("reply model level cancellation", () => {
   it.each(["thinking", "reasoning"] as const)(
     "releases an aborted %s waiter without cancelling shared discovery",
@@ -49,6 +70,7 @@ describe("reply model level cancellation", () => {
       await expect(survivor).resolves.toEqual({
         resolvedThinkLevel: "off",
         resolvedReasoningLevel: "off",
+        thinkingExplicit: false,
       });
       expect(continueReply).not.toHaveBeenCalled();
       expect(resolveDefaultReasoningLevel).toHaveBeenCalledTimes(stage === "thinking" ? 1 : 2);
@@ -79,6 +101,7 @@ describe("reply model level cancellation", () => {
         await expect(resolver()).resolves.toEqual({
           resolvedThinkLevel: "low",
           resolvedReasoningLevel: "off",
+          thinkingExplicit: false,
         });
         expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
         controller.abort();

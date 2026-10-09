@@ -44,6 +44,7 @@ describe("reply-path model thinking capability", () => {
         timeoutMs: 60_000,
         blockReplyBreak: "text_end",
         thinkLevel: "max",
+        thinkingExplicit: false,
         skipProviderRuntimeHints: true,
         thinkingCatalog: [
           {
@@ -72,6 +73,7 @@ describe("reply-path model thinking capability", () => {
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         },
       });
+      expect(result.thinkingExplicit).toBe(false);
     },
   );
 });

@@ -54,6 +54,12 @@ export function createVllmQwenThinkingWrapper(params: {
       });
       if (params.format === "chat-template") {
         setQwenChatTemplateThinking(payloadObj, enableThinking);
+        // The binary profile stores "on" as low; keep enabled thinking at the template's
+        // default effort instead of forwarding the transport's low tier.
+        const chatTemplateKwargs = payloadObj.chat_template_kwargs;
+        if (typeof chatTemplateKwargs === "object" && chatTemplateKwargs !== null) {
+          Reflect.deleteProperty(chatTemplateKwargs, "reasoning_effort");
+        }
       } else {
         payloadObj.enable_thinking = enableThinking;
       }

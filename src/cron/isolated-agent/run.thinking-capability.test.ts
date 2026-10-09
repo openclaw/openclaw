@@ -18,7 +18,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-function runCodexCronTurn(thinking: string) {
+function runCodexCronTurn(thinking?: string) {
   return runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({
       sessionKey: "cron:thinking-capability",
@@ -69,6 +69,7 @@ describe("runCronIsolatedAgentTurn model thinking capability", () => {
 
     const embeddedCall = requireRecord(runEmbeddedAgentMock.mock.calls[0]?.[0]);
     expect(embeddedCall.thinkLevel).toBe("max");
+    expect(embeddedCall.thinkingExplicit).toBe(true);
     expect(embeddedCall.modelThinkingCapability).toEqual({
       provider: "openai",
       modelId: "gpt-5.6-luna",
@@ -85,5 +86,12 @@ describe("runCronIsolatedAgentTurn model thinking capability", () => {
     const embeddedCall = requireRecord(runEmbeddedAgentMock.mock.calls[0]?.[0]);
     expect(embeddedCall.thinkLevel).toBe("high");
     expect(embeddedCall.modelThinkingCapability).toBeUndefined();
+  });
+
+  it("does not mark a model default as selected thinking", async () => {
+    loadModelCatalogMock.mockResolvedValue([]);
+    await runCodexCronTurn();
+    const embeddedCall = requireRecord(runEmbeddedAgentMock.mock.calls[0]?.[0]);
+    expect(embeddedCall.thinkingExplicit).toBe(false);
   });
 });
