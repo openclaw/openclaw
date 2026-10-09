@@ -77,7 +77,7 @@ function readGrant(): SqliteSourceFenceGrant {
   ) {
     throw new SqliteWorkerError("SQLite source fence grant is unavailable", "closed");
   }
-  // The private port carries the host factory's captured identities, never command-supplied authority.
+  // SAFETY: The private port carries the host factory's typed grant, never command-supplied authority.
   return value as SqliteSourceFenceGrant;
 }
 
@@ -133,7 +133,7 @@ export async function runSqliteSourceFence<T>(
     }
     physical.set(source.identity.physical.key, previous ?? source);
   }
-  const ordered = [...physical.values()].sort((a, b) =>
+  const ordered = [...physical.values()].toSorted((a, b) =>
     a.identity.physical.key < b.identity.physical.key ? -1 : 1,
   );
   const captured = new Set([fence.destination, ...fence.sources]);

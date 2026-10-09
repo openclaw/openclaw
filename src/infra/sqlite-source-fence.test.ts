@@ -319,7 +319,9 @@ describe("durable source fence through the real SQLite broker", () => {
       gate.release();
       await expect(operation.result).resolves.toEqual({ id: "all-or-release", revision: 1 });
     } finally {
-      if (higher.isTransaction) higher.exec("ROLLBACK");
+      if (higher.isTransaction) {
+        higher.exec("ROLLBACK");
+      }
       gate.release();
       await operation.result.catch(() => {});
     }
