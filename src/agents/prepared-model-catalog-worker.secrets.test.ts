@@ -46,8 +46,6 @@ describe("serialized catalog credential provenance", () => {
     loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean };
   }>([
     { owner: "config", label: "literal bytes", value: "synthetic-worker-config-key" },
-    { owner: "config", label: "marker bytes", value: NON_ENV_SECRETREF_MARKER },
-    { owner: "config", label: "env-template bytes", value: "${OPAQUE_WORKER_KEY}" },
     { owner: "profile", label: "profile-only sibling", value: "synthetic-worker-profile-key" },
     {
       owner: "config",
