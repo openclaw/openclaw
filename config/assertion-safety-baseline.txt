@@ -1169,7 +1169,7 @@ src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	3
 src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	12
+src/agents/agent-hooks/compaction-safeguard.ts	11
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -1232,13 +1232,8 @@ src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
 src/agents/codex-mcp-config.ts	1
 src/agents/command/attempt-execution.helpers.ts	1
-src/agents/compaction-planning-projection.ts	6
-src/agents/compaction-planning-worker.ts	1
-src/agents/compaction-planning.ts	1
-src/agents/compaction-planning.worker.ts	1
 src/agents/compaction-real-conversation.ts	4
 src/agents/compaction-usage.ts	1
-src/agents/compaction.ts	3
 src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	1
@@ -1864,6 +1859,7 @@ src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	2
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
+src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-write.ts	2

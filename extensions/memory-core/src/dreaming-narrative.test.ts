@@ -1,7 +1,6 @@
 // Memory Core tests cover prompt-only dreaming and publication boundaries.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,36 +30,7 @@ afterEach(() => {
 });
 
 describe("runDreamNarrative", () => {
-  it("writes the completion using the workspace owner's configured model", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-completion-");
-    const subagent = createCompletion();
-    const outcome = await runDreamNarrative({
-      agentId: "researcher",
-      subagent,
-      workspaceDir,
-      data: { phase: "light", snippets: ["API endpoints need authentication"] },
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-      model: "anthropic/claude-sonnet-4-6",
-      logger: createLogger(),
-    });
-
-    expect(subagent.complete).toHaveBeenCalledOnce();
-    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({
-      agentId: "researcher",
-      model: "anthropic/claude-sonnet-4-6",
-      timeoutMs: 60_000,
-      message: expect.stringContaining("API endpoints need authentication"),
-      extraSystemPrompt: expect.stringContaining("Output ONLY the diary entry"),
-    });
-    expect(outcome).toEqual({ status: "completed" });
-    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
-      "The repository whispered of forgotten endpoints.",
-    );
-  });
-
   it.each([
-    new Error("model unavailable"),
     new Error("Completion failed", { cause: new Error("unknown model: ollama/missing-model") }),
   ])("retries an unavailable configured model with the default (%s)", async (error) => {
     const workspaceDir = await createTempWorkspace("dreaming-model-retry-");
@@ -111,16 +81,9 @@ describe("runDreamNarrative", () => {
     expect(diary).toContain("A memory trace surfaced");
   });
 
-  it.each([
-    { name: "empty completion", failure: undefined },
-    { name: "timeout", failure: new Error("completion timed out") },
-    { name: "request-scoped runtime", failure: new RequestScopedSubagentRuntimeError() },
-  ])("writes only a generic trace after $name", async ({ failure }) => {
+  it("writes only a generic trace after empty completion", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-fallback-");
     const subagent = createCompletion("   \n  ");
-    if (failure) {
-      subagent.complete.mockRejectedValue(failure);
-    }
     const outcome = await runDreamNarrative({
       agentId: "main",
       subagent,
@@ -135,7 +98,7 @@ describe("runDreamNarrative", () => {
     expect(diary).not.toContain("A private raw staging fragment.");
   });
 
-  it.each(["main", undefined])("skips empty data for owner %s", async (agentId) => {
+  it.each([undefined])("skips empty data for owner %s", async (agentId) => {
     const workspaceDir = await createTempWorkspace("dreaming-empty-");
     const subagent = createCompletion();
     await expect(

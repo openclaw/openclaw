@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -303,6 +304,25 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
+    // Read at evaluation time: selected-account discovery replaces outcomes in place. Entitlement
+    // is per account, so only the listing discovery made with this exact credential applies.
+    accountListedModelIds: (provider, profileId) => {
+      let listed: Set<string> | undefined;
+      for (const outcome of providerOutcomes) {
+        if (
+          outcome.status === "ready" &&
+          outcome.listedModelIds &&
+          outcome.profileId === profileId &&
+          normalizeProviderId(outcome.provider) === provider
+        ) {
+          listed ??= new Set();
+          for (const id of outcome.listedModelIds) {
+            listed.add(normalizeLowercaseStringOrEmpty(id));
+          }
+        }
+      }
+      return listed;
+    },
   });
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const preferredProfileIdForCatalog = params.preferredProfileId || undefined;
