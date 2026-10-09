@@ -47,17 +47,18 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     purgeExpiredSecretStoreEntries: () => mocks.purge(),
   };
 });
-vi.mock("../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => mocks.gatewayIdentity(),
+// mock-isolation: These policy tests use the offline branch; owner routing has its own boundary suite.
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: Parameters<typeof import("./local-state-owner.js").runWithLocalStateOwner>[0]) =>
+    runLocal({
+      env: process.env,
+      config: {},
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
 }));
-vi.mock("@clack/prompts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@clack/prompts")>();
-  return {
-    ...actual,
-    confirm: (options: unknown) => mocks.confirm(options),
-    isCancel: (value: unknown) => typeof value === "symbol",
-  };
-});
 
 function createProgram(): Command {
   const program = new Command();
@@ -285,18 +286,24 @@ describe("secrets store CLI", () => {
       { from: "user" },
     );
 
-    expect(mocks.updateHosts).toHaveBeenNthCalledWith(1, {
-      scope: { kind: "team" },
-      name: "MISC_VALUE",
-      allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
-      updatedBy: "cli",
-    });
-    expect(mocks.updateHosts).toHaveBeenNthCalledWith(2, {
-      scope: { kind: "team" },
-      name: "MISC_VALUE",
-      allowedHosts: [],
-      updatedBy: "cli",
-    });
+    expect(mocks.updateHosts).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        scope: { kind: "team" },
+        name: "MISC_VALUE",
+        allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
+        updatedBy: "cli",
+      }),
+    );
+    expect(mocks.updateHosts).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        scope: { kind: "team" },
+        name: "MISC_VALUE",
+        allowedHosts: [],
+        updatedBy: "cli",
+      }),
+    );
     expect(mocks.write).not.toHaveBeenCalled();
   });
 

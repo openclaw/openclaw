@@ -22,20 +22,18 @@ vi.mock("./one-shot-exit.js", () => ({
   exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
     runtime.exit(exitCode),
 }));
-vi.mock("../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => Promise.resolve(undefined),
+// mock-isolation: These policy tests use the offline branch; owner routing has its own boundary suite.
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: Parameters<typeof import("./local-state-owner.js").runWithLocalStateOwner>[0]) =>
+    runLocal({
+      env: process.env,
+      config: {},
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
 }));
-vi.mock("./secrets-store-input.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./secrets-store-input.js")>();
-  return {
-    ...actual,
-    readSecretStoreInput: async (params: Parameters<typeof actual.readSecretStoreInput>[0]) => {
-      const value = await actual.readSecretStoreInput(params);
-      await runPendingInterleave();
-      return value;
-    },
-  };
-});
 vi.mock("@clack/prompts", () => ({
   confirm: async () => {
     await runPendingInterleave();

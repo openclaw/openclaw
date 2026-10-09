@@ -259,3 +259,49 @@ export function deleteSecretStoreEntryInDatabase(
     );
   }, undefined);
 }
+
+export function updateSecretStoreAllowedHostsInDatabase(
+  params: {
+    scope: SecretStoreScope;
+    name: string;
+    allowedHosts: readonly string[];
+    updatedBy: string | null;
+    database?: OpenClawStateDatabaseOptions;
+    now: number;
+  },
+  admit: (stage: "transaction" | "commit") => void,
+): void {
+  assertSecretStoreMutationName(params.name);
+  const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
+  const { now } = params;
+  runOpenClawStateWriteTransaction(
+    ({ db: sqlite }) => {
+      admit("transaction");
+      const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+      const updated = executeSqliteQuerySync(
+        sqlite,
+        db
+          .updateTable("secret_store_entries")
+          .set({
+            allowed_hosts: allowedHosts.length ? JSON.stringify(allowedHosts) : null,
+            updated_at_ms: now,
+            updated_by: params.updatedBy,
+          })
+          .where("scope_kind", "=", "team")
+          .where("scope_id", "=", "")
+          .where("name", "=", params.name)
+          .where("kind", "=", "secret")
+          .where("deleted_at_ms", "is", null),
+      );
+      if (Number(updated.numAffectedRows ?? 0n) !== 1) {
+        throw new SecretStoreValidationError(
+          "SECRET_STORE_INVALID_ALLOWED_HOST",
+          `Secret store entry "${params.name}" is missing or is not a secret entry.`,
+        );
+      }
+      admit("commit");
+    },
+    params.database,
+    { operationLabel: "secrets.store.allowed-hosts" },
+  );
+}
