@@ -660,6 +660,9 @@ Already admitted readers retain their independent read path. The queue reservati
 ends before consumer callbacks run, and the existing request deadline, cancellation,
 and database revocation cover admission waiting. Read-only access never creates a
 missing store; idle agents still have no durable database until their first write.
+Session event capture retains the physical source reported by the worker after
+cold admission. A first writer that finishes before the read can supply that
+source; a file created after an absent read or replaced after capture is refused.
 No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
