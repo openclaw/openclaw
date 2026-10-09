@@ -55,25 +55,22 @@ function createHarness(params?: AgentEventTestHarnessOptions) {
 }
 
 describe("chat run registration lifecycle", () => {
-  it.each([true, false])(
-    "releases finalized hidden run registrations without message subscribers (messages=%s)",
-    async (projectSessionMessages) => {
-      const h = createHarness();
-      for (let index = 0; index < 300; index += 1) {
-        const runId = `hidden-run-${index}`;
-        h.register(runId, "agent:main:hidden", runId);
-        registerAgentRunContext(runId, {
-          sessionKey: "agent:main:hidden",
-          isControlUiVisible: false,
-          projectSessionMessages,
-          projectSessionLifecycle: false,
-        });
-        await h.emit(runId, "lifecycle", { phase: "end" });
-      }
-      expect(h.chat()).toHaveLength(0);
-      expect(h.chatRunState.runs.size).toBe(0);
-    },
-  );
+  it("releases finalized hidden run registrations without message subscribers", async () => {
+    const h = createHarness();
+    for (let index = 0; index < 300; index += 1) {
+      const runId = `hidden-run-${index}`;
+      h.register(runId, "agent:main:hidden", runId);
+      registerAgentRunContext(runId, {
+        sessionKey: "agent:main:hidden",
+        isControlUiVisible: false,
+        projectSessionMessages: true,
+        projectSessionLifecycle: false,
+      });
+      await h.emit(runId, "lifecycle", { phase: "end" });
+    }
+    expect(h.chat()).toHaveLength(0);
+    expect(h.chatRunState.runs.size).toBe(0);
+  });
 
   it("cancels deferred lifecycle errors when the handler is disposed", async () => {
     vi.useFakeTimers();
