@@ -72,7 +72,8 @@ import {
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
+import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import {
   isDuplicateRestartRecoverySource,
   retireTerminalRestartRecoverySourceClaim,
@@ -301,7 +302,7 @@ export async function runReplyAgent(
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
   const touchActiveSessionEntry = async () => {
-    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
+    if (opts?.internalEventExecution || !activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
     }
     // Keep the in-memory snapshot aligned with the pending-reset write boundary.
@@ -479,24 +480,25 @@ export async function runReplyAgent(
     buildReplyMediaContextParams(followupRun, sessionKey, cfg),
   );
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-  const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
-    ? async (phase: CompactionNoticePhase, text?: string) => {
-        if (!opts?.onBlockReply) {
-          return;
-        }
-        const noticePayload = createCompactionNoticePayload({
-          phase,
-          text,
-          currentMessageId: compactionNoticeMessageId,
-          applyReplyToMode,
-        });
-        try {
-          await opts.onBlockReply(noticePayload);
-        } catch (err) {
-          logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
-        }
-      }
-    : undefined;
+  const sendDirectCompactionNotice = async (phase: CompactionNoticePhase, text?: string) => {
+    if (
+      !opts?.onBlockReply ||
+      (phase !== "context_bounded" && !shouldNotifyUserAboutCompaction(cfg))
+    ) {
+      return;
+    }
+    const noticePayload = createCompactionNoticePayload({
+      phase,
+      text,
+      currentMessageId: compactionNoticeMessageId,
+      applyReplyToMode,
+    });
+    try {
+      await opts.onBlockReply(noticePayload);
+    } catch (err) {
+      logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
+    }
+  };
   const blockReplyPipeline =
     blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
       ? createBlockReplyPipeline({
@@ -528,6 +530,7 @@ export async function runReplyAgent(
     sessionKey: replySessionKey,
   });
   let replyOperation: ReplyOperation;
+  let callerOwnedReplyOperation = providedReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
     if (replyOperationRunState) {
@@ -636,6 +639,9 @@ export async function runReplyAgent(
     storePath,
   });
   try {
+    if (!providedReplyOperation && opts?.onReplyOperationOwned?.(replyOperation) === true) {
+      callerOwnedReplyOperation = replyOperation;
+    }
     await replyOperation.bindToolAuthoritySnapshotAsync(
       prepareReplyToolAuthority(
         followupRun,
@@ -699,7 +705,7 @@ export async function runReplyAgent(
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
       isHeartbeat,
-      providedReplyOperation,
+      providedReplyOperation: callerOwnedReplyOperation,
       queueKey,
       replyOperation,
       runFollowupTurn,

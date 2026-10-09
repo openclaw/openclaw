@@ -672,28 +672,45 @@ function assertNativeSqliteObservationSafe(handles, label) {
   }
 }
 
+const sqliteObservationFiles = [
+  "state/openclaw.sqlite",
+  "state/openclaw.sqlite-wal",
+  "state/openclaw.sqlite-shm",
+  "state/openclaw.sqlite-journal",
+];
+
+function openObservationSources(handles, root, files, requireDatabase = false) {
+  for (const relative of files) {
+    try {
+      const handle = openOwned(root, relative);
+      handles.push(handle);
+      if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
+        throw new Error();
+      }
+    } catch (error) {
+      if ((requireDatabase && relative.endsWith(".sqlite")) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+}
+
+function assertObservationSourcesUnchanged(handles) {
+  for (const { fd, stat, file } of handles) {
+    // SQLite readers update SHM read marks. Preserve identity checks without
+    // mistaking those cache timestamps for durable index mutations.
+    const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
+    if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
+      throw new Error();
+    }
+  }
+}
+
 function readMigrationSessions(stateRoot) {
   const handles = [];
   let db;
   try {
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > 64 * 1024 * 1024) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (relative.endsWith(".sqlite") || error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    openObservationSources(handles, stateRoot, sqliteObservationFiles, true);
     assertNativeSqliteObservationSafe(handles, "migration-sessions");
     db = new DatabaseSync(handles[0].file, { readOnly: true });
     db.exec("BEGIN");
@@ -751,12 +768,7 @@ function readMigrationSessions(stateRoot) {
     db.exec("COMMIT");
     db.close();
     db = undefined;
-    for (const { fd, stat, file } of handles) {
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     return { deferred, imports };
   } finally {
     db?.close();
@@ -1135,36 +1147,14 @@ async function pluginIdentities(stateRoot, artifactRoot) {
   try {
     // The existing reader opens SQLite read-only. Fence every file it may read;
     // disable its config fallback rather than consulting failed-state CLI/config.
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
+    openObservationSources(handles, stateRoot, [
+      ...sqliteObservationFiles,
       "plugins/installs.json",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    ]);
     assertNativeSqliteObservationSafe(handles, "plugin identity");
     const { readPluginInstallIndex } = await import("../plugin-index-sqlite.mjs");
     const index = readPluginInstallIndex({ stateDir: stateRoot, configPath: null });
-    for (const { fd, stat, file } of handles) {
-      // SQLite readers update SHM read marks: its cache timestamps are not
-      // durable index mutations. Keep file identity checks on every source.
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     if (Buffer.byteLength(JSON.stringify(index)) > indexLimit || !Array.isArray(index.plugins)) {
       throw new Error();
     }

@@ -203,7 +203,7 @@ export function dispatchAgentRunFromGateway(params: {
   const producerRunInstance = registeredRunEntry?.operationalRunInstance;
   const producerLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
   const producerSessionKey = registeredRunEntry?.sessionKey;
-  const producerCompletion = createDeferredCore();
+  const producerCompletion = createDeferredCore<unknown>();
   let terminalSettlement: Promise<void> | undefined;
   if (registeredRunEntry && params.ingressOpts.abortSignal === params.abortController.signal) {
     registeredRunEntry.resolveTerminalProducer = () => {
@@ -249,8 +249,8 @@ export function dispatchAgentRunFromGateway(params: {
       };
     };
   }
-  const completeTerminalProducer = async () => {
-    producerCompletion.resolve();
+  const completeTerminalProducer = async (producerError?: unknown) => {
+    producerCompletion.resolve(producerError);
     let joined: Promise<void> | undefined;
     do {
       joined = terminalSettlement;
@@ -265,11 +265,11 @@ export function dispatchAgentRunFromGateway(params: {
         ...(media
           ? { prepareAssistantTranscriptMessage: media.prepareAssistantTranscriptMessage }
           : {}),
-        beforeTerminalDelivery: async (reply) => {
+        beforeTerminalDelivery: async (reply, producerError) => {
           try {
             await media?.finalize(reply);
           } finally {
-            await completeTerminalProducer();
+            await completeTerminalProducer(producerError);
           }
         },
       },
@@ -338,10 +338,14 @@ export function dispatchAgentRunFromGateway(params: {
     : runOwnedAgent();
   // Startup failures may never enter command finalization; delivery already joined this boundary.
   const agentRun = (async () => {
+    let producerError: unknown;
     try {
       return await agentExecution;
+    } catch (error) {
+      producerError = error;
+      throw error;
     } finally {
-      await completeTerminalProducer();
+      await completeTerminalProducer(producerError);
     }
   })();
   let inputCompletionWriteFailed = false;

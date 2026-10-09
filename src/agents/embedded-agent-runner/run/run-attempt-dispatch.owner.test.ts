@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -15,6 +16,7 @@ import {
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
+import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
@@ -64,6 +66,7 @@ type DispatchCase = {
   realManagedWorkspace?: boolean;
   hostMedia?: "allowed" | "outside";
   retirePlacement?: boolean;
+  configuredContextEngine?: boolean;
 };
 
 const dispatchCases: DispatchCase[] = [
@@ -73,6 +76,7 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "host" as const,
     oneShotCliRun: undefined,
+    configuredContextEngine: true,
   },
   {
     agentId: "work",
@@ -137,6 +141,7 @@ it.each(dispatchCases)(
     realManagedWorkspace,
     hostMedia,
     retirePlacement,
+    configuredContextEngine,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -289,6 +294,7 @@ it.each(dispatchCases)(
         label: "Owner fixture",
         supports: () => ({ supported: true }),
         conversationToolPolicySupport: "exact",
+        contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.capabilities,
         runAttempt,
       });
       const runtimePluginToolGrant = { pluginId: "owner-tools", toolNames: ["owner_only"] };
@@ -350,7 +356,14 @@ it.each(dispatchCases)(
         setParams: () => {},
       });
       const authProfileStore = { version: 1, profiles: {} };
+      const contextEngine = createContextEngine({
+        info: {
+          id: configuredContextEngine ? "selected-context" : "legacy",
+          name: "Fixture context",
+        },
+      });
       const input = {
+        contextEngine,
         runInput: {
           runParams: params,
           provider: "fixture",
@@ -569,6 +582,9 @@ it.each(dispatchCases)(
         const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
+        expect(runAttempt.mock.calls[0]?.[0].contextEngine).toBe(
+          configuredContextEngine ? contextEngine : undefined,
+        );
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             agentId,

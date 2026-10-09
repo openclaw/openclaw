@@ -1959,9 +1959,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readLatestTranscriptEntry"],
+        operations: [
+          "readLatestTranscriptEntry",
+          "readTranscriptEntry",
+          "readStoredTranscriptNotes",
+        ],
         evidence:
-          "src/transcripts/store.ts:250 submits transcripts.latest → src/state/openclaw-state-worker-runtime.ts:188 → src/transcripts/store-worker-read.ts:94; other reference is ReturnType only.",
+          "Ordinary reads dispatch through store-worker-read.ts; streamed library exports dispatch through store-export.worker.ts. TranscriptsStore no longer invokes a native generator; remaining host references are types and pure helpers.",
       },
     ],
   ],

@@ -131,7 +131,10 @@ export async function ensureSkillSnapshot(params: {
   } = params;
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const cwd = process.cwd();
-  const assertCurrent = params.assertCurrent ?? (() => {});
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.reader?.assertCurrent();
+  };
   assertCurrent();
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
@@ -149,34 +152,38 @@ export async function ensureSkillSnapshot(params: {
   };
   const existingSnapshot = nextEntry?.skillsSnapshot;
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
-    withSandboxRuntimeStatusInWorker(execParams, { env, cwd, assertCurrent }, async (sandbox) => {
-      const execDefaults = await resolvePreparedExecDefaultsAsync(
-        prepareExecDefaults(execParams, sandbox),
-        () => loadExecApprovalsReadOnlyAsync({ env }),
-      );
-      assertCurrent();
-      const nodeSkillsEligibility = resolveNodeExecEligibility(execParams, execDefaults);
-      const result = await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent,
-        workspaceDir,
-        ...resolveSessionSkillExecutionWorkspace(
-          nextEntry?.worktree?.canonicalWorkspaceDir,
-          params.executionWorkspaceDir,
-        ),
-        config: cfg,
-        agentId,
-        skillFilter,
-        skillOverrides,
-        resolveEligibility: () => ({
-          nodeSkills: nodeSkillsEligibility,
-          remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
-        }),
-        existingSnapshot: snapshot,
-        librarySelections: nextEntry?.skillLibrarySelections,
-      });
-      assertCurrent();
-      return result;
-    });
+    withSandboxRuntimeStatusInWorker(
+      execParams,
+      { env, cwd, assertCurrent, reader: params.reader },
+      async (sandbox) => {
+        const execDefaults = await resolvePreparedExecDefaultsAsync(
+          prepareExecDefaults(execParams, sandbox),
+          () => loadExecApprovalsReadOnlyAsync({ env }),
+        );
+        assertCurrent();
+        const nodeSkillsEligibility = resolveNodeExecEligibility(execParams, execDefaults);
+        const result = await resolveReusableWorkspaceSkillSnapshot({
+          assertCurrent,
+          workspaceDir,
+          ...resolveSessionSkillExecutionWorkspace(
+            nextEntry?.worktree?.canonicalWorkspaceDir,
+            params.executionWorkspaceDir,
+          ),
+          config: cfg,
+          agentId,
+          skillFilter,
+          skillOverrides,
+          resolveEligibility: () => ({
+            nodeSkills: nodeSkillsEligibility,
+            remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
+          }),
+          existingSnapshot: snapshot,
+          librarySelections: nextEntry?.skillLibrarySelections,
+        });
+        assertCurrent();
+        return result;
+      },
+    );
   const persistSnapshot = (
     key: string,
     currentEntry: SessionEntry,

@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { inspectCronBackups, readDatabase } from "./observations.mjs";
 import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
@@ -52,8 +53,7 @@ function installedIdentity(root) {
 }
 
 function inspectSharedSchema(databasePath) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  return readDatabase(databasePath, (db) => {
     const userVersion = db.prepare("PRAGMA user_version").get().user_version;
     assert(Number.isSafeInteger(userVersion) && userVersion >= 0);
     const hasMarkers = db
@@ -67,35 +67,23 @@ function inspectSharedSchema(databasePath) {
     const marker = row ? JSON.parse(row.value_json) : null;
     assert(marker === null || (Number.isSafeInteger(marker) && marker >= 0));
     return { userVersion, marker, contentVersion: Math.max(userVersion, marker ?? 0) };
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function inspectRows(databasePath) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  return readDatabase(databasePath, (db) => {
     return db
       .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
       .all()
       .map((row) => Object.assign({}, row));
-  } finally {
-    db.close();
-  }
-}
-
-function inspectBackups(databasePath) {
-  const directory = path.dirname(databasePath);
-  const prefix = `${path.basename(databasePath)}.doctor-cron-`;
-  return fs
-    .readdirSync(directory)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
-    .toSorted()
-    .map((name) => ({ name, sha256: hash(fs.readFileSync(path.join(directory, name))) }));
+  });
 }
 
 function snapshot(fixture) {
-  return { rows: inspectRows(fixture.databasePath), backups: inspectBackups(fixture.databasePath) };
+  return {
+    rows: inspectRows(fixture.databasePath),
+    backups: inspectCronBackups(fixture.databasePath),
+  };
 }
 
 function configure(stateDir) {
@@ -508,8 +496,7 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
   );
   assert.equal(added.length, 1, "Repair must retain exactly one new cron backup");
   const backupPath = path.join(path.dirname(fixture.databasePath), added[0].name);
-  const backup = new DatabaseSync(backupPath, { readOnly: true });
-  try {
+  readDatabase(backupPath, (backup) => {
     assert.deepEqual(
       backup
         .prepare("PRAGMA integrity_check")
@@ -518,9 +505,7 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
       ["ok"],
     );
     assert.deepEqual(backup.prepare("PRAGMA foreign_key_check").all(), []);
-  } finally {
-    backup.close();
-  }
+  });
   assert.deepEqual(
     inspectRows(backupPath),
     fixture.before.rows,

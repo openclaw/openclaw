@@ -15,6 +15,7 @@ import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import * as coldStorage from "./session-cold-storage.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
@@ -73,8 +74,14 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       replyInitializationSessionKey: sessionKey,
       includeMembers: true,
       includeParticipantRecords: true,
+      includeAuthProfileSource: true,
       lifecycleSessionKey: sessionKey,
-      transcript: { sessionKey, entryIds: ["question", "missing"], includeHeader: true },
+      transcript: {
+        sessionKey,
+        entryIds: ["question", "missing"],
+        includeHeader: true,
+        includeWatermark: true,
+      },
     };
     const read = (input = request) => operations["session.entry.read"](input, context);
     const first = read();
@@ -90,10 +97,39 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       storePath: database.path,
     });
     expect(first.lifecycleTimestamps.sessionStartedAt).toBe(123);
+    expect(first.authProfileSource).toBe(false);
     expect(first.transcript).toMatchObject({
       header: { id: "cohort" },
       anchors: [{ entryId: "question", sessionId: "cohort" }],
+      watermark: { generation: expect.any(String), maxSeq: 1 },
     });
+    const currentVersion = readTranscriptContextVersionInTransaction(database, scope.sessionId);
+    const replayRequest: SessionEntryCohortRequest = {
+      sessionKeys: [sessionKey],
+      snapshotFields: [],
+      transcript: {
+        sessionKey,
+        entryIds: ["question"],
+        contextValidation: { version: currentVersion },
+        replayValidation: { allowInitial: false, expectedLifecycleRevision: "original" },
+      },
+    };
+    expect(read(replayRequest).transcript).toMatchObject({
+      contextValidated: true,
+      anchors: [{ entryId: "question" }],
+    });
+    expect(
+      read({
+        ...replayRequest,
+        transcript: {
+          ...replayRequest.transcript!,
+          replayValidation: {
+            allowInitial: false,
+            admission: { ...first.transcript!.anchors[0]!, role: "user", logicalTurnId: "cohort" },
+          },
+        },
+      }).transcript,
+    ).toMatchObject({ contextValidated: true, anchors: [] });
     request.expected = {
       incarnation: first.databaseIdentity.incarnation,
       sessions: [{ sessionKey, sessionId: "cohort", lifecycleRevision: "original" }],
@@ -111,6 +147,11 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
         peer
           .prepare("UPDATE session_participants SET contribution_count = 9 WHERE session_key = ?")
           .run(sessionKey);
+        peer
+          .prepare(
+            "UPDATE transcript_rewrite_watermarks SET generation = 'foreign-generation' WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
         return rows;
       });
     const reopen = vi
@@ -128,10 +169,12 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       }
       return exec(statement);
     });
-    const sql = trackSqliteStatementExecutions(database.db, ["fresh"], (statement) =>
+    const sql = trackSqliteStatementExecutions(database.db, ["fresh", "authSchema"], (statement) =>
       /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
         ? "fresh"
-        : null,
+        : /^SELECT type FROM sqlite_master WHERE name = \?$/iu.test(statement.trim())
+          ? "authSchema"
+          : null,
     );
     try {
       const standalone = operations["session.entry.read"]({ sessionKey }, context);
@@ -146,6 +189,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(pinned.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
       expect(pinned.runtimeTarget?.sessionKey).toBe(sessionKey);
       expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.authSchema).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
       // A known write cannot hide the foreign change from this connection's next use.
       writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 2 });
@@ -160,6 +204,10 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
         storePath: database.path,
       });
       expect(current.participantRecords?.[sessionKey]).toMatchObject([{ contributionCount: 9 }]);
+      expect(current.transcript?.watermark).toEqual({
+        generation: "foreign-generation",
+        maxSeq: 1,
+      });
       expect(
         current.entries.find(({ sessionKey: key }) => key === parentKey)?.entry.updatedAt,
       ).toBe(2);

@@ -6,14 +6,7 @@ export NO_COLOR=1
 
 source scripts/lib/openclaw-e2e-instance.sh
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-openclaw_e2e_install_trash_shim
-
-export NPM_CONFIG_PREFIX="$HOME/.npm-global"
-export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-export npm_config_loglevel=error
-export npm_config_fund=false
-export npm_config_audit=false
+source scripts/e2e/lib/release-scenarios/setup.sh
 export OPENAI_API_KEY="sk-openclaw-release-media-memory"
 export OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER=1
 
@@ -22,26 +15,27 @@ MOCK_PORT="44200"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_MEDIA_MEMORY"
 MEMORY_MARKER="release-media-memory-saffron-$(date +%s)"
 media_root="$(mktemp -d /tmp/openclaw-release-media-memory.XXXXXX)"
-INSTALL_LOG="$media_root/install.log"
-ONBOARD_LOG="$media_root/onboard.log"
-ENV_LOG="$media_root/env.log"
-CONFIG_JSON="$media_root/config.json"
-PACKAGE_FILES_LOG="$media_root/package-files.log"
-PLUGINS_JSON="$media_root/plugins.json"
-PLUGINS_STDERR_LOG="$media_root/plugins.stderr.log"
-MOCK_OPENAI_LOG="$media_root/openai.log"
-MOCK_REQUEST_LOG="$media_root/openai-requests.jsonl"
-DESCRIBE_JSON="$media_root/describe.json"
-DESCRIBE_STDERR_LOG="$media_root/describe.stderr.log"
-GENERATE_JSON="$media_root/generate.json"
-GENERATE_STDERR_LOG="$media_root/generate.stderr.log"
-INDEX_LOG="$media_root/index.log"
-SEARCH_BEFORE_JSON="$media_root/search-before.json"
-SEARCH_BEFORE_STDERR_LOG="$media_root/search-before.stderr.log"
-SEARCH_AFTER_JSON="$media_root/search-after.json"
-SEARCH_AFTER_STDERR_LOG="$media_root/search-after.stderr.log"
-GATEWAY_1_LOG="$media_root/gateway-1.log"
-GATEWAY_2_LOG="$media_root/gateway-2.log"
+openclaw_release_scenario_logs \
+  INSTALL_LOG "$media_root/install.log" \
+  ONBOARD_LOG "$media_root/onboard.log" \
+  ENV_LOG "$media_root/env.log" \
+  CONFIG_JSON "$media_root/config.json" \
+  PACKAGE_FILES_LOG "$media_root/package-files.log" \
+  PLUGINS_JSON "$media_root/plugins.json" \
+  PLUGINS_STDERR_LOG "$media_root/plugins.stderr.log" \
+  MOCK_OPENAI_LOG "$media_root/openai.log" \
+  MOCK_REQUEST_LOG "$media_root/openai-requests.jsonl" \
+  DESCRIBE_JSON "$media_root/describe.json" \
+  DESCRIBE_STDERR_LOG "$media_root/describe.stderr.log" \
+  GENERATE_JSON "$media_root/generate.json" \
+  GENERATE_STDERR_LOG "$media_root/generate.stderr.log" \
+  INDEX_LOG "$media_root/index.log" \
+  SEARCH_BEFORE_JSON "$media_root/search-before.json" \
+  SEARCH_BEFORE_STDERR_LOG "$media_root/search-before.stderr.log" \
+  SEARCH_AFTER_JSON "$media_root/search-after.json" \
+  SEARCH_AFTER_STDERR_LOG "$media_root/search-after.stderr.log" \
+  GATEWAY_1_LOG "$media_root/gateway-1.log" \
+  GATEWAY_2_LOG "$media_root/gateway-2.log"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 
 mock_pid=""
@@ -58,27 +52,7 @@ trap cleanup EXIT
 dump_debug_logs() {
   local status="$1"
   echo "release media memory failed with exit code $status" >&2
-  openclaw_e2e_dump_logs \
-    "$INSTALL_LOG" \
-    "$ONBOARD_LOG" \
-    "$ENV_LOG" \
-    "$CONFIG_JSON" \
-    "$PACKAGE_FILES_LOG" \
-    "$PLUGINS_JSON" \
-    "$PLUGINS_STDERR_LOG" \
-    "$MOCK_OPENAI_LOG" \
-    "$MOCK_REQUEST_LOG" \
-    "$DESCRIBE_JSON" \
-    "$DESCRIBE_STDERR_LOG" \
-    "$GENERATE_JSON" \
-    "$GENERATE_STDERR_LOG" \
-    "$INDEX_LOG" \
-    "$SEARCH_BEFORE_JSON" \
-    "$SEARCH_BEFORE_STDERR_LOG" \
-    "$SEARCH_AFTER_JSON" \
-    "$SEARCH_AFTER_STDERR_LOG" \
-    "$GATEWAY_1_LOG" \
-    "$GATEWAY_2_LOG"
+  openclaw_e2e_dump_logs "${OPENCLAW_RELEASE_DIAGNOSTIC_LOGS[@]}"
 }
 openclaw_e2e_enable_failure_diagnostics
 

@@ -13,13 +13,16 @@ import type {
   ConversationRegistryScope,
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
-import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import {
+  projectPendingFinalDeliverySettlement,
+  type PendingFinalDeliverySettlementInput,
+} from "../../config/sessions/session-pending-final-settlement.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -136,39 +139,80 @@ export async function settlePendingFinalDelivery(
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  await patchSessionEntryCore(
-    {
-      agentId: completion.agentId,
-      sessionKey: completion.sessionKey,
-      storePath: completion.storePath,
-      env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
-    },
-    (internalEntry: InternalSessionEntry) => {
-      if (
-        internalEntry.sessionId !== completion.sessionId ||
-        internalEntry.pendingFinalDelivery?.intentId !== completion.intentId
-      ) {
-        return null;
-      }
-      const deliveries = internalEntry.pendingFinalDelivery.deliveries;
-      const index = deliveries?.findIndex(({ id }) => id === completion.deliveryId) ?? -1;
-      if (!deliveries || index < 0) {
-        return null;
-      }
-      const authority = completion.sessionWriterDeliveryAuthority;
-      const claim = authority?.harnessCompletion;
-      if (
-        completion.agentId !== undefined &&
-        ((authority?.agentId !== undefined &&
-          normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
-          (claim &&
-            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)))
-      ) {
-        return null;
-      }
-      if (
-        claim &&
-        (!authority ||
+  const scope = {
+    agentId: completion.agentId,
+    sessionKey: completion.sessionKey,
+    storePath: completion.storePath,
+    env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
+  };
+  const settlement: PendingFinalDeliverySettlementInput = {
+    sessionId: completion.sessionId,
+    intentId: completion.intentId,
+    deliveryId: completion.deliveryId,
+    state,
+    expectedStates: expectedStates?.slice(),
+  };
+  const patchOptions = {
+    skipMaintenance: true,
+    takeCacheOwnership: true,
+    preserveActivity: options.preserveActivity,
+    workerGuard: {},
+  };
+  const authority = completion.sessionWriterDeliveryAuthority;
+  const claim = authority?.harnessCompletion;
+  if (!claim) {
+    if (
+      completion.agentId !== undefined &&
+      authority?.agentId !== undefined &&
+      normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)
+    ) {
+      return { state: "stale" };
+    }
+    let committed = false;
+    const entry = await applySessionEntryOperation(
+      scope,
+      { kind: "pending-final-settle", settlement },
+      {
+        ...patchOptions,
+        onCommitted(current) {
+          const delivery = current.pendingFinalDelivery?.deliveries?.find(
+            ({ id }) => id === settlement.deliveryId,
+          );
+          if (!delivery) {
+            throw new Error("Pending final settlement omitted its committed delivery");
+          }
+          committed = true;
+          settled = delivery.state;
+          wakeRecovery = settled !== "queued" && current.abortedLastRun === true;
+        },
+      },
+    );
+    if (!committed && entry) {
+      // A null reduction still distinguishes a terminal replay from refused expected states.
+      settled = projectPendingFinalDeliverySettlement(entry, settlement).state;
+    }
+  } else {
+    await patchSessionEntryCore(
+      scope,
+      (entry) => {
+        // The host claim may invoke live source authority; retain its exact selection ordering.
+        if (
+          entry.sessionId !== completion.sessionId ||
+          entry.pendingFinalDelivery?.intentId !== completion.intentId ||
+          !entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId)
+        ) {
+          return null;
+        }
+        if (
+          completion.agentId !== undefined &&
+          ((authority?.agentId !== undefined &&
+            normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
+            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId))
+        ) {
+          return null;
+        }
+        if (
+          !authority ||
           authority.sessionKey !== completion.sessionKey ||
           (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
           claim.requesterSessionKey !== completion.sessionKey ||
@@ -176,113 +220,31 @@ export async function settlePendingFinalDelivery(
           authority.expectedSessionId !== completion.sessionId ||
           (authority.agentId !== undefined && authority.agentId !== claim.requesterAgentId) ||
           (authority.expectedLifecycleRevision !== undefined &&
-            authority.expectedLifecycleRevision !== internalEntry.lifecycleRevision) ||
+            authority.expectedLifecycleRevision !== entry.lifecycleRevision) ||
           (authority.expectedWriterRunId !== undefined &&
-            authority.expectedWriterRunId !== internalEntry.activeWriterRunId) ||
-          !getOwedHarnessCompletionTask(claim, internalEntry))
-      ) {
-        return null;
-      }
-      const current = deliveries[index]!.state;
-      if (expectedStates && !expectedStates.some((expected) => expected === current)) {
-        return null;
-      }
-      const terminal =
-        current === "delivered" ||
-        current === "suppressed" ||
-        (current === "unknown" && state === "unknown");
-      settled = terminal ? current : state;
-      const pending = internalEntry.pendingFinalDelivery;
-      const existingNotice = internalEntry.pendingDeliveryNotice;
-      const owedNotice =
-        settled === "unknown" &&
-        (current === "queued" || current === "unknown") &&
-        pending.context &&
-        pending.intentId &&
-        existingNotice?.intentId !== pending.intentId &&
-        (!existingNotice || existingNotice.createdAt <= pending.createdAt)
-          ? {
-              pendingDeliveryNotice: {
-                createdAt: pending.createdAt,
-                context: pending.context,
-                intentId: pending.intentId,
-                state: "owed" as const,
-              },
-            }
-          : undefined;
-      const updatedDeliveries = deliveries.with(index, {
-        id: completion.deliveryId,
-        state: settled,
-      });
-      const result = options.identifiedResult;
-      const platformMessageId = result ? readPlatformMessageId(result) : undefined;
-      const context = pending.context;
-      // Commit the receipt with pending-final completion before queue acknowledgement
-      // so recovery can recognize this exact claim without another announcement.
-      const terminalEvidence =
-        claim &&
-        result &&
-        platformMessageId &&
-        result.channel === context?.channel &&
-        context?.to &&
-        (!result.target || result.target.id === context.to) &&
-        settled === "delivered" &&
-        updatedDeliveries.every((delivery) => delivery.state === "delivered")
-          ? mergeRestartRecoveryTerminalDeliveryEvidence(
-              internalEntry.restartRecoveryTerminalDeliveryEvidence,
-              [
-                {
-                  runId: claim.sourceRunId,
-                  harnessCompletion: claim,
-                  deliveryContext: context,
-                  captured: true,
-                  payloads: [{ visible: true }],
-                  deliveryStatus: { status: "sent", resultCount: 1 },
-                  durableFinalReceipt: {
-                    intentId: completion.intentId,
-                    deliveryId: completion.deliveryId,
-                    platformMessageId,
-                  },
-                },
-              ],
-            )
-          : undefined;
-      const clearsNotice =
-        existingNotice?.state !== "acknowledged" &&
-        !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
-        settled !== "queued" &&
-        settled !== "unknown" &&
-        existingNotice?.intentId === pending.intentId;
-      // One resolved sibling cannot erase another's ambiguity. Acknowledgment
-      // remains an intent-level fact so delayed settlement cannot owe it again.
-      if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
-        return null;
-      }
-      wakeRecovery = settled !== "queued" && internalEntry.abortedLastRun === true;
-      return {
-        ...(internalEntry.mainRestartRecovery
-          ? {
-              mainRestartRecovery: {
-                ...internalEntry.mainRestartRecovery,
-                revision: internalEntry.mainRestartRecovery.revision + 1,
-              },
-            }
-          : {}),
-        pendingFinalDelivery: {
-          ...internalEntry.pendingFinalDelivery,
-          deliveries: updatedDeliveries,
-        },
-        ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
-        ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
-      };
-    },
-    {
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      preserveActivity: options.preserveActivity,
-      workerGuard: {},
-    },
-  );
+            authority.expectedWriterRunId !== entry.activeWriterRunId) ||
+          !getOwedHarnessCompletionTask(claim, entry)
+        ) {
+          return null;
+        }
+        const result = options.identifiedResult;
+        const projected = projectPendingFinalDeliverySettlement(entry, settlement, {
+          claim,
+          result: result
+            ? {
+                channel: result.channel,
+                target: result.target,
+                platformMessageId: readPlatformMessageId(result),
+              }
+            : undefined,
+        });
+        settled = projected.state;
+        wakeRecovery = projected.wakeRecovery;
+        return projected.patch;
+      },
+      patchOptions,
+    );
+  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");

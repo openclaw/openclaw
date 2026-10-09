@@ -72,6 +72,8 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
+    permissionMode: entry.permissionMode,
+    toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
   };
 }
 
@@ -160,11 +162,21 @@ export type CreationRecord = {
   active: boolean;
 };
 export type PlaceholderReceipt = {
+  kind: "placeholder";
   creation: CreationRecord | undefined;
   databaseIdentity: DatabaseSync | string;
   sessionKey: string;
   placeholder: SessionEntryPlaceholder;
   committed: boolean;
+};
+
+export type CreatedSessionEntryReceipt = {
+  kind: "entry";
+  creation: CreationRecord;
+  databaseIdentity: string;
+  sessionKey: string;
+  entry: SessionSharingEntry;
+  committed: true;
 };
 
 export type SessionEntryPublicationRecord = {
@@ -177,6 +189,7 @@ export type SessionEntryPublicationRecord = {
       kind: "metadata";
       sharingChange: "changed" | "unchanged";
       prepared: PreparedSessionEntryChanges;
+      creation?: CreatedSessionEntryReceipt;
     }
   | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt }
 );

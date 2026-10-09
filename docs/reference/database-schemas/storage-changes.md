@@ -1446,8 +1446,12 @@ the canonical selector and expected input revision while preserving admitted ID
 origin. Export bookkeeping retains the actual export lease through native
 settlement, including unknown outcomes, and validates that lease inside its write
 transaction. Pending markers commit before filesystem changes, and manifest updates
-settle before success returns. Streamed chronological reads, export snapshots, and
-host lease primitives retain their existing owners.
+settle before success returns. Meeting export snapshots now run in the existing
+shared-state reader, retaining one private snapshot through bounded chunk
+consumption and cleanup. Artifact publication uses private staging and the guarded
+filesystem copy owner; it retains the prior best-effort file and parent-directory
+sync policy. This temporarily requires one additional artifact-sized copy. Host
+lease primitives remain the final live-authority guard before file mutation.
 
 Transcript artifact ownership recovery streams raw utterances in sequence order
 through the shared-state worker and returns their canonical JSONL SHA-256 digest.

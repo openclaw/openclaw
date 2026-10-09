@@ -12,7 +12,10 @@ title: "Database schemas"
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
 Native SQLite initialization reads the loaded library's version and extension
-capability in one query before admitting real state databases. Quarantine
+capability in one query before admitting real state databases. Auth-profile
+readers install their lock-wait timeout at connection open.
+Non-mutating WAL observations reuse the loaded library's admitted capability;
+they still observe current WAL frames and read freshness on each use. Quarantine
 decision readers and writers set their existing lock-wait timeout at connection
 open; each decision reads the current schema version and quarantine row in one
 SQLite snapshot and validates any recorded file generation. WAL safety, quarantine authority, and recovery
@@ -79,9 +82,10 @@ the metadata. This changes no schema, stored bytes, or update behavior.
 
 The shared-state content-version marker uses the same admitted read revision.
 Unchanged reads reuse its successful result; foreign commits, local writes,
-rollback, schema changes, and connection disposal invalidate reuse. Transactions,
-pinned snapshots, and authorizer-controlled reads still query the marker. Version
-validation and upgrade or downgrade behavior are unchanged.
+rollback, schema changes, and connection disposal invalidate reuse. Transactions
+and pinned snapshots reuse the marker at their admitted revision;
+authorizer-controlled reads still query it. Version validation and upgrade or
+downgrade behavior are unchanged.
 
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and

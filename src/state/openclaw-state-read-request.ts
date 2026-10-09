@@ -6,6 +6,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "meetingTranscripts.export") {
+    return structuredClone(command);
+  }
   if (
     command.type === "localWorkspace.get" ||
     command.type === "localWorkspace.exists" ||
@@ -16,6 +19,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
+    command.type === "sessionUpstream.read" ||
     command.type === "operatorApprovals.placementGrant" ||
     command.type === "operatorApprovals.history" ||
     command.type === "diagnostic.latest" ||
@@ -222,6 +226,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
+    command.type === "sessionUpstream.read" ||
     command.type === "workers.placementProjection" ||
     command.type === "workers.placementPendingResults" ||
     isWorkspaceJournalReadCommand(command)
@@ -553,6 +558,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "workerEnvironments.snapshot") {
     return bytes + stringBytes(command.ids ?? []);
+  }
+  if (command.type === "meetingTranscripts.export") {
+    return bytes + Buffer.byteLength(JSON.stringify(command));
   }
   return bytes;
 }

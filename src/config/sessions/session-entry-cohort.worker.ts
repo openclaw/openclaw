@@ -1,3 +1,4 @@
+import { hasAgentAuthProfileSourceInDatabase } from "../../agents/auth-profiles/sqlite-json.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -15,8 +16,6 @@ import {
   readSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import type {
@@ -25,6 +24,7 @@ import type {
   SessionExactEntriesWorkerInput,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 
 /** Captured cohorts retain their native handle and snapshot; standalone reads keep admission. */
@@ -62,7 +62,7 @@ export function readSessionEntryCohort(
   input: SessionEntryCohortRequest,
   readEntries: (request: SessionExactEntriesWorkerInput) => SessionExactEntriesWorkerResult,
 ): SessionEntryCohortResult {
-  const { expected, transcript, runtimeTarget, ...selection } = input;
+  const { expected, transcript, runtimeTarget, includeAuthProfileSource, ...selection } = input;
   const count =
     input.sessionKeys.length +
     (input.replyInitializationSessionKey ? 1 : 0) +
@@ -124,30 +124,22 @@ export function readSessionEntryCohort(
     const entry =
       transcript &&
       result.entries.find(({ sessionKey }) => sessionKey === transcript.sessionKey)?.entry;
-    let header: unknown;
-    if (transcript?.includeHeader && entry) {
-      try {
-        header = readTranscriptHeaderFromDatabase(database, entry.sessionId);
-      } catch {
-        // Lifecycle header metadata remains best effort; source and row identity are mandatory.
-      }
-    }
-    const anchors =
+    const transcriptFacts =
       transcript && entry
-        ? [...new Set(transcript.entryIds)].flatMap(
-            (entryId) =>
-              readActiveTranscriptEntryAnchorInTransaction({
-                database,
-                resolved: {
-                  agentId: database.agentId,
-                  path: database.path,
-                  sessionKey: transcript.sessionKey,
-                  sessionId: entry.sessionId,
-                },
-                entryId,
-              }) ?? [],
+        ? readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            {
+              agentId: transcript.agentId ?? database.agentId,
+              path: database.path,
+              sessionKey: transcript.sessionKey,
+              sessionId: entry.sessionId,
+            },
+            { ...transcript, entryIds: [...new Set(transcript.entryIds)] },
           )
-        : [];
+        : { anchors: [] };
+    const authProfileSource = includeAuthProfileSource
+      ? hasAgentAuthProfileSourceInDatabase(database.db)
+      : undefined;
     const preparedRuntimeTarget = runtimeTarget && {
       ...runtimeTarget,
       sessionKey:
@@ -172,13 +164,12 @@ export function readSessionEntryCohort(
               entry,
               agentId: database.agentId,
               sessionKey: input.lifecycleSessionKey,
-              readHeader: () => header,
+              readHeader: () => transcriptFacts.header,
             }),
           }
         : {}),
-      ...(transcript
-        ? { transcript: { anchors, ...(transcript.includeHeader ? { header } : {}) } }
-        : {}),
+      ...(transcript ? { transcript: transcriptFacts } : {}),
+      ...(includeAuthProfileSource ? { authProfileSource } : {}),
     };
   };
   // The transaction owner performs the one fresh probe after BEGIN; nested kernels share it.

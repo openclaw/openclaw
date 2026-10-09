@@ -7,10 +7,7 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import {
-  readSubagentRunsInWorker,
-  streamSubagentRegistryInWorker,
-} from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
@@ -113,6 +110,7 @@ import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
+import { readStateStream } from "./openclaw-state-read-stream.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadResult,
@@ -164,16 +162,12 @@ serveOwnedWorkerTasks(
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
         }
-        if (command.type === "subagents.restore") {
-          if (!channel) {
-            throw new Error("Subagent restore requires a bounded receiver");
-          }
-          const count = await control.runNativeSection(() =>
-            streamSubagentRegistryInWorker(input, channel, () => {
+        if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
+          return await control.runNativeSection(() =>
+            readStateStream(input, command, channel, () => {
               sourceAdmitted = true;
             }),
           );
-          return { ok: true, type: command.type, sourceAdmitted: true, count };
         }
         if (command.type === "doctor.gatewayOwnerLease.read") {
           const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
