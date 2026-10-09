@@ -544,6 +544,13 @@ phases, including those still waiting for foreground admission. Schemas, stored
 bytes, retention, SDK signatures, and update behavior are unchanged.
 
 Transcript preparation carries that selected physical owner into history reads.
+Admitted delta, watermark, and anchor reads borrow the same prepared execution
+as exact-path reads. Inside a matching transcript write lock, they join its
+settlement queue and read through its existing worker, retaining generation and
+physical-file checks without waiting on independent history-reader custody.
+Anchor reads with synchronous acceptance use the reserved discovery lane when
+their sequence selection requires a history reader, so eviction and failure
+cleanup remain safe while writer admission is held.
 Bounded metadata phases combine current session, replay validation, anchors, and
 watermarks through the same cohort contract. Replay prepares a fresh bounded
 history view and its metadata together; a manager's mutable entries never certify
