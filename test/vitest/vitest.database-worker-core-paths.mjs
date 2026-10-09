@@ -237,7 +237,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/daemon-cli/probe.reachability.test.ts",
   "src/cli/daemon-cli/restart-health-client.test.ts",
   "src/acp/control-plane/manager.test.ts",
-  "src/acp/control-plane/manager.turn-preflight.test.ts",
   "src/acp/control-plane/manager.terminal-signals.test.ts",
   "src/acp/control-plane/manager.accepted-ownership.test.ts",
   "src/acp/control-plane/manager.cancel-session.worker.test.ts",
