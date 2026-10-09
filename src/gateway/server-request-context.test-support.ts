@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
@@ -33,7 +34,9 @@ export function makeContextParams(
   const config = {} as never;
   return {
     runtime: {
+      scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
+      forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,
       runtimeState: {
@@ -125,7 +128,7 @@ export function makeContextParams(
       subscribeSessionMessageEvents: vi.fn(),
       unsubscribeSessionMessageEvents: vi.fn(),
       sessionMessageSubscribers: { unsubscribeAll: vi.fn() },
-      toolEventRecipients: { add: vi.fn() },
+      toolEventRecipients: { add: vi.fn(), removeConnection: vi.fn() },
       dedupe: new Map(),
       wizardSessions: new Map(),
       systemAgentSessions: new Map(),
@@ -160,6 +163,7 @@ export function makeContextParams(
     configRevisionProjector: {
       projectRawHash: (hash) => hash,
       projectResolvedHash: (hash) => hash,
+      hashResponseSessionBearer: () => "unused-test-scope",
     },
   };
 }

@@ -190,59 +190,6 @@ describe.each([false, true])("durable Discord transport webhook=%s", (webhook) =
     expect(replies).toEqual(chunks.map((_, index) => (index === 0 ? "fixture-reply" : undefined)));
   });
 
-  it.each([
-    {
-      name: "default 17",
-      root: undefined,
-      account: undefined,
-      explicit: undefined,
-      counts: [17, 3],
-    },
-    { name: "root limit", root: 10, account: undefined, explicit: undefined, counts: [10, 10] },
-    { name: "account wins", root: 5, account: 50, explicit: undefined, counts: [20] },
-    { name: "explicit smaller", root: 10, account: 50, explicit: 5, counts: [5, 5, 5, 5] },
-    { name: "explicit larger", root: 5, account: 10, explicit: 50, counts: [20] },
-  ])("preserves $name at the HTTP boundary", async ({ root, account, explicit, counts }) => {
-    const { chunks, result } = await runDurableLineLimitScenario({
-      cfg: {
-        channels: {
-          discord: {
-            maxLinesPerMessage: root,
-            accounts: {
-              work: {
-                token: "fixture-token",
-                ...(account === undefined ? {} : { maxLinesPerMessage: account }),
-              },
-            },
-          },
-        },
-      },
-      accountId: "work",
-      webhook,
-      formatting: explicit === undefined ? undefined : { maxLinesPerMessage: explicit },
-    });
-    expect(result.status).toBe("sent");
-    expect(chunks.map((chunk) => chunk.split("\n").length)).toEqual(counts);
-    expect(chunks.join("\n")).toBe(twentyLineText);
-  });
-  it.each([
-    { replyToIdSource: "implicit", replyToMode: "first", repeat: false },
-    { replyToIdSource: "explicit", replyToMode: "first", repeat: true },
-    { replyToIdSource: "implicit", replyToMode: "all", repeat: true },
-  ] as const)(
-    "preserves $replyToIdSource $replyToMode-mode replies across physical chunks",
-    async ({ replyToIdSource, replyToMode, repeat }) => {
-      const { chunks, replies, result } = await runDurableLineLimitScenario({
-        cfg: { channels: { discord: { token: "fixture-token" } } },
-        webhook,
-        replyToIdSource,
-        replyToMode,
-      });
-      expect(result.status).toBe("sent");
-      expect(chunks.map((chunk) => chunk.split("\n").length)).toEqual([17, 3]);
-      expect(replies).toEqual(["fixture-reply", repeat ? "fixture-reply" : undefined]);
-    },
-  );
   it("preserves fenced code and character limits through durable delivery", async () => {
     const body = Array.from({ length: 20 }, (_, index) => `row-${index}: ${"x".repeat(130)}`).join(
       "\n",
@@ -271,3 +218,55 @@ describe.each([false, true])("durable Discord transport webhook=%s", (webhook) =
     expect(offset).toBe(body.length);
   });
 });
+
+it.each([
+  ["root limit", false, 10, undefined, undefined, [10, 10]],
+  ["account wins", true, 5, 50, undefined, [20]],
+  ["explicit smaller", false, 10, 50, 5, [5, 5, 5, 5]],
+  ["explicit smaller", true, 10, 50, 5, [5, 5, 5, 5]],
+  ["explicit larger", false, 5, 10, 50, [20]],
+  ["explicit larger", true, 5, 10, 50, [20]],
+] as const)(
+  "preserves %s at the HTTP boundary (webhook=%s)",
+  async (_name, webhook, root, account, explicit, counts) => {
+    const { chunks, result } = await runDurableLineLimitScenario({
+      cfg: {
+        channels: {
+          discord: {
+            maxLinesPerMessage: root,
+            accounts: {
+              work: {
+                token: "fixture-token",
+                ...(account === undefined ? {} : { maxLinesPerMessage: account }),
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      webhook,
+      formatting: explicit === undefined ? undefined : { maxLinesPerMessage: explicit },
+    });
+    expect(result.status).toBe("sent");
+    expect(chunks.map((chunk) => chunk.split("\n").length)).toEqual(counts);
+    expect(chunks.join("\n")).toBe(twentyLineText);
+  },
+);
+
+it.each([
+  { replyToIdSource: "explicit", replyToMode: "first", webhook: true },
+  { replyToIdSource: "implicit", replyToMode: "all", webhook: false },
+] as const)(
+  "preserves $replyToIdSource $replyToMode-mode replies across physical chunks",
+  async ({ replyToIdSource, replyToMode, webhook }) => {
+    const { chunks, replies, result } = await runDurableLineLimitScenario({
+      cfg: { channels: { discord: { token: "fixture-token" } } },
+      webhook,
+      replyToIdSource,
+      replyToMode,
+    });
+    expect(result.status).toBe("sent");
+    expect(chunks.map((chunk) => chunk.split("\n").length)).toEqual([17, 3]);
+    expect(replies).toEqual(["fixture-reply", "fixture-reply"]);
+  },
+);

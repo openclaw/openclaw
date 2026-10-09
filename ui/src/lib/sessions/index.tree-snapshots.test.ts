@@ -1,15 +1,15 @@
 // @vitest-environment node
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { readSessionChangedEvent, reconcileSessionChanged } from "./reconcile.ts";
+import { readSessionChangedEvent } from "./reconcile.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { canApplySessionListSnapshot } from "./session-list-query.ts";
 
 const settledGrandparent: GatewaySessionRow = {
   key: "agent:main:grandparent",
@@ -81,91 +81,108 @@ function treeHarness(rows = [child, parent, grandparent]) {
 }
 
 describe("tree row snapshots", () => {
-  it.each(["sessions.changed", "session.message"])(
-    "keeps %s ancestor references equivalent to full snapshots without roster or descriptor reads",
-    async (event) => {
-      vi.useFakeTimers();
-      const outcomes: GatewaySessionRow[][] = [];
-      try {
-        for (const references of [false, true]) {
-          const h = treeHarness();
-          const invalidated = vi.fn();
-          const observer = h.sessions.observeRow(
-            { key: parent.key, agentId: "main" },
-            () => undefined,
-            {
-              onInvalidate: invalidated,
-            },
-          );
-          try {
-            await h.sessions.refresh({ agentId: "main", force: true });
-            h.request.mockClear();
-            for (const snapshotAt of [101, 102, 103]) {
-              const ancestors = [
-                {
-                  ...settledParent,
-                  totalTokensFresh: false,
-                  snapshotAt,
-                  ancestorRevision: "parent-revision",
-                },
-                {
-                  ...settledGrandparent,
-                  totalTokensFresh: false,
-                  snapshotAt,
-                  ancestorRevision: "grandparent-revision",
-                },
-              ];
-              h.emit({
-                type: "event",
-                event,
-                payload: {
-                  agentId: "main",
-                  ...(event === "sessions.changed"
-                    ? { reason: "agent.input.settled" }
-                    : { phase: "end" }),
-                  session: { ...settledChild, snapshotAt },
-                  ancestorSessions: references && snapshotAt > 101 ? [] : ancestors,
-                  ...(references && snapshotAt > 101
-                    ? {
-                        ancestorSessionRefs: ancestors.map(
-                          ({ key, sessionId, ancestorRevision }) => ({
-                            key,
-                            sessionId,
-                            revision: ancestorRevision,
-                            snapshotAt,
-                          }),
-                        ),
-                      }
-                    : {}),
-                  ts: snapshotAt,
-                },
+  it("keeps session.message ancestor references equivalent to full snapshots without roster or descriptor reads", async () => {
+    vi.useFakeTimers();
+    const outcomes: GatewaySessionRow[][] = [];
+    const summary = { state: "stale" as const, canEnsure: true };
+    try {
+      for (const references of [true, false]) {
+        const h = treeHarness();
+        const invalidated = vi.fn();
+        const observer = h.sessions.observeRow(
+          { key: parent.key, agentId: "main" },
+          () => undefined,
+          {
+            onInvalidate: invalidated,
+          },
+        );
+        try {
+          await h.sessions.refresh({ agentId: "main", force: true });
+          h.request.mockClear();
+          for (const snapshotAt of [101, 102, 103]) {
+            const ancestors = [
+              {
+                ...settledParent,
+                activitySummary: summary,
+                totalTokensFresh: false,
+                snapshotAt,
+                ancestorRevision: "parent-revision",
+              },
+              {
+                ...settledGrandparent,
+                totalTokensFresh: false,
+                snapshotAt,
+                ancestorRevision: "grandparent-revision",
+              },
+            ];
+            h.emit({
+              type: "event",
+              event: "session.message",
+              payload: {
+                agentId: "main",
+                phase: "end",
+                session: { ...settledChild, snapshotAt },
+                ancestorSessions: references && snapshotAt > 101 ? [] : ancestors,
+                ...(references && snapshotAt > 101
+                  ? {
+                      ancestorSessionRefs: ancestors.map(
+                        ({ key, sessionId, ancestorRevision }) => ({
+                          key,
+                          sessionId,
+                          revision: ancestorRevision,
+                          snapshotAt,
+                        }),
+                      ),
+                    }
+                  : {}),
+                ts: snapshotAt,
+              },
+            });
+            if (snapshotAt === 102) {
+              // Page reads omit opt-in recaps and retain the wire's empty usage marker.
+              const read = h.holdRead();
+              const refresh = h.sessions.refreshList({
+                agentId: "main",
+                includeUnknown: false,
+                force: true,
               });
-              await vi.dynamicImportSettled();
+              read.resolve(
+                sessionsResult(
+                  [
+                    { ...settledChild, totalTokensFresh: false, snapshotAt },
+                    { ...settledParent, totalTokensFresh: false, snapshotAt },
+                    { ...settledGrandparent, totalTokensFresh: false, snapshotAt },
+                  ],
+                  snapshotAt,
+                ),
+              );
+              await refresh;
+              h.request.mockClear();
             }
-            // Snapshot clocks are sampling metadata, not a row-content difference.
-            outcomes.push(
-              h.sessions.state.result!.sessions.map(({ snapshotAt: _clock, ...row }) => row),
-            );
-            expect(observer.row).toMatchObject(settledParent);
-            expect(invalidated).not.toHaveBeenCalled();
-            await vi.advanceTimersByTimeAsync(5_000);
-            expect(h.request).not.toHaveBeenCalled();
-          } finally {
-            observer.dispose();
-            h.sessions.dispose();
           }
+          // Snapshot clocks are sampling metadata, not a row-content difference.
+          outcomes.push(
+            h.sessions.state.result!.sessions.map(({ snapshotAt: _clock, ...row }) => row),
+          );
+          expect(observer.row).toMatchObject(settledParent);
+          expect(invalidated).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(h.request).not.toHaveBeenCalled();
+        } finally {
+          observer.dispose();
+          h.sessions.dispose();
         }
-        expect(outcomes).toEqual([
-          [settledChild, settledParent, settledGrandparent],
-          [settledChild, settledParent, settledGrandparent],
-        ]);
-      } finally {
-        vi.useRealTimers();
       }
-    },
-  );
+      expect(outcomes).toEqual([
+        [settledChild, { ...settledParent, activitySummary: summary }, settledGrandparent],
+        [settledChild, { ...settledParent, activitySummary: summary }, settledGrandparent],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-  it.each(["unknown", "generation", "list replacement", "local edit"])(
+  it.each(["generation", "list replacement", "local edit"])(
     "refreshes instead of certifying an ancestor reference after %s",
     async (change) => {
       vi.useFakeTimers();
@@ -185,7 +202,6 @@ describe("tree row snapshots", () => {
             ],
           },
         });
-        await vi.dynamicImportSettled();
         if (change === "list replacement") {
           const read = h.holdRead();
           const refresh = h.sessions.refresh({ agentId: "main", force: true });
@@ -215,7 +231,7 @@ describe("tree row snapshots", () => {
             ancestorSessions: [settledGrandparent],
             ancestorSessionRefs: [
               {
-                key: change === "unknown" ? "agent:main:unknown" : parent.key,
+                key: parent.key,
                 sessionId: change === "generation" ? "replaced-parent-id" : parent.sessionId,
                 revision: "parent-revision",
                 snapshotAt: 101,
@@ -238,48 +254,12 @@ describe("tree row snapshots", () => {
     },
   );
 
-  it("keeps old Control UI ancestor rows intact and requests an authoritative refresh", () => {
-    const heldParent = {
-      ...parent,
-      label: "Main",
-      pinned: true,
-      pinnedAt: 10,
-      owner: { actor: { type: "human" as const, id: "owner-id", label: "Owner" }, assignedAt: 10 },
-    };
-    const payload = {
-      agentId: "main",
-      reason: "patch",
-      session: settledChild,
-      ancestorSessions: [],
-      ancestorSessionRefs: [
-        { key: parent.key, sessionId: parent.sessionId, revision: "unchanged", snapshotAt: 101 },
-      ],
-    };
-    // Frozen pre-reference parser: only ancestorSessions contributes ancestor snapshots.
-    const legacySnapshots = [payload.session, ...payload.ancestorSessions].filter(
-      (row) => typeof row.key === "string",
-    );
-    const rows = [child, heldParent, grandparent];
-    const legacyRows = rows.map((row) => {
-      const snapshot = legacySnapshots.find((candidate) => candidate.key === row.key);
-      // The old complete-snapshot branch replaces optional fields rather than merging them.
-      return snapshot ? { ...snapshot, key: row.key, kind: snapshot.kind ?? row.kind } : row;
-    });
-    expect(legacyRows.find((row) => row.key === parent.key)).toBe(heldParent);
-    const { ancestorSessionRefs: _ignored, ...legacyPayload } = payload;
-    expect(
-      canApplySessionListSnapshot(sessionsResult(rows, 100), legacyPayload, { agentId: "main" }),
-    ).toBe(false);
-    expect(
-      reconcileSessionChanged(sessionsResult(rows, 100), legacyPayload).result?.sessions,
-    ).toEqual(expect.arrayContaining(legacyRows));
-  });
-
-  it("confirms cleared ancestor fields ahead of an overlapping list read", async () => {
+  it("keeps null ancestor clears over a stale read", async () => {
     vi.useFakeTimers();
+    const activitySummary = { state: "stale" as const, canEnsure: true };
     const h = treeHarness([
       child,
-      { ...parent, label: "Cleared label", snapshotAt: 100 },
+      { ...parent, label: "Cleared label", activitySummary, snapshotAt: 100 },
       grandparent,
     ]);
     try {
@@ -295,7 +275,12 @@ describe("tree row snapshots", () => {
             ancestorSessions: reference
               ? [settledGrandparent]
               : [
-                  { ...settledParent, ancestorRevision: "parent-revision", snapshotAt: 101 },
+                  {
+                    ...settledParent,
+                    activitySummary: null,
+                    ancestorRevision: "parent-revision",
+                    snapshotAt: 101,
+                  },
                   settledGrandparent,
                 ],
             ...(reference
@@ -313,7 +298,6 @@ describe("tree row snapshots", () => {
           },
         });
       emit(false);
-      await vi.dynamicImportSettled();
       const pending = h.holdRead();
       const refresh = h.sessions.refresh({ agentId: "main", force: true });
       emit(true);
@@ -321,7 +305,7 @@ describe("tree row snapshots", () => {
         sessionsResult(
           [
             settledChild,
-            { ...settledParent, label: "Stale read label", snapshotAt: 102 },
+            { ...settledParent, label: "Stale read label", activitySummary, snapshotAt: 102 },
             settledGrandparent,
           ],
           102,
@@ -337,40 +321,6 @@ describe("tree row snapshots", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each(["sessions.changed", "session.message"])(
-    "applies %s to held ancestors and descriptors without reading the window",
-    async (event) => {
-      vi.useFakeTimers();
-      const h = treeHarness();
-      const invalidated = vi.fn();
-      const observer = h.sessions.observeRow(
-        { key: parent.key, agentId: "main" },
-        () => undefined,
-        {
-          onInvalidate: invalidated,
-        },
-      );
-      try {
-        await h.sessions.refresh({ agentId: "main", force: true });
-        h.request.mockClear();
-        h.settle(event);
-        expect(h.sessions.state.result?.sessions).toEqual([
-          settledChild,
-          settledParent,
-          settledGrandparent,
-        ]);
-        expect(observer.row).toEqual(settledParent);
-        expect(invalidated).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(h.request).not.toHaveBeenCalled();
-      } finally {
-        observer.dispose();
-        h.sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("keeps complete viewer snapshots authoritative over stale envelope row fields", async () => {
     vi.useFakeTimers();
@@ -460,10 +410,9 @@ describe("tree row snapshots", () => {
     }
   });
 
-  it("updates an ancestor in the selected agent without admitting its foreign child", async () => {
+  it("retains authoritative refresh for an unknown ancestor tree update", async () => {
     vi.useFakeTimers();
-    const h = treeHarness([parent, grandparent]);
-    const nextParent = { ...settledParent, childSessions: ["agent:worker:subagent:child"] };
+    const h = treeHarness();
     try {
       await h.sessions.refresh({ agentId: "main", force: true });
       h.request.mockClear();
@@ -471,67 +420,153 @@ describe("tree row snapshots", () => {
         type: "event",
         event: "sessions.changed",
         payload: {
-          agentId: "worker",
-          reason: "agent.input.settled",
-          session: { ...settledChild, key: "agent:worker:subagent:child" },
-          ancestorSessions: [nextParent, settledGrandparent],
-          ts: 101,
+          agentId: "main",
+          reason: "patch",
+          session: {
+            ...settledChild,
+            archived: false,
+          },
+          ancestorSessions: [
+            settledParent,
+            settledGrandparent,
+            { ...grandparent, key: "agent:main:unknown" },
+          ],
         },
       });
-      expect(h.sessions.state.result?.sessions).toEqual([nextParent, settledGrandparent]);
+      expect(
+        h.sessions.state.result?.sessions.some((row) => row.key === "agent:main:unknown"),
+      ).toBe(false);
+      expect(
+        h.sessions.state.result?.sessions.find((row) => row.key === parent.key)?.sessionId,
+      ).toBe(parent.sessionId);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(h.request).not.toHaveBeenCalled();
+      expect(h.request).toHaveBeenCalledTimes(1);
     } finally {
       h.sessions.dispose();
       vi.useRealTimers();
     }
   });
+});
 
-  it.each(["incomplete", "lineage", "generation", "unknown ancestor"])(
-    "retains authoritative refresh for an %s tree update",
-    async (change) => {
+describe("child roster refresh", () => {
+  const parentKey = "agent:main:parent";
+  const known: GatewaySessionRow = {
+    key: "agent:worker:subagent:known",
+    sessionId: "known-session",
+    kind: "direct",
+    spawnedBy: parentKey,
+    updatedAt: 1,
+  };
+  const added: GatewaySessionRow = {
+    key: "agent:research:subagent:added",
+    sessionId: "added-session",
+    kind: "direct",
+    parentSessionKey: parentKey,
+    updatedAt: 2,
+  };
+
+  it.each([
+    {
+      name: "a known child run finishing",
+      payload: {},
+      terminal: { sessionKeys: [known.key], status: "done" as const, endedAt: 2 },
+      refresh: true,
+    },
+    {
+      name: "an unknown run finishing outside an incomplete child window",
+      payload: {},
+      terminal: { sessionKeys: ["agent:research:unloaded"], status: "done" as const, endedAt: 2 },
+      refresh: true,
+      incomplete: true,
+    },
+    {
+      name: "accepted history discovering a child",
+      payload: {},
+      historyRow: { ...added, agentId: "research" },
+      refresh: true,
+      rows: [known, added],
+    },
+    {
+      name: "unrelated same-agent root",
+      payload: { sessionKey: "agent:main:other", reason: "update" },
+      refresh: false,
+    },
+    {
+      name: "known child deletion before list reconciliation",
+      payload: { sessionKey: known.key, sessionId: known.sessionId, reason: "delete" },
+      refresh: true,
+      rows: [],
+    },
+    {
+      name: "key-only lifecycle deletion",
+      payload: { sessionKey: known.key, reason: "delete" },
+      refresh: true,
+      rows: [],
+    },
+    {
+      name: "known child moved to another parent",
+      payload: {
+        sessionKey: known.key,
+        session: { ...known, spawnedBy: "agent:other:parent", updatedAt: 2 },
+        reason: "move",
+      },
+      refresh: true,
+      rows: [],
+    },
+  ])(
+    "refreshes a parent-scoped child query only for $name",
+    async ({ payload, historyRow, terminal, refresh, rows, incomplete }) => {
       vi.useFakeTimers();
-      const h = treeHarness();
+      let currentRows = [known];
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        const children = isRecord(params) && params.spawnedBy === parentKey;
+        return {
+          ...sessionsResult(children ? currentRows : [], 1),
+          hasMore: children && incomplete === true,
+          totalCount: children && incomplete ? 10_001 : children ? currentRows.length : 0,
+        };
+      });
+      const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+      const sessions = createTestSessionCapability(gateway);
+      const query = {
+        spawnedBy: parentKey,
+        limit: 10_000,
+        includeGlobal: false,
+        includeUnknown: false,
+      };
+      const observer = sessions.observeList(query, () => undefined);
       try {
-        await h.sessions.refresh({ agentId: "main", force: true });
-        h.request.mockClear();
-        h.emit({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            agentId: "main",
-            reason: "patch",
-            session: {
-              ...settledChild,
-              archived: false,
-              ...(change === "lineage" ? { spawnedBy: grandparent.key } : {}),
-            },
-            ...(change === "incomplete"
-              ? {}
-              : {
-                  ancestorSessions: [
-                    {
-                      ...settledParent,
-                      ...(change === "generation" ? { sessionId: "retired-parent" } : {}),
-                    },
-                    settledGrandparent,
-                    ...(change === "unknown ancestor"
-                      ? [{ ...grandparent, key: "agent:main:unknown" }]
-                      : []),
-                  ],
-                }),
-          },
-        });
-        expect(
-          h.sessions.state.result?.sessions.some((row) => row.key === "agent:main:unknown"),
-        ).toBe(false);
-        expect(
-          h.sessions.state.result?.sessions.find((row) => row.key === parent.key)?.sessionId,
-        ).toBe(parent.sessionId);
+        await sessions.refresh({ agentId: "main", force: true });
+        await observer.refresh();
+        request.mockClear();
+        currentRows = rows ?? currentRows;
+        if (historyRow) {
+          expect(
+            sessions.captureReconcile()(historyRow, undefined, {
+              resultAgentId: historyRow.agentId,
+            }),
+          ).toBe(true);
+        } else if (terminal) {
+          sessions.reconcileRunTerminal(terminal);
+        } else {
+          emitEvent({ type: "event", event: "sessions.changed", payload });
+        }
         await vi.advanceTimersByTimeAsync(5_000);
-        expect(h.request).toHaveBeenCalledTimes(1);
+        const childRequests = request.mock.calls.filter(
+          ([, params]) => isRecord(params) && params.spawnedBy === parentKey,
+        );
+        expect(childRequests).toHaveLength(refresh ? 1 : 0);
+        if (refresh) {
+          expect(sessions.listSnapshot(query).result?.sessions.map((entry) => entry.key)).toEqual(
+            currentRows.map((entry) => entry.key),
+          );
+        }
       } finally {
-        h.sessions.dispose();
+        observer.dispose();
+        sessions.dispose();
         vi.useRealTimers();
       }
     },

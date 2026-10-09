@@ -75,7 +75,7 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
             scope,
             _update,
             options: {
-              assertCommitAllowed: () => void;
+              workerGuard: { source: () => void };
               fallbackEntry?: { sessionId: string; lifecycleRevision?: string };
             },
           ) => {
@@ -91,7 +91,7 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
             expect(authorityActive).toBe(true);
             await Promise.resolve();
             authorityActive = false;
-            options.assertCommitAllowed();
+            options.workerGuard.source();
             followUpCommitted = true;
             return null;
           },

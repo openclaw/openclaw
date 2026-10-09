@@ -186,15 +186,42 @@ describe("login gate failure recovery", () => {
 
     expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
     expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
-      "Profile verification unavailable",
+      "Couldn't verify your account",
     );
-    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(
+      "OpenClaw couldn't check your account right now. Please try again shortly.",
+    );
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
-      "Gateway administrator",
+      "person who manages OpenClaw",
     );
     expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
     expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+  });
+
+  it("explains operator access denial without credential or network recovery", async () => {
+    const element = await mountFailure(
+      "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.",
+      ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+
+    expect(failure?.getAttribute("data-kind")).toBe("access-denied");
+    expect(failure?.getAttribute("data-tone")).toBe("warn");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "No access to this Gateway",
+    );
+    expect(failure?.textContent).not.toMatch(/openclaw gateway run|Gateway unreachable/u);
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain(
+      "Ask a Gateway administrator to assign your profile a role",
+    );
+    expect(steps?.textContent).toContain("This page reconnects on its own once access is granted.");
+    expect(steps?.textContent).not.toMatch(/Gateway is running|Gateway URL|token|password/iu);
+    expect(steps?.querySelector("code")?.textContent).toBe("openclaw users list --json");
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
+    );
   });
 
   it("renders every auth recovery command exactly once", async () => {
@@ -208,6 +235,28 @@ describe("login gate failure recovery", () => {
         entry.textContent?.trim(),
       ),
     ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
+  });
+
+  it("recovers an invalid one-time pairing link without blaming the Gateway secret", async () => {
+    const element = await mountFailure(
+      "unauthorized: bootstrap token invalid",
+      ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Pairing link is no longer valid",
+    );
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toMatch(
+      /expired|already been used/,
+    );
+    expect(failure?.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw dashboard",
+    );
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain("browserUrl");
+    expect(steps?.querySelector("code")?.textContent?.trim()).toBe("openclaw dashboard --json");
+    expect(failure?.textContent).not.toMatch(/Gateway secret rejected|Replace the Gateway secret/);
+    expect(element.props.onConnect).not.toHaveBeenCalled();
   });
 
   it("edits and reveals one Gateway secret without choosing a credential type", async () => {

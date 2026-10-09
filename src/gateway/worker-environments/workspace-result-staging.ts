@@ -21,7 +21,6 @@ import {
 } from "./workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
-  WorkerWorkspaceManifestEntry,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import { localPath } from "./workspace-reconcile-fs.js";
@@ -174,7 +173,6 @@ async function stageWorkerWorkspaceResult(
   },
 ): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
-  const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   params.assertCurrent?.();
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
@@ -187,7 +185,7 @@ async function stageWorkerWorkspaceResult(
     params.assertCurrent?.();
     const input = await fs.open(inputPath, "r");
     try {
-      await withWorkspaceResultRefMutation(root, (baseEnv) => {
+      const { stdout } = await withWorkspaceResultRefMutation(root, (baseEnv) => {
         params.assertCurrent?.();
         return runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
           baseEnv,
@@ -196,31 +194,13 @@ async function stageWorkerWorkspaceResult(
           maxBuffer: 1024 * 1024,
         });
       });
+      return stdout.trim();
     } finally {
       await input.close();
     }
-    return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
-}
-
-async function materializeStagedEntry(params: {
-  root: string;
-  entry: WorkerWorkspaceManifestEntry;
-  content?: Uint8Array;
-}): Promise<void> {
-  const target = localPath(params.root, params.entry.path);
-  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  if (params.entry.type === "symlink") {
-    await fs.symlink(params.entry.target, target);
-    return;
-  }
-  if (!params.content) {
-    throw new Error(`Cloud workspace staged content is missing: ${params.entry.path}`);
-  }
-  await fs.writeFile(target, params.content, { mode: params.entry.mode, flag: "wx" });
-  await fs.chmod(target, params.entry.mode);
 }
 
 export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
@@ -259,7 +239,19 @@ async function withMaterializedWorkerWorkspaceResult<T>(
       }
     };
     for await (const { entry, content } of snapshot.readEntries()) {
-      writes.push(() => materializeStagedEntry({ root: stagingRoot, entry, content }));
+      writes.push(async () => {
+        const target = localPath(stagingRoot, entry.path);
+        await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+        if (entry.type === "symlink") {
+          await fs.symlink(entry.target, target);
+          return;
+        }
+        if (!content) {
+          throw new Error(`Cloud workspace staged content is missing: ${entry.path}`);
+        }
+        await fs.writeFile(target, content, { mode: entry.mode, flag: "wx" });
+        await fs.chmod(target, entry.mode);
+      });
       if (writes.length === 4) {
         await flush();
       }
@@ -287,56 +279,48 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   alreadyAccepted?: boolean;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
-  publishAcceptedManifest?: (accepted: {
-    manifestRef: string;
-    manifest: WorkerWorkspaceManifest;
-    conflictPaths: string[];
-  }) => Promise<void>;
+  publishAcceptedManifest?: (
+    accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
+  ) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
-  return await withWorkspaceHashContext(
-    async () => await applyStagedWorkerWorkspaceResultWithMemo(params),
-  );
-}
-
-async function applyStagedWorkerWorkspaceResultWithMemo(
-  params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
-): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
-  const root = await fs.realpath(params.root);
-  const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
-  if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
-    // An acceptance marker proves the mutations already ran even when omitted
-    // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
-    // A base advance proves the same commit-before-acceptance crash window.
-    const accepted = await inspectAcceptedWorkerWorkspace({
-      root,
-      expectedManifestRef: params.expectedBaseManifestRef,
-      allowAdvancedLocalState: true,
-      base: staged.base,
-      current: staged.current,
-    });
-    if (!accepted) {
-      throw new Error("Cloud workspace staged result does not match the placement base");
+  return await withWorkspaceHashContext(async () => {
+    const root = await fs.realpath(params.root);
+    const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
+    if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
+      // An acceptance marker proves the mutations already ran even when omitted
+      // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
+      // A base advance proves the same commit-before-acceptance crash window.
+      const accepted = await inspectAcceptedWorkerWorkspace({
+        root,
+        expectedManifestRef: params.expectedBaseManifestRef,
+        allowAdvancedLocalState: true,
+        base: staged.base,
+        current: staged.current,
+      });
+      if (!accepted) {
+        throw new Error("Cloud workspace staged result does not match the placement base");
+      }
+      params.assertCurrent?.();
+      await params.journal.commit(accepted.manifestRef);
+      return {
+        ...accepted,
+        changed: staged.changed,
+      };
     }
-    params.assertCurrent?.();
-    params.journal.commit(accepted.manifestRef);
-    return {
-      ...accepted,
-      changed: staged.changed,
-    };
-  }
-  return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
-    const applied = await applyStagedWorkerWorkspace({
-      root,
-      stagingRoot,
-      baseManifestRef: staged.baseManifestRef,
-      currentManifestRef: staged.currentManifestRef,
-      base: staged.base,
-      current: staged.current,
-      journal: params.journal,
-      assertCurrent: params.assertCurrent,
-      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
+    return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
+      const applied = await applyStagedWorkerWorkspace({
+        root,
+        stagingRoot,
+        baseManifestRef: staged.baseManifestRef,
+        currentManifestRef: staged.currentManifestRef,
+        base: staged.base,
+        current: staged.current,
+        journal: params.journal,
+        assertCurrent: params.assertCurrent,
+        acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
+      });
+      return { ...applied, changed: staged.changed };
     });
-    return { ...applied, changed: staged.changed };
   });
 }
 
@@ -346,29 +330,18 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
-  publishAcceptedManifest?: (accepted: {
-    manifestRef: string;
-    manifest: WorkerWorkspaceManifest;
-    conflictPaths: string[];
-  }) => Promise<void>;
-}): Promise<{
-  applyPreparedStagedResult(): Promise<void>;
-  getAppliedWorkspaceResult(): WorkerWorkspaceApplyResult | undefined;
-  verifyLocalStable(): Promise<void>;
-  publishStagedResult(): Promise<void>;
-  discardPreparedStagedResult(): Promise<void>;
-}> {
+  unchanged?: WorkerWorkspaceApplyResult;
+  publishAcceptedManifest?: (
+    accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
+  ) => Promise<void>;
+}) {
   const stagedResult = params.request.stagedResult;
-  if (!stagedResult) {
-    throw new Error("Cloud workspace durable result staging was not requested");
-  }
   const candidateRef = preparedWorkerWorkspaceResultRef(stagedResult.ref);
-  const active = activeWorkspaceHashContext();
-  const hashMemo = active?.memo ?? new Map();
-  const metrics = active?.metrics;
+  const { memo: hashMemo = new Map(), metrics } = activeWorkspaceHashContext() ?? {};
   let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
-  await stageWorkerWorkspaceResult({
-    root: params.request.localPath,
+  const root = await fs.realpath(params.request.localPath);
+  const commit = await stageWorkerWorkspaceResult({
+    root,
     stagingRoot: params.stagingRoot,
     stagedResultRef: candidateRef,
     baseManifestRef: params.request.baseManifestRef,
@@ -377,39 +350,41 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     currentManifestRaw: params.currentManifestRaw,
     assertCurrent: params.request.assertCurrent,
   });
+  const unchanged = params.unchanged;
+  const applyPreparedStagedResult = async () => {
+    if (unchanged) {
+      await unchanged.verifyLocalStable();
+      params.request.assertCurrent?.();
+      await params.request.journal.commit(unchanged.manifestRef);
+      appliedWorkspaceResult = unchanged;
+      return;
+    }
+    appliedWorkspaceResult = await withWorkspaceHashMemo(
+      hashMemo,
+      async () =>
+        await applyStagedWorkerWorkspaceResult({
+          root,
+          stagedResultRef: candidateRef,
+          expectedBaseManifestRef: params.request.baseManifestRef,
+          journal: params.request.journal,
+          assertCurrent: params.request.assertCurrent,
+          publishAcceptedManifest: params.publishAcceptedManifest,
+        }),
+      metrics,
+    );
+  };
   return {
-    applyPreparedStagedResult: async () => {
-      const root = await ensureWorkerWorkspaceResultRepository(
-        params.request.localPath,
-        params.request.assertCurrent,
-      );
-      appliedWorkspaceResult = await withWorkspaceHashMemo(
-        hashMemo,
-        async () =>
-          await applyStagedWorkerWorkspaceResult({
-            root,
-            stagedResultRef: candidateRef,
-            expectedBaseManifestRef: params.request.baseManifestRef,
-            journal: params.request.journal,
-            assertCurrent: params.request.assertCurrent,
-            publishAcceptedManifest: params.publishAcceptedManifest,
-          }),
-        metrics,
-      );
-    },
+    applyPreparedStagedResult,
+    ...(unchanged ? { acceptUnchangedStagedResult: applyPreparedStagedResult } : {}),
     getAppliedWorkspaceResult: () => appliedWorkspaceResult,
     verifyLocalStable: async () => {
-      if (!appliedWorkspaceResult) {
+      const local = appliedWorkspaceResult ?? unchanged;
+      if (!local) {
         throw new Error("Cloud workspace staged result has not been applied");
       }
-      await appliedWorkspaceResult.verifyLocalStable();
+      await local.verifyLocalStable();
     },
     publishStagedResult: async () => {
-      const root = await ensureWorkerWorkspaceResultRepository(
-        params.request.localPath,
-        params.request.assertCurrent,
-      );
-      const commit = await requireGit(root, ["rev-parse", `${candidateRef}^{commit}`]);
       await updateWorkspaceResultRefs(
         root,
         [{ ref: stagedResult.ref, objectId: commit }, { ref: candidateRef }],
@@ -418,7 +393,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
       // Final fences precede publishing. Preserve the canonical ref on any
       // SQLite failure so restart recovery can discover the verified result.
       params.request.assertCurrent?.();
-      stagedResult.record(stagedResult.ref);
+      await stagedResult.record(stagedResult.ref);
+      params.request.assertCurrent?.();
     },
     discardPreparedStagedResult: async () => {
       await deleteStagedWorkerWorkspaceResult({
@@ -494,7 +470,7 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: () => ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -504,10 +480,10 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   ]);
   const cleanupRefs = output.split("\n").filter(Boolean);
   if (cleanupRefs.length > 0) {
-    await updateWorkspaceResultRefs(root, () => {
+    await updateWorkspaceResultRefs(root, async () => {
       // Read fences after inventory and the shared ref queue wait. Later
       // claims cannot appear in these immutable claim refs.
-      const retainedRefs = params.retainedRefs?.();
+      const retainedRefs = await params.retainedRefs?.();
       return cleanupRefs
         .map(requireWorkerResultStorageRef)
         .filter((ref) => !retainedRefs?.has(ref))

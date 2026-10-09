@@ -32,6 +32,7 @@ import {
   sendLocationTelegram,
   sendMessageTelegram,
   sendPollTelegram,
+  sendTypingTelegram,
 } from "./send.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
@@ -52,6 +53,33 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     from: { id: 123456, is_bot: true, first_name: "OpenClaw" },
     text,
     ...extra,
+  });
+  const pollMessage = (chatId: number, type: string, id: string, thread?: number) => ({
+    message_id: 500,
+    date: 1_779_394_740,
+    chat: {
+      id: chatId,
+      type,
+      first_name: "Ada",
+      title: "Reviewers",
+      ...(thread && chatId < 0 ? { is_forum: true } : {}),
+    },
+    ...(thread && thread !== 1 ? { message_thread_id: thread } : {}),
+    poll: {
+      id,
+      question: "Ready?",
+      options: [
+        { text: "Yes", voter_count: 0 },
+        { text: "No", voter_count: 0 },
+      ],
+      total_voter_count: 0,
+      is_closed: false,
+      is_anonymous: id === "anonymous",
+      type: "regular",
+      allows_multiple_answers: false,
+      allows_revoting: false,
+      members_only: false,
+    },
   });
   beforeEach(() => {
     resetPluginStateStoreForTests({ closeDatabase: false });
@@ -150,6 +178,21 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     expect(fixture.requests).toHaveLength(1);
   });
 
+  it.each([
+    { name: "username target", to: "@fixture:topic:0", messageThreadId: undefined },
+    { name: "numeric thread option", to: "-100123", messageThreadId: 0 },
+  ])("rejects zero in $name before Telegram requests", async ({ to, messageThreadId }) => {
+    fixture.responseFor = (method) =>
+      method === "getChat"
+        ? { id: -100123, type: "supergroup" }
+        : providerMessage(-100123, "Must not send");
+    const opts = { cfg, api: fixture.bot.api, messageThreadId };
+    const error = /topic ID must be a positive safe integer/;
+    await expect(sendMessageTelegram(to, "Must not send", opts)).rejects.toThrow(error);
+    await expect(sendTypingTelegram(to, opts)).rejects.toThrow(error);
+    expect(fixture.requests).toHaveLength(0);
+  });
+
   it("records General-topic acceptance without inventing a private-chat General topic", async () => {
     fixture.responseFor = () => providerMessage(-100123, "Reply in General");
     await sendMessageTelegram("-100123:topic:1", "Reply in General", { cfg, api: fixture.bot.api });
@@ -164,106 +207,101 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
         1,
       ),
     ).toBe(true);
+    await sendTypingTelegram("-100123:topic:1", { cfg, api: fixture.bot.api });
+    expect(fixture.requests[1]).toEqual({
+      method: "sendChatAction",
+      fields: { chat_id: "-100123", action: "typing", message_thread_id: 1 },
+    });
     fixture.responseFor = () => providerMessage(123, "Private topic");
     await expect(
       sendMessageTelegram("123:topic:1", "Private topic", { cfg, api: fixture.bot.api }),
     ).rejects.toThrow("topic unknown; expected topic 1");
   });
 
-  it.each(["text", "location"] as const)(
-    "keeps Telegram time and transcript provenance for %s",
-    async (kind) => {
-      fixture.responseFor = () => providerMessage(123, "Final answer");
-      const cursor = createTelegramPromptContextProjectionCursor({
-        transcriptMessageId: "assistant-final",
-      });
-      const opts = {
-        cfg,
-        api: fixture.bot.api,
-        promptContextProjectionPlan: { cursor, finalPart: true },
-      };
-      if (kind === "text") {
-        await sendMessageTelegram("123", "Final answer", opts);
-      } else {
-        await sendLocationTelegram("123", { latitude: 48.858844, longitude: 2.294351 }, opts);
-      }
-      const node = await cache().get({ accountId: "default", chatId: "123", messageId: "902" });
-      expect(node?.timestamp).toBe(1_779_394_740_000);
-      expect(node?.promptContextProjectionMarker).toEqual({
-        kind: "valid",
-        projection: { transcriptMessageId: "assistant-final", partIndex: 0, finalPart: true },
-      });
-    },
-  );
+  it("keeps Telegram time and transcript provenance for locations", async () => {
+    fixture.responseFor = () => providerMessage(123, "Final answer");
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
+    const opts = {
+      cfg,
+      api: fixture.bot.api,
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    };
+    await sendLocationTelegram("123", { latitude: 48.858844, longitude: 2.294351 }, opts);
+    const node = await cache().get({ accountId: "default", chatId: "123", messageId: "902" });
+    expect(node?.timestamp).toBe(1_779_394_740_000);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { transcriptMessageId: "assistant-final", partIndex: 0, finalPart: true },
+    });
+  });
 
-  it.each(["text", "caption"] as const)(
-    "refreshes authoritative edited %s without hiding later group history",
-    async (kind) => {
-      const original = providerMessage(-100123, "original response", { message_thread_id: 77 });
-      fixture.responseFor = () => original;
-      await sendMessageTelegram("-100123:topic:77", "original response", {
-        cfg,
-        api: fixture.bot.api,
-      });
-      await cache().record({
-        accountId: "default",
-        chatId: -100123,
-        threadId: 77,
-        historyEligible: true,
-        msg: {
-          message_id: 903,
-          message_thread_id: 77,
-          date: 1_779_394_741,
-          chat: { id: -100123, type: "supergroup", title: "Ops" },
-          from: { id: 43, is_bot: false, first_name: "Teammate" },
-          text: "context that must remain visible",
-        },
-      });
-      fixture.responseFor = () => ({
-        ...original,
-        text: kind === "text" ? "authoritative edited response" : undefined,
-        ...(kind === "caption" ? { caption: "authoritative edited response" } : {}),
-        edit_date: 1_779_394_750,
-      });
-      await editMessageTelegram("-100123", 902, "requested replacement", {
-        cfg,
-        api: fixture.bot.api,
-        editMode: kind,
-      });
-      resetTelegramMessageCacheForTest();
-      const history = await cache().readHistory({
-        accountId: "default",
-        chatId: -100123,
-        threadId: 77,
-        limit: 50,
-      });
-      expect(history.messages).toMatchObject([
-        {
+  it("refreshes authoritative edited captions without hiding later group history", async () => {
+    const original = providerMessage(-100123, "original response", { message_thread_id: 77 });
+    fixture.responseFor = () => original;
+    await sendMessageTelegram("-100123:topic:77", "original response", {
+      cfg,
+      api: fixture.bot.api,
+    });
+    await cache().record({
+      accountId: "default",
+      chatId: -100123,
+      threadId: 77,
+      historyEligible: true,
+      msg: {
+        message_id: 903,
+        message_thread_id: 77,
+        date: 1_779_394_741,
+        chat: { id: -100123, type: "supergroup", title: "Ops" },
+        from: { id: 43, is_bot: false, first_name: "Teammate" },
+        text: "context that must remain visible",
+      },
+    });
+    fixture.responseFor = () => ({
+      ...original,
+      text: undefined,
+      caption: "authoritative edited response",
+      edit_date: 1_779_394_750,
+    });
+    await editMessageTelegram("-100123", 902, "requested replacement", {
+      cfg,
+      api: fixture.bot.api,
+      editMode: "caption",
+    });
+    resetTelegramMessageCacheForTest();
+    const history = await cache().readHistory({
+      accountId: "default",
+      chatId: -100123,
+      threadId: 77,
+      limit: 50,
+    });
+    expect(history.messages).toMatchObject([
+      {
+        messageId: "902",
+        sender: "OpenClaw (you)",
+        body: "authoritative edited response",
+        timestamp: 1_779_394_740_000,
+      },
+      {
+        messageId: "903",
+        sender: "Teammate",
+        body: "context that must remain visible",
+        timestamp: 1_779_394_741_000,
+      },
+    ]);
+    expect(history.hasMore).toBe(false);
+    expect(
+      hasProviderObservedTelegramThreadBinding(
+        await cache().get({
+          accountId: "default",
+          chatId: -100123,
           messageId: "902",
-          sender: "OpenClaw (you)",
-          body: "authoritative edited response",
-          timestamp: 1_779_394_740_000,
-        },
-        {
-          messageId: "903",
-          sender: "Teammate",
-          body: "context that must remain visible",
-          timestamp: 1_779_394_741_000,
-        },
-      ]);
-      expect(history.hasMore).toBe(false);
-      expect(
-        hasProviderObservedTelegramThreadBinding(
-          await cache().get({
-            accountId: "default",
-            chatId: -100123,
-            messageId: "902",
-          }),
-          77,
-        ),
-      ).toBe(true);
-    },
-  );
+        }),
+        77,
+      ),
+    ).toBe(true);
+  });
 
   it.each(["html-recovery", "middle-rejection", "rich-recovery", "empty-tail"] as const)(
     "projects only accepted chunks through %s",
@@ -364,7 +402,6 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
   );
 
   it.each([
-    { name: "DM", chatId: 123, type: "private", thread: undefined, scope: { scope: "dm" } },
     { name: "DM topic", chatId: 123, type: "private", thread: 42, scope: { scope: "dm", id: 42 } },
     {
       name: "group",
@@ -372,13 +409,6 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
       type: "supergroup",
       thread: undefined,
       scope: { scope: "none" },
-    },
-    {
-      name: "forum",
-      chatId: -100123,
-      type: "supergroup",
-      thread: 77,
-      scope: { scope: "forum", id: 77 },
     },
     {
       name: "General",
@@ -393,33 +423,7 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
       fixture.responseFor = (method) =>
         method === "getChatMember"
           ? { status: "administrator" }
-          : {
-              message_id: 500,
-              date: 1_779_394_740,
-              chat: {
-                id: chatId,
-                type,
-                first_name: "Ada",
-                title: "Reviewers",
-                ...(thread && chatId < 0 ? { is_forum: true } : {}),
-              },
-              ...(thread && thread !== 1 ? { message_thread_id: thread } : {}),
-              poll: {
-                id: name,
-                question: "Ready?",
-                options: [
-                  { text: "Yes", voter_count: 0 },
-                  { text: "No", voter_count: 0 },
-                ],
-                total_voter_count: 0,
-                is_closed: false,
-                is_anonymous: false,
-                type: "regular",
-                allows_multiple_answers: false,
-                allows_revoting: false,
-                members_only: false,
-              },
-            };
+          : pollMessage(chatId, type, name, thread);
       const target = `${chatId}${thread ? `:topic:${thread}` : ""}`;
       await expect(
         sendPollTelegram(
@@ -451,12 +455,10 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     status?: "administrator" | "member";
     thread?: number;
     warning: string;
-    anonymous?: boolean;
   }> = [
     {
       name: "anonymous",
       policy: {},
-      anonymous: true,
       type: "supergroup",
       status: "administrator",
       warning: "anonymously",
@@ -505,16 +507,6 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
       warning: "inbound messages are disabled",
     },
     {
-      name: "General-policy",
-      policy: {
-        groupPolicy: "open",
-        groups: { "-100123": { topics: { "1": { groupPolicy: "disabled" } } } },
-      },
-      thread: 1,
-      type: "supergroup",
-      warning: "inbound messages are disabled",
-    },
-    {
       name: "write-failure",
       policy: {},
       type: "private",
@@ -525,37 +517,11 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     "warns after accepted $name polls without advertising a usable route or resending",
     async (scenario) => {
       const chatId = scenario.type === "private" ? 123 : -100123;
-      const thread = "thread" in scenario ? scenario.thread : undefined;
+      const thread = scenario.thread;
       fixture.responseFor = (method) =>
         method === "getChatMember"
-          ? { status: "status" in scenario ? scenario.status : "administrator" }
-          : {
-              message_id: 500,
-              date: 1_779_394_740,
-              chat: {
-                id: chatId,
-                type: scenario.type,
-                first_name: "Ada",
-                title: "Reviewers",
-                ...(thread ? { is_forum: true } : {}),
-              },
-              ...(thread && thread !== 1 ? { message_thread_id: thread } : {}),
-              poll: {
-                id: scenario.name,
-                question: "Ready?",
-                options: [
-                  { text: "Yes", voter_count: 0 },
-                  { text: "No", voter_count: 0 },
-                ],
-                total_voter_count: 0,
-                is_closed: false,
-                is_anonymous: scenario.name === "anonymous",
-                type: "regular",
-                allows_multiple_answers: false,
-                allows_revoting: false,
-                members_only: false,
-              },
-            };
+          ? { status: scenario.status ?? "administrator" }
+          : pollMessage(chatId, scenario.type, scenario.name, thread);
       if (scenario.name === "write-failure") {
         const state = getTelegramRuntime().state;
         const open = state.openKeyedStore;

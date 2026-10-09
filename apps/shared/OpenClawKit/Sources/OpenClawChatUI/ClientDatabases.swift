@@ -109,12 +109,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// removed. No gateway payload is deleted until the registry owner commits.
     public func stageGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [gatewayHash])
-        }
+        let existingPhase = try self.gatewayRemovalPhase(gatewayHash: gatewayHash)
         if existingPhase == GatewayRemovalPhase.committing.rawValue {
             try self.commitGatewayRemoval(gatewayID: gatewayID)
         } else if existingPhase == GatewayRemovalPhase.scrubbing.rawValue {
@@ -154,12 +149,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// metadata. A failed commit remains staged for startup reconciliation.
     public func commitGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [gatewayHash])
-        }
+        let existingPhase = try self.gatewayRemovalPhase(gatewayHash: gatewayHash)
         if existingPhase == GatewayRemovalPhase.scrubbing.rawValue {
             try self.finishGatewayRemovalScrub(gatewayHash: gatewayHash)
             return
@@ -228,6 +218,15 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                 arguments: [gatewayHash])
         }
         try self.finishGatewayRemovalScrub(gatewayHash: gatewayHash)
+    }
+
+    private func gatewayRemovalPhase(gatewayHash: String) throws -> Int? {
+        try self.stateQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
+                arguments: [gatewayHash])
+        }
     }
 
     /// Cancels an uncommitted forget when the registry owner could not remove
@@ -446,21 +445,20 @@ extension OpenClawClientDatabases {
     }
 
     private static func openRepairableCacheDatabase(at url: URL) throws -> DatabaseQueue {
-        do {
+        func openCache() throws -> DatabaseQueue {
             let queue = try DatabaseQueue(
                 path: url.path,
                 configuration: self.configuration(label: "OpenClaw.gateway-cache"))
             try self.prepareCacheSchema(queue)
             return queue
+        }
+        do {
+            return try openCache()
         } catch {
             // This file contains gateway snapshots only. A format mismatch or
             // corruption is repaired by rebuilding, never by migrating rows.
             self.removeDatabaseFiles(at: url)
-            let queue = try DatabaseQueue(
-                path: url.path,
-                configuration: self.configuration(label: "OpenClaw.gateway-cache"))
-            try self.prepareCacheSchema(queue)
-            return queue
+            return try openCache()
         }
     }
 
@@ -605,7 +603,7 @@ extension OpenClawClientDatabases {
                 try self.writeLegacySnapshot(ownedSnapshot)
                 // Preserve bytes for unregistered gateways rather than
                 // importing or destroying state whose ownership is unknown.
-                let forgottenGatewayHashes = try forgottenGatewayHashesForLegacyImport()
+                let forgottenGatewayHashes = try self.stateQueue.read(Self.forgottenGatewayHashesForLegacyImport)
                 let allLegacyGatewaysAccountedFor = legacyGatewayIDs.allSatisfy { gatewayID in
                     registeredGatewayIDs?.contains(gatewayID) == true ||
                         forgottenGatewayHashes.contains(Self.gatewayIdentityHash(gatewayID))
@@ -731,12 +729,7 @@ extension OpenClawClientDatabases {
 
     private func writeLegacySnapshot(_ snapshot: LegacySnapshot) throws {
         try self.stateQueue.write { db in
-            let forgottenGatewayHashes = try Set(String.fetchAll(
-                db,
-                sql: """
-                SELECT gateway_hash FROM forgotten_gateways
-                WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
-                """))
+            let forgottenGatewayHashes = try Self.forgottenGatewayHashesForLegacyImport(db)
             for identity in snapshot.routingIdentities
                 where !forgottenGatewayHashes.contains(Self.gatewayIdentityHash(identity.gatewayID))
             {
@@ -801,15 +794,13 @@ extension OpenClawClientDatabases {
         }
     }
 
-    private func forgottenGatewayHashesForLegacyImport() throws -> Set<String> {
-        try self.stateQueue.read { db in
-            try Set(String.fetchAll(
-                db,
-                sql: """
-                SELECT gateway_hash FROM forgotten_gateways
-                WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
-                """))
-        }
+    private static func forgottenGatewayHashesForLegacyImport(_ db: Database) throws -> Set<String> {
+        try Set(String.fetchAll(
+            db,
+            sql: """
+            SELECT gateway_hash FROM forgotten_gateways
+            WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
+            """))
     }
 
     static func insertOutboxAttachments(

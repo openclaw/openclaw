@@ -29,7 +29,6 @@ import plugin from "./index.js";
 import {
   CODEX_MANAGED_THREAD_NAMESPACE,
   CODEX_MANAGED_THREAD_MAX_ENTRIES,
-  markStartedCodexManagedThread,
   type StoredCodexManagedThread,
 } from "./src/app-server/managed-thread-store.js";
 import {
@@ -164,7 +163,7 @@ describe("codex plugin", () => {
     vi.spyOn(runtime.state, "openKeyedStore");
     vi.spyOn(runtime.state, "openSyncKeyedStore");
     const registerAgentHarness = vi.fn();
-    const observation = observeHostDataSql(env);
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     try {
       const calibration = new DatabaseSync(":memory:");
@@ -194,7 +193,7 @@ describe("codex plugin", () => {
         bindingStore: CodexAppServerBindingStore;
       };
       const managed = bindingStore.managedThreads!;
-      await markStartedCodexManagedThread(managed, original);
+      await managed.mark(original);
       await expect(managed.mark({ ...original, rolloutPath: "/later.jsonl" })).resolves.toBe(true);
       await expect(managed.has("home", "managed")).resolves.toBe(true);
       const control: CodexSessionCatalogControl = {

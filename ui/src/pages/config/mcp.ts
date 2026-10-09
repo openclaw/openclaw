@@ -1,4 +1,5 @@
 import { html, type TemplateResult } from "lit";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   renderLearnMoreLink,
   renderSettingsRow,
@@ -8,6 +9,7 @@ import "../../components/mcp-servers-card.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 
 registerMcpEnglish();
 
@@ -28,11 +30,9 @@ export function renderMcp(props: McpViewProps) {
   const rows = summarizeMcpServers(props.configObject) ?? [];
   return html`
     <section class="mcp-page">
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         <section class="settings-section mcp-page__summary">
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("mcpPage.servers")}</h2>
-          </div>
+          ${renderSettingsSectionHeader(t("mcpPage.servers"))}
           <div class="settings-group">
             ${(
               [
@@ -48,9 +48,7 @@ export function renderMcp(props: McpViewProps) {
         </section>
 
         <section class="settings-section">
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("mcpPage.operatorCommands")}</h2>
-          </div>
+          ${renderSettingsSectionHeader(t("mcpPage.operatorCommands"))}
           <p class="settings-section__desc">${t("mcpPage.operatorCommandsHint")}</p>
           <div class="settings-group">
             <div class="settings-row settings-row--stacked">

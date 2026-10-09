@@ -134,16 +134,6 @@ class OpenClawMascot extends LitElement {
     this.syncPlayback();
   }
 
-  catchOnce(): void {
-    if (!this.isConnected || this.reducedMotion || currentThemeBranding().mascot === "none") {
-      return;
-    }
-    const time = currentSeconds();
-    this.animator.playCatch(time);
-    this.drawCurrentFrame(time);
-    this.syncPlayback();
-  }
-
   override render() {
     return currentThemeBranding().mascot === "none"
       ? html`<span class="openclaw-mascot--neutral">${neutralMark}</span>`
@@ -178,17 +168,12 @@ class OpenClawMascot extends LitElement {
   };
 
   private syncPlayback(): void {
-    if (!this.renderRoot.querySelector("canvas")) {
+    const canvas = this.renderRoot.querySelector("canvas");
+    if (!canvas || this.reducedMotion || !this.shouldAnimate) {
       this.stopAnimation();
-      return;
-    }
-    if (this.reducedMotion) {
-      this.stopAnimation();
-      this.drawPose(staticMascotPose(this.resolvedMood));
-      return;
-    }
-    if (!this.shouldAnimate) {
-      this.stopAnimation();
+      if (canvas && this.reducedMotion) {
+        this.drawPose(staticMascotPose(this.resolvedMood));
+      }
       return;
     }
     if (this.animationFrame === 0) {

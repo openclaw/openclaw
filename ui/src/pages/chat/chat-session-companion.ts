@@ -5,19 +5,32 @@ import type {
   SessionsCompanionResetResult,
   SessionsCompanionStateResult,
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { showToast } from "../../lib/toast.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
 const COMPANION_ASK_TIMEOUT_MS = 70_000;
+const COMPANION_FAILURE_HINTS = new Map([
+  ["context-unavailable", "history-unavailable"],
+  ["session-missing", "missing"],
+  ["rate-limited", "rate-limited"],
+  ["image-input-unsupported", "image-unsupported"],
+  ["utility-model-unavailable", "model-unavailable"],
+]);
 
 export type ChatSessionCompanionTurn = {
   question: string;
@@ -151,10 +164,23 @@ export class ChatSessionCompanionThreads {
     this.notify();
   }
 
-  setAttachments(sessionKey: string, attachments: ChatAttachment[], agentId?: string | null): void {
+  setAttachments(
+    sessionKey: string,
+    attachments: ChatAttachment[],
+    agentId?: string | null,
+  ): boolean {
+    // Reject edits before replacing the correctable draft or releasing its payloads.
+    if (
+      (companionSelectionContext(attachments)?.length ?? 0) >
+      SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
+    ) {
+      showToast({ message: t("chat.rail.selectionTooLong") });
+      return false;
+    }
     const thread = this.get(sessionKey, agentId);
     thread.attachments = attachments;
     this.notify();
+    return true;
   }
 
   async hydrate(
@@ -277,17 +303,7 @@ export class ChatSessionCompanionThreads {
       const hint =
         details.code === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
-          : reason === "context-unavailable"
-            ? "history-unavailable"
-            : reason === "session-missing"
-              ? "missing"
-              : reason === "rate-limited"
-                ? "rate-limited"
-                : imageUnsupported
-                  ? "image-unsupported"
-                  : reason === "utility-model-unavailable"
-                    ? "model-unavailable"
-                    : "unavailable";
+          : (COMPANION_FAILURE_HINTS.get(reason ?? "") ?? "unavailable");
       Object.assign(turn, {
         status: "failed",
         hint,
@@ -408,43 +424,37 @@ export class ChatSessionCompanionThreads {
   }
 }
 
+function companionSelectionContext(attachments: readonly ChatAttachment[]): string | undefined {
+  const selections = attachments.flatMap((attachment) =>
+    attachment.selectionAnnotation
+      ? [formatChatSelectionAnnotation(attachment.selectionAnnotation)]
+      : [],
+  );
+  return selections.length ? selections.join("\n\n") : undefined;
+}
+
 export function requestSessionCompanionAnswer(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
   question: string,
   agentId?: string | null,
   attachments?: ChatAttachment[],
+  uploadConfig?: ApplicationConfigCapability,
 ): Promise<SessionsCompanionAskResult> {
+  const selectionContext = companionSelectionContext(attachments ?? []);
+  const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
+  if (media?.length) {
+    assertUploadsEnabled(uploadConfig);
+  }
   return client.request<SessionsCompanionAskResult>(
     "sessions.companion.ask",
     {
       sessionKey,
       ...(agentId ? { agentId } : {}),
       question,
-      ...(attachments?.length ? { attachments: buildChatApiAttachments(attachments) } : {}),
+      ...(selectionContext ? { selectionContext } : {}),
+      ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
     },
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );
-}
-
-export function requestSessionCompanionState(
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  agentId?: string | null,
-): Promise<SessionsCompanionStateResult> {
-  return client.request<SessionsCompanionStateResult>("sessions.companion.state", {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-  });
-}
-
-export function resetSessionCompanion(
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  agentId?: string | null,
-): Promise<SessionsCompanionResetResult> {
-  return client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-  });
 }

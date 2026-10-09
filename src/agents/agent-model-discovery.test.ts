@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
-  discoverAuthStorage,
+  discoverAuthStorageFacts,
   discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
@@ -45,7 +45,7 @@ describe("discoverModels", () => {
     try {
       const createRegistry = (agentDir: string) =>
         discoverModelsFromCapturedSources(
-          discoverAuthStorage(agentDir, { skipCredentials: true }),
+          discoverAuthStorageFacts(agentDir, { skipCredentials: true }).authStorage,
           {
             includePluginCatalogs: true,
             modelsJsonContents: "not valid json",
@@ -69,9 +69,11 @@ describe("discoverModels", () => {
   it("clears cached find results when the agent model registry refreshes", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-"));
     writeModelsJson(agentDir, "old-model");
-    const authStorage = discoverAuthStorage(agentDir, { skipCredentials: true });
+    const { authStorage } = discoverAuthStorageFacts(agentDir, { skipCredentials: true });
     const registry = discoverModels(authStorage, agentDir, { normalizeModels: false });
 
+    expect(registry.find("CUSTOM", "old-model")).toBeUndefined();
+    expect(registry.find("custom", "old-model")?.id).toBe("old-model");
     expect(registry.find("custom", "new-model")).toBeUndefined();
 
     writeModelsJson(agentDir, "new-model");
@@ -79,6 +81,7 @@ describe("discoverModels", () => {
 
     expect(registry.getAll().some((model) => model.id === "new-model")).toBe(true);
     expect(registry.find("custom", "new-model")?.id).toBe("new-model");
+    expect(registry.find("CUSTOM", "new-model")).toBeUndefined();
   });
 
   it("preserves authored OpenAI Completions while normalizing models.json entries", () => {
@@ -119,7 +122,7 @@ describe("discoverModels", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const authStorage = discoverAuthStorage(agentDir, { skipCredentials: true });
+    const { authStorage } = discoverAuthStorageFacts(agentDir, { skipCredentials: true });
     const registry = discoverModels(authStorage, agentDir, { config });
 
     expect(registry.find("openai", "gpt-5.5")?.api).toBe("openai-completions");

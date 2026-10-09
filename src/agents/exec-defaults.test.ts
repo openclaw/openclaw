@@ -1,19 +1,19 @@
 // Verifies exec host, sandbox, and approval-default resolution for embedded agents.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
 
-const execStoreDirs = useAutoCleanupTempDirTracker(afterEach);
+const execStoreDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-exec-");
 
 function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
   return {
     ...config,
-    agents: { ...config.agents, list: [{ id: "main", default: true }] },
+    agents: { ...config.agents, entries: { main: {} } },
   };
 }
 
@@ -47,7 +47,7 @@ describe("resolveExecDefaults", () => {
   ] as const)(
     "keeps required $sessionKey sandboxed and hides nodes despite configured host=$host",
     async ({ host, sessionKey }) => {
-      const storePath = path.join(execStoreDirs.make("openclaw-required-exec-"), "sessions.json");
+      const storePath = path.join(execStoreDirs.make(), "sessions.json");
       const sessionEntry = {
         sessionId: "guest-session",
         updatedAt: 1,
@@ -92,7 +92,7 @@ describe("resolveExecDefaults", () => {
   ])(
     "uses $agentId sandbox policy for global exec defaults",
     ({ agentId, effectiveHost, canExec }) => {
-      const storeRoot = execStoreDirs.make("openclaw-global-exec-");
+      const storeRoot = execStoreDirs.make();
       const cfg: OpenClawConfig = {
         session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
         agents: {
@@ -249,7 +249,7 @@ describe("resolveExecDefaults", () => {
               mode: "full",
             },
           },
-          agents: { list: [{ id: "agent-a", default: true }] },
+          agents: { entries: { "agent-a": {} } },
         },
         agentId: "agent-a",
         sandboxAvailable: false,
@@ -401,17 +401,15 @@ describe("resolveExecDefaults", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "agent-a",
-                default: true,
+            entries: {
+              "agent-a": {
                 tools: {
                   exec: {
                     mode: "full",
                   },
                 },
               },
-            ],
+            },
           },
         },
         agentId: "agent-a",
@@ -434,17 +432,15 @@ describe("resolveExecDefaults", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "agent-a",
-                default: true,
+            entries: {
+              "agent-a": {
                 tools: {
                   exec: {
                     mode: "allowlist",
                   },
                 },
               },
-            ],
+            },
           },
         },
         agentId: "agent-a",
@@ -457,7 +453,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("uses the configured default agent for an unscoped session", () => {
+  it("uses the explicit agent owner for an unscoped session", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -465,10 +461,11 @@ describe("resolveExecDefaults", () => {
           agents: {
             entries: {
               main: {},
-              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
+              ops: { tools: { exec: { security: "deny", ask: "always" } } },
             },
           },
         },
+        agentId: "ops",
         sandboxAvailable: false,
       }),
     ).toMatchObject({

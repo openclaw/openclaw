@@ -23,6 +23,7 @@ import type {
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2ePrebuiltAssets?: ControlUiE2ePrebuiltAssets;
+    controlUiE2eBuildRoot?: string;
     controlUiE2ePrebuiltGeneration: string;
   }
 }
@@ -77,8 +78,12 @@ export function assertPrebuiltUiE2eRuntime(repoRoot: string): string {
     fail(runtime.reason);
   }
   const uiRoot = path.join(distRoot, "control-ui");
-  if (inspectControlUiRootAssets(uiRoot).kind !== "ready") {
-    fail("canonical Control UI assets are not ready");
+  const { buildId } = normalizeControlUiBuildInfo(
+    JSON.parse(fs.readFileSync(path.join(distRoot, "build-info.json"), "utf8")),
+  );
+  const health = inspectControlUiRootAssets(uiRoot, buildId);
+  if (health.kind !== "ready") {
+    fail(`canonical Control UI assets are not ready (${health.kind})`);
   }
   const digest = createHash("sha256").update(head);
   for (const file of [

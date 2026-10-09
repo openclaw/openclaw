@@ -1,25 +1,44 @@
-// Memory Wiki plugin module: shared guarded write for vault pages.
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
-// A concurrent atomic rewrite (write-temp + rename) of the same vault page by
-// the memory bridge re-export makes fs-safe's opened-fd identity check fail with
-// `path-mismatch` (see @openclaw/fs-safe opened-realpath): the file we opened is
-// replaced under us mid-operation. It is transient (resolves sub-ms) and benign,
-// so a short retry closes the window. Symlink/path-alias swaps and persistent
-// guard failures (e.g. a directory collision) carry their own code and still
-// hard-fail unchanged below.
+// Atomic replacement can invalidate fs-safe's opened-file identity check.
+// Retry only that race; symlink and path-alias failures remain fatal.
 const isConcurrentRewriteRace = (error: unknown): boolean =>
   error instanceof FsSafeError && error.code === "path-mismatch";
 
-/**
- * Write `content` to a vault page, breaking an accidental hardlink first, and map
- * fs-safe guard failures to a labeled error. A transient concurrent-rewrite race
- * is retried briefly; on exhaustion (or any other guard failure) the error
- * propagates so the caller's safety contract is unchanged.
- */
+export async function readWikiPageStat(vault: VaultRoot, pagePath: string) {
+  return vault.stat(pagePath).catch((error: unknown) => {
+    if (
+      error instanceof FsSafeError &&
+      (error.code === "not-found" || error.code === "path-alias")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+}
+
+export async function readExistingWikiPage(
+  read: () => Promise<string>,
+  emptyOn: (error: unknown) => boolean,
+): Promise<string> {
+  try {
+    return await read();
+  } catch {
+    // Retry before classifying absence so a transient read cannot erase Notes.
+    try {
+      return await read();
+    } catch (error) {
+      if (emptyOn(error)) {
+        return "";
+      }
+      throw error;
+    }
+  }
+}
+
 export async function writeGuardedVaultPage(params: {
   vault: VaultRoot;
   pagePath: string;

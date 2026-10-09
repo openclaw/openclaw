@@ -3,12 +3,11 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
-import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./context-file.js";
+export { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -156,19 +155,11 @@ export function resolveBootstrapTotalMaxChars(
   );
 }
 
-function isAgentsBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
-}
-
-function isUserBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase();
-}
-
 function isPolicyDigestCandidate(line: string): boolean {
-  if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
-    return true;
-  }
-  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
+  return (
+    /^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line) ||
+    AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line)
+  );
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -218,7 +209,7 @@ function buildAgentsPolicyDigest(
   };
 }
 
-function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBootstrapResult {
+function trimAgentsBootstrapContent(trimmed: string, maxChars: number): string {
   let headChars = Math.floor(maxChars * AGENTS_POLICY_HEAD_RATIO);
   let tailChars = Math.floor(maxChars * AGENTS_POLICY_TAIL_RATIO);
   let digestBudget = Math.floor(maxChars * AGENTS_POLICY_DIGEST_RATIO);
@@ -275,12 +266,7 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
     rendered = render();
   }
 
-  return {
-    content: rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered,
-    truncated: true,
-    maxChars,
-    originalLength: trimmed.length,
-  };
+  return rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered;
 }
 
 function trimBootstrapContent(
@@ -289,16 +275,17 @@ function trimBootstrapContent(
   maxChars: number,
 ): TrimBootstrapResult {
   const trimmed = content.trimEnd();
+  const finish = (value: string, truncated = true): TrimBootstrapResult => ({
+    content: value,
+    truncated,
+    maxChars,
+    originalLength: trimmed.length,
+  });
   if (trimmed.length <= maxChars) {
-    return {
-      content: trimmed,
-      truncated: false,
-      maxChars,
-      originalLength: trimmed.length,
-    };
+    return finish(trimmed, false);
   }
-  if (isAgentsBootstrapFile(fileName)) {
-    return trimAgentsBootstrapContent(trimmed, maxChars);
+  if (fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()) {
+    return finish(trimAgentsBootstrapContent(trimmed, maxChars));
   }
 
   const markerTemplate = (headChars: number, tailChars: number) =>
@@ -316,14 +303,12 @@ function trimBootstrapContent(
     [head, markerContent, tail]
       .filter((part) => part.length > 0)
       .join(markerContent.includes("\n") ? "\n" : "");
-  const resolveMarkerTemplate = () => {
-    const fullMarker = markerTemplate(0, 0);
-    const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
-    return fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+  const fullMarker = markerTemplate(0, 0);
+  const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
+  const resolvedMarkerTemplate =
+    fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
       ? markerTemplate
       : compactMarkerTemplate;
-  };
-  const resolvedMarkerTemplate = resolveMarkerTemplate();
   let headChars = 0;
   let tailChars = 0;
   let marker = resolvedMarkerTemplate(headChars, tailChars);
@@ -376,30 +361,20 @@ function trimBootstrapContent(
     contentWithMarker.length > maxChars
       ? truncateUtf16Safe(contentWithMarker, maxChars)
       : contentWithMarker;
-  return {
-    content: boundedContent,
-    truncated: true,
-    maxChars,
-    originalLength: trimmed.length,
-  };
+  return finish(boundedContent);
 }
 
 function clampToBudget(content: string, budget: number): string {
-  if (budget <= 0) {
-    return "";
-  }
   if (content.length <= budget) {
     return content;
   }
-  if (budget <= 3) {
-    return truncateUtf16Safe(content, budget);
-  }
-  const safe = budget - 1;
-  return `${truncateUtf16Safe(content, safe)}…`;
+  return budget <= 3
+    ? truncateUtf16Safe(content, budget)
+    : `${truncateUtf16Safe(content, budget - 1)}…`;
 }
 
 export function buildBootstrapContextFiles(
-  files: WorkspaceBootstrapFile[],
+  files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
   opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
@@ -420,17 +395,21 @@ export function buildBootstrapContextFiles(
       );
       continue;
     }
+    const appendContext = (content: string, includePersonalUser = false) => {
+      remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
+      result.push({
+        path: pathValue,
+        content,
+        ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
+      });
+    };
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
-      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
-      result.push({
-        path: pathValue,
-        content: cappedMissingText,
-      });
+      appendContext(cappedMissingText);
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
@@ -439,9 +418,10 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
-    const fileBudget = isUserBootstrapFile(file.name)
-      ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
-      : maxChars;
+    const fileBudget =
+      file.name?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase()
+        ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+        : maxChars;
     const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     // Personal instructions are indivisible: never turn a cut-off directive into new policy.
     if (file.personalUser && (file.content ?? "").trimEnd().length > fileMaxChars) {
@@ -458,16 +438,23 @@ export function buildBootstrapContextFiles(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
-    remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
-    result.push({
-      path: pathValue,
-      content: contentWithinBudget,
-      ...(file.personalUser ? { personalUser: file.personalUser } : {}),
-    });
+    appendContext(contentWithinBudget, true);
   }
   return result;
 }
 
-export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {
-  return sanitizeGoogleAssistantFirstOrdering(messages);
+/** Builds bounded context files from already-resolved bootstrap file metadata. */
+export function buildBootstrapContextForFiles(
+  bootstrapFiles: WorkspaceBootstrapFile[],
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string | null;
+    warn?: (message: string) => void;
+  },
+): EmbeddedContextFile[] {
+  return buildBootstrapContextFiles(bootstrapFiles, {
+    maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    warn: params.warn,
+  });
 }

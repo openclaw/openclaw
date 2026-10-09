@@ -158,7 +158,7 @@ describe("session connection hydration", () => {
     queuedList.resolve(queuedResult);
     await queuedRefresh;
     expect(sessions.state.agentId).toBe("other");
-    expect(sessions.state.result).toBe(queuedResult);
+    expect(sessions.state.result).toStrictEqual(queuedResult);
     sessions.dispose();
   });
 
@@ -212,7 +212,7 @@ describe("session connection hydration", () => {
       ),
     );
     await waitForFast(() => expect(sessions.state.agentId).toBe("roboclaw"));
-    expect(sessions.state.result).toBe(result);
+    expect(sessions.state.result).toStrictEqual(result);
     sessions.dispose();
   });
 
@@ -274,7 +274,7 @@ describe("session connection hydration", () => {
 
       if (agentId === "work") {
         resolveList(result);
-        await waitForFast(() => expect(sessions.state.result).toBe(result));
+        await waitForFast(() => expect(sessions.state.result).toStrictEqual(result));
         // A foreground query can select a roster independently of the current route.
         snapshot = { ...snapshot, sessionKey: "global" };
         await sessions.refresh({ agentId, search: "selected", force: true });
@@ -372,7 +372,7 @@ describe("session connection hydration", () => {
       connect();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(sessions.state.result).toBe(result);
+      expect(sessions.state.result).toStrictEqual(result);
       expect(sessions.state.error).toBe("session observer temporarily unavailable");
       expect(subscriptionCalls).toBe(1);
       expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
@@ -387,7 +387,7 @@ describe("session connection hydration", () => {
 
       expect(subscriptionCalls).toBe(2);
       expect(sessions.state.error).toBeNull();
-      expect(sessions.state.result).toBe(recoveredResult);
+      expect(sessions.state.result).toStrictEqual(recoveredResult);
       expect(listCalls).toBe(2);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({

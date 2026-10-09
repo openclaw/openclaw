@@ -6,12 +6,6 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
-export {
-  buildRemoteCommand,
-  buildRemoteWorkdirValidationCommand,
-  buildValidatedExecRemoteCommand,
-} from "openclaw/plugin-sdk/sandbox";
-
 export type OpenShellExecContext = {
   config: ResolvedOpenShellPluginConfig;
   sandboxName: string;

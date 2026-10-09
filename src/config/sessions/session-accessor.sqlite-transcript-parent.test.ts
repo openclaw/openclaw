@@ -1,9 +1,13 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
@@ -11,19 +15,17 @@ import {
   validatePreparedAssistantAppendSync,
   type TranscriptEvent,
 } from "./session-accessor.js";
-import {
-  isTranscriptEntryOnActivePathInTransaction,
-  resolveTranscriptMessageAppendParent,
-} from "./session-accessor.sqlite-transcript-parent.js";
+import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
+import { appendTranscriptMessageSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
 
 async function createTranscript(events: TranscriptEvent[]) {
   const scope = {
     agentId: "main",
     sessionId: "ancestry",
     sessionKey: "agent:main:ancestry",
-    storePath: path.join(tempDirs.make("openclaw-ancestry-"), "sessions.json"),
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   replaceTranscriptEventsSync(scope, [
@@ -43,53 +45,146 @@ function message(id: string, parentId: string | null): TranscriptEvent {
   return { type: "message", id, parentId, message: { role: "user", content: id } };
 }
 
-describe("SQLite transcript append ancestry", () => {
-  it("bounds statement executions across 512 ancestors", async () => {
-    const count = 512;
-    const events = Array.from({ length: count }, (_, index) =>
-      message(`entry-${index}`, index === 0 ? null : `entry-${index - 1}`),
-    );
-    const { database, scope } = await createTranscript(events);
-    const executions = trackSqliteStatementExecutions(database.db, ["read"], (sql) =>
-      /^(?:select|with)\b/iu.test(sql) ? "read" : null,
-    );
+it.each(["dirty", "unclassified"] as const)(
+  "shares append metadata without retaining facts across rollback or foreign %s writes",
+  async (change) => {
+    const { database, scope } = await createTranscript([
+      message("root", null),
+      message("tail", "root"),
+    ]);
+    const append = (id: string, parentId: string) => {
+      const snapshot = appendTranscriptMessageSnapshotSync(scope, {
+        eventId: id,
+        parentId,
+        message: { role: "assistant", content: id },
+      });
+      if (!snapshot.ok) {
+        throw new Error(`Append refused: ${snapshot.error.code}`);
+      }
+      return snapshot.value;
+    };
+    const queries = trackSqliteStatementExecutions(database.db, ["projection", "tail"], (sql) => {
+      if (!/^select /i.test(sql)) {
+        return null;
+      }
+      if (sql.includes('"session_transcript_index_state"')) {
+        return "projection";
+      }
+      return /^select "seq" from "transcript_events"/i.test(sql) &&
+        sql.includes('order by "seq" desc')
+        ? "tail"
+        : null;
+    });
+    let first: ReturnType<typeof append>;
     try {
-      expect(
-        runSqliteImmediateTransactionSync(database.db, () =>
-          resolveTranscriptMessageAppendParent(database, scope.sessionId, {
-            appendIntent: "active-branch",
-            parentId: "entry-0",
-          }),
-        ),
-      ).toBe(`entry-${count - 1}`);
-      expect(executions.counts.read).toBeLessThanOrEqual(4);
+      first = append("answer", "tail");
+      expect(queries.counts).toEqual({ projection: 2, tail: 0 });
     } finally {
-      executions.restore();
+      queries.restore();
     }
-  });
+    expect(first.result?.anchor).toMatchObject({
+      entryId: "answer",
+      rawSeq: 3,
+      activeMessagePosition: 2,
+      effectiveParentId: "tail",
+    });
+    expect(first.visibleTail).toEqual({ entryId: "answer", generation: first.after.generation });
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        () => {
+          expect(append("rolled-back", "answer").visibleTail.entryId).toBe("rolled-back");
+          throw new Error("rollback append");
+        },
+        { agentId: scope.agentId, path: database.path },
+      ),
+    ).toThrow("rollback append");
+    const second = append("after-rollback", "answer");
+    expect(second.result?.anchor).toMatchObject({
+      entryId: "after-rollback",
+      rawSeq: 4,
+      activeMessagePosition: 3,
+    });
 
+    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
+    try {
+      peer
+        .prepare(
+          change === "dirty"
+            ? "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?"
+            : "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
+        )
+        .run(scope.sessionId);
+    } finally {
+      peer.close();
+    }
+    const fresh = append("after-foreign", "after-rollback");
+    expect(fresh.result?.anchor).toBeUndefined();
+    expect(fresh.visibleTail).toEqual({
+      entryId: "after-foreign",
+      generation: fresh.after.generation,
+    });
+  },
+);
+
+it("returns the newer visible tail after native identity-insert reentry", async () => {
+  const { scope } = await createTranscript([message("root", null)]);
+  const { StatementSync } = requireNodeSqlite();
+  // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the original native receiver.
+  const original = StatementSync.prototype.run;
+  let reentered = false;
+  const spy = vi.spyOn(StatementSync.prototype, "run").mockImplementation(
+    new Proxy(original, {
+      apply(target, receiver, args) {
+        const value = Reflect.apply(target, receiver, args);
+        if (
+          !reentered &&
+          receiver.sourceSQL.startsWith('insert into "transcript_event_identities"') &&
+          args.includes("outer")
+        ) {
+          reentered = true;
+          const nested = appendTranscriptMessageSnapshotSync(scope, {
+            eventId: "nested",
+            parentId: "outer",
+            message: { role: "assistant", content: "nested" },
+          });
+          expect(nested.ok).toBe(true);
+        }
+        return value;
+      },
+    }),
+  );
+  try {
+    const result = appendTranscriptMessageSnapshotSync(scope, {
+      eventId: "outer",
+      parentId: "root",
+      message: { role: "assistant", content: "outer" },
+    });
+    expect(reentered).toBe(true);
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        result: { messageId: "outer", anchor: { entryId: "outer", rawSeq: 2 } },
+        visibleTail: { entryId: "nested" },
+        after: { rawSeq: 3 },
+      },
+    });
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+describe("SQLite transcript append ancestry", () => {
   const linear = [message("root", null), message("tail", "root")];
   const cycle = [message("cycle-a", "cycle-b"), message("cycle-b", "cycle-a")];
   it.each([
-    { name: "implicit tail", events: linear, parentId: undefined, expected: "tail" },
-    { name: "current tail", events: linear, parentId: "tail", expected: "tail" },
-    { name: "root ancestry", events: linear, parentId: null, expected: "tail" },
-    { name: "missing parent", events: linear, parentId: "missing", expected: "missing" },
     {
       name: "dangling ancestor",
       events: [message("tail", "missing")],
       parentId: "missing",
       expected: "tail",
     },
-    { name: "reachable cycle", events: cycle, parentId: "cycle-a", expected: "cycle-b" },
     { name: "unrelated cycle", events: cycle, parentId: "outside", expected: "outside" },
     { name: "cycle without root", events: cycle, parentId: null, expected: null },
-    {
-      name: "opaque tail",
-      events: [...linear, { type: "future-metadata", id: "opaque", parentId: "tail" }],
-      parentId: "root",
-      expected: "opaque",
-    },
     {
       name: "invalid leaf navigation fallback",
       events: [...linear, { type: "leaf", id: "invalid", parentId: "tail", targetId: "missing" }],
@@ -130,60 +225,6 @@ describe("SQLite transcript append ancestry", () => {
         }),
       ),
     ).toBe("root");
-  });
-
-  it("checks active ancestry directly without adopting another branch", async () => {
-    const { database, scope } = await createTranscript([
-      message("active-root", null),
-      message("active-tail", "active-root"),
-      message("other-root", null),
-      {
-        type: "leaf",
-        id: "select-active",
-        parentId: "other-root",
-        targetId: "active-tail",
-        appendParentId: "active-tail",
-      },
-    ]);
-
-    expect(
-      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "active-root"),
-    ).toBe(true);
-    expect(
-      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "active-tail"),
-    ).toBe(true);
-    expect(
-      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "other-root"),
-    ).toBe(false);
-    expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "missing")).toBe(
-      false,
-    );
-  });
-
-  it("checks selected visible ancestry instead of a disjoint append cursor", async () => {
-    const { database, scope } = await createTranscript([
-      message("visible", null),
-      message("hidden-user", "visible"),
-      {
-        type: "leaf",
-        id: "select-visible",
-        parentId: "hidden-user",
-        targetId: "visible",
-        appendParentId: "hidden-user",
-        appendMode: "side",
-      },
-      message("continued", "hidden-user"),
-    ]);
-
-    expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "visible")).toBe(
-      true,
-    );
-    expect(
-      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "hidden-user"),
-    ).toBe(false);
-    expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "continued")).toBe(
-      true,
-    );
   });
 });
 

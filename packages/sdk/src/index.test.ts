@@ -1,58 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { EventHub, OpenClaw, normalizeGatewayEvent } from "./index.js";
-import type {
-  GatewayEvent,
-  GatewayRequestOptions,
-  OpenClawEvent,
-  OpenClawTransport,
-  RunResult,
-} from "./types.js";
-
-type RequestCall = {
-  method: string;
-  params?: unknown;
-  options?: GatewayRequestOptions;
-};
-
-type FakeResponseValue = null | boolean | number | string | Record<string, unknown> | unknown[];
-type FakeResponseHandler = (
-  params: unknown,
-  options: GatewayRequestOptions | undefined,
-  transport: FakeTransport,
-) => Promise<FakeResponseValue> | FakeResponseValue;
-type FakeResponse = FakeResponseValue | FakeResponseHandler;
-
-class FakeTransport implements OpenClawTransport {
-  readonly calls: RequestCall[] = [];
-  private readonly eventHub = new EventHub<GatewayEvent>({ replayLimit: 100 });
-
-  constructor(private readonly responses: Record<string, FakeResponse>) {}
-
-  async request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: GatewayRequestOptions,
-  ): Promise<T> {
-    this.calls.push({ method, params, options });
-    const response = this.responses[method];
-    if (typeof response === "function") {
-      return (await response(params, options, this)) as T;
-    }
-    return response as T;
-  }
-
-  events(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
-    return this.eventHub.stream(filter, { replay: true });
-  }
-
-  emit(event: GatewayEvent): void {
-    this.eventHub.publish(event);
-  }
-
-  close(): void {
-    this.eventHub.close();
-  }
-}
+import {
+  FakeTransport,
+  createAgentEvent,
+  createClientFixture,
+  observeGatewaySequence,
+  type RequestCall,
+} from "./client.test-support.js";
+import { OpenClaw, normalizeGatewayEvent } from "./index.js";
+import type { GatewayEvent, OpenClawEvent, OpenClawTransport, RunResult } from "./types.js";
 
 class DelayedConnectTransport extends FakeTransport {
   connectCalls = 0;
@@ -119,23 +74,10 @@ function requireTransportCall(calls: readonly RequestCall[], index: number): Req
   return call;
 }
 
-function createClientFixture(responses: Record<string, FakeResponse> = {}) {
-  const transport = new FakeTransport(responses);
-  return { transport, oc: new OpenClaw({ transport }) };
-}
-
-async function observeGatewaySequence(oc: OpenClaw, seq: number): Promise<OpenClawEvent> {
-  for await (const event of oc.events((eventLocal) => eventLocal.raw?.seq === seq)) {
-    return event;
-  }
-  throw new Error(`event stream ended before sequence ${seq}`);
-}
-
 function createListFixture() {
   return createClientFixture({
     "agents.list": { agents: [] },
     "sessions.list": { sessions: [] },
-    "tasks.list": { tasks: [] },
     "models.list": { models: [] },
     "tools.catalog": { tools: [] },
     "exec.approval.list": { approvals: [] },
@@ -146,49 +88,6 @@ function createListFixture() {
 function waitForSnapshot(runId: string, fields: Record<string, unknown> = {}) {
   const snapshot = { status: "timeout", runId, ...fields };
   return createClientFixture({ "agent.wait": snapshot }).oc.runs.wait(runId);
-}
-
-function createAgentEvent(
-  runId: string,
-  seq: number,
-  ts: number,
-  stream: string,
-  data: Record<string, unknown>,
-): GatewayEvent {
-  return { event: "agent", seq, payload: { runId, stream, ts, data } };
-}
-
-function createChatEvent(
-  runId: string,
-  sessionKey: string,
-  seq: number,
-  state: "delta" | "final",
-  text: string,
-  timestamp: number,
-  options: { deltaText?: string; replace?: true } = {},
-): GatewayEvent {
-  return {
-    event: "chat",
-    seq,
-    payload: {
-      runId,
-      sessionKey,
-      state,
-      ...options,
-      message: { role: "assistant", content: [{ type: "text", text }], timestamp },
-    },
-  };
-}
-
-function createRunEventFixture(runId: string, sessionKey: string, events: readonly GatewayEvent[]) {
-  return createClientFixture({
-    agent: (_params, _options, transport) => {
-      for (const event of events) {
-        transport.emit(event);
-      }
-      return { status: "accepted", runId, sessionKey };
-    },
-  });
 }
 
 describe("OpenClaw SDK", () => {
@@ -489,13 +388,13 @@ describe("OpenClaw SDK", () => {
     const { transport, oc } = createClientFixture();
 
     await expect(oc.artifacts.list(undefined as never)).rejects.toThrow(
-      "oc.artifacts.list requires one of sessionKey, runId, or taskId",
+      "oc.artifacts.list requires sessionKey or runId",
     );
     await expect(oc.artifacts.get("artifact_123", undefined as never)).rejects.toThrow(
-      "oc.artifacts.get requires one of sessionKey, runId, or taskId",
+      "oc.artifacts.get requires sessionKey or runId",
     );
     await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
-      "oc.artifacts.download requires one of sessionKey, runId, or taskId",
+      "oc.artifacts.download requires sessionKey or runId",
     );
     expect(transport.calls).toStrictEqual([]);
   });
@@ -525,67 +424,6 @@ describe("OpenClaw SDK", () => {
           confirm: false,
           idempotencyKey: "tools-invoke-test",
         },
-        options: undefined,
-      },
-    ]);
-  });
-
-  it("calls task ledger Gateway methods", async () => {
-    const task = {
-      id: "task_123",
-      status: "running",
-      title: "Investigate issue",
-      lastActivity: "Running focused tests",
-      diffStat: { files: 2, added: 12, removed: 3 },
-    };
-    const listedTask = {
-      ...task,
-      runId: "run_123",
-      sessionKey: "agent:main:main",
-      lastActivity: "Editing the registry",
-    };
-    const { transport, oc } = createClientFixture({
-      "tasks.list": { tasks: [structuredClone(listedTask)] },
-      "tasks.get": { task: structuredClone(task) },
-      "tasks.cancel": {
-        found: true,
-        cancelled: true,
-        task: { id: "task_123", status: "cancelled" },
-      },
-    });
-    const taskList = await oc.tasks.list({
-      status: "running",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sortBy: "endedAt",
-    });
-    expect(taskList.tasks).toEqual([listedTask]);
-    const taskGet = await oc.tasks.get("task_123");
-    expect(taskGet.task).toEqual(task);
-    const taskCancel = await oc.tasks.cancel("task_123", { reason: "user stopped task" });
-    expect(taskCancel.found).toBe(true);
-    expect(taskCancel.cancelled).toBe(true);
-    expect(taskCancel.task).toEqual({ id: "task_123", status: "cancelled" });
-
-    expect(transport.calls).toEqual([
-      {
-        method: "tasks.list",
-        params: {
-          status: "running",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sortBy: "endedAt",
-        },
-        options: undefined,
-      },
-      {
-        method: "tasks.get",
-        params: { taskId: "task_123" },
-        options: undefined,
-      },
-      {
-        method: "tasks.cancel",
-        params: { taskId: "task_123", reason: "user stopped task" },
         options: undefined,
       },
     ]);
@@ -653,7 +491,6 @@ describe("OpenClaw SDK", () => {
     const { transport, oc } = createListFixture();
     await expect(oc.agents.list()).resolves.toEqual({ agents: [] });
     await expect(oc.sessions.list()).resolves.toEqual({ sessions: [] });
-    await expect(oc.tasks.list()).resolves.toEqual({ tasks: [] });
     await expect(oc.models.list()).resolves.toEqual({ models: [] });
     await expect(oc.tools.list()).resolves.toEqual({ tools: [] });
     await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
@@ -662,7 +499,6 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([
       { method: "agents.list", params: {}, options: undefined },
       { method: "sessions.list", params: {}, options: undefined },
-      { method: "tasks.list", params: {}, options: undefined },
       { method: "models.list", params: {}, options: undefined },
       { method: "tools.catalog", params: {}, options: undefined },
       { method: "exec.approval.list", params: {}, options: undefined },
@@ -675,7 +511,6 @@ describe("OpenClaw SDK", () => {
     const { transport, oc } = createListFixture();
     await (oc.agents.list as unknown as ListMethod).call(oc.agents, null);
     await (oc.sessions.list as unknown as ListMethod).call(oc.sessions, null);
-    await (oc.tasks.list as unknown as ListMethod).call(oc.tasks, null);
     await oc.models.list(null);
     await oc.tools.list(null);
     await oc.approvals.list(null);
@@ -684,7 +519,6 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([
       { method: "agents.list", params: null, options: undefined },
       { method: "sessions.list", params: null, options: undefined },
-      { method: "tasks.list", params: null, options: undefined },
       { method: "models.list", params: null, options: undefined },
       { method: "tools.catalog", params: null, options: undefined },
       { method: "exec.approval.list", params: null, options: undefined },
@@ -861,155 +695,6 @@ describe("OpenClaw SDK", () => {
       }
     },
   );
-
-  it("does not surface raw chat projection events in per-run streams", async () => {
-    const ts = 1_777_000_000_100;
-    const { oc } = createRunEventFixture("run_chat_projection", "chat-projection", [
-      createAgentEvent("run_chat_projection", 1, ts, "lifecycle", { phase: "start" }),
-      createAgentEvent("run_chat_projection", 2, ts + 1, "assistant", { delta: "hello" }),
-      createChatEvent("run_chat_projection", "chat-projection", 3, "delta", "hello", ts + 2, {
-        deltaText: "hello",
-      }),
-      createAgentEvent("run_chat_projection", 4, ts + 3, "lifecycle", { phase: "end" }),
-      createChatEvent("run_chat_projection", "chat-projection", 5, "final", "hello", ts + 4),
-    ]);
-
-    const run = await oc.runs.create({
-      input: "stream with chat projection",
-      idempotencyKey: "chat-projection-events",
-      sessionKey: "chat-projection",
-    });
-    const seen: OpenClawEvent[] = [];
-
-    for await (const event of run.events()) {
-      seen.push(event);
-      if (event.type === "run.completed") {
-        break;
-      }
-    }
-
-    expect(seen.map((event) => event.type)).toEqual([
-      "run.started",
-      "assistant.delta",
-      "run.completed",
-    ]);
-    expect(seen.map((event) => event.raw?.event)).toEqual(["agent", "agent", "agent"]);
-  });
-
-  it("normalizes chat-only projection events in per-run streams", async () => {
-    const ts = 1_777_000_000_200;
-    const { oc } = createRunEventFixture("run_chat_only", "chat-only", [
-      createChatEvent("run_chat_only", "chat-only", 1, "delta", "hello", ts, {
-        deltaText: "hello",
-      }),
-      createChatEvent("run_chat_only", "chat-only", 2, "delta", "hello again", ts + 1, {
-        deltaText: " provided",
-      }),
-      createChatEvent("run_chat_only", "chat-only", 3, "delta", "reset", ts + 2, {
-        deltaText: "reset",
-        replace: true,
-      }),
-      createChatEvent("run_chat_only", "chat-only", 4, "final", "reset", ts + 3),
-      {
-        event: "custom.debug",
-        seq: 5,
-        payload: { runId: "run_chat_only", ts: ts + 4, data: { ok: true } },
-      },
-    ]);
-
-    const run = await oc.runs.create({
-      input: "stream with chat-only projection",
-      idempotencyKey: "chat-only-events",
-      sessionKey: "chat-only",
-    });
-    const iterator = run.events()[Symbol.asyncIterator]();
-
-    try {
-      for (const [type, data] of [
-        ["assistant.delta", { text: "hello", delta: "hello" }],
-        ["assistant.delta", { text: "hello again", delta: " provided" }],
-        ["assistant.delta", { text: "reset", delta: "reset", replace: true }],
-        ["run.completed", { phase: "end", outputText: "reset" }],
-      ] as const) {
-        const next = await iterator.next();
-        expect(next.done).toBe(false);
-        expect(next.value?.type).toBe(type);
-        expect(next.value?.data).toEqual(data);
-        expect(next.value?.raw?.event).toBe("chat");
-      }
-    } finally {
-      await iterator.return?.();
-    }
-  });
-
-  it("replays the chat tail before queued live events and drains it after close", async () => {
-    const { transport, oc } = createClientFixture();
-    const runId = "run_chat_delta_text_replay";
-    let text = "";
-    let iterator: AsyncIterator<OpenClawEvent> | undefined;
-
-    try {
-      await oc.connect();
-      const observedLast = observeGatewaySequence(oc, 501);
-
-      for (let index = 0; index <= 500; index += 1) {
-        const deltaText = index === 0 ? "hello" : ` ${index}`;
-        text += deltaText;
-        transport.emit(
-          createChatEvent(
-            runId,
-            "chat-delta-text-replay",
-            index + 1,
-            "delta",
-            text,
-            1_777_000_000_300 + index,
-            { deltaText },
-          ),
-        );
-      }
-
-      await observedLast;
-      const run = await oc.runs.get(runId);
-      iterator = run.events()[Symbol.asyncIterator]();
-      const first = await iterator.next();
-      expect(first.done).toBe(false);
-      if (first.done !== false) {
-        throw new Error("expected first replayed chat projection event");
-      }
-      expect(first.value.type).toBe("assistant.delta");
-      expect(first.value.data).toEqual({ text: "hello 1", delta: "hello 1" });
-
-      const observedLive = observeGatewaySequence(oc, 502);
-      text += " 501";
-      transport.emit(
-        createChatEvent(runId, "chat-delta-text-replay", 502, "delta", text, 1_777_000_000_801, {
-          deltaText: " 501",
-        }),
-      );
-      await observedLive;
-      await oc.close();
-
-      const seen = [first.value];
-      while (true) {
-        const next = await iterator.next();
-        if (next.done) {
-          break;
-        }
-        seen.push(next.value);
-      }
-      expect(seen.map((event) => event.raw?.seq)).toEqual(
-        Array.from({ length: 501 }, (_, index) => index + 2),
-      );
-      expect(seen.at(-1)?.data).toEqual({ text, delta: " 501" });
-      await expect(run.events()[Symbol.asyncIterator]().next()).rejects.toThrow(
-        "OpenClaw SDK client is closed",
-      );
-      await expect(oc.connect()).rejects.toThrow("OpenClaw SDK client is closed");
-    } finally {
-      await iterator?.return?.();
-      await oc.close();
-    }
-  });
 
   it("retains a quiet run for independent filtered consumers while another run is busy", async () => {
     const { transport, oc } = createClientFixture();
@@ -1220,4 +905,3 @@ describe("OpenClaw SDK", () => {
     check("run.timed_out", 14, { phase: "end", stopReason: "timeout" });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

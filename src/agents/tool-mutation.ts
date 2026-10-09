@@ -82,6 +82,7 @@ const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "s
 const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
 const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
+const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
   "cat",
@@ -356,6 +357,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return action !== "list" && action !== "get";
     case "nodes":
       return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
+    case "presence":
+      return action != null && !PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
     default: {
       if (
         isAutomationsToolName(normalized) ||
@@ -409,6 +412,8 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
       return action === "list" || action === "get";
     case "nodes":
       return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
+    case "presence":
+      return action == null || PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
     default: {
       if (isAutomationsToolName(normalized) || normalized === "canvas") {
         return action != null && READ_ONLY_ACTIONS.has(action);

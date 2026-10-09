@@ -10,11 +10,15 @@ vi.mock("./update-command-database-context.js", () => ({
   inspectUpdateDatabaseContexts: boundary.contexts,
 }));
 vi.mock("./update-command-managed-context.js", () => ({
-  revalidateUpdateDatabaseContext: async () => {},
+  revalidateUpdateDatabaseContext: async (
+    context: Parameters<
+      typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext
+    >[0],
+  ) => context,
   captureOwnedManagedUpdateContext: async () => undefined,
 }));
-vi.mock("./update-command-service-plan.js", async (original) => ({
-  ...(await original<typeof import("./update-command-service-plan.js")>()),
+vi.mock("./update-command-runtime-preflight.js", async (original) => ({
+  ...(await original<typeof import("./update-command-runtime-preflight.js")>()),
   resolvePackageRuntimePreflight: async () => ({
     ok: true,
     value: { nodeRunner: "/target/node" },
@@ -78,7 +82,6 @@ it.each([
       root,
       managedServiceRoot,
       managedServiceRootRedirect: null,
-      packageInstallSpec: "openclaw@2026.9.5",
       opts: { yes: true, json: true },
       result: {
         status: "skipped",
@@ -103,8 +106,8 @@ it.each([
     });
 
     expect(refuseUpdate).not.toHaveBeenCalled();
-    expect(boundary.maintenance).toHaveBeenCalledTimes(foreground ? 0 : 2);
-    for (const [index, phase] of (foreground ? [] : ["inspect", "refresh"]).entries()) {
+    expect(boundary.maintenance).toHaveBeenCalledTimes(foreground ? 0 : 1);
+    for (const [index, phase] of (foreground ? [] : ["refresh"]).entries()) {
       expect(boundary.maintenance).toHaveBeenNthCalledWith(
         index + 1,
         expect.objectContaining({

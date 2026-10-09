@@ -87,3 +87,16 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
     await release();
   }
 }
+
+export const privateHarnessParamCases = [
+  {
+    field: "runtimePluginToolGrant",
+    value: { pluginId: "grant-owner", toolNames: ["optional_tool"] },
+  },
+  { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
+  { field: "compactionCountOwner", value: "caller" },
+  { field: "completionCheck", value: { unfinishedPlan: true, checked: false } },
+  { field: "preparedSessionTarget", value: { target: {}, assertCurrent: () => undefined } },
+  { field: "onContextAccountingEvent", value: () => undefined },
+  { field: "onCompactionRequestBudget", value: () => undefined },
+] as const;

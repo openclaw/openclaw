@@ -1,4 +1,4 @@
-// Nextcloud Talk tests cover pre-authentication webhook in-flight admission behavior.
+import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -34,46 +34,13 @@ const WEBHOOK_PATH = "/nextcloud-talk-webhook-preauth-inflight";
 const IN_FLIGHT_LIMIT = 64;
 const PROMISED_BODY_BYTES = 65536;
 
-function openIncompleteWebhookRequest(params: {
-  host: string;
-  port: number;
-  sockets: Socket[];
-}): Promise<Socket> {
-  return new Promise((resolve, reject) => {
-    const socket = createConnection({ host: params.host, port: params.port });
-    params.sockets.push(socket);
-    socket.once("error", reject);
-    socket.once("connect", () => {
-      // Promise a body larger than one TCP segment but send only one byte, so the
-      // pre-auth read stays open without completing signature verification.
-      socket.write(
-        [
-          `POST ${WEBHOOK_PATH} HTTP/1.1`,
-          `Host: ${params.host}:${params.port}`,
-          "Content-Type: application/json",
-          `Content-Length: ${PROMISED_BODY_BYTES}`,
-          "X-Nextcloud-Talk-Signature: invalid-but-present",
-          "X-Nextcloud-Talk-Random: attacker-controlled",
-          "X-Nextcloud-Talk-Backend: https://nextcloud.example",
-          "Connection: close",
-          "",
-          "{",
-        ].join("\r\n"),
-      );
-      resolve(socket);
-    });
+async function readEntireResponse(socket: Socket): Promise<string> {
+  let data = "";
+  socket.on("data", (chunk) => {
+    data += chunk.toString();
   });
-}
-
-function readEntireResponse(socket: Socket): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    socket.on("data", (chunk) => {
-      data += chunk.toString();
-    });
-    socket.once("error", reject);
-    socket.once("close", () => resolve(data));
-  });
+  await once(socket, "close");
+  return data;
 }
 
 describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
@@ -119,6 +86,32 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
       const { hostname: host, port: portText } = new URL(webhookUrl);
       const port = Number(portText);
       const sockets: Socket[] = [];
+      const connect = () =>
+        new Promise<Socket>((resolve, reject) => {
+          const socket = createConnection({ host, port });
+          sockets.push(socket);
+          socket.once("error", reject);
+          socket.once("connect", () => resolve(socket));
+        });
+      // Promise a full body but send one byte, holding admission before signature verification.
+      const incompleteRequest = (connection: "close" | "keep-alive") =>
+        [
+          `POST ${WEBHOOK_PATH} HTTP/1.1`,
+          `Host: ${host}:${port}`,
+          "Content-Type: application/json",
+          `Content-Length: ${PROMISED_BODY_BYTES}`,
+          "X-Nextcloud-Talk-Signature: invalid-but-present",
+          "X-Nextcloud-Talk-Random: attacker-controlled",
+          "X-Nextcloud-Talk-Backend: https://nextcloud.example",
+          `Connection: ${connection}`,
+          "",
+          "{",
+        ].join("\r\n");
+      const openIncompleteRequest = async () => {
+        const socket = await connect();
+        socket.write(incompleteRequest("close"));
+        return socket;
+      };
       let received = 0;
       let awaitedCount = 0;
       let receivedCount = createDeferred<void>();
@@ -138,12 +131,7 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
       };
       server.on("request", onRequest);
       try {
-        const connection = await new Promise<Socket>((resolve, reject) => {
-          const socket = createConnection({ host, port });
-          sockets.push(socket);
-          socket.once("error", reject);
-          socket.once("connect", () => resolve(socket));
-        });
+        const connection = await connect();
         const { body, headers } = createSignedCreateMessageRequest();
         const signedHeaders = Object.entries(headers)
           .map(([key, value]) => `${key}: ${value}`)
@@ -162,13 +150,9 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
         await admitted.promise;
 
         const saturated = waitForRequests(IN_FLIGHT_LIMIT + 1);
-        await Promise.all(
-          Array.from({ length: IN_FLIGHT_LIMIT }, () =>
-            openIncompleteWebhookRequest({ host, port, sockets }),
-          ),
-        );
+        await Promise.all(Array.from({ length: IN_FLIGHT_LIMIT }, openIncompleteRequest));
         await saturated;
-        const overflow = await openIncompleteWebhookRequest({ host, port, sockets });
+        const overflow = await openIncompleteRequest();
         const overflowResponse = await readEntireResponse(overflow);
         expect(overflowResponse).toMatch(/^HTTP\/1.1 429/);
         expect(dispatches).toHaveLength(1);
@@ -212,20 +196,7 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
         rejection.mockClear();
         const pipelined = waitForRequests(received + 1);
         const connectionResponse = readEntireResponse(connection);
-        connection.write(
-          [
-            `POST ${WEBHOOK_PATH} HTTP/1.1`,
-            `Host: ${host}:${port}`,
-            "Content-Type: application/json",
-            `Content-Length: ${PROMISED_BODY_BYTES}`,
-            "X-Nextcloud-Talk-Signature: invalid-but-present",
-            "X-Nextcloud-Talk-Random: attacker-controlled",
-            "X-Nextcloud-Talk-Backend: https://nextcloud.example",
-            "Connection: keep-alive",
-            "",
-            "{",
-          ].join("\r\n"),
-        );
+        connection.write(incompleteRequest("keep-alive"));
         await pipelined;
         // Parsing a later request cannot select a close while admission is pending.
         expect(rejection).not.toHaveBeenCalled();

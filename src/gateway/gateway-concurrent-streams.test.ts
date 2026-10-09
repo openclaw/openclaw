@@ -1,10 +1,11 @@
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { describe, expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import * as gatewayBenchChild from "../../scripts/lib/gateway-bench-child.js";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
@@ -13,14 +14,53 @@ import {
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import type { Deferred } from "../shared/deferred.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+const testLifetime = createFixtureLifetime();
+// onTestFinished runs after shared afterEach hooks; join native teardown before those resets.
+afterEach(() => testLifetime.cleanup());
+type ConcurrentStreamLifetime = Pick<
+  ReturnType<typeof createFixtureLifetime>,
+  "verifyCleanup" | "createTempDir"
+> & { signal: AbortSignal };
+
+function runConcurrentStreamFixture<T>(
+  context: { signal: AbortSignal },
+  body: (lifetime: ConcurrentStreamLifetime) => Promise<T>,
+  ...cleanups: Array<() => unknown>
+): Promise<T> {
+  return testLifetime.run(() =>
+    runQaGatewayFixture(
+      async () => {
+        context.signal.throwIfAborted();
+        return await body({
+          signal: context.signal,
+          verifyCleanup: testLifetime.verifyCleanup,
+          createTempDir: testLifetime.createTempDir,
+        });
+      },
+      ...cleanups.map(
+        (cleanup) => () =>
+          testLifetime.verifyCleanup(async () => {
+            await cleanup();
+          }),
+      ),
+    ),
+  );
+}
 
 type StreamFrame = {
   id?: string;
@@ -31,29 +71,76 @@ type StreamFrame = {
 };
 
 type MockProcessOwner = {
-  child: ChildProcessWithoutNullStreams;
+  child: ChildProcess;
+  stdin: NonNullable<ChildProcess["stdin"]>;
+  stdout: NonNullable<ChildProcess["stdout"]>;
+  stderr: NonNullable<ChildProcess["stderr"]>;
   closeObserved: boolean;
+  closed: Promise<void>;
+  requestLogged(sequence: number): Promise<void>;
   error?: Error;
 };
 
-function ownMockProcess(child: ChildProcessWithoutNullStreams): MockProcessOwner {
-  const owner: MockProcessOwner = { child, closeObserved: false };
+function ownMockProcess(child: ChildProcess): MockProcessOwner {
+  const { stdin, stdout, stderr } = child;
+  if (!stdin || !stdout || !stderr) {
+    throw new Error("Mock provider requires piped stdin, stdout, and stderr");
+  }
+  const closed = createDeferred();
+  // The durable-log fallback can advance before IPC arrives. Retain exact
+  // sequence receipts so an earlier request cannot satisfy a later wait.
+  const requestReceipts = new Map<number, Deferred>();
+  const requestReceipt = (sequence: number) => {
+    let receipt = requestReceipts.get(sequence);
+    if (!receipt) {
+      receipt = createDeferred();
+      requestReceipts.set(sequence, receipt);
+    }
+    return receipt;
+  };
+  const owner: MockProcessOwner = {
+    child,
+    stdin,
+    stdout,
+    stderr,
+    closeObserved: false,
+    closed: closed.promise,
+    requestLogged: (sequence) => requestReceipt(sequence).promise,
+  };
+  const onMessage = (message: unknown) => {
+    if (
+      isRecord(message) &&
+      message.type === "mock-openai:request-logged" &&
+      typeof message.seq === "number"
+    ) {
+      requestReceipt(message.seq).resolve();
+    }
+  };
   const onError = (error: Error) => {
     owner.error = error;
   };
   child.on("error", onError);
+  child.on("message", onMessage);
   child.once("close", () => {
     owner.closeObserved = true;
     child.off("error", onError);
+    child.off("message", onMessage);
+    closed.resolve();
   });
   return owner;
 }
 
-async function stopMockProcess(owner: MockProcessOwner): Promise<void> {
-  // Only caller verification uses this deadline; stopChild can outlast it:
-  // its Linux census has a separate timeout; synchronous Windows taskkill has none.
-  const deadline = Date.now() + 2_000 + 1_000;
+async function stopMockProcess(
+  owner: MockProcessOwner,
+  { verifyMissingClose = false }: { verifyMissingClose?: boolean } = {},
+): Promise<void> {
+  // The negative fixture must observe the missing close without awaiting it.
+  // Normal teardown joins the retained native close before inspecting resources.
+  const deadline = verifyMissingClose ? Date.now() + 2_000 + 1_000 : undefined;
   await gatewayBenchChild.stopChild(owner.child);
+  if (!verifyMissingClose) {
+    await owner.closed;
+  }
   while (true) {
     const { child } = owner;
     const exited = child.exitCode !== null || child.signalCode !== null;
@@ -68,14 +155,14 @@ async function stopMockProcess(owner: MockProcessOwner): Promise<void> {
     if (
       exited &&
       owner.closeObserved &&
-      child.stdin.closed &&
-      child.stdout.closed &&
-      child.stderr.closed &&
+      owner.stdin.closed &&
+      owner.stdout.closed &&
+      owner.stderr.closed &&
       groupClosed
     ) {
       return;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline === undefined ? 0 : deadline - Date.now();
     if (remaining <= 0) {
       throw new Error("Mock provider shutdown unverified; Gateway state retained", {
         cause: owner.error,
@@ -127,7 +214,7 @@ describe("Gateway concurrent HTTP streams", () => {
   it("retains backing state when mock shutdown resolves without native closure", (context) => {
     let gateway: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
     let mock: MockProcessOwner | undefined;
-    return runQaGatewayTestFixture(
+    return runConcurrentStreamFixture(
       context,
       async ({ signal, verifyCleanup }) => {
         const stateOwner = await createOpenClawTestInstance({
@@ -157,16 +244,25 @@ describe("Gateway concurrent HTTP streams", () => {
           }),
         );
         mock = processOwner;
-        processOwner.child.stderr.resume();
-        const lines = createInterface({ input: processOwner.child.stdout });
+        processOwner.stderr.resume();
+        const lines = createInterface({ input: processOwner.stdout });
         try {
-          const [ready] = await once(lines, "line", {
-            signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
-          });
+          const [ready] = await withinTest(
+            awaitGateBeforeSettlement(
+              once(lines, "line", { signal }),
+              processOwner.closed.then(() => {
+                if (processOwner.error) {
+                  throw processOwner.error;
+                }
+              }),
+              "mock OpenAI exited before listening",
+            ),
+            signal,
+          );
           expect(ready).toMatch(/^mock-openai listening on \d+$/);
         } finally {
           lines.close();
-          processOwner.child.stdout.resume();
+          processOwner.stdout.resume();
         }
         signal.throwIfAborted();
         const closeClient = vi.fn(async () => {});
@@ -182,7 +278,7 @@ describe("Gateway concurrent HTTP streams", () => {
           const cleanupOutcome = await cleanupConcurrentStreamResources({
             closeClient,
             stopGateway,
-            stopMock: () => stopMockProcess(processOwner),
+            stopMock: () => stopMockProcess(processOwner, { verifyMissingClose: true }),
             settleStreams,
             cleanupGateway,
           }).then(
@@ -250,7 +346,7 @@ describe("Gateway concurrent HTTP streams", () => {
       client?.close();
     };
     signal.addEventListener("abort", cancel, { once: true });
-    return runQaGatewayTestFixture(
+    return runConcurrentStreamFixture(
       context,
       async ({ verifyCleanup }) => {
         signal.throwIfAborted();
@@ -340,6 +436,7 @@ describe("Gateway concurrent HTTP streams", () => {
             spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
               cwd: process.cwd(),
               detached: process.platform !== "win32",
+              stdio: ["pipe", "pipe", "pipe", "ipc"],
               env: {
                 PATH: process.env.PATH,
                 MOCK_PORT: "0",
@@ -348,9 +445,9 @@ describe("Gateway concurrent HTTP streams", () => {
               },
             }),
           );
-          mock.child.stderr.resume();
+          mock.stderr.resume();
           await once(mock.child, "spawn", { signal });
-          const output = createInterface({ input: mock.child.stdout, signal });
+          const output = createInterface({ input: mock.stdout, signal });
           let mockPort: number | undefined;
           try {
             for await (const line of output) {
@@ -369,7 +466,7 @@ describe("Gateway concurrent HTTP streams", () => {
             }
           } finally {
             output.close();
-            mock.child.stdout.resume();
+            mock.stdout.resume();
           }
           expect(
             (await fetch(`http://127.0.0.1:${mockPort}/health`, { signal: abort.signal })).status,
@@ -461,6 +558,7 @@ describe("Gateway concurrent HTTP streams", () => {
                 ? { input: item.marker }
                 : { messages: [{ role: "user", content: item.marker }] }),
             };
+            const requestLogged = mock.requestLogged(index + 1);
             const pending = (async () => {
               const response = await fetch(`http://127.0.0.1:${port}${item.endpoint}`, {
                 method: "POST",
@@ -491,15 +589,17 @@ describe("Gateway concurrent HTTP streams", () => {
             });
             // Reserve each scripted response in arrival order, but hold both provider
             // requests open together before either may deliver a delta or terminal.
-            await vi.waitFor(
-              async () => {
-                signal.throwIfAborted();
-                expect(await requestBodies()).toHaveLength(index + 1);
-              },
-              {
-                timeout: 30_000,
+            // IPC and HTTP replies can arrive in either order; the mock appends
+            // the durable log before sending either receipt or response.
+            const settledBeforeReceipt = Promise.race([pending, mock.closed]).then(
+              async () => expect(await requestBodies()).toHaveLength(index + 1),
+              async (error: unknown) => {
+                if ((await requestBodies()).length !== index + 1) {
+                  throw error;
+                }
               },
             );
+            await withinTest(Promise.race([requestLogged, settledBeforeReceipt]), signal);
           }
           const requests = await requestBodies();
           signal.throwIfAborted();
@@ -543,10 +643,18 @@ describe("Gateway concurrent HTTP streams", () => {
               expect(lifecycle.filter((event) => event.data.phase === "start")).toHaveLength(1);
               expect(lifecycle.filter((event) => event.data.phase === "end")).toHaveLength(1);
               const assistant = own.filter((event) => event.stream === "assistant");
-              expect(assistant.at(-1)?.data.text).toBe(item.marker);
+              expect(assistant[0]?.data.text).toBeTypeOf("string");
+              let assistantText = "";
               for (const event of assistant) {
-                expect(item.marker.startsWith(String(event.data.text))).toBe(true);
+                if (typeof event.data.text === "string") {
+                  assistantText = event.data.text;
+                } else {
+                  expect(event.data.delta).toBeTypeOf("string");
+                  assistantText += String(event.data.delta);
+                }
+                expect(item.marker.startsWith(assistantText)).toBe(true);
               }
+              expect(assistantText).toBe(item.marker);
             });
           }
         } catch (error) {

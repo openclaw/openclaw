@@ -10,7 +10,6 @@ import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-m
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
-import { modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
@@ -54,6 +53,7 @@ const SESSION_SEARCH_SCOPE = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 } as const;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
@@ -179,9 +179,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           }
         }),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         this.clearSessionSearch();
         this.clearCatalogSearch();
@@ -505,6 +504,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     try {
       const result = await sessions.list({
         ...SESSION_SEARCH_SCOPE,
+        source: "command-palette",
         search,
         limit: SESSION_SEARCH_LIMIT,
       });
@@ -630,11 +630,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
-      modelSearchError: this.modelReader.failed
-        ? t("palette.modelSearchFailed")
-        : models.hasSnapshot
-          ? modelCatalogRefreshError(models)
-          : null,
+      modelSearchError: this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
         ...getStaticCommandPaletteCatalogItems(

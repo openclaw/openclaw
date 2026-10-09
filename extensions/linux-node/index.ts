@@ -9,7 +9,7 @@ export default definePluginEntry({
   configSchema: createLinuxNodePluginConfigSchema,
   register(api) {
     const config = resolveLinuxNodePluginConfig(api.pluginConfig);
-    for (const command of createLinuxNodeCommands({ config })) {
+    for (const command of createLinuxNodeCommands(config)) {
       api.registerNodeHostCommand(command);
     }
 

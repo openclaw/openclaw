@@ -156,7 +156,7 @@ Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in transcript activity and Tasks views. Use
+Use `label` for a recognizable child name in session transcripts. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
@@ -326,14 +326,20 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         subagents: { allowAgents: ["worker"] },
       },
       worker: { tools: { swarm: false } },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
@@ -415,8 +421,7 @@ identify each child's status. Native clients present killed and timed-out childr
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
-Collector children appear in inline transcript activity rows and the chat **Tasks**
-tab. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations. They have no session-sidebar
+Collector children appear in their session transcripts. They have no session-sidebar
 rows. Their activity and unread failures still contribute to the parent’s sidebar
 ring and attention signals. Persistent spawned sessions and forks keep their
 normal sidebar nesting.
@@ -441,10 +446,13 @@ nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
 as running siblings stop. It does not cancel work from unrelated parent turns.
 
-If Stop reports incomplete descendant cancellation, inspect the remaining work
-in the chat **Tasks** tab or with `openclaw tasks list`, and retry cancellation for
+Stop also waits for the selected children's execution and queued-launch cleanup.
+A child's task can show a terminal status while that cleanup is still settling.
+
+If Stop times out or reports incomplete descendant cancellation, inspect the remaining work
+with `subagents` using `action: "list"` and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,
-and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+and a failed request can leave cleanup pending.
 
 Already-accepted children remain independent when the parent completes normally,
 yields, or times out. If the parent is no longer active, cancel the child tasks
@@ -549,7 +557,15 @@ failures. A rejected launch or failed child must not discard results from other
 accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. It returns:
+Each `agents_wait` call accepts 1–1000 run ids. Use `awaitResults: true` to keep
+collection owned until **all** authorized requested collectors settle, without
+an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
+child and agent-run deadlines, tool watchdogs, cancellation, and ownership
+checks still apply. In OpenClaw Code Mode this also makes the enclosing cell
+required, so the runtime—not repeated model calls—waits for registry completion
+events. An ordinary call keeps its existing first-completion and timeout behavior.
+
+It returns:
 
 ```typescript
 type AgentsWaitResult = {

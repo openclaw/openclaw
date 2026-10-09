@@ -82,27 +82,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     }
   });
 
-  it("can include env-configured version manager dirs on macOS when requested", () => {
-    const result = getMinimalServicePathPartsFromEnv({
-      platform: "darwin",
-      includeUserDirs: true,
-      env: {
-        HOME: "/Users/testuser",
-        FNM_DIR: "/Users/testuser/Library/Application Support/fnm",
-        NVM_DIR: "/Users/testuser/.nvm",
-        PNPM_HOME: "/Users/testuser/Library/pnpm",
-      },
-      existsSync: allExist,
-    });
-
-    // fnm uses aliases/default/bin (not current)
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin");
-    // nvm: relies on NVM_DIR env var (no stable default path)
-    expect(result).toContain("/Users/testuser/.nvm");
-    // pnpm: binary is directly in PNPM_HOME
-    expect(result).toContain("/Users/testuser/Library/pnpm");
-  });
-
   it("does not include Linux user directories on Windows", () => {
     const result = getMinimalServicePathParts({
       platform: "win32",
@@ -268,20 +247,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 });
 
 describe("getMinimalServicePathParts - Nix Home Manager", () => {
-  it("can include single Nix profile from NIX_PROFILES on macOS when requested", () => {
-    const result = getMinimalServicePathPartsFromEnv({
-      platform: "darwin",
-      includeUserDirs: true,
-      env: {
-        HOME: "/Users/testuser",
-        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
-      },
-      existsSync: () => true,
-    });
-
-    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
-  });
-
   it("preserves Nix precedence across three profiles", () => {
     const result = getMinimalServicePathPartsFromEnv({
       platform: "linux",

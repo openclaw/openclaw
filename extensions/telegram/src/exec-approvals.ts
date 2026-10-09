@@ -15,22 +15,12 @@ import type {
   OpenClawConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
-  const normalized = normalizeOptionalString(String(value)) ?? "";
-  const chatId = normalizeTelegramChatId(normalized);
-  if (!chatId || chatId.startsWith("-")) {
-    return undefined;
-  }
-  return chatId;
-}
-
-function resolveTelegramOwnerApprovers(cfg: OpenClawConfig): Array<string | number> {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  return Array.isArray(ownerAllowFrom) ? ownerAllowFrom : [];
+  const chatId = normalizeTelegramChatId(String(value));
+  return chatId && !chatId.startsWith("-") ? chatId : undefined;
 }
 
 export function resolveTelegramExecApprovalConfig(params: {
@@ -53,7 +43,9 @@ export function getTelegramExecApprovalApprovers(params: {
 }): string[] {
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
-    allowFrom: resolveTelegramOwnerApprovers(params.cfg),
+    allowFrom: Array.isArray(params.cfg.commands?.ownerAllowFrom)
+      ? params.cfg.commands.ownerAllowFrom
+      : [],
     normalizeApprover: normalizeTelegramDirectApproverId,
   });
 }
@@ -67,11 +59,8 @@ export function isTelegramExecApprovalTargetRecipient(params: {
     ...params,
     channel: "telegram",
     matchTarget: ({ target, normalizedSenderId }) => {
-      const to = target.to ? normalizeTelegramChatId(target.to) : undefined;
-      if (!to || to.startsWith("-")) {
-        return false;
-      }
-      return to === normalizedSenderId;
+      const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
+      return to !== undefined && to === normalizedSenderId;
     },
   });
 }
@@ -144,13 +133,11 @@ export function shouldInjectTelegramExecApprovalButtons(params: {
   }
   const target = resolveTelegramExecApprovalTarget(params);
   const chatType = resolveTelegramTargetChatType(params.to);
-  if (chatType === "direct") {
-    return target === "dm" || target === "both";
-  }
-  if (chatType === "group") {
-    return target === "channel" || target === "both";
-  }
-  return target === "both";
+  return (
+    target === "both" ||
+    (chatType === "direct" && target === "dm") ||
+    (chatType === "group" && target === "channel")
+  );
 }
 
 export const shouldSuppressLocalTelegramExecApprovalPrompt =

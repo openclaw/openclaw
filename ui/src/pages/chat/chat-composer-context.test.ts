@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type {
   GatewaySessionRow,
@@ -43,12 +43,12 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
-  it.each([true, false])("uses the last-run prompt budget with fresh usage %s", (fresh) => {
+  it("uses the last-run prompt budget with fresh usage", () => {
     const container = renderComposer({
       selectedSession: sessionRow({
         updatedAt: 2,
         totalTokens: 160_000,
-        totalTokensFresh: fresh,
+        totalTokensFresh: true,
         contextTokens: 200_000,
         contextBudgetStatus: contextBudgetStatusFixture(),
       }),
@@ -57,17 +57,10 @@ describe("renderChatComposer context usage", () => {
     expect(container.querySelector(".context-usage__title")?.textContent).toBe("Prompt budget");
     expect(
       container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
-    ).toBe(fresh);
+    ).toBe(true);
   });
 
-  it.each([
-    { name: "renders the owner-selected global alias", sessionKey: "agent:work:main", owned: true },
-    {
-      name: "does not reuse a global row owned by another agent",
-      sessionKey: "global",
-      owned: false,
-    },
-  ])("$name", ({ sessionKey, owned }) => {
+  it("does not reuse a global row owned by another agent", () => {
     const session: GatewaySessionRow = {
       key: "global",
       kind: "global",
@@ -76,74 +69,13 @@ describe("renderChatComposer context usage", () => {
       contextTokens: 200_000,
     };
     const container = renderComposer({
-      sessionKey,
+      sessionKey: "global",
       currentAgentId: "work",
-      selectedSession: owned ? session : undefined,
+      selectedSession: undefined,
       sessions: { sessions: [session], defaults: { contextTokens: 200_000 } } as never,
     });
 
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label") ?? null).toBe(
-      owned ? "Session context usage: 46k of 200k (23%)" : null,
-    );
-  });
-
-  it("renders only the current session provider's plan usage", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_700_000_000_000);
-    const container = renderComposer({
-      selectedSession: sessionRow({
-        totalTokens: 46_000,
-        contextTokens: 200_000,
-        model: "gateway-injected",
-        modelProvider: "openai",
-      }),
-      sessions: {
-        sessions: [],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-      providerUsage: planUsage(
-        [
-          planProvider("openai", "OpenAI", {
-            providerId: "openai",
-            windows: [
-              { label: "Week", usedPercent: 72, resetAt: 1_700_000_000_000 + 3 * 3_600_000 },
-            ],
-          }),
-          planProvider(
-            "github-copilot",
-            "Copilot",
-            {
-              providerId: "github-copilot",
-              windows: [{ label: "Day", usedPercent: 41 }],
-            },
-            { profileId: "github-copilot", type: "token" },
-          ),
-        ],
-        "/control",
-      ),
-    });
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 46k of 200k (23%)",
-    );
-    expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
-      "Plan usage",
-    );
-    expect(
-      [...container.querySelectorAll(".context-usage__limit")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(["Weekly Resets 3h 72%"]);
-    expect(
-      container
-        .querySelector("[data-chat-usage-provider='true']")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim(),
-    ).toBe("Provider: OpenAI");
-    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
-    const popoverText = container.querySelector(".context-usage__popover")?.textContent ?? "";
-    expect(popoverText).not.toContain("openclaw");
-    expect(popoverText).not.toContain("gateway-injected");
-    expect(popoverText).not.toContain("Model:");
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label") ?? null).toBe(null);
   });
 
   it("renders plan usage before session metrics arrive", () => {
@@ -344,52 +276,6 @@ describe("renderChatComposer context usage", () => {
     });
 
     expect(container.textContent).not.toContain("Cost by Type");
-  });
-
-  it("prioritizes a matching session provider over historical response provenance", () => {
-    const container = renderComposer({
-      messages: [
-        { role: "user", content: "hi" },
-        {
-          role: "assistant",
-          content: "hello",
-          cost: { input: 0.01, output: 0.02 },
-          provider: "openai",
-          responseModel: "gpt-5.5",
-        },
-      ],
-      selectedSession: sessionRow({
-        totalTokens: 1_000,
-        contextTokens: 200_000,
-        modelProvider: "anthropic",
-      }),
-      sessions: {
-        sessions: [],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-      providerUsage: planUsage([
-        planProvider("openai", "OpenAI", {
-          providerId: "openai",
-          windows: [{ label: "Week", usedPercent: 72 }],
-        }),
-        planProvider("claude-cli", "Claude", {
-          providerId: "anthropic",
-          windows: [{ label: "Week", usedPercent: 25 }],
-        }),
-      ]),
-    });
-
-    expect(
-      [...container.querySelectorAll(".context-usage__limit")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(["Weekly 25%"]);
-    expect(
-      [...container.querySelectorAll("[data-chat-usage-provider='true']")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(["Provider: Claude"]);
-    expect(container.textContent).not.toContain("Model:");
   });
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {

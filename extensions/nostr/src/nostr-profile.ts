@@ -1,15 +1,10 @@
 import { finalizeEvent, SimplePool } from "nostr-tools";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { profileToContent } from "./nostr-profile-core.js";
 
-export interface ProfilePublishResult {
-  eventId: string;
-  successes: string[];
-  failures: Array<{ relay: string; error: string }>;
-  /** Unix timestamp when the event was created. */
-  createdAt: number;
-}
+export type ProfilePublishResult = Awaited<ReturnType<typeof publishProfile>>;
 
 const RELAY_PUBLISH_TIMEOUT_MS = 5000;
 
@@ -20,7 +15,7 @@ export async function publishProfile(
   relays: string[],
   profile: NostrProfile,
   lastPublishedAt?: number,
-): Promise<ProfilePublishResult> {
+) {
   const content = JSON.stringify(profileToContent(profile));
   // Replaceable events must advance even if the previous publication was ahead of our clock.
   const now = Math.floor(Date.now() / 1000);
@@ -36,24 +31,18 @@ export async function publishProfile(
   const successes: string[] = [];
   const failures: Array<{ relay: string; error: string }> = [];
 
-  // Publish to each relay in parallel with timeout
   const publishPromises = relays.map(async (relay) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
-      });
-
-      await Promise.race([pool.publish([relay], event)[0], timeoutPromise]);
-
+      await withTimeout(
+        Promise.resolve(pool.publish([relay], event)[0]),
+        RELAY_PUBLISH_TIMEOUT_MS,
+        {
+          message: "timeout",
+        },
+      );
       successes.push(relay);
     } catch (err) {
-      const errorMessage = formatErrorMessage(err);
-      failures.push({ relay, error: errorMessage });
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
+      failures.push({ relay, error: formatErrorMessage(err) });
     }
   });
 
@@ -63,6 +52,7 @@ export async function publishProfile(
     eventId: event.id,
     successes,
     failures,
+    /** Unix timestamp when the event was created. */
     createdAt: event.created_at,
   };
 }

@@ -1,11 +1,11 @@
-import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
-import * as workerStores from "../infra/sqlite-worker-store.js";
-import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  listPluginStateInWorker,
+  lookupPluginStateInWorker,
+  registerPluginStateInWorker,
+} from "../plugin-state/plugin-state-worker-client.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   captureWsEventAsync,
@@ -14,7 +14,6 @@ import {
 } from "../proxy-capture/runtime.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
@@ -23,128 +22,90 @@ import {
 } from "./openclaw-agent-db.js";
 import { retainOpenClawStateDatabase } from "./openclaw-state-db-cache.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
 });
 
+// Plugin state keeps cause text out of its public message; the maintenance refusal is the cause.
+async function expectOfflineMaintenance(operation: Promise<unknown>) {
+  const error = await operation.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+  const messages: string[] = [];
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    messages.push(current.message);
+  }
+  expect(messages.join("\n")).toContain("offline maintenance");
+}
+
 function createSharedWorkerClient(env: NodeJS.ProcessEnv) {
-  const ownerKey = "agent:main:maintenance-resource";
-  const flowIds = new Map<string, string>();
+  const namespace = { env, pluginId: "maintenance-resources-fixture", namespace: "shared" };
   return {
-    async register(key: string, value: { value: string }) {
-      const flow = buildFlowRecord({
-        ownerKey,
-        controllerId: "tests/maintenance-resources",
-        goal: key,
-        stateJson: value,
+    register(key: string, value: { value: string }) {
+      return registerPluginStateInWorker({
+        ...namespace,
+        key,
+        valueJson: JSON.stringify(value),
+        maxEntries: 10,
+        overflowPolicy: "reject-new",
       });
-      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.createManaged",
-        input: { flow },
-      });
-      flowIds.set(key, flow.flowId);
     },
-    async lookup(key: string) {
-      const flowId = flowIds.get(key);
-      if (flowId === undefined) {
-        return undefined;
-      }
-      const flow = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.current",
-        input: { flowId },
-      });
-      return flow?.stateJson;
+    lookup(key: string) {
+      return lookupPluginStateInWorker({ ...namespace, key });
     },
-    async entries() {
-      const flows = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.list",
-        input: { ownerKey },
-      });
-      return flows.map((flow) => ({ key: flow.goal, value: flow.stateJson }));
+    entries() {
+      return listPluginStateInWorker(namespace);
     },
   };
 }
 
-it("releases its native borrow without retiring an independent shared client", async () => {
-  await withOpenClawTestState({ label: "maintenance-native-borrow" }, async (state) => {
-    const store = createSharedWorkerClient(state.env);
-    const lock = await acquireGatewayLock({
-      env: state.env,
-      role: "sqlite-maintenance",
-      allowInTests: true,
-    });
-    if (!lock) {
-      throw new Error("Expected maintenance lock");
-    }
-    const owned = await lock.run(async () => {
-      const database = openOpenClawStateDatabase({ env: state.env });
-      const reference = retainOpenClawStateDatabase(database);
-      await store.register("owned", { value: "owned" });
-      return { database, reference };
-    });
-    try {
-      await store.register("foreign", { value: "foreign" });
-      await lock.release();
-      expect(owned.database.db.isOpen).toBe(false);
-      await expect(store.lookup("foreign")).resolves.toEqual({ value: "foreign" });
-      await store.register("after", { value: "after" });
-      await expect(store.lookup("after")).resolves.toEqual({ value: "after" });
-    } finally {
-      owned.reference.release();
-      await lock.release();
-    }
-  });
-});
-
-it("retains sibling-created handles with their common Doctor owner", async () => {
-  await withOpenClawTestState(
-    { scenario: "external-service", label: "maintenance-sibling-resources" },
-    async (state) => {
-      const begin = () =>
-        beginDoctorMaintenance({
-          options: { repair: true },
-          root: null,
-          runtime: { log() {}, error() {}, exit() {} },
-        });
-      const parent = await begin();
-      if (!parent) {
-        throw new Error("Expected parent maintenance");
-      }
-      try {
-        const owned = await parent.run(async () => {
-          const first = await begin();
-          const second = await begin();
-          if (!first || !second) {
-            throw new Error("Expected sibling maintenance");
-          }
-          try {
-            const database = first.run(() =>
-              openOpenClawAgentDatabase({ agentId: "owned", env: state.env }),
+it.each(["siblings", "nested"] as const)(
+  "retains %s agent handles until their common Doctor owner releases",
+  async (topology) => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "maintenance-nested-resources" },
+      async (state) => {
+        const parent = await beginCaptureMaintenance("Doctor", state.env);
+        try {
+          const owned = await parent.run(async () => {
+            const database =
+              topology === "nested"
+                ? openOpenClawAgentDatabase({ agentId: "owned", env: state.env })
+                : undefined;
+            const first = await beginCaptureMaintenance(
+              topology === "siblings" ? "Doctor" : "Gateway lock",
+              state.env,
             );
-            expect(
-              second.run(() => openOpenClawAgentDatabase({ agentId: "owned", env: state.env })),
-            ).toBe(database);
-            await first.release();
-            await second.release();
-            expect(database.db.isOpen).toBe(true);
-            return database;
-          } finally {
-            await first.release();
-            await second.release();
-          }
-        });
-        await parent.release();
-        expect(owned.db.isOpen).toBe(false);
-      } finally {
-        await parent.release();
-      }
-    },
-  );
-});
+            const second =
+              topology === "siblings" ? await beginCaptureMaintenance("Doctor", state.env) : first;
+            try {
+              const handle =
+                database ??
+                first.run(() => openOpenClawAgentDatabase({ agentId: "owned", env: state.env }));
+              expect(
+                second.run(() => openOpenClawAgentDatabase({ agentId: "owned", env: state.env })),
+              ).toBe(handle);
+              await first.release();
+              await second.release();
+              expect(handle.db.isOpen).toBe(true);
+              return handle;
+            } finally {
+              await first.release();
+              await second.release();
+            }
+          });
+          await parent.release();
+          expect(owned.db.isOpen).toBe(false);
+        } finally {
+          await parent.release();
+        }
+      },
+    );
+  },
+);
 
 it("settles its agent resource before closing the associated native handle", async () => {
   await withOpenClawTestState({ label: "maintenance-resource-order" }, async (state) => {
@@ -181,48 +142,6 @@ it("settles its agent resource before closing the associated native handle", asy
   });
 });
 
-it("keeps a parent Doctor handle owned through a nested migration scope", async () => {
-  await withOpenClawTestState(
-    { scenario: "external-service", label: "maintenance-nested-resources" },
-    async (state) => {
-      const maintenance = await beginDoctorMaintenance({
-        options: { repair: true },
-        root: null,
-        runtime: { log() {}, error() {}, exit() {} },
-      });
-      if (!maintenance) {
-        throw new Error("Expected Doctor maintenance");
-      }
-      try {
-        const owned = await maintenance.run(async () => {
-          const database = openOpenClawAgentDatabase({ agentId: "owned", env: state.env });
-          const child = await acquireGatewayLock({
-            env: state.env,
-            role: "sqlite-maintenance",
-            allowInTests: true,
-          });
-          if (!child) {
-            throw new Error("Expected nested maintenance lock");
-          }
-          try {
-            expect(
-              child.run(() => openOpenClawAgentDatabase({ agentId: "owned", env: state.env })),
-            ).toBe(database);
-          } finally {
-            await child.release();
-          }
-          expect(database.db.isOpen).toBe(true);
-          return database;
-        });
-        await maintenance.release();
-        expect(owned.db.isOpen).toBe(false);
-      } finally {
-        await maintenance.release();
-      }
-    },
-  );
-});
-
 it("closes its created agent handle while preserving earlier and later runtime handles", async () => {
   await withOpenClawTestState({ label: "maintenance-native-resources" }, async (state) => {
     const earlier = openOpenClawAgentDatabase({ agentId: "earlier", env: state.env });
@@ -236,8 +155,8 @@ it("closes its created agent handle while preserving earlier and later runtime h
     }
     try {
       const owned = lock.run(() => openOpenClawAgentDatabase({ agentId: "owned", env: state.env }));
-      const later = openOpenClawAgentDatabase({ agentId: "later", env: state.env });
       await lock.release();
+      const later = openOpenClawAgentDatabase({ agentId: "later", env: state.env });
       expect(owned.db.isOpen).toBe(false);
       expect(earlier.db.isOpen).toBe(true);
       expect(later.db.isOpen).toBe(true);
@@ -247,108 +166,57 @@ it("closes its created agent handle while preserving earlier and later runtime h
   });
 });
 
-it.each([false, true])(
-  "preserves an independent shared client across maintenance release (already open=%s)",
-  async (alreadyOpen) => {
+it.each(["new", "existing", "borrowed"] as const)(
+  "preserves an independent shared client across maintenance release (%s)",
+  async (mode) => {
     await withOpenClawTestState({ label: "maintenance-shared-resources" }, async (state) => {
       const store = createSharedWorkerClient(state.env);
-      if (alreadyOpen) {
-        await store.register("earlier", { value: "earlier" });
+      const earlier = mode === "borrowed" ? "foreign" : "earlier";
+      if (mode !== "new") {
+        await store.register(earlier, { value: earlier });
       }
-      const lock = await acquireGatewayLock({
-        env: state.env,
-        role: "sqlite-maintenance",
-        allowInTests: true,
-      });
-      if (!lock) {
-        throw new Error("Expected maintenance lock");
-      }
+      const lock = await beginCaptureMaintenance("Gateway lock", state.env);
+      let borrowed:
+        | {
+            database: ReturnType<typeof openOpenClawStateDatabase>;
+            reference: ReturnType<typeof retainOpenClawStateDatabase>;
+          }
+        | undefined;
       try {
-        await lock.run(() => store.register("owned", { value: "owned" }));
-        await store.register("later", { value: "later" });
+        await lock.run(async () => {
+          if (mode === "borrowed") {
+            const database = openOpenClawStateDatabase({ env: state.env });
+            borrowed = { database, reference: retainOpenClawStateDatabase(database) };
+          }
+          await store.register("owned", { value: "owned" });
+        });
+        await expectOfflineMaintenance(store.register("later", { value: "later" }));
+        if (borrowed) {
+          borrowed.reference.release();
+          expect(borrowed.database.db.isOpen).toBe(false);
+        }
         await lock.release();
+        if (borrowed) {
+          expect(borrowed.database.db.isOpen).toBe(false);
+          await expect(store.lookup("foreign")).resolves.toEqual({ value: "foreign" });
+        }
+        await store.register("later", { value: "later" });
         await store.register("after", { value: "after" });
+        await expect(store.lookup("after")).resolves.toEqual({ value: "after" });
         expect((await store.entries()).map((entry) => entry.key).toSorted()).toEqual(
-          (alreadyOpen
-            ? ["after", "earlier", "later", "owned"]
-            : ["after", "later", "owned"]
-          ).toSorted(),
+          [...(mode === "new" ? [] : [earlier]), "after", "later", "owned"].toSorted(),
         );
       } finally {
-        await lock.release();
+        try {
+          borrowed?.reference.release();
+        } finally {
+          await lock.release();
+        }
       }
     });
   },
 );
 
-it("reopens shared state after another owner completes failed-admission cleanup", async () => {
-  await withOpenClawTestState({ label: "shared-worker-cleanup-handoff" }, async (state) => {
-    const context = captureOpenClawStateWorkerContext({ env: state.env });
-    const databasePath = context.admission.databasePath;
-    const { result: gateway, database } = captureCoordinatorDatabase(() =>
-      acquireGatewayLifecycleCoordinator({
-        databasePath,
-        runtimeDirectory: context.coordinatorRuntime.directory,
-      }),
-    );
-    openOpenClawStateDatabase({ env: state.env });
-    await closeOpenClawStateDatabaseAsync();
-    const backendPath = await state.writeText(
-      "failed-open.mjs",
-      `
-      export function createSqliteWorkerBackend() {
-        throw new Error("Fixture shared-state factory failed");
-      }
-    `,
-    );
-    const openSharedState = workerStores.openSharedStateSqliteWorkerStore;
-    const opening = vi
-      .spyOn(workerStores, "openSharedStateSqliteWorkerStore")
-      .mockImplementationOnce((options, ...args) =>
-        openSharedState({ ...options, moduleUrl: pathToFileURL(backendPath) }, ...args),
-      );
-    const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
-      throw new Error("Fixture native coordinator close remains pending");
-    });
-    const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementationOnce(function (
-      this: Worker,
-      ...args
-    ) {
-      dispatch.mockRestore();
-      const result = this.postMessage(...args);
-      gateway.release();
-      return result;
-    });
-    const read = () =>
-      executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env: state.env }), {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:cleanup-handoff" },
-      });
-    try {
-      await expect(read()).rejects.toMatchObject({
-        message: "SQLite worker failure and cleanup failed",
-        cause: { message: "Fixture shared-state factory failed" },
-      });
-      opening.mockRestore();
-      dispatch.mockRestore();
-      expect(database.isOpen).toBe(true);
-      expect(workerStores.hasUnclaimedSharedStateSqliteCleanup(databasePath)).toBe(true);
-      await expect(read()).rejects.toThrow("Shared-state SQLite cleanup is pending");
-
-      await workerStores.closeUnclaimedSharedStateSqliteWorkers(databasePath);
-      expect(database.isOpen).toBe(false);
-      expect(workerStores.hasUnclaimedSharedStateSqliteCleanup(databasePath)).toBe(false);
-      await expect(read()).resolves.toEqual([]);
-    } finally {
-      opening.mockRestore();
-      dispatch.mockRestore();
-      close.mockRestore();
-      await workerStores.closeUnclaimedSharedStateSqliteWorkers(databasePath);
-      await closeOpenClawStateDatabaseAsync();
-      gateway.release();
-    }
-  });
-});
 it.each(["Doctor", "Gateway lock"] as const)(
   "drains %s capture before releasing maintenance and preserves independent capture",
   async (producer) => {
@@ -367,21 +235,7 @@ it.each(["Doctor", "Gateway lock"] as const)(
         });
         try {
           await captureWsEventAsync(frame("outside-before", "outside before"), outsideSettings);
-          const maintenance =
-            producer === "Doctor"
-              ? await beginDoctorMaintenance({
-                  options: { repair: true },
-                  root: null,
-                  runtime: { log() {}, error() {}, exit() {} },
-                })
-              : await acquireGatewayLock({
-                  env: state.env,
-                  role: "sqlite-maintenance",
-                  allowInTests: true,
-                });
-          if (!maintenance) {
-            throw new Error("Expected maintenance owner");
-          }
+          const maintenance = await beginCaptureMaintenance(producer, state.env);
           try {
             const writing = maintenance.run(() =>
               captureWsEventAsync(frame("owned", "owned capture bytes"), ownedSettings),
@@ -525,16 +379,18 @@ it.each(["Doctor", "Gateway lock"] as const)(
           }
           await captureEof;
         };
-        const maintenance = await beginCaptureMaintenance(producer, state.env);
+        let maintenance: Awaited<ReturnType<typeof beginCaptureMaintenance>> | undefined;
         try {
+          await initializeDebugProxyCaptureAsync("outside", settings, deps);
+          const patchedFetch = target.fetch;
+          maintenance = await beginCaptureMaintenance(producer, state.env);
           await maintenance.run(() =>
             initializeDebugProxyCaptureAsync("maintenance", settings, deps),
           );
-          const patchedFetch = target.fetch;
           await maintenance.run(() => fetchBody("maintenance-first"));
-          await fetchBody("outside-second");
           await maintenance.release();
           expect(target.fetch).toBe(patchedFetch);
+          await fetchBody("outside-second");
 
           const reader = await acquireDebugProxyCaptureStoreAsync({ env: state.env });
           try {
@@ -585,7 +441,7 @@ it.each(["Doctor", "Gateway lock"] as const)(
           }
         } finally {
           try {
-            await maintenance.release();
+            await maintenance?.release();
           } finally {
             await finalizeDebugProxyCaptureAsync(settings, deps);
           }
@@ -673,13 +529,15 @@ it.each(["Doctor", "Gateway lock"] as const)(
           fetch: async () => await transport.promise,
         };
         const deps = { fetchTarget: target };
-        const maintenance = await beginCaptureMaintenance(producer, state.env);
+        let maintenance: Awaited<ReturnType<typeof beginCaptureMaintenance>> | undefined;
         let pending: Promise<Response> | undefined;
         try {
+          await initializeDebugProxyCaptureAsync("outside", settings, deps);
+          pending = target.fetch("https://synthetic.invalid/pending-outside");
+          maintenance = await beginCaptureMaintenance(producer, state.env);
           await maintenance.run(() =>
             initializeDebugProxyCaptureAsync("maintenance", settings, deps),
           );
-          pending = target.fetch("https://synthetic.invalid/pending-outside");
           await maintenance.release();
           await finalizeDebugProxyCaptureAsync(settings, deps);
 
@@ -716,7 +574,7 @@ it.each(["Doctor", "Gateway lock"] as const)(
             }
           } finally {
             try {
-              await maintenance.release();
+              await maintenance?.release();
             } finally {
               await finalizeDebugProxyCaptureAsync(settings, deps);
             }

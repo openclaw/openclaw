@@ -1,11 +1,11 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+  createAgentHarnessCompletionEventSink,
+  deliverAgentHarnessCompletion,
+} from "openclaw/plugin-sdk/agent-harness-completion";
+import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { defineCodexBuildState } from "../build-state.js";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import {
   claimCodexAppServerLiveThread,
@@ -27,7 +27,7 @@ import type { NativeParentRegistration } from "./native-subagent-parent-owner.js
 
 type NativeMonitor = {
   registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle>;
-  retireParent(parentThreadId: string): void;
+  retireParent(parentThreadId: string): Promise<void>;
   captureModelSource(
     request: NativeModelSourceRequest,
   ): Promise<NativeModelSourceCapture | undefined>;
@@ -43,16 +43,20 @@ type NativeMonitorConstructor = new (
 ) => NativeMonitor;
 
 export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime = {
+  deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
+  createAgentHarnessCompletionEventSink,
 };
 
 export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorConstructor>(
   Monitor: T,
 ) {
-  const monitors = new WeakMap<CodexAppServerClient, NativeMonitor>();
+  // Retirement and model admission must reach the original monitor's custody
+  // when another same-build module copy receives the shared physical client.
+  const monitors = defineCodexBuildState(
+    "openclaw.codexNativeSubagentMonitors",
+    () => new WeakMap<CodexAppServerClient, NativeMonitor>(),
+  )();
 
   async function registerMonitor({
     client,
@@ -175,8 +179,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
       }
       return monitor.prepareModelInput(request);
     },
-    retireParent: (client: CodexAppServerClient, parentThreadId: string): void => {
-      monitors.get(client)?.retireParent(parentThreadId);
-    },
+    retireParent: (client: CodexAppServerClient, parentThreadId: string): Promise<void> =>
+      monitors.get(client)?.retireParent(parentThreadId) ?? Promise.resolve(),
   };
 }

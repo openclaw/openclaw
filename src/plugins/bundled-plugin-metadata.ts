@@ -1,4 +1,3 @@
-// Loads bundled plugin metadata without activating plugin runtime code.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +32,6 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-/** Metadata collected from a bundled plugin package and manifest. */
 type BundledPluginMetadata = {
   dirName: string;
   idHint: string;
@@ -48,13 +46,25 @@ type BundledPluginMetadata = {
   manifest: PluginManifest;
 };
 
-function collectBundledPluginMetadata(
-  resolvedScanDir: string | undefined,
-  includeChannelConfigs: boolean,
-  includeSyntheticChannelConfigs: boolean,
-): readonly BundledPluginMetadata[] {
+/** Lists bundled plugin metadata from source or built package layouts. */
+export function listBundledPluginMetadata(params?: {
+  rootDir?: string;
+  scanDir?: string;
+  includeChannelConfigs?: boolean;
+  includeSyntheticChannelConfigs?: boolean;
+}): readonly BundledPluginMetadata[] {
+  const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
+  const resolvedScanDir = params?.scanDir
+    ? path.resolve(params.scanDir)
+    : resolveBundledPluginScanDir({
+        packageRoot: rootDir,
+        runningFromBuiltArtifact: RUNNING_FROM_BUILT_ARTIFACT,
+      });
+  const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
+  const includeSyntheticChannelConfigs =
+    params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
   if (!resolvedScanDir || !fs.existsSync(resolvedScanDir)) {
-    return [];
+    return Object.freeze([]);
   }
 
   const entries: BundledPluginMetadata[] = [];
@@ -104,12 +114,15 @@ function collectBundledPluginMetadata(
           })
         : manifestResult.manifest.channelConfigs;
 
+    const packageName = trimBundledPluginString(packageJson?.name);
+    const packageVersion = trimBundledPluginString(packageJson?.version);
+    const packageDescription = trimBundledPluginString(packageJson?.description);
     entries.push({
       dirName,
       idHint: deriveBundledPluginIdHint({
         entryPath: sourceEntry,
         manifestId: manifestResult.manifest.id,
-        packageName: trimBundledPluginString(packageJson?.name),
+        packageName,
         hasMultipleExtensions: extensions.length > 1,
       }),
       source: {
@@ -119,15 +132,9 @@ function collectBundledPluginMetadata(
       ...(setupSource ? { setupSource } : {}),
       ...(publicSurfaceArtifacts ? { publicSurfaceArtifacts } : {}),
       ...(runtimeSidecarArtifacts ? { runtimeSidecarArtifacts } : {}),
-      ...(trimBundledPluginString(packageJson?.name)
-        ? { packageName: trimBundledPluginString(packageJson?.name) }
-        : {}),
-      ...(trimBundledPluginString(packageJson?.version)
-        ? { packageVersion: trimBundledPluginString(packageJson?.version) }
-        : {}),
-      ...(trimBundledPluginString(packageJson?.description)
-        ? { packageDescription: trimBundledPluginString(packageJson?.description) }
-        : {}),
+      ...(packageName ? { packageName } : {}),
+      ...(packageVersion ? { packageVersion } : {}),
+      ...(packageDescription ? { packageDescription } : {}),
       ...(packageManifest ? { packageManifest } : {}),
       manifest: {
         ...manifestResult.manifest,
@@ -136,33 +143,7 @@ function collectBundledPluginMetadata(
     });
   }
 
-  return entries;
-}
-
-/** Lists bundled plugin metadata from source or built package layouts. */
-export function listBundledPluginMetadata(params?: {
-  rootDir?: string;
-  scanDir?: string;
-  includeChannelConfigs?: boolean;
-  includeSyntheticChannelConfigs?: boolean;
-}): readonly BundledPluginMetadata[] {
-  const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
-  const resolvedScanDir = params?.scanDir
-    ? path.resolve(params.scanDir)
-    : resolveBundledPluginScanDir({
-        packageRoot: rootDir,
-        runningFromBuiltArtifact: RUNNING_FROM_BUILT_ARTIFACT,
-      });
-  const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
-  const includeSyntheticChannelConfigs =
-    params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
-  return Object.freeze(
-    collectBundledPluginMetadata(
-      resolvedScanDir,
-      includeChannelConfigs,
-      includeSyntheticChannelConfigs,
-    ),
-  );
+  return Object.freeze(entries);
 }
 
 /** Finds bundled plugin metadata by manifest id. */

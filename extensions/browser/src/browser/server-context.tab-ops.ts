@@ -1,7 +1,5 @@
-/**
- * Browser tab listing, opening, labeling, and alias management for one profile.
- */
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import {
   assertChromeMcpCdpTransportAllowed,
@@ -48,7 +46,14 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
-import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
+import { readColdNativeActivity, volatileTabsBySession } from "./session-tab-process-state.js";
+import {
+  dispatchBrowserTabClose,
+  findRetainedBrowserDashboardTab,
+  readBrowserDashboardTabs,
+} from "./session-tab-store.js";
+import { readDurableTabs } from "./session-tab-tracking.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -82,7 +87,6 @@ type ExtensionCdpTarget = CdpTarget & {
   tabId?: unknown;
 };
 
-/** Normalize a reported CDP WebSocket URL against the configured endpoint. */
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) {
     return undefined;
@@ -94,7 +98,58 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
-/** Builds list/open/label tab operations for one resolved browser profile. */
+/**
+ * Collects the freshest recorded session activity per target for one profile.
+ * Durable records and volatile registrations both carry lastUsedAt; durable
+ * native identities also fold in activity observed after the record froze.
+ */
+async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string, number>> {
+  const profile = normalizeOptionalLowercaseString(profileName);
+  const lastUsedByTarget = new Map<string, number>();
+  const observe = (targetId: string, recordProfile: string | undefined, lastUsedAt: number) => {
+    if (!targetId || normalizeOptionalLowercaseString(recordProfile) !== profile) {
+      return;
+    }
+    const previous = lastUsedByTarget.get(targetId);
+    if (previous === undefined || lastUsedAt > previous) {
+      lastUsedByTarget.set(targetId, lastUsedAt);
+    }
+  };
+  for (const record of await readDurableTabs()) {
+    const observedAt =
+      record.interactionTargetKind === "native"
+        ? readColdNativeActivity(browserSessionTabNativeIdentity(record))
+        : undefined;
+    observe(record.nativeTargetId, record.profile, Math.max(record.lastUsedAt, observedAt ?? 0));
+  }
+  for (const sessionTabs of volatileTabsBySession().values()) {
+    for (const tab of sessionTabs.values()) {
+      observe(tab.targetId, tab.profile, tab.lastUsedAt);
+    }
+  }
+  return lastUsedByTarget;
+}
+
+/**
+ * Orders eviction candidates for the managed tab cap. Chrome reports CDP
+ * targets most-recently-activated first, so raw /json/list order is exactly
+ * backwards for cleanup: slicing from the front closes the tabs other sessions
+ * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
+ * session activity) evict first in reverse CDP order; tracked tabs follow in
+ * ascending last-use order.
+ */
+function orderManagedTabEvictionCandidates(
+  candidates: readonly BrowserTab[],
+  lastUsedByTarget: ReadonlyMap<string, number>,
+): BrowserTab[] {
+  return candidates
+    .toReversed()
+    .toSorted(
+      (left, right) =>
+        (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
+    );
+}
+
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
@@ -254,36 +309,34 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       return;
     }
 
-    const retained = readBrowserDashboardTabs();
+    const retained = await readBrowserDashboardTabs();
     const candidates = pageTabs.filter(
       (tab) =>
         tab.targetId !== keepTargetId &&
         !findRetainedBrowserDashboardTab(tab.targetId, profile.name, retained),
     );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
-    for (const tab of candidates.slice(0, excessCount)) {
+    const lastUsedByTarget = await readProfileTabLastUsedAt(profile.name);
+    const evictionOrder = orderManagedTabEvictionCandidates(candidates, lastUsedByTarget);
+    for (const tab of evictionOrder.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
-      if (findRetainedBrowserDashboardTab(tab.targetId, profile.name)) {
-        continue;
-      }
-      await fetchOk(
-        appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
-        undefined,
-        undefined,
-        getCdpControlPolicy(),
+      await dispatchBrowserTabClose(
+        tab.targetId,
+        profile.name,
+        () => {
+          options?.signal?.throwIfAborted();
+          return fetchOk(
+            appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
+            undefined,
+            undefined,
+            getCdpControlPolicy(),
+          );
+        },
+        { skipRetained: true },
       ).catch(() => {
         // best-effort cleanup only
       });
     }
-  };
-
-  const triggerManagedTabLimit = (
-    keepTargetId: string,
-    options?: BrowserOperationOptions,
-  ): void => {
-    // This local-managed raw HTTP cleanup owns no browser process or adapter.
-    // Keep it best-effort so an unresponsive old target cannot block tab creation.
-    void enforceManagedTabLimit(keepTargetId, options).catch(() => {});
   };
 
   const adoptValidatedTab = (
@@ -295,7 +348,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     // Alias and sticky state therefore change only at this final validated adoption point.
     const adopted = assignTabAlias({ profileState: runtime, tab, label: options?.label });
     runtime.lastTargetId = tab.targetId;
-    triggerManagedTabLimit(tab.targetId, options);
+    // This local-managed raw HTTP cleanup owns no browser process or adapter.
+    // Keep it best-effort so an unresponsive old target cannot block tab creation.
+    void enforceManagedTabLimit(tab.targetId, options).catch(() => {});
     return adopted;
   };
 
@@ -389,64 +444,48 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
       const cdpActionTimeouts = getRemoteCdpActionTimeouts();
-      const createTargetOpts: Parameters<typeof createTargetViaCdp>[0] = {
+      const createdViaCdp = await createTargetViaCdp({
         cdpUrl: profile.cdpUrl,
         url,
         ssrfPolicy: cdpPolicy,
         waitForNavigationResult: true,
-      };
-      if (cdpActionTimeouts) {
-        createTargetOpts.timeouts = cdpActionTimeouts;
-      }
-      if (opts?.signal) {
-        createTargetOpts.signal = opts.signal;
-      }
-      const createdViaCdp = await createTargetViaCdp(createTargetOpts).catch(() => null);
+        ...(cdpActionTimeouts ? { timeouts: cdpActionTimeouts } : {}),
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+      }).catch(() => null);
       createdTargetId = createdViaCdp?.targetId;
       opts?.signal?.throwIfAborted();
 
       if (createdViaCdp) {
-        if (!createdViaCdp.finalUrl) {
-          // The target exists, but its committed document is not authoritative.
-          // Preserve the explicit result without sticky, alias, or cleanup adoption.
-          return await withTabOwnership(
-            {
-              targetId: createdViaCdp.targetId,
-              title: "",
-              url,
-              type: "page",
-            },
-            opts,
-          );
-        }
-        await assertBrowserNavigationResultAllowed({
-          url: createdViaCdp.finalUrl,
-          ...ssrfPolicyOpts,
-        });
-        const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-        while (Date.now() < deadline) {
-          opts?.signal?.throwIfAborted();
-          const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
-          const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
-          if (found) {
-            await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
-            // The attached target owns the committed URL; /json/list supplies the
-            // remaining metadata and may briefly lag that exact document snapshot.
-            return adoptValidatedTab(
-              await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
-              { ...opts, label: normalizedLabel },
-            );
+        if (createdViaCdp.finalUrl) {
+          await assertBrowserNavigationResultAllowed({
+            url: createdViaCdp.finalUrl,
+            ...ssrfPolicyOpts,
+          });
+          const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+          while (Date.now() < deadline) {
+            opts?.signal?.throwIfAborted();
+            const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
+            const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
+            if (found) {
+              await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+              // The attached target owns the committed URL; /json/list supplies the
+              // remaining metadata and may briefly lag that exact document snapshot.
+              return adoptValidatedTab(
+                await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
+                { ...opts, label: normalizedLabel },
+              );
+            }
+            await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
           }
-          await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
+          opts?.signal?.throwIfAborted();
         }
-        opts?.signal?.throwIfAborted();
-        // Preserve the explicit target-id result for callers, but do not adopt an
-        // undiscovered target into sticky, alias, or managed-cleanup state.
+        // Uncommitted or undiscovered targets are returned without sticky,
+        // alias, or managed-cleanup adoption.
         return await withTabOwnership(
           {
             targetId: createdViaCdp.targetId,
             title: "",
-            url: createdViaCdp.finalUrl,
+            url: createdViaCdp.finalUrl || url,
             type: "page",
           },
           opts,

@@ -61,19 +61,15 @@ type VoiceTranscriptOperationOwner = {
   closePromise?: Promise<void>;
 };
 
-class VoiceTranscriptOperationRegistry {
+export class VoiceTranscriptOperationRegistry {
   private readonly owners = new Map<string, VoiceTranscriptOperationOwner>();
-
-  constructor(
-    private readonly queuePolicy: Pick<typeof VOICE_TRANSCRIPT_QUEUE_POLICY, "createQueue">,
-  ) {}
 
   private getOrCreate(key: string): VoiceTranscriptOperationOwner {
     const existing = this.owners.get(key);
     if (existing) {
       return existing;
     }
-    const created = { queue: this.queuePolicy.createQueue() };
+    const created = { queue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue() };
     this.owners.set(key, created);
     return created;
   }
@@ -92,47 +88,25 @@ class VoiceTranscriptOperationRegistry {
   async run<T>(
     key: string,
     operation: () => Promise<T>,
-    options: { weight?: number; waitForCapacity?: boolean } = {},
+    options: { weight?: number } = {},
   ): Promise<T> {
-    while (true) {
-      const owner = this.getOrCreate(key);
-      if (owner.closePromise) {
-        if (options.waitForCapacity !== true) {
-          throw new Error("voice transcript persistence session is closing");
-        }
-        try {
-          await owner.closePromise;
-        } catch {
-          // Control work retries on a fresh owner after a failed close releases this one.
-        }
-        continue;
-      }
-      // Control work may wait for the accepted transcript prefix, but must not
-      // be the event that seals transcript admission. Real overflow stays terminal.
-      const admission = owner.queue.enqueue(operation, {
-        weight: options.weight,
-        sealOnOverflow: options.waitForCapacity !== true,
-      });
-      if (admission.accepted) {
-        void admission.completion.then(
-          () => this.cleanup(key, owner),
-          () => this.cleanup(key, owner),
-        );
-        return await admission.completion;
-      }
-      if (owner.queue.didOverflow || options.waitForCapacity !== true) {
-        throw new Error(
-          owner.queue.didOverflow
-            ? "voice transcript persistence queue capacity exceeded"
-            : "voice transcript persistence session is closed",
-        );
-      }
-      if (admission.reason !== "capacity") {
-        throw new Error("voice transcript persistence session is closed");
-      }
-      await owner.queue.flush();
-      this.cleanup(key, owner);
+    const owner = this.getOrCreate(key);
+    if (owner.closePromise) {
+      throw new Error("voice transcript persistence session is closing");
     }
+    const admission = owner.queue.enqueue(operation, options);
+    if (admission.accepted) {
+      void admission.completion.then(
+        () => this.cleanup(key, owner),
+        () => this.cleanup(key, owner),
+      );
+      return await admission.completion;
+    }
+    throw new Error(
+      owner.queue.didOverflow
+        ? "voice transcript persistence queue capacity exceeded"
+        : "voice transcript persistence session is closed",
+    );
   }
 
   async close(key: string, operation: () => Promise<void>): Promise<void> {
@@ -158,10 +132,4 @@ class VoiceTranscriptOperationRegistry {
   clear(): void {
     this.owners.clear();
   }
-}
-
-export function createVoiceTranscriptOperationRegistry(
-  queuePolicy: Pick<typeof VOICE_TRANSCRIPT_QUEUE_POLICY, "createQueue">,
-): VoiceTranscriptOperationRegistry {
-  return new VoiceTranscriptOperationRegistry(queuePolicy);
 }

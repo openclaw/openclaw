@@ -11,7 +11,7 @@ import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.
 import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
@@ -21,6 +21,7 @@ export function withOpenClawAgentDatabaseWrite<T>(
   inputOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T,
   expectedDatabase?: DatabaseSync,
+  signal?: AbortSignal,
 ): Promise<T> {
   const options = {
     ...inputOptions,
@@ -48,7 +49,7 @@ export function withOpenClawAgentDatabaseWrite<T>(
     options,
     async (_identity, assertCurrent) => {
       if (!expectedDatabase) {
-        return await withOpenClawAgentDatabaseAsync(options, run, assertCurrent);
+        return await withOpenClawAgentDatabaseRuntime(options, run, assertCurrent);
       }
       const database = getOpenClawAgentDatabaseIfOpen(options);
       if (!database || database.db !== expectedDatabase || !expectedDatabase.isOpen) {
@@ -64,5 +65,7 @@ export function withOpenClawAgentDatabaseWrite<T>(
       }
     },
     true,
+    undefined,
+    signal,
   );
 }

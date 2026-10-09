@@ -255,6 +255,8 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
         await pane.locator("[data-chat-thinking-select]").click();
         const slider = pane.locator("[data-chat-thinking-slider]");
+        await expect.poll(() => slider.isVisible()).toBe(true);
+        await expect.poll(() => slider.isEnabled()).toBe(true);
         await slider.press("End");
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
         const contextWindow = pane.locator("[data-chat-context-window-toggle]");

@@ -1,8 +1,3 @@
-/**
- * Active subagent prompt context builder.
- *
- * Renders sanitized runtime-owned subagent facts for the current-turn carrier.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -80,12 +75,8 @@ export async function buildActiveSubagentRuntimeContext(params: {
   if (!rawControllerSessionKey) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const controllerSessionKey = resolveInternalSessionKey({
-    key: rawControllerSessionKey,
-    alias,
-    mainKey,
-  });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  const controllerSessionKey = resolveInternalSessionKey({ key: rawControllerSessionKey, alias });
   const agentId = params.controllerAgentId ?? parseAgentSessionKey(controllerSessionKey)?.agentId;
   if (!agentId) {
     return undefined;
@@ -105,7 +96,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
     (snapshot) => {
       const index = buildSubagentRunReadIndexFromRuns({
         runs: snapshot,
-        inMemoryRuns: subagentRuns.values(),
+        inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
       });
       const yielded = [...index.latestRunsByChildSessionKey.values()].filter(
         (entry) => isVisible(entry) && entry.pauseReason === "sessions_yield",
@@ -176,40 +167,35 @@ export async function buildActiveSubagentRuntimeContext(params: {
         ]
           .filter(Boolean)
           .join(" ");
-      const lines: string[] = [];
+      const sections: string[][] = [];
       if (params.includeSpawnContext !== false && list.active.length > 0) {
-        lines.push(
+        sections.push([
           "## Active Subagents",
           ...list.active
             .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
             .slice(0, 16)
             .map(formatEntry),
           ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
-        );
+        ]);
       }
       if (params.includeSpawnContext !== false && recentForPrompt.length > 0) {
-        if (lines.length > 0) {
-          lines.push("");
-        }
-        lines.push(
+        sections.push([
           "## Recently Completed Subagents",
           `Children that ended in the last ${recentMinutes}m, newest first:`,
           ...recentForPrompt.map(formatEntry),
-        );
+        ]);
       }
       if (pending.length > 0) {
-        if (lines.length > 0) {
-          lines.push("");
-        }
-        lines.push(
+        sections.push([
           "## Child results awaiting delivery",
           ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map(formatPendingResult),
           ...(pending.length > PENDING_RESULT_MAX_ENTRIES
             ? [`- additional_results=${pending.length - PENDING_RESULT_MAX_ENTRIES}`]
             : []),
-        );
+        ]);
       }
-      return lines.join("\n");
+      return sections.map((lines) => lines.join("\n")).join("\n\n");
     },
+    { sessionKeys: [controllerSessionKey], descendants: true },
   );
 }

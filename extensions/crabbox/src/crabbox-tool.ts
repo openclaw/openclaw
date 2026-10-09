@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   AnyAgentTool,
@@ -66,9 +67,21 @@ type CrabboxToolOptions = {
   gateway: OpenClawPluginApi["runtime"]["gateway"];
 };
 
-function operationId(sessionId: string, toolCallId: string): string {
+// Unchanged attachment state dedupes in-flight creates; the service reuses live boxes.
+// After stop, the previous attachment distinguishes a new create with a repeated call ID.
+function operationId(
+  sessionId: string,
+  toolCallId: string,
+  previousEnvironmentId?: string,
+): string {
   return createHash("sha256")
-    .update(JSON.stringify([sessionId, toolCallId]))
+    .update(
+      JSON.stringify(
+        previousEnvironmentId
+          ? [sessionId, toolCallId, previousEnvironmentId]
+          : [sessionId, toolCallId],
+      ),
+    )
     .digest("hex");
 }
 
@@ -128,12 +141,15 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         if (presentation !== undefined && presentation !== "desktop" && presentation !== "portal") {
           throw new Error("presentation must be desktop or portal");
         }
+        const status = await gateway.request<{
+          attachment: { environmentId: string } | null;
+        }>("environments.session.status", {}, { timeoutMs: 30_000, scopes: ["operator.read"] });
         return jsonResult(
           await gateway.request(
             "environments.session.create",
             {
               profileId,
-              idempotencyKey: operationId(sessionId, toolCallId),
+              idempotencyKey: operationId(sessionId, toolCallId, status.attachment?.environmentId),
               ...(os ? { os } : {}),
               ...(machineClass ? { machineClass } : {}),
               ...(presentation ? { presentation } : {}),
@@ -193,7 +209,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             throw error;
           }
           throw new Error(
-            `${error instanceof Error ? error.message : String(error)}\nBackground processId: ${processId}. Check process_status for this ID before retrying; a failed response does not prove that the app failed to start.`,
+            `${coerceErrorMessage(error)}\nBackground processId: ${processId}. Check process_status for this ID before retrying; a failed response does not prove that the app failed to start.`,
             { cause: error },
           );
         }

@@ -9,6 +9,7 @@ import {
 } from "../../../test/helpers/temp-dir.js";
 import * as postCoreConvergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import * as config from "../../config/config.js";
+import { hashConfigIncludeRaw } from "../../config/includes.js";
 import { CONFIG_AUDIT_SCOPE } from "../../config/io.audit.js";
 import * as configFactory from "../../config/io.factory.js";
 import { createConfigIO } from "../../config/io.js";
@@ -49,9 +50,6 @@ import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
 import * as updatePlugins from "./update-command-plugins.js";
-import * as postCore from "./update-command-post-core.js";
-import { shouldResumePostCoreUpdateInFreshProcess } from "./update-command-post-core.js";
-import * as postCoreResume from "./update-command-resume.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 const dirs = createTempDirTracker();
@@ -63,13 +61,67 @@ afterEach(async () => {
   dirs.cleanup();
 });
 
-it.each(["beta", "stable"])(
-  "retains stored %s channel during tolerant invalid config reads without rewriting source",
-  async (channel) => {
-    const home = channelDirs.make("update-invalid-channel-read-");
+it("retains the stored channel during tolerant invalid config reads without rewriting source", async () => {
+  const channel = "beta";
+  const home = channelDirs.make("update-invalid-channel-read-");
+  const configPath = path.join(home, "openclaw.json");
+  const original = `{\n  // Keep the authored channel while another field needs repair.\n  update: { channel: '${channel}' },\n  gateway: { port: 'invalid' },\n}\n`;
+  await fs.writeFile(configPath, original);
+  await withEnvAsync(
+    {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_STATE_DIR: home,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+    async () => {
+      const ordinary = await readUpdateChannelConfig(false);
+      expect(ordinary.configSnapshot.valid).toBe(false);
+      expect(ordinary.storedChannel).toBeNull();
+
+      const tolerant = await readUpdateChannelConfig(false, { tolerateReadFailure: true });
+      expect(tolerant.configSnapshot.valid).toBe(false);
+      expect(tolerant.storedChannel).toBe(channel);
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
+    },
+  );
+});
+
+it.each(["root", "include", "repaired include"] as const)(
+  "refreshes the legacy projection after a concurrent %s save during planning",
+  async (changed) => {
+    const home = await fs.realpath(channelDirs.make("update-legacy-planning-save-"));
     const configPath = path.join(home, "openclaw.json");
-    const original = `{\n  // Keep the authored channel while another field needs repair.\n  update: { channel: '${channel}' },\n  gateway: { port: 'invalid' },\n}\n`;
+    const includePath = path.join(home, "gateway.json");
+    const original = JSON.stringify({
+      gateway: { $include: "gateway.json" },
+      update: { channel: "stable" },
+    });
+    const originalInclude = JSON.stringify({
+      mode: "local",
+      bind: "loopback",
+      port: 18789,
+      tailscale: { mode: "off", resetOnExit: true },
+    });
+    const savedRoot = changed === "root" ? original.replace("stable", "beta") : original;
+    const savedInclude =
+      changed === "root"
+        ? originalInclude
+        : JSON.stringify({
+            mode: "local",
+            bind: "loopback",
+            port: 18791,
+            tailscale: {
+              mode: "off",
+              ...(changed === "repaired include" ? {} : { resetOnExit: true }),
+            },
+          });
     await fs.writeFile(configPath, original);
+    await fs.writeFile(includePath, originalInclude);
     await withEnvAsync(
       {
         HOME: home,
@@ -81,42 +133,73 @@ it.each(["beta", "stable"])(
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
       async () => {
-        const ordinary = await readUpdateChannelConfig(false);
-        expect(ordinary.configSnapshot.valid).toBe(false);
-        expect(ordinary.storedChannel).toBeNull();
+        const readSnapshot = config.readConfigFileSnapshot;
+        vi.spyOn(config, "readConfigFileSnapshot").mockImplementationOnce(async (options) => {
+          const snapshot = await readSnapshot(options);
+          expect(snapshot.valid).toBe(false);
+          expect(snapshot.includedPaths).toEqual([includePath]);
+          expect(snapshot.legacyIssues).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ path: "gateway.tailscale.resetOnExit" }),
+            ]),
+          );
+          await fs.writeFile(
+            changed === "root" ? configPath : includePath,
+            changed === "root" ? savedRoot : savedInclude,
+          );
+          return snapshot;
+        });
+        const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 
-        const tolerant = await readUpdateChannelConfig(false, { tolerateReadFailure: true });
-        expect(tolerant.configSnapshot.valid).toBe(false);
-        expect(tolerant.storedChannel).toBe(channel);
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
+        const current = await readUpdateChannelConfig(true);
+
+        expect(current.storedChannel).toBe(changed === "root" ? "beta" : "stable");
+        expect(current.configSnapshot.raw).toBe(savedRoot);
+        expect(current.configSnapshot.sourceConfig.gateway).toEqual(JSON.parse(savedInclude));
+        if (changed === "repaired include") {
+          expect(current.configSnapshot.valid).toBe(true);
+          expect(current.legacyConfigPlan).toBeUndefined();
+        } else {
+          expect(current.legacyConfigPlan?.snapshot).toBe(current.configSnapshot);
+          expect(current.legacyConfigPlan?.config.gateway).toMatchObject({
+            mode: "local",
+            bind: "loopback",
+            port: changed === "root" ? 18789 : 18791,
+          });
+          expect(current.legacyConfigPlan?.config.gateway?.tailscale).toEqual({ mode: "off" });
+          expect(current.legacyConfigPlan?.includeIdentity.includeFileHashesForWrite).toEqual({
+            [includePath]: hashConfigIncludeRaw(savedInclude),
+          });
+          expect(current.legacyConfigPlan?.includeIdentity.includeFileTargetsForWrite).toEqual({
+            [includePath]: includePath,
+          });
+        }
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringMatching(/Configuration changed during update planning.*continuing/),
+        );
+        expect(await fs.readFile(configPath, "utf8")).toBe(savedRoot);
+        expect(await fs.readFile(includePath, "utf8")).toBe(savedInclude);
+        expect((await fs.readdir(home)).toSorted()).toEqual(["gateway.json", "openclaw.json"]);
       },
     );
   },
 );
 
-it.each(
-  (
-    [
-      "prepare",
-      "channel",
-      "downgrade",
-      "plugins",
-      "candidate-prepare",
-      "candidate-commit",
-      "ordinary-prepare",
-      "ordinary-commit",
-      "fresh-check",
-    ] as const
-  ).flatMap((flow) => [false, true].map((suspicious) => ({ flow, suspicious }))),
-)(
+it.each([
+  { flow: "prepare", suspicious: false },
+  { flow: "prepare", suspicious: true },
+  { flow: "channel", suspicious: true },
+  { flow: "downgrade", suspicious: true },
+  { flow: "plugins", suspicious: true },
+  { flow: "candidate-prepare", suspicious: true },
+  { flow: "candidate-commit", suspicious: true },
+  { flow: "fresh-check", suspicious: true },
+] as const)(
   "preserves config observation state after $flow executor revocation (suspicious=$suspicious)",
   async ({ flow, suspicious }) => {
-    const preparationFlow =
-      flow === "prepare" || flow === "candidate-prepare" || flow === "ordinary-prepare";
+    const preparationFlow = flow === "prepare" || flow === "candidate-prepare";
     const candidateFlow = flow === "candidate-prepare" || flow === "candidate-commit";
-    const ordinaryFlow = flow === "ordinary-prepare" || flow === "ordinary-commit";
-    const commitFlow = flow === "candidate-commit" || flow === "ordinary-commit";
+    const commitFlow = flow === "candidate-commit";
     const freshCheckFlow = flow === "fresh-check";
     const home = await fs.realpath(dirs.make("update-config-observation-fence-"));
     const stateDir = path.join(home, "state");
@@ -203,7 +286,7 @@ it.each(
         expect(before?.health).toHaveLength(1);
         expect(before?.audit).toEqual([]);
         const plugins =
-          preparationFlow || candidateFlow || ordinaryFlow
+          preparationFlow || candidateFlow
             ? vi
                 .spyOn(updatePlugins, "updatePluginsAfterCoreUpdate")
                 .mockRejectedValue(new Error("Unexpected plugin convergence after ownership loss"))
@@ -351,7 +434,7 @@ it.each(
         await expect(
           withUpdateCommandExecutor(run.runId, async (executor) => {
             const executorFence = await executor.enter(root);
-            if (candidateFlow || ordinaryFlow) {
+            if (candidateFlow) {
               const result = {
                 status: "ok" as const,
                 mode: "npm" as const,
@@ -361,12 +444,6 @@ it.each(
                 steps: [],
                 durationMs: 0,
               };
-              if (ordinaryFlow) {
-                // Old targets below the post-core writer floor retain the original runtime.
-                expect(
-                  shouldResumePostCoreUpdateInFreshProcess({ result, downgradeRisk: true }),
-                ).toBe(false);
-              }
               await convergeUpdatePlugins({
                 candidateRuntime: candidateFlow,
                 root,
@@ -376,7 +453,7 @@ it.each(
                 storedChannel: suspicious ? "beta" : null,
                 channel: "stable",
                 installKindChanged: false,
-                downgradeRisk: ordinaryFlow,
+                downgradeRisk: false,
                 opts: { json: true, run: { runId: run.runId, env, executorFence } },
                 preUpdatePluginInstallRecords: {},
                 startedAt: Date.now(),
@@ -398,7 +475,6 @@ it.each(
                   npm: { changed: false, outcomes: [] },
                   integrityDrifts: [],
                 },
-                freshDoctorRequired: false,
                 yes: true,
                 json: true,
                 timeoutMs: 1_000,
@@ -480,110 +556,6 @@ it.each(
   },
 );
 
-it("converges healthy candidate code once without nested delegation and restores its host context", async () => {
-  const home = await fs.realpath(dirs.make("update-candidate-convergence-"));
-  const configPath = path.join(home, "openclaw.json");
-  const root = path.join(home, "package");
-  const control = path.join(home, "control");
-  await fs.mkdir(root);
-  await fs.mkdir(control);
-  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw","version":"1.0.0"}\n');
-  await fs.writeFile(configPath, '{"gateway":{"mode":"local","port":18789}}\n');
-  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_STATE_DIR: home,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_CONFIG_READONLY: undefined,
-      OPENCLAW_NIX_MODE: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_COMPATIBILITY_HOST_VERSION: "9.0.0",
-    },
-    async () => {
-      const configSnapshot = await createConfigIO({
-        configPath,
-        observe: false,
-        pluginValidation: "skip",
-      }).readConfigFileSnapshot();
-      expect(configSnapshot.valid).toBe(true);
-      const pluginUpdate: Awaited<ReturnType<typeof updatePlugins.updatePluginsAfterCoreUpdate>> = {
-        assessment: { kind: "no-payload-repair" },
-        status: "ok",
-        changed: false,
-        sync: {
-          changed: false,
-          switchedToBundled: [],
-          switchedToNpm: [],
-          warnings: [],
-          errors: [],
-        },
-        npm: { changed: false, outcomes: [] },
-        integrityDrifts: [],
-      };
-      const plugins = vi
-        .spyOn(updatePlugins, "updatePluginsAfterCoreUpdate")
-        .mockImplementation(async ({ assertCurrent }) => {
-          assertCurrent?.();
-          expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("1.0.0");
-          return pluginUpdate;
-        });
-      const phase = vi.spyOn(postCoreResume, "convergePostCoreUpdatePlugins");
-      const delegate = vi
-        .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
-        .mockRejectedValue(new Error("Candidate code must not delegate its shared phase again"));
-      vi.spyOn(freshDoctor, "completePostCorePluginUpdate").mockResolvedValue({
-        pluginUpdate,
-        configSnapshot,
-      });
-      const result = {
-        status: "ok" as const,
-        mode: "npm" as const,
-        root,
-        before: { version: "2.0.0" },
-        after: { version: "1.0.0" },
-        steps: [],
-        durationMs: 0,
-      };
-      expect(shouldResumePostCoreUpdateInFreshProcess({ result, downgradeRisk: false })).toBe(true);
-      const env = { ...process.env };
-      const run = createUpdateRun({ trigger: "cli" }, { env });
-      await withUpdateCommandExecutor(run.runId, async (executor) => {
-        const executorFence = await executor.enter(root);
-        const assertCurrent = vi.fn(() => executorFence.assertCurrent());
-        const completed = await convergeUpdatePlugins({
-          candidateRuntime: true,
-          result,
-          root,
-          installKindChanged: false,
-          configSnapshot,
-          requestedChannel: null,
-          storedChannel: null,
-          channel: "stable",
-          downgradeRisk: false,
-          opts: { json: true, run: { runId: run.runId, env, executorFence } },
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          updateStepTimeoutMs: 1_000,
-          assertCurrent,
-        });
-        expect(completed.resultWithPostUpdate.status).toBe("ok");
-        expect(completed.resultWithPostUpdate.postUpdate?.plugins).toBe(pluginUpdate);
-        expect(assertCurrent).toHaveBeenCalled();
-        expect(phase).toHaveBeenCalledWith(expect.objectContaining({ assertCurrent }));
-        expect(plugins).toHaveBeenCalledWith(expect.objectContaining({ assertCurrent }));
-      });
-      expect(phase).toHaveBeenCalledTimes(1);
-      expect(plugins).toHaveBeenCalledTimes(1);
-      expect(delegate).not.toHaveBeenCalled();
-      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("9.0.0");
-    },
-  );
-});
-
 it.each([
   { revoked: false, included: false, late: false },
   { revoked: true, included: false, late: false },
@@ -655,9 +627,9 @@ it.each([
       ? [await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]
       : [];
     let reachedCommit = false;
+    let revokedDuringSync = false;
     const owned = withUpdateCommandExecutor(run.runId, async (executor) => {
       const fence = await executor.enter(home);
-      const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
       const revoke = () => {
         const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
         try {
@@ -669,17 +641,21 @@ it.each([
           db.close();
         }
       };
+      if (late) {
+        const fsync = syncFs.fsyncSync;
+        vi.spyOn(syncFs, "fsyncSync").mockImplementation((fd) => {
+          fsync(fd);
+          if (reachedCommit && !revokedDuringSync) {
+            revoke();
+            revokedDuringSync = true;
+          }
+        });
+      }
+      const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
       const beforeCommit = async () => {
         reachedCommit = true;
         if (revoked && !late) {
           revoke();
-        }
-        if (late) {
-          const fsync = syncFs.fsyncSync;
-          vi.spyOn(syncFs, "fsyncSync").mockImplementationOnce((fd) => {
-            fsync(fd);
-            revoke();
-          });
         }
       };
       return await withConfigWriteLock(
@@ -732,46 +708,9 @@ it.each([
       }
     }
     expect(reachedCommit).toBe(true);
+    expect(revokedDuringSync).toBe(late);
     if (included && process.platform !== "win32") {
       expect((await fs.stat(path.dirname(includePath))).mode & 0o7777).toBe(0o3700);
     }
   },
 );
-
-it("preserves ordinary unguarded include publication", async () => {
-  const home = await fs.realpath(dirs.make("update-config-unguarded-include-"));
-  const configPath = path.join(home, "openclaw.json");
-  const includePath = path.join(home, "gateway.json");
-  const original = '{"gateway":{"$include":"./gateway.json"}}\n';
-  const includedRaw = '{"mode":"local","port":18789}\n';
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    OPENCLAW_STATE_DIR: home,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_HOME: undefined,
-    OPENCLAW_PROFILE: undefined,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  };
-  await fs.writeFile(configPath, original);
-  await fs.writeFile(includePath, includedRaw);
-  const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
-  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
-  await replaceConfigFile({
-    snapshot,
-    baseHash: snapshot.hash,
-    nextConfig: {
-      ...snapshot.sourceConfig,
-      gateway: { ...snapshot.sourceConfig.gateway, port: 18791 },
-    },
-    writeOptions: { ...writeOptions, skipPluginValidation: true },
-    io: { ...io, env },
-  });
-  expect(await fs.readFile(configPath, "utf8")).toBe(original);
-  expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
-    mode: "local",
-    port: 18791,
-  });
-  expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includedRaw);
-});

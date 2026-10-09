@@ -18,8 +18,6 @@ import type {
   BrowserGraphicsAcceleration,
   BrowserGraphicsDevice,
   BrowserGraphicsDiagnostics,
-  BrowserVideoDecodeCapability,
-  BrowserVideoEncodeCapability,
 } from "./client.types.js";
 
 type ChromeGraphicsProbeOptions = {
@@ -58,34 +56,6 @@ function readSize(value: unknown): { width: number; height: number } {
 
 function readRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function readDevices(value: unknown): BrowserGraphicsDevice[] {
-  return readRecordArray(value).map((device) => ({
-    vendorId: readChromeNumber(device.vendorId),
-    deviceId: readChromeNumber(device.deviceId),
-    vendor: readChromeString(device.vendorString),
-    device: readChromeString(device.deviceString),
-    driverVendor: readChromeString(device.driverVendor),
-    driverVersion: readChromeString(device.driverVersion),
-  }));
-}
-
-function readVideoDecoding(value: unknown): BrowserVideoDecodeCapability[] {
-  return readRecordArray(value).map((capability) => ({
-    profile: readChromeString(capability.profile),
-    minResolution: readSize(capability.minResolution),
-    maxResolution: readSize(capability.maxResolution),
-  }));
-}
-
-function readVideoEncoding(value: unknown): BrowserVideoEncodeCapability[] {
-  return readRecordArray(value).map((capability) => ({
-    profile: readChromeString(capability.profile),
-    maxResolution: readSize(capability.maxResolution),
-    maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
-    maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
-  }));
 }
 
 function firstAttribute(
@@ -131,7 +101,7 @@ function classifyGraphicsAcceleration(params: {
 
 function normalizeChromeGraphicsInfo(
   value: unknown,
-  observedAt = Date.now(),
+  observedAt: number,
 ): BrowserGraphicsDiagnostics {
   const result = asNullableRecord(value);
   const gpu = asNullableRecord(result?.gpu);
@@ -145,7 +115,14 @@ function normalizeChromeGraphicsInfo(
 
   const attributes = readStringRecord(gpu.auxAttributes);
   const featureStatus = readStringRecord(gpu.featureStatus);
-  const devices = readDevices(gpu.devices);
+  const devices = readRecordArray(gpu.devices).map((device) => ({
+    vendorId: readChromeNumber(device.vendorId),
+    deviceId: readChromeNumber(device.deviceId),
+    vendor: readChromeString(device.vendorString),
+    device: readChromeString(device.deviceString),
+    driverVendor: readChromeString(device.driverVendor),
+    driverVersion: readChromeString(device.driverVersion),
+  }));
   const renderer = firstAttribute(attributes, ["glRenderer", "angleRenderer", "webglRenderer"]);
   const disabledFeatures = Object.entries(featureStatus)
     .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
@@ -163,8 +140,17 @@ function normalizeChromeGraphicsInfo(
     featureStatus,
     disabledFeatures,
     driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
-    videoDecoding: readVideoDecoding(gpu.videoDecoding),
-    videoEncoding: readVideoEncoding(gpu.videoEncoding),
+    videoDecoding: readRecordArray(gpu.videoDecoding).map((capability) => ({
+      profile: readChromeString(capability.profile),
+      minResolution: readSize(capability.minResolution),
+      maxResolution: readSize(capability.maxResolution),
+    })),
+    videoEncoding: readRecordArray(gpu.videoEncoding).map((capability) => ({
+      profile: readChromeString(capability.profile),
+      maxResolution: readSize(capability.maxResolution),
+      maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
+      maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
+    })),
   };
 }
 

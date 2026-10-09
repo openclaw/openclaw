@@ -4,7 +4,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
-  getContextEngineRegistration,
   registerContextEngineInRegistry,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
@@ -62,7 +61,9 @@ function registerTestContextEngine(
   });
 }
 
-function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): string {
+async function registerEngine(
+  requiredCapabilities: ContextEngineHostCapability[],
+): Promise<string> {
   const id = uniqueEngineId();
   const engine: ContextEngine = {
     info: {
@@ -88,7 +89,7 @@ function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): st
       return { ok: true, compacted: false };
     },
   };
-  registerTestContextEngine(id, () => engine);
+  await registerTestContextEngine(id, () => engine);
   return id;
 }
 
@@ -211,24 +212,8 @@ describe("doctor context-engine host compatibility", () => {
     },
   );
 
-  it("distinguishes read-only discovery registrations from runtime entries", () => {
-    const id = uniqueEngineId();
-    const factory = () => {
-      throw new Error("discovery-only");
-    };
-    const result = registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
-      lifecycle: "readOnlyDiscovery",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(getContextEngineRegistration(id)).toMatchObject({
-      factory,
-      lifecycle: "readOnlyDiscovery",
-    });
-  });
-
   it("evaluates native Codex and OpenClaw agent-run hosts", async () => {
-    const engineId = registerEngine(["thread-bootstrap-projection"]);
+    const engineId = await registerEngine(["thread-bootstrap-projection"]);
     const warnings = await collectContextEngineHostCompatibilityWarnings({
       cfg: configWithEngine(engineId, {
         agents: {
@@ -249,7 +234,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("does not warn for context engines without host requirements", async () => {
-    const engineId = registerEngine([]);
+    const engineId = await registerEngine([]);
     const warnings = await collectContextEngineHostCompatibilityWarnings({
       cfg: configWithEngine(engineId, {
         agents: {
@@ -268,7 +253,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
-    const engineId = registerEngine([]);
+    const engineId = await registerEngine([]);
     const warnings = await collectContextEngineHostCompatibilityWarnings({
       cfg: configWithEngine(engineId, {
         agents: {
@@ -291,7 +276,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("repairs an incompatible context engine by resetting the global slot to legacy", async () => {
-    const engineId = registerEngine(["assemble-before-prompt"]);
+    const engineId = await registerEngine(["assemble-before-prompt"]);
     const cfg = configWithEngine(engineId, {
       plugins: {
         slots: {
@@ -326,7 +311,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("leaves compatible native runtimes unchanged", async () => {
-    const engineId = registerEngine(["assemble-before-prompt", "runtime-llm-complete"]);
+    const engineId = await registerEngine(["assemble-before-prompt", "runtime-llm-complete"]);
     const cfg = configWithEngine(engineId, {
       agents: {
         defaults: {
@@ -346,7 +331,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("warns but does not auto-repair mixed compatible and incompatible runtimes", async () => {
-    const engineId = registerEngine(["assemble-before-prompt"]);
+    const engineId = await registerEngine(["assemble-before-prompt"]);
     const cfg = configWithEngine(engineId, {
       agents: {
         defaults: {

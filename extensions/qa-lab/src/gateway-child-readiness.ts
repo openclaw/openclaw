@@ -105,21 +105,24 @@ export async function waitForQaGatewayRestartBoundary(params: {
   throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
 }
 
-export async function waitForGatewayReady(params: {
+type QaGatewayProbeParams = {
   baseUrl: string;
   logs: () => string;
   child: QaGatewayHealthChild;
   getChildFailure?: () => QaChildFailure | null;
   timeoutMs?: number;
-}) {
+};
+
+async function waitForGatewayProbe(params: QaGatewayProbeParams, kind: "health" | "listening") {
   const deadline = Date.now() + (params.timeoutMs ?? 60_000);
+  const phase = kind === "health" ? "becoming healthy" : "listening";
   let remainingMs: number;
   while ((remainingMs = deadline - Date.now()) > 0) {
     throwQaGatewayChildFailure(params.getChildFailure, params.logs);
     if (hasQaGatewayChildExited(params.child)) {
       throw new QaSuiteInfraError(
         "gateway_startup_unhealthy",
-        `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
+        `gateway exited before ${phase} (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
     // Listener liveness can turn green before the Gateway can admit startup or restart work.
@@ -127,52 +130,27 @@ export async function waitForGatewayReady(params: {
       if (
         await fetchLocalGatewayProbe({
           baseUrl: params.baseUrl,
-          kind: "health",
-          timeoutMs: Math.min(2_000, remainingMs),
+          kind,
+          timeoutMs: kind === "health" ? Math.min(2_000, remainingMs) : undefined,
         })
       ) {
         return;
       }
-    } catch {
-      // retry until timeout
-    }
-    await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+    } catch {}
+    await sleep(kind === "health" ? Math.min(250, Math.max(0, deadline - Date.now())) : 100);
   }
   throw new QaSuiteInfraError(
     "gateway_startup_unhealthy",
-    `gateway failed to become healthy:\n${params.logs()}`,
+    `gateway failed to ${kind === "health" ? "become healthy" : "listen before timeout"}:\n${params.logs()}`,
   );
 }
 
-export async function waitForGatewayListening(params: {
-  baseUrl: string;
-  logs: () => string;
-  child: QaGatewayHealthChild;
-  getChildFailure?: () => QaChildFailure | null;
-  timeoutMs?: number;
-}) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
-    throwQaGatewayChildFailure(params.getChildFailure, params.logs);
-    if (hasQaGatewayChildExited(params.child)) {
-      throw new QaSuiteInfraError(
-        "gateway_startup_unhealthy",
-        `gateway exited before listening (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
-      );
-    }
-    try {
-      if (await fetchLocalGatewayProbe({ baseUrl: params.baseUrl, kind: "listening" })) {
-        return;
-      }
-    } catch {
-      // retry until the HTTP listener accepts requests
-    }
-    await sleep(100);
-  }
-  throw new QaSuiteInfraError(
-    "gateway_startup_unhealthy",
-    `gateway failed to listen before timeout:\n${params.logs()}`,
-  );
+export function waitForGatewayReady(params: QaGatewayProbeParams) {
+  return waitForGatewayProbe(params, "health");
+}
+
+export function waitForGatewayListening(params: QaGatewayProbeParams) {
+  return waitForGatewayProbe(params, "listening");
 }
 
 export function isRetryableRpcStartupError(error: unknown) {

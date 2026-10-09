@@ -194,10 +194,7 @@ export async function runCodexNodeExecServer(params: {
     }
   };
   let close = releaseResources;
-  let rejectDisconnected!: (error: Error) => void;
-  const disconnected = new Promise<never>((_resolve, reject) => {
-    rejectDisconnected = reject;
-  });
+  const { promise: disconnected, reject: rejectDisconnected } = createDeferred<never>();
   void disconnected.catch(() => {});
   const onAbort = () => {
     const error = nodeExecServerAbortError(io.signal);
@@ -246,8 +243,7 @@ export async function runCodexNodeExecServer(params: {
     const nativeReady = createDeferred<void>();
     const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
     let stderr = Buffer.alloc(0);
-    let startupSettled = false;
-    let pendingLine = "";
+    let pendingLine: string | undefined = "";
     const decoder = new StringDecoder("utf8");
     const child = await createStdioTransport(
       {
@@ -295,15 +291,14 @@ export async function runCodexNodeExecServer(params: {
             stderr,
             next.subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES),
           ]).subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES);
-          if (startupSettled) {
+          if (pendingLine === undefined) {
             return;
           }
           const lines = (pendingLine + decoder.write(next)).split("\n");
           pendingLine = lines.pop()!;
           for (const line of [...lines, pendingLine]) {
             if (Buffer.byteLength(line, "utf8") > MAX_CODEX_EXEC_SERVER_STDERR_BYTES) {
-              startupSettled = true;
-              pendingLine = "";
+              pendingLine = undefined;
               rejectDisconnected(new Error("Codex node startup diagnostic line exceeded 4 KiB."));
               return;
             }
@@ -313,8 +308,7 @@ export async function runCodexNodeExecServer(params: {
               stripVTControlCharacters(line).trimEnd().endsWith(CODEX_EXEC_SERVER_READY_LINE),
             )
           ) {
-            startupSettled = true;
-            pendingLine = "";
+            pendingLine = undefined;
             nativeReady.resolve();
           }
         });

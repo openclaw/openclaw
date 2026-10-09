@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
@@ -21,7 +22,6 @@ import {
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -97,14 +97,8 @@ function compareSidebarSessionRowsByCreatedAt(
   b: SessionRow,
   createdOrder: ReadonlyMap<string, number>,
 ): number {
-  const createdAtA =
-    typeof a.createdAt === "number" && Number.isFinite(a.createdAt) && a.createdAt >= 0
-      ? a.createdAt
-      : null;
-  const createdAtB =
-    typeof b.createdAt === "number" && Number.isFinite(b.createdAt) && b.createdAt >= 0
-      ? b.createdAt
-      : null;
+  const createdAtA = asNonNegativeFiniteNumber(a.createdAt) ?? null;
+  const createdAtB = asNonNegativeFiniteNumber(b.createdAt) ?? null;
   if (createdAtA !== null || createdAtB !== null) {
     if (createdAtA === null) {
       return 1;
@@ -200,14 +194,13 @@ export function buildSidebarSessionNavigationState(input: {
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      label: resolveSessionDisplayName(row.key, row),
       userLabel: row.label,
       renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
       gatewayHasActiveRun: row.hasActiveRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
@@ -215,6 +208,7 @@ export function buildSidebarSessionNavigationState(input: {
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
       sharingRole: row.sharingRole,
@@ -255,7 +249,7 @@ export function buildSidebarSessionNavigationState(input: {
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: input.hasSessionDraft(row.key),
+      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
@@ -315,7 +309,7 @@ export function buildReconciledSidebarZone(input: {
   const defaultPluginNavigationKeys = new Set([
     ...pluginTabs.keys(),
     ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
+      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
       .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
       .map((entry) => entry.key),
   ]);
@@ -431,16 +425,9 @@ export function collectSidebarSessionRowsByKey(input: {
   rows: readonly GatewaySessionRow[];
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
 }): ReadonlyMap<string, GatewaySessionRow> {
-  const rowsByKey = new Map<string, GatewaySessionRow>();
-  for (const rows of Object.values(input.childRowsByParent)) {
-    for (const row of rows) {
-      rowsByKey.set(row.key, row);
-    }
-  }
-  for (const row of input.rows) {
-    rowsByKey.set(row.key, row);
-  }
-  return rowsByKey;
+  return new Map(
+    [...Object.values(input.childRowsByParent).flat(), ...input.rows].map((row) => [row.key, row]),
+  );
 }
 
 export function collectCategorizedChildRootRows(input: {
@@ -457,14 +444,6 @@ export function collectCategorizedChildRootRows(input: {
       resolveUiSessionNavigationParentKey(row) != null &&
       sessionMatchesVisibleSessionScope(row, input.visibilityOptions),
   );
-}
-
-export function resolveSidebarAgentResumeKey(
-  latest: SessionRow | null,
-  agentId: string,
-  mainKey: string,
-): string {
-  return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
 }
 
 export function collectKnownSidebarSessionCatalogIds(input: {
@@ -498,13 +477,6 @@ export function resolveSidebarMainSessionKey(input: {
     agentId: input.agentId,
     mainKey: resolveUiConfiguredMainKey(host),
   });
-}
-
-export function findSidebarMainSessionRow(
-  rows: readonly GatewaySessionRow[],
-  mainKey: string,
-): GatewaySessionRow | null {
-  return rows.find((row) => areUiSessionKeysEquivalent(row.key, mainKey)) ?? null;
 }
 
 /** Search the projected tree without flattening folded descendant state. */

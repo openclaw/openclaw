@@ -1,15 +1,6 @@
-import {
-  ACCESS_MODE_ALL,
-  ACCESS_MODE_SELECTED,
-  nearestGroupColor,
-  parsePairingString,
-} from "./relay-core.js";
+import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, parsePairingString } from "./relay-core.js";
 import { isTabSelected } from "./relay-tab-groups.js";
 import { isValidTabId } from "./tab-eligibility.js";
-
-function errorResponse(sendResponse, error) {
-  sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
-}
 
 /** Own manual/native pairing transactions and compact popup/options messages. */
 export function createPopupMessageHandler({
@@ -113,7 +104,7 @@ export function createPopupMessageHandler({
         policy.beginTransition();
       }
       try {
-        await pairingConfigStore.save(parsed, nearestGroupColor(), normalizedMode);
+        await pairingConfigStore.save(parsed, "orange", normalizedMode);
         assertCurrent();
         await reconcileAccessMode(normalizedMode, { transitioning: downgrading });
         assertCurrent();
@@ -316,13 +307,12 @@ export function createPopupMessageHandler({
             sendResponse({ ok: false, error: "unknown message" });
         }
       } catch (error) {
-        errorResponse(sendResponse, error);
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
       }
     })();
     return true;
   };
 
   handler.applyPairing = applyPairing;
-  handler.unpair = unpair;
   return handler;
 }

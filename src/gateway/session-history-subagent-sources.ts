@@ -1,16 +1,63 @@
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import { isSubagentSessionFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
+import {
+  readExactSessionEntryRow,
+  readExactSessionEntryRowValidated,
+} from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import type { CurrentTranscriptProjection } from "../config/sessions/session-accessor.sqlite-projection-read.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
+import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
-import { readGatewaySessionEntryFromSources } from "./session-utils-store-readonly.js";
+import { resolveGatewaySessionStoreReadResults } from "./session-utils-store-selection.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 type SessionHistorySubagentSource = Pick<CurrentTranscriptProjection, "database"> & {
   resolved: Pick<CurrentTranscriptProjection["resolved"], "agentId">;
 };
+
+/** Auxiliary metadata never chooses one of several matching canonical source rows. */
+function readGatewaySessionEntryFromSources(
+  sessionKey: string,
+  sources: readonly SessionEntryReadSource[],
+  current?: { source: SessionEntryReadSource; entry: SessionEntry | undefined },
+): SessionEntry | undefined {
+  if (sources.length === 0) {
+    return undefined;
+  }
+  const selected = resolveGatewaySessionStoreReadResults({
+    canonicalKey: sessionKey,
+    scanTargets: [sessionKey],
+    deferCanonicalValidation: true,
+    reads: sources.map((source) => ({ storePath: source.path, readSource: source })),
+    readStore: ({ readSource }) => {
+      if (
+        current &&
+        readSource.path === current.source.path &&
+        readSource.agentId === current.source.agentId
+      ) {
+        return current.entry ? { [sessionKey]: current.entry } : {};
+      }
+      try {
+        const result = withScopedOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readWithCanonicalSessionAdmission(
+              database,
+              () => readExactSessionEntryRowValidated(database, sessionKey, "list")?.entry,
+            ),
+          readSource,
+        );
+        return result.found && result.value ? { [sessionKey]: result.value } : {};
+      } catch {
+        // Preserve the existing unavailable auxiliary store as an unclassified source.
+        return {};
+      }
+    },
+  });
+  return selected.canonicalValidationError ? undefined : selected.match?.entry;
+}
 
 /** Source lineage is independent of which live or archived transcript is being displayed. */
 export function createBoundSessionHistorySubagentSource(
@@ -64,17 +111,13 @@ export function createBoundSessionHistorySubagentSource(
     });
     let child = isSubagentSessionFromEntry(sessionKey, entry);
     if (!child && entry && (entry.parentSessionKey || entry.spawnedBy) && stateDatabase) {
-      const acp = withStateDatabaseCoordinatorRuntimeDirectory(
-        stateDatabase.coordinatorRuntime,
-        () =>
-          readAcpSessionMetaForEntry({
-            sessionKey,
-            agentId: parseAgentSessionKey(sessionKey)?.agentId,
-            entry,
-            databasePath: stateDatabase.path,
-            env: stateDatabase.environment,
-          }),
-      );
+      const acp = readAcpSessionMetaForEntry({
+        sessionKey,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId,
+        entry,
+        databasePath: stateDatabase.path,
+        env: stateDatabase.environment,
+      });
       child = isSubagentSessionFromEntry(sessionKey, entry, acp);
     }
     sources.set(sessionKey, child);

@@ -80,6 +80,10 @@ describe("handleDirFetch — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
     await fs.mkdir(path.join(tmpRoot, "sub"));
     await fs.writeFile(path.join(tmpRoot, "sub", "b.txt"), "beta\n");
+    await fs.mkdir(path.join(tmpRoot, "c"));
+    await fs.writeFile(path.join(tmpRoot, "c", "z.txt"), "first subtree\n");
+    await fs.mkdir(path.join(tmpRoot, "c\u200d"));
+    await fs.writeFile(path.join(tmpRoot, "c\u200d", "a.txt"), "second subtree\n");
 
     const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
     if (!r.ok) {
@@ -91,7 +95,17 @@ describe("handleDirFetch — happy path", () => {
     expect(r.tarBytes).toBe(0);
     expect(r.sha256).toBe("");
     expect(r.preflightOnly).toBe(true);
-    expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
+    expect(r.entries).toEqual([
+      ".ssh",
+      ".ssh/id_rsa",
+      "a.txt",
+      "c",
+      "c/z.txt",
+      "c\u200d",
+      "c\u200d/a.txt",
+      "sub",
+      "sub/b.txt",
+    ]);
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
@@ -129,6 +143,28 @@ describe("handleDirFetch — happy path", () => {
         code: "CANONICAL_PATH_CHANGED",
         message: "canonical path differs from the authorized target",
         canonicalPath: second,
+      });
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "returns an invalid-path error for a non-UTF-8 filename instead of a partial preflight",
+    async () => {
+      await fs.writeFile(path.join(tmpRoot, "valid.txt"), "valid sibling");
+      const nested = path.join(tmpRoot, "nested");
+      await fs.mkdir(nested);
+      await fs.writeFile(
+        Buffer.concat([Buffer.from(`${nested}/`), Buffer.from([0xff])]),
+        "unrepresentable filename",
+      );
+
+      const result = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
+
+      expect(result).toEqual({
+        ok: false,
+        code: "INVALID_PATH",
+        message: expect.stringContaining("directory entry name is not valid UTF-8"),
+        canonicalPath: tmpRoot,
       });
     },
   );

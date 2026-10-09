@@ -13,6 +13,7 @@ import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 type CompilerInputPolicy = {
   toolchainFiles: string[];
   generatorInputs: string[];
+  runtimeVersion?: string;
   isGeneratorInput?: (file: string) => boolean;
   assertInput?: (file: string) => string;
 };
@@ -210,6 +211,7 @@ export class CompilerInputSnapshot {
   private generatorInputs?: string[];
   private readonly policy: CompilerInputPolicy;
   private tools?: string;
+  private toolPaths?: string;
   readonly rootDir: string;
   constructor(rootDir: string, policy: CompilerInputPolicy) {
     this.rootDir = rootDir;
@@ -501,7 +503,7 @@ export class CompilerInputSnapshot {
   private toolchain() {
     this.tools ??= digest(
       JSON.stringify([
-        process.versions.node,
+        this.policy.runtimeVersion ?? process.versions.node,
         process.platform,
         process.arch,
         ...this.toolInputs().map((file) => this.hash(file)),
@@ -510,13 +512,46 @@ export class CompilerInputSnapshot {
     return this.tools;
   }
 
-  signature(config: string, args: string[], inputs: string[], outputRoot?: string) {
+  private toolchainPaths() {
+    this.toolPaths ??= digest(
+      JSON.stringify(
+        this.toolInputs().map((file) => {
+          const absolute = this.inputPath(file);
+          return [
+            portableRelativePath(this.rootDir, absolute),
+            portableRelativePath(this.rootDir, this.inputPath(fs.realpathSync.native(absolute))),
+          ];
+        }),
+      ),
+    );
+    return this.toolPaths;
+  }
+
+  signature(
+    config: string,
+    args: string[],
+    inputs: string[],
+    outputRoot?: string,
+    resolutionFingerprint?: string,
+  ) {
     const parsed = this.config(config);
+    const namespace = this.namespace(outputRoot);
     return digest(
       JSON.stringify(
         [
           ARTIFACT_CACHE_VERSION,
-          this.namespace(outputRoot),
+          resolutionFingerprint === undefined
+            ? namespace
+            : [
+                "compiler-lookups",
+                resolutionFingerprint,
+                this.toolchainPaths(),
+                (this.topology ?? [])
+                  .filter(
+                    ({ id, name }) => path.isAbsolute(id) && name === `${id}:ancestor-install`,
+                  )
+                  .map(({ name }) => name),
+              ],
           outputRoot,
           this.toolchain(),
           config,
@@ -545,11 +580,13 @@ export class CompilerInputSnapshot {
     args: string[],
     required: string[],
     outputRoot?: string,
+    resolutionFingerprint?: string,
   ) {
     try {
       return (
         record?.inputs !== undefined &&
-        record.signature === this.signature(config, args, record.inputs, outputRoot) &&
+        record.signature ===
+          this.signature(config, args, record.inputs, outputRoot, resolutionFingerprint) &&
         required.every((file) => Object.hasOwn(record.outputs, file)) &&
         (!outputRoot ||
           listCacheFiles(

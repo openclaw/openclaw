@@ -8,11 +8,7 @@ import type {
 } from "baileys";
 import { formatCliCommand, VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createHttp1EnvHttpProxyAgent,
-  createHttp1ProxyAgent,
-  createNodeProxyAgent,
-} from "openclaw/plugin-sdk/fetch-runtime";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success, getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -168,10 +164,6 @@ function resolveEnvWaWebSocketUrl(): string | undefined {
   return url.toString();
 }
 
-/**
- * Create a Baileys socket backed by the multi-file auth store we keep on disk.
- * Consumers can opt into QR printing for interactive login flows.
- */
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
@@ -223,8 +215,9 @@ async function createWaSocketInternal(
   };
   const { version } = await fetchLatestBaileysVersion();
   const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
-  const agent = await resolveEnvProxyAgent(sessionLogger);
-  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
+  // The media agent owns proxy failures; an absent agent permits direct uploads.
+  const fetchAgent = createNodeProxyAgent({ mode: "env", protocol: "https" });
+  const agent = resolveEnvProxyAgent(sessionLogger, WHATSAPP_WEBSOCKET_PROXY_TARGET);
   const socketTiming = {
     keepAliveIntervalMs:
       opts.keepAliveIntervalMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
@@ -242,6 +235,13 @@ async function createWaSocketInternal(
     }
     opts.onCredentialPersistenceError?.(error);
   };
+  const observeCredentialPersistence = <T>(task: Promise<T>, reportError = false): Promise<T> => {
+    opts.onCredentialPersistenceTask?.(task);
+    if (reportError) {
+      void task.then(undefined, reportCredentialPersistenceError);
+    }
+    return task;
+  };
   const persistedSignalKeys: SignalKeyStore = opts.beforeCredentialPersistence
     ? {
         ...state.keys,
@@ -256,9 +256,7 @@ async function createWaSocketInternal(
     ? {
         ...cachedSignalKeys,
         get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
-          const task = Promise.resolve(cachedSignalKeys.get(type, ids));
-          opts.onCredentialPersistenceTask?.(task);
-          return task;
+          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.get(type, ids)));
         },
         set(data) {
           const task = (async () => {
@@ -269,8 +267,7 @@ async function createWaSocketInternal(
               throw error;
             }
           })();
-          opts.onCredentialPersistenceTask?.(task);
-          return task;
+          return observeCredentialPersistence(task);
         },
       }
     : cachedSignalKeys;
@@ -280,19 +277,11 @@ async function createWaSocketInternal(
         const storeLidPnMappings = repository.lidMapping.storeLIDPNMappings.bind(
           repository.lidMapping,
         );
-        repository.lidMapping.storeLIDPNMappings = (...storeArgs) => {
-          const task = storeLidPnMappings(...storeArgs);
-          opts.onCredentialPersistenceTask?.(task);
-          void task.then(undefined, reportCredentialPersistenceError);
-          return task;
-        };
+        repository.lidMapping.storeLIDPNMappings = (...storeArgs) =>
+          observeCredentialPersistence(storeLidPnMappings(...storeArgs), true);
         const migrateSession = repository.migrateSession.bind(repository);
-        repository.migrateSession = (...migrateArgs) => {
-          const task = migrateSession(...migrateArgs);
-          opts.onCredentialPersistenceTask?.(task);
-          void task.then(undefined, reportCredentialPersistenceError);
-          return task;
-        };
+        repository.migrateSession = (...migrateArgs) =>
+          observeCredentialPersistence(migrateSession(...migrateArgs), true);
         return repository;
       }
     : undefined;
@@ -310,9 +299,8 @@ async function createWaSocketInternal(
     markOnlineOnConnect: false,
     ...socketTiming,
     agent,
-    // Baileys types still model `fetchAgent` as a Node agent even though the
-    // runtime path accepts an undici dispatcher for upload fetches.
-    fetchAgent: fetchAgent as Agent | undefined,
+    // Baileys uploads through node:https; its media hosts need per-request proxy routing.
+    fetchAgent,
     ...(makeSignalRepository ? { makeSignalRepository } : {}),
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
@@ -371,6 +359,8 @@ async function createWaSocketInternal(
         }
       }
       if (connection === "close") {
+        agent?.destroy();
+        fetchAgent?.destroy();
         const status = getStatusCode(lastDisconnect?.error);
         if (status === LOGGED_OUT_STATUS) {
           console.error(
@@ -404,85 +394,27 @@ export async function createWaDirectorySocket(
   return await createWaSocketInternal(false, false, { authDir }, "directory");
 }
 
-async function resolveEnvProxyAgent(
+function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
-): Promise<Agent | undefined> {
+  targetUrl: string,
+): Agent | undefined {
   try {
     const agent = createNodeProxyAgent({
       mode: "env",
-      targetUrl: WHATSAPP_WEBSOCKET_PROXY_TARGET,
+      targetUrl,
       protocol: "https",
-    }) as Agent | undefined;
-    if (!agent) {
-      return undefined;
+    });
+    if (agent) {
+      logger.info("Using ambient env proxy for WhatsApp connection");
     }
-    logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     return agent;
   } catch (error) {
     logger.warn(
       { error: String(error) },
-      "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
+      "Failed to initialize env proxy agent for WhatsApp connection",
     );
     return undefined;
   }
-}
-
-async function resolveEnvFetchDispatcher(
-  logger: ReturnType<typeof getChildLogger>,
-  agent?: unknown,
-): Promise<unknown> {
-  const proxyUrl = resolveProxyUrlFromAgent(agent);
-  const envProxyUrl = resolveEnvHttpsProxyUrl();
-  if (!proxyUrl && !envProxyUrl) {
-    return undefined;
-  }
-  try {
-    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
-  } catch (error) {
-    logger.warn(
-      { error: String(error) },
-      "Failed to initialize env proxy dispatcher for WhatsApp media uploads",
-    );
-    return undefined;
-  }
-}
-
-function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
-  if (
-    typeof agent === "object" &&
-    agent !== null &&
-    "getProxyForUrl" in agent &&
-    typeof agent.getProxyForUrl === "function"
-  ) {
-    const proxyUrl = agent.getProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET);
-    return typeof proxyUrl === "string" && proxyUrl.length > 0 ? proxyUrl : undefined;
-  }
-  if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
-    return undefined;
-  }
-  const proxy = (agent as { proxy?: unknown }).proxy;
-  if (proxy instanceof URL) {
-    return proxy.toString();
-  }
-  return typeof proxy === "string" && proxy.length > 0 ? proxy : undefined;
-}
-
-function resolveEnvHttpsProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const lowerHttpsProxy = normalizeEnvProxyValue(env.https_proxy);
-  const lowerHttpProxy = normalizeEnvProxyValue(env.http_proxy);
-  const httpsProxy =
-    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeEnvProxyValue(env.HTTPS_PROXY);
-  const httpProxy =
-    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeEnvProxyValue(env.HTTP_PROXY);
-  return httpsProxy ?? httpProxy ?? undefined;
-}
-
-function normalizeEnvProxyValue(value: string | undefined): string | null | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 type WhatsAppConnectionWaitOptions =

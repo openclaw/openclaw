@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -138,18 +146,33 @@ describePosix("prepare-push retained Crabbox finalization", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
   });
 
-  it("refuses ordinary prepare-push before refresh when dispatch acceptance is uncertain", () => {
-    const f = publishedPreparation();
-    writeFileSync(
-      join(f.local, "gates.env"),
-      readFileSync(join(f.local, "gates.env"), "utf8") + "PENDING_CRABBOX_STATE=dispatching\n",
-    );
-    const result = runPublisher(f, "prepare_push 4242", [...f.setup, "enter_worktree() { :; }"]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("--resume-crabbox-run");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-    expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-  });
+  it.each([false, true])(
+    "refuses ordinary prepare-push before refresh when dispatch acceptance is uncertain (restricted PATH=%s)",
+    (restrictedPath) => {
+      const f = publishedPreparation();
+      writeFileSync(
+        join(f.local, "gates.env"),
+        readFileSync(join(f.local, "gates.env"), "utf8") + "PENDING_CRABBOX_STATE=dispatching\n",
+      );
+      const setup = [...f.setup, "enter_worktree() { :; }"];
+      if (restrictedPath) {
+        const grep = spawnSync("bash", ["-c", "command -v grep"], { encoding: "utf8" });
+        expect(grep.status, grep.stderr).toBe(0);
+        const bin = join(f.local, "without-ripgrep");
+        mkdirSync(bin);
+        symlinkSync(grep.stdout.trim(), join(bin, "grep"));
+        setup.push(
+          `PATH='${bin.replaceAll("'", "'\\''")}'`,
+          "if type -P rg >/dev/null; then echo 'unexpected external rg' >&2; exit 99; fi",
+        );
+      }
+      const result = runPublisher(f, "prepare_push 4242", setup);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("--resume-crabbox-run");
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    },
+  );
   it("resumes after gate success when the preparation writer was interrupted", () => {
     const f = publishedPreparation();
     const first = runPublisher(f, 'prepare_push 4242 "" 99', [

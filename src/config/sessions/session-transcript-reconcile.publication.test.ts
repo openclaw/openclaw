@@ -136,7 +136,7 @@ it("publishes a cold compressed multi-chunk branch without host data SQL", async
     .run(scope.sessionId);
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
-  const observed = observeHostDataSql(options.env);
+  const observed = observeHostDataSql();
   try {
     await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
       reconciledSessions: 1,
@@ -264,7 +264,6 @@ it("delivers a committed finalization before close permits a physical successor"
         stateContext?: Parameters<typeof runOperation>[2],
         assertCurrent?: Parameters<typeof runOperation>[3],
         createAdmission?: Parameters<typeof runOperation>[4],
-        requireStateLifecycle?: Parameters<typeof runOperation>[5],
       ) =>
         runOperation(
           target,
@@ -291,7 +290,6 @@ it("delivers a committed finalization before close permits a physical successor"
           stateContext,
           assertCurrent,
           createAdmission,
-          requireStateLifecycle,
         ),
     );
   let reconciliation: ReturnType<typeof reconcileSessionTranscriptIndexes> | undefined;
@@ -420,30 +418,56 @@ it("keeps a successor request separate from a retired scheduled owner", async ()
   }
 }, 30_000);
 
-it("rejects a prepared projection from a replaced transcript generation", async () => {
-  const { options, database, scope } = await fixture();
-  const changes: unknown[] = [];
-  const stop = sessionChanges.subscribe((change) => changes.push(change));
-  observer.onTask = ({ observeMessage }) =>
-    observeMessage((message) => {
-      if (message.type === "plan-start") {
-        database.db
-          .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
-          .run("replacement-generation", scope.sessionId);
+it.each(["transcript", "caller", "cancellation"] as const)(
+  "rejects prepared projection publication when %s authority changes",
+  async (race) => {
+    const { options, database, scope } = await fixture();
+    const changes: unknown[] = [];
+    let current = true;
+    const controller = new AbortController();
+    const refusal = new Error("startup maintenance owner retired");
+    const stop = sessionChanges.subscribe((change) => changes.push(change));
+    observer.onTask = ({ observeMessage }) =>
+      observeMessage((message) => {
+        if (message.type === "plan-start") {
+          if (race === "transcript") {
+            database.db
+              .prepare(
+                "UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?",
+              )
+              .run("replacement-generation", scope.sessionId);
+          } else if (race === "caller") {
+            current = false;
+          } else {
+            controller.abort(refusal);
+          }
+        }
+      });
+    try {
+      const repair = reconcileSessionTranscriptIndexes({
+        ...options,
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw refusal;
+          }
+        },
+      });
+      if (race === "transcript") {
+        await expect(repair).resolves.toEqual({ reconciledSessions: 0 });
+      } else {
+        await expect(repair).rejects.toThrow("startup maintenance owner retired");
       }
-    });
-  try {
-    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-      reconciledSessions: 0,
-    });
-    expect(changes).toEqual([]);
-    expect(
-      database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get(),
-    ).toEqual({ needs_rebuild: 1 });
-    expect(
-      database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-    ).toEqual([{ message_id: "message-0", text: "projection message 0" }]);
-  } finally {
-    stop();
-  }
-}, 30_000);
+      expect(changes).toEqual([]);
+      expect(
+        database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get(),
+      ).toEqual({ needs_rebuild: 1 });
+      expect(
+        database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
+      ).toEqual([{ message_id: "message-0", text: "projection message 0" }]);
+    } finally {
+      stop();
+    }
+  },
+  30_000,
+);

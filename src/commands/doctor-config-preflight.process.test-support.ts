@@ -45,7 +45,7 @@ export function runBuiltRuntime(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeout: number,
-  maxBuffer?: number,
+  options: Pick<Parameters<typeof runCliProcessChild>[0], "maxBuffer" | "onTestFinished"> = {},
 ) {
   return runCliProcessChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
@@ -54,7 +54,8 @@ export function runBuiltRuntime(
     cwd: runtimeRoot,
     env,
     timeoutMs: timeout,
-    maxBuffer: maxBuffer ?? 1024 * 1024,
+    maxBuffer: options.maxBuffer ?? 1024 * 1024,
+    ...(options.onTestFinished ? { onTestFinished: options.onTestFinished } : {}),
   });
 }
 
@@ -118,6 +119,7 @@ export function createSourceRuntime(root: string): string {
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "node-runtime-env.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
@@ -139,7 +141,7 @@ export function createSourceRuntime(root: string): string {
 export function createBuiltRuntime(
   root: string,
   sourceDist = path.resolve("dist"),
-  options: { copyDirectories?: boolean } = {},
+  options: { copyDirectories?: boolean; emptyExtensions?: boolean } = {},
 ): string {
   const runtimeRoot = createSourceRuntime(root);
   // The pretest owner supplies immutable built modules once; mutable package
@@ -150,7 +152,9 @@ export function createBuiltRuntime(
     }
     const source = path.join(sourceDist, entry.name);
     const target = path.join(runtimeRoot, "dist", entry.name);
-    if (entry.isDirectory() && options.copyDirectories) {
+    if (entry.isDirectory() && entry.name === "extensions" && options.emptyExtensions) {
+      fs.mkdirSync(target);
+    } else if (entry.isDirectory() && options.copyDirectories) {
       // Direct package entry invocations do not pass --preserve-symlinks.
       fs.cpSync(source, target, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
     } else if (entry.isDirectory()) {

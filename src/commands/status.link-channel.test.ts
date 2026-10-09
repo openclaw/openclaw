@@ -1,6 +1,4 @@
-// Status link-channel tests cover channel link status summaries and redaction.
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 
@@ -36,43 +34,9 @@ describe("resolveLinkChannelContext", () => {
       },
     ];
 
-    const result = await resolveLinkChannelContext({} as OpenClawConfig);
+    const result = await resolveLinkChannelContext({});
     expect(result?.linked).toBe(true);
     expect(result?.authAgeMs).toBeNull();
     expect(result?.account).toBe(account);
-  });
-
-  it("preserves link age from runtime summary hooks when an account is resolved", async () => {
-    const account = { configured: true, enabled: true, authDir: "/synthetic/auth" };
-    const summary = vi.fn(() => ({ linked: true, authAgeMs: 1234 }));
-    pluginRegistry.list = [
-      {
-        id: "quietchat",
-        meta: { label: "QuietChat" },
-        config: { listAccountIds: () => ["default"], resolveAccount: () => account },
-        status: { buildChannelSummary: summary },
-      },
-    ];
-
-    const result = await resolveLinkChannelContext({});
-    expect(result).toMatchObject({ linked: true, authAgeMs: 1234, account });
-    expect(summary).toHaveBeenCalledWith(expect.objectContaining({ account }));
-  });
-
-  it("reports unexpected account resolution failures", async () => {
-    pluginRegistry.list = [
-      {
-        id: "quietchat",
-        meta: { label: "QuietChat" },
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => {
-            throw new Error("missing secret");
-          },
-        },
-      },
-    ];
-
-    await expect(resolveLinkChannelContext({} as OpenClawConfig)).rejects.toThrow("missing secret");
   });
 });

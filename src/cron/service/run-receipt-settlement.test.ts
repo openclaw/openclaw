@@ -18,15 +18,18 @@ import { CronService, type CronEvent } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
+import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
-  claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
+import * as runtimeMutation from "./runtime-mutation.js";
 
 const onExitSchedule = { kind: "on-exit", command: "true" } as const;
 
@@ -79,6 +82,68 @@ function latestReceiptStatus(storePath: string, jobId: string): string | undefin
 }
 
 describe("cron run receipt settlement", () => {
+  it.each([false, true])(
+    "retires an active on-exit schedule after a command whitespace edit (restore=%s)",
+    async (restore) => {
+      const { storePath } = await makeStorePath();
+      const started = createDeferred();
+      const release = createDeferred();
+      const service = makeService(storePath, async () => {
+        started.resolve();
+        await release.promise;
+        return { status: "ok" };
+      });
+      const schedule = { kind: "on-exit" as const, command: "printf %s hello\\" };
+      const editedSchedule = { ...schedule, command: `${schedule.command} ` };
+      const job = await service.add({
+        name: "on-exit whitespace edit",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule,
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "command", argv: ["true"] },
+        delivery: { mode: "none" },
+      });
+      const run = service.runOnExit(job.id, {
+        schedule,
+        signal: new AbortController().signal,
+        commitGuard: () => {},
+        onReserved: () => {},
+      });
+      try {
+        await started.promise;
+        await service.update(job.id, { schedule: editedSchedule });
+        const edited = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)!;
+        expect(edited.state.runningScheduleChangeId).toEqual(expect.any(String));
+        if (restore) {
+          const restored = await service.update(job.id, { schedule });
+          expect(restored.state.runningScheduleChangeId).toEqual(expect.any(String));
+          expect(restored.state.runningScheduleChangeId).not.toBe(
+            edited.state.runningScheduleChangeId,
+          );
+        }
+        release.resolve();
+        await expect(run).resolves.toEqual({ ok: true, ran: true });
+        const current = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+        expect(current).toMatchObject({
+          id: job.id,
+          enabled: false,
+          schedule: restore ? schedule : editedSchedule,
+          deleteAfterRun: true,
+          state: { lastRunStatus: "ok" },
+        });
+        expect(current?.state.runningAtMs).toBeUndefined();
+        expect(current?.state.runningScheduleChangeId).toBeUndefined();
+        expect(latestReceiptStatus(storePath, job.id)).toBe("ok");
+      } finally {
+        release.resolve();
+        await run;
+        service.stop();
+      }
+    },
+  );
+
   it.each(["on-exit", "stream", "empty-stream", "startup", "manual"] as const)(
     "retains the execution owner through %s execution and settlement",
     async (source) => {
@@ -218,13 +283,18 @@ describe("cron run receipt settlement", () => {
       };
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+        claimCronRunReceiptInDatabaseForTest({
+          database: db,
+          prepared,
+          resolveAgentId: () => "alpha",
+        }),
       );
       job.state.runningReceiptId = receipt.receiptId;
       await saveCronStore(storePath, { version: 1, jobs: [job] });
@@ -298,13 +368,18 @@ describe("cron run receipt settlement", () => {
     };
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "alpha",
       startedAtMs,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+      claimCronRunReceiptInDatabaseForTest({
+        database: db,
+        prepared,
+        resolveAgentId: () => "alpha",
+      }),
     );
     // Process exit drops the local liveness claim but leaves the durable receipt.
     releaseLocalCronRunReceiptOwnership(receipt);
@@ -391,6 +466,19 @@ describe("cron run receipt settlement", () => {
         createTestGatewayScheduler(clock.clock),
       );
       const stoppedObserver = makeService(storePath, successorRunner);
+      const receiptFinishes: Promise<void>[] = [];
+      const finishStarted = createDeferred();
+      const executeMutation = runtimeMutation.runCronRuntimeMutation;
+      const mutation = vi
+        .spyOn(runtimeMutation, "runCronRuntimeMutation")
+        .mockImplementation((params) => {
+          const completion = executeMutation(params);
+          if (params.type === "cron.finishReceipt") {
+            receiptFinishes.push(completion);
+            finishStarted.resolve();
+          }
+          return completion;
+        });
       const settlementAbort = new AbortController();
       const first =
         trigger === "startup" ? owner.start() : owner.run(job.id, "force").then(() => undefined);
@@ -437,7 +525,7 @@ describe("cron run receipt settlement", () => {
         const database = openOpenClawStateDatabase().db;
         if (trigger === "manual-finish-retry") {
           database.exec(`
-            CREATE TEMP TRIGGER reject_on_exit_receipt_finish
+            CREATE TRIGGER reject_on_exit_receipt_finish
             BEFORE UPDATE ON cron_run_receipts
             WHEN OLD.job_id = '${job.id}' AND NEW.status != 'running'
             BEGIN SELECT RAISE(ABORT, 'receipt finish temporarily unavailable'); END;
@@ -463,8 +551,12 @@ describe("cron run receipt settlement", () => {
           });
           database.exec("DROP TRIGGER reject_on_exit_receipt_finish");
         }
-        // Allow the retained receipt retry and foreign-owner reconciliation to run.
+        // Join the real receipt write before advancing the successor's polling clock.
+        // Advancing fake time alone cannot settle worker I/O or its retained retry.
+        await finishStarted.promise;
         await vi.advanceTimersByTimeAsync(2_000);
+        await Promise.allSettled(receiptFinishes);
+        expect(latestReceiptStatus(storePath, job.id)).toBe("error");
         await clock.advanceBy(2_000);
         await expect(settlement).resolves.toEqual({ ok: true, ran: true });
         expect(onReserved).toHaveBeenCalledOnce();
@@ -475,6 +567,8 @@ describe("cron run receipt settlement", () => {
         settlementAbort.abort();
         releaseRunner.resolve({ status: "ok", summary: "late runner settled" });
         await first.catch(() => undefined);
+        await Promise.allSettled(receiptFinishes);
+        mutation.mockRestore();
         owner.stop();
         successor.stop();
         stoppedObserver.stop();

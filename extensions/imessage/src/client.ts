@@ -1,13 +1,23 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+
+// Match only the documented Contacts reconciliation diagnostic; other Apple
+// framework messages must keep their error level.
+const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
+  /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ imsg\[\d+:\d+\] )?Could not fetch group for change type \d+ with identifier [^:]+:ABGroup, making it a delete change type\.$/u;
 
 type IMessageRpcError = {
   code?: number;
@@ -77,7 +87,6 @@ function describeIMessageBridgeStall(error: unknown): unknown {
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timer?: NodeJS.Timeout;
 };
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
@@ -144,7 +153,6 @@ export class IMessageRpcClient {
   private terminalResolve: ((error: Error) => void) | null = null;
   private readonly reaped: Promise<void>;
   private reapedResolve: (() => void) | null = null;
-  private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopPromise: Promise<void> | null = null;
   private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
@@ -185,19 +193,16 @@ export class IMessageRpcClient {
     });
     this.child = child;
 
-    child.stdout.on("data", (chunk) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.stdoutFramer.write(chunk);
-    });
-
-    child.stderr?.on("data", (chunk) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.stderrFramer.write(chunk);
-    });
+    for (const [stream, framer] of [
+      [child.stdout, this.stdoutFramer],
+      [child.stderr, this.stderrFramer],
+    ] as const) {
+      stream.on("data", (chunk) => {
+        if (this.child === child) {
+          framer.write(chunk);
+        }
+      });
+    }
 
     // Every process/stdio error is terminal for this RPC transport. Settle the
     // client once and terminate a helper whose pipe failed; otherwise the
@@ -248,6 +253,24 @@ export class IMessageRpcClient {
   async request<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
+    opts?: { timeoutMs?: number; assertCurrent?: () => void },
+  ): Promise<T> {
+    const child = this.child;
+    const stdin = child?.stdin;
+    const assertReadAuthority = captureChannelReadAuthority();
+    return captureEffectAuthority().initiate(() => {
+      if (child !== this.child || stdin !== this.child?.stdin) {
+        throw new Error("imsg rpc process changed before request initiation");
+      }
+      assertReadAuthority?.();
+      opts?.assertCurrent?.();
+      return this.initiateRequest<T>(method, params, opts);
+    });
+  }
+
+  private async initiateRequest<T>(
+    method: string,
+    params?: Record<string, unknown>,
     opts?: { timeoutMs?: number },
   ): Promise<T> {
     if (!this.child || !this.child.stdin) {
@@ -263,21 +286,20 @@ export class IMessageRpcClient {
     const line = `${JSON.stringify(payload)}\n`;
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
-    const response = new Promise<T>((resolve, reject) => {
-      const key = String(id);
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              this.pending.delete(key);
-              reject(new Error(`imsg rpc timeout (${method})`));
-            }, timeoutMs)
-          : undefined;
+    const key = String(id);
+    const pendingResponse = new Promise<T>((resolve, reject) => {
       this.pending.set(key, {
         resolve: (value) => resolve(value as T),
         reject,
-        timer,
       });
     });
+    const response =
+      timeoutMs > 0
+        ? raceWithTimeout(pendingResponse, timeoutMs, () => {
+            this.pending.delete(key);
+            throw new Error(`imsg rpc timeout (${method})`);
+          })
+        : pendingResponse;
 
     // Reject the specific pending request on write error (e.g. EPIPE)
     // instead of letting it hang until timeout. (#75438)
@@ -330,22 +352,14 @@ export class IMessageRpcClient {
   }
 
   private async waitForReap(timeoutMs: number): Promise<boolean> {
-    if (this.isReaped) {
+    if (!this.reapedResolve) {
       return true;
     }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        this.reaped.then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
+    return await raceWithTimeout(
+      this.reaped.then(() => true),
+      timeoutMs,
+      () => false,
+    );
   }
 
   private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
@@ -378,7 +392,13 @@ export class IMessageRpcClient {
     if (!trimmed) {
       return;
     }
+    // The Full Disk Access promotion below must still see every line, including
+    // the benign ones, so record before choosing the log level.
     this.recordProcessDiagnostic(trimmed);
+    if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
+      logVerbose(`imsg rpc: ${trimmed}`);
+      return;
+    }
     this.runtime?.error?.(`imsg rpc: ${trimmed}`);
   }
 
@@ -398,9 +418,6 @@ export class IMessageRpcClient {
       const pending = this.pending.get(key);
       if (!pending) {
         return;
-      }
-      if (pending.timer) {
-        clearTimeout(pending.timer);
       }
       this.pending.delete(key);
 
@@ -454,9 +471,6 @@ export class IMessageRpcClient {
 
   private failAll(err: Error) {
     for (const [key, pending] of this.pending.entries()) {
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
       pending.reject(err);
       this.pending.delete(key);
     }
@@ -474,10 +488,6 @@ export class IMessageRpcClient {
   }
 
   private markReaped(): void {
-    if (this.isReaped) {
-      return;
-    }
-    this.isReaped = true;
     const resolve = this.reapedResolve;
     this.reapedResolve = null;
     resolve?.();

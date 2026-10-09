@@ -18,6 +18,12 @@ function requireValue(condition, message) {
 
 function selectedPackages(manifest) {
   const source = manifest.sourceAdmission;
+  if (
+    source?.publicationSelection?.npmDistTag === "alpha" ||
+    source?.projection?.packages?.some((pkg) => pkg.version?.includes("-alpha."))
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   requireValue(source?.validationPurpose === "publish", "publish source required");
   requireValue(Array.isArray(source.projection?.packages), "package projection required");
   return source.projection.packages.filter((pkg) => pkg.targets.includes("npm"));
@@ -31,6 +37,20 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     "SDK override",
   );
   const sealed = manifest?.publishInputs;
+  if (
+    overrides.npmDistTag === "alpha" ||
+    sealed?.npmDistTag === "alpha" ||
+    manifest?.sourceAdmission?.publicationSelection?.npmDistTag === "alpha" ||
+    sealed?.npmDecisions?.some(
+      (row) =>
+        row.packageVersion?.includes("-alpha.") ||
+        row.plan?.channel === "alpha" ||
+        row.plan?.publishTag === "alpha" ||
+        row.plan?.mirrorDistTags?.includes("alpha"),
+    )
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (sealed?.stableSoakWaiver || manifest?.validationInputs?.laneWaiver) {
     throw new Error(
       "Release waivers are no longer supported; rerun Full Release Validation without waivers.",
@@ -51,7 +71,7 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
   );
   requireValue(
     sealed.npmDistTag === manifest.sourceAdmission?.publicationSelection?.npmDistTag &&
-      ["alpha", "beta", "latest", "extended-stable"].includes(sealed.npmDistTag) &&
+      ["beta", "latest", "extended-stable"].includes(sealed.npmDistTag) &&
       (!overrides.npmDistTag || sealed.npmDistTag === overrides.npmDistTag),
     "npm dist-tag mismatch",
   );
@@ -75,10 +95,10 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     );
     requireValue(
       isRecord(row.plan) &&
-        ["alpha", "beta", "stable"].includes(row.plan.channel) &&
-        ["alpha", "beta", "latest", "extended-stable"].includes(row.plan.publishTag) &&
+        ["beta", "stable"].includes(row.plan.channel) &&
+        ["beta", "latest", "extended-stable"].includes(row.plan.publishTag) &&
         Array.isArray(row.plan.mirrorDistTags) &&
-        row.plan.mirrorDistTags.every((tag) => ["alpha", "beta", "latest"].includes(tag)) &&
+        row.plan.mirrorDistTags.every((tag) => ["beta", "latest"].includes(tag)) &&
         ["already-published", "superseded", "plan"].includes(row.decision) &&
         [null, "npm-readback", "npm-mirror", "npm-tag-repair"].includes(row.route) &&
         typeof row.bootstrap === "boolean" &&

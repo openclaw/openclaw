@@ -146,12 +146,11 @@ describe("resolveCodexNativeSearchActivation", () => {
       config: {
         ...baseConfig,
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["web_search"] },
             },
-          ],
+          },
         },
       },
       agentId: "main",
@@ -169,12 +168,11 @@ describe("resolveCodexNativeSearchActivation", () => {
       config: {
         ...baseConfig,
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["group:web"] },
             },
-          ],
+          },
         },
       },
       sessionKey: "agent:main:main",

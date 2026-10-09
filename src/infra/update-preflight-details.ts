@@ -1,5 +1,32 @@
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
+  "windows-task-elevation-required":
+    "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
+  "windows-task-inspection-timeout":
+    "Windows Task Scheduler task lookup/elevation check timed out before update staging. Check Task Scheduler, then retry openclaw update from an elevated terminal (Run as administrator).",
+  "handoff-permission-denied":
+    "Update handoff permission was denied. Run openclaw gateway status --deep and check access to the installation and state directory as the service owner.",
+  "handoff-runtime-unavailable":
+    "The update helper runtime or a required file is unavailable. Run openclaw doctor and check the Gateway service's Node executable before retrying.",
+  "handoff-helper-start-failed":
+    "The update helper could not be spawned. Check available process and memory resources, then retry openclaw update from an external terminal.",
+  "handoff-service-refused":
+    "Native service inspection or management refused the handoff. Run openclaw gateway status --deep and repair the service through its installation owner.",
+  "handoff-ownership-refused":
+    "Update handoff ownership could not be verified. Run openclaw update status and retry through the current Gateway owner after any active update finishes.",
+  "handoff-payload-failed":
+    "The update handoff payload or control channel could not be written or read. Check state-directory access and free disk space, then retry openclaw update.",
+  "handoff-timeout":
+    "The update helper did not acknowledge the handoff before its deadline. Run openclaw update status and openclaw gateway status --deep before retrying.",
+  "handoff-helper-exited":
+    "The update helper exited before acknowledging the handoff. Run openclaw doctor, then retry openclaw update from an external terminal to inspect its startup failure.",
+  "handoff-preparation-failed":
+    "The update handoff could not be prepared. Run openclaw triage or retry openclaw update from an external terminal to diagnose the recorded failure.",
+  "npm-EACCES":
+    "Check the npm global prefix and run the update as its owning account: https://docs.openclaw.ai/cli/update.",
+  "npm-ENOSPC": "Free disk space on the npm prefix and cache volumes, then retry the update.",
+  "npm-ETARGET":
+    "Run npm cache verify, check the configured npm registry/mirror, and run npm view <spec> version before retrying the update.",
   "installation-unclassified":
     "Installation ownership could not be determined. Run openclaw gateway status --deep and npm root -g; retry openclaw update from the owning installation or reinstall using the original method.",
   "target-registry-dist-tag":
@@ -13,13 +40,13 @@ export const UPDATE_PREFLIGHT_DETAILS = {
   "target-git-metadata":
     "The Git target manifest or revision could not be inspected. Check Git remote access and the selected ref, then retry openclaw update; a dry-run does not fetch missing objects.",
   "target-git-cache-stale":
-    "The cached Git target differs from the current remote target. A dry-run leaves local refs unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the current remote target.",
+    "The selected Git target is not fully available in the local checkout. A dry-run leaves local refs and objects unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the selected target.",
   "inside-gateway-process-tree":
     "The update is running inside the Gateway process tree. Use the Gateway update action for a managed handoff, or run openclaw update from a terminal outside the Gateway process tree.",
   "inside-gateway-service":
     "The update is running inside the Gateway's native service membership. Stopping the service would terminate this command. Run openclaw update from an independent terminal outside the service, or use the Gateway update action for a managed handoff.",
   "service-membership-unverified":
-    "Native Gateway service membership could not be verified. No service teardown was attempted. Retry from an independent terminal after restoring native process inspection, or use the Gateway update action for a managed handoff.",
+    "Native Gateway service membership could not be verified. From an interactive external shell not started by the service, run openclaw gateway stop && openclaw update --yes && openclaw gateway start. If the update fails, follow its recovery guidance before starting the Gateway. No service teardown was attempted. With native helper support (systemd-run on Linux), use openclaw gateway call update.run --params '{}' for a managed handoff.",
   "service-ancestry-unverified":
     "Process ancestry could not be fully inspected. Use the Gateway update action for a managed handoff, or retry from an independent terminal without inherited service markers.",
   "inside-triage-process-tree":
@@ -43,6 +70,9 @@ export const UPDATE_PREFLIGHT_DETAILS = {
   "task-ownership-unverified":
     "Scheduled Task ownership could not be verified. Inspect the task's autostart state through its service owner, then retry openclaw update.",
 } as const;
+
+export const UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL =
+  "Gateway kept serving; handoff failed before ownership transfer";
 
 export function updatePreflightDetailMessage(code: string): string | undefined {
   return Object.entries(UPDATE_PREFLIGHT_DETAILS).find(([key]) => key === code)?.[1];

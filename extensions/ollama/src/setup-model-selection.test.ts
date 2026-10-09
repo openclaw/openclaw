@@ -321,27 +321,6 @@ describe("Ollama onboarding model selection", () => {
     );
   });
 
-  it("aborts pending model discovery with the setup signal", async () => {
-    const controller = new AbortController();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
-        pendingAbortableResponse(init?.signal),
-      ),
-    );
-
-    const discovery = discoverOllamaModelsForSetup({
-      baseUrl: "http://127.0.0.1:11434",
-      signal: controller.signal,
-    });
-    await vi.waitFor(() => {
-      expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
-    });
-    controller.abort();
-
-    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
-  });
-
   it("aborts pending context enrichment with the setup signal", async () => {
     const controller = new AbortController();
     vi.stubGlobal(

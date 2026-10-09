@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   projectSessionResultRows,
   readSessionChangedEvent,
@@ -12,8 +13,6 @@ import {
   resolveUiSessionNavigationParentKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
-import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -37,7 +36,7 @@ function applyObservedChatSessionRow(
     }
     const sessions = result.sessions.filter(
       (candidate) =>
-        !chatScopedEventSessionMatches(state, candidate.key, candidate.agentId) ||
+        !visibleSessionMatches(state, candidate.key, candidate.agentId) ||
         (observedSessionId !== null && candidate.sessionId !== observedSessionId),
     );
     if (sessions.length === result.sessions.length) {
@@ -46,7 +45,7 @@ function applyObservedChatSessionRow(
     state.sessionsResult = { ...result, sessions, count: sessions.length };
     return true;
   }
-  if (!chatScopedEventSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
+  if (!visibleSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
     return false;
   }
   const current = state.sessionsResultAgentId === selectedAgentId ? state.sessionsResult : null;
@@ -54,7 +53,7 @@ function applyObservedChatSessionRow(
     ? current?.sessions.find(
         (candidate) =>
           candidate.sessionId === row.sessionId &&
-          chatScopedEventSessionMatches(state, candidate.key, candidate.agentId),
+          visibleSessionMatches(state, candidate.key, candidate.agentId),
       )
     : undefined;
   const projected =
@@ -99,8 +98,6 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
-  protected readonly activeSessionResources = new ChatPaneActiveResources();
-
   private sessionObservation: {
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
@@ -176,14 +173,11 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         const observation = binding.observation;
         while (current() && observation?.isCurrent()) {
           const reconcile = observation.captureReconcile();
-          const { session } = await client.request<{ session?: GatewaySessionRow }>(
-            "sessions.describe",
-            { key, agentId },
-          );
+          const { session } = await sessions.describe({ key, agentId }, { client });
           if (!current()) {
             return;
           }
-          if (reconcile(session).status !== "invalidated") {
+          if (reconcile(session ?? undefined).status !== "invalidated") {
             return;
           }
         }
@@ -240,7 +234,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     previous?.observation?.dispose();
   }
 
-  protected synchronizeSessionObservation() {
+  protected synchronizeSessionObservation(options: { eventSessionId?: string | null } = {}) {
     const state = this.state;
     const sessions = this.context.sessions;
     if (!state?.connected || !state.sessionKey.trim() || parseCatalogSessionKey(state.sessionKey)) {
@@ -259,6 +253,9 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       this.synchronizeParentSessionObservation();
       return;
     }
+    const previousObservationSessionId = previous?.matchesPane()
+      ? previous.observation?.sessionId
+      : null;
     // Unidentified live content keeps its observed incarnation across metadata rebinding.
     const retainedTranscriptSessionId =
       state.chatRunId ||
@@ -341,7 +338,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           if (binding.observation && !binding.observation.isCurrent()) {
             const previousSessionId = binding.observation.sessionId;
             predecessorSessionId = previousSessionId;
-            this.synchronizeSessionObservation();
+            this.synchronizeSessionObservation({ eventSessionId: incoming?.sessionId });
             const replacement = this.sessionObservation;
             if (
               !ownsPaneScope() ||
@@ -355,7 +352,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
               incoming.sessionId === previousSessionId ||
               incoming.sessionId !== replacement.observation.sessionId ||
               incoming.sessionId !== replacement.observation.row?.sessionId ||
-              !chatScopedEventSessionMatches(state, incoming.key, incoming.agentId ?? undefined)
+              !visibleSessionMatches(state, incoming.key, incoming.agentId ?? undefined)
             ) {
               void resumeStoredChatOutboxes(state, event);
               return;
@@ -370,7 +367,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
             observation?.isCurrent() &&
             incoming.sessionId === observation.sessionId &&
             incoming.sessionId === observation.row?.sessionId &&
-            chatScopedEventSessionMatches(state, incoming.key, incoming.agentId ?? undefined) &&
+            visibleSessionMatches(state, incoming.key, incoming.agentId ?? undefined) &&
             transcriptSessionId &&
             transcriptSessionId !== incoming.sessionId &&
             (state.currentSessionId ||
@@ -395,6 +392,21 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     } else {
       // The owner can publish its first result synchronously before the handle returns.
       this.projectObservedSessionRow();
+      const observation = binding.observation;
+      const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
+      if (
+        previousObservationSessionId &&
+        observation?.isCurrent() &&
+        observation.sessionId &&
+        observation.sessionId !== options.eventSessionId &&
+        observation.sessionId !== previousObservationSessionId &&
+        observation.row?.sessionId === observation.sessionId &&
+        transcriptSessionId &&
+        transcriptSessionId !== observation.sessionId
+      ) {
+        // A canonical read can admit the successor after its event was fenced.
+        this.refreshHistory();
+      }
     }
   }
 

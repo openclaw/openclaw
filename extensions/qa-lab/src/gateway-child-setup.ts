@@ -29,7 +29,6 @@ import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log
 import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import { createQaGatewayProcessBoundaryController } from "./gateway-process-boundary.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
-import { resolveQaNodeExecPath } from "./node-exec.js";
 import type { QaCliBackendAuthMode } from "./providers/env.js";
 import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
@@ -46,7 +45,7 @@ import {
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -78,6 +77,7 @@ export type QaGatewayChildParams = {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
   codexMockAutoCompactTokenLimit?: number;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
@@ -173,7 +173,10 @@ export async function prepareQaGatewayChild(
   lifetime: QaGatewayChildLifecycle,
 ) {
   const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
-  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  lifetime.tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  // Store discovery returns physical paths; macOS /tmp aliases must not split
+  // the fixture's configured roots from their captured database custody.
+  const tempRoot = await fs.realpath(lifetime.tempRoot);
   lifetime.tempRoot = tempRoot;
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
@@ -220,13 +223,14 @@ export async function prepareQaGatewayChild(
     autoCompactTokenLimit: params.codexMockAutoCompactTokenLimit,
   });
   const resolvedProvider = getQaProvider(providerMode);
-  const liveProviderIds = resolvedProvider.usesModelProviderPlugins
-    ? [params.primaryModel, params.alternateModel]
-        .map((modelRef) =>
-          typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
-        )
-        .filter((providerId): providerId is string => Boolean(providerId))
-    : [];
+  const liveProviderIds =
+    resolvedProvider.kind === "live"
+      ? [params.primaryModel, params.alternateModel]
+          .map((modelRef) =>
+            typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
+          )
+          .filter((providerId): providerId is string => Boolean(providerId))
+      : [];
   const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
     providerIds: liveProviderIds,
   });
@@ -272,6 +276,7 @@ export async function prepareQaGatewayChild(
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
       forcedRuntime: params.forcedRuntime,
+      runtimeSelection: params.runtimeSelection,
       controlUiEnabled: params.controlUiEnabled,
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
@@ -285,7 +290,7 @@ export async function prepareQaGatewayChild(
       cfg,
       stateDir,
     });
-    const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+    const mockAuthProviders = resolvedProvider.mockAuthProviders;
     if (mockAuthProviders && mockAuthProviders.length > 0) {
       if (usesPackagedCandidate) {
         cfg = applyQaMockAuthProfileConfig({ cfg, providers: mockAuthProviders });
@@ -316,7 +321,7 @@ export async function prepareQaGatewayChild(
   let env: NodeJS.ProcessEnv | null = null;
   let packagedMockAuthStaged = false;
 
-  const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
+  const nodeExecPath = gatewayExecutablePath ?? process.execPath;
   const cliArgsPrefix = gatewayCommand?.processBoundary
     ? gatewayArgsPrefix
     : gatewayExecutablePath
@@ -414,6 +419,7 @@ export async function prepareQaGatewayChild(
               ...params.runtimeEnvPatch,
               ...buildQaForcedRuntimeEnvPatch({
                 forcedRuntime: params.forcedRuntime,
+                runtimeSelection: params.runtimeSelection,
                 providerMode,
                 providerBaseUrl: params.providerBaseUrl,
                 codexModelCatalogPath,
@@ -435,7 +441,11 @@ export async function prepareQaGatewayChild(
           encoding: "utf8",
           mode: 0o600,
         });
-        const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+        // Bootstrap commands must inspect this child's port without our placeholder listener.
+        env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+        await lifetime.portReservation?.release();
+        lifetime.portReservation = null;
+        const mockAuthProviders = resolvedProvider.mockAuthProviders;
         if (
           usesPackagedCandidate &&
           gatewayCommand &&
@@ -465,14 +475,6 @@ export async function prepareQaGatewayChild(
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");
       }
-      // Child-owned CLI commands must resolve the same ephemeral Gateway as the
-      // fixture process. Otherwise commands without their own connection flags
-      // can silently fall back to the operator's ambient local Gateway.
-      env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-
-      // Packaged repair must inspect the configured port without our placeholder listener.
-      await lifetime.portReservation?.release();
-      lifetime.portReservation = null;
       // Auth staging opens parent-owned agent stores. Release this fixture's
       // leases before packaged repair or Gateway startup takes maintenance ownership.
       await closeQaRuntimeStores(tempRoot);

@@ -1,15 +1,17 @@
 // Sandbox explain tests cover command output for sandbox browser and container diagnostics.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sandbox-explain-");
 
 let mockCfg: unknown = {};
 
@@ -44,7 +46,7 @@ describe("sandbox explain command", () => {
     mockCfg = {
       agents: {
         defaults: { sandbox: { mode: "off" } },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
@@ -62,10 +64,10 @@ describe("sandbox explain command", () => {
       agents: {
         ownership: "explicit",
         defaults: { sandbox: { mode: "off" } },
-        list: [
-          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
-          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
-        ],
+        entries: {
+          ops: { workspace: "/tmp/openclaw-ops-workspace" },
+          research: { workspace: "/tmp/openclaw-research-workspace" },
+        },
       },
     };
 
@@ -87,7 +89,7 @@ describe("sandbox explain command", () => {
       mockCfg = {
         agents: {
           defaults: { sandbox: { mode: "off" } },
-          list: [{ id: "readonly", workspace: state.workspaceDir }],
+          entries: { readonly: { workspace: state.workspaceDir } },
         },
         session: { store: agentDatabasePath },
       };
@@ -141,9 +143,8 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         },
-        list: [
-          {
-            id: "tavern",
+        entries: {
+          tavern: {
             tools: {
               sandbox: {
                 tools: {
@@ -152,7 +153,7 @@ describe("sandbox explain command", () => {
               },
             },
           },
-        ],
+        },
       },
       tools: {
         sandbox: {
@@ -187,7 +188,7 @@ describe("sandbox explain command", () => {
               workspaceRoot: "/tmp/openclaw-sandboxes",
             },
           },
-          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+          entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
         },
         session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
       };
@@ -222,7 +223,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "main", default: true }, { id: "builder" }],
+        entries: { main: {}, builder: {} },
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };
@@ -258,7 +259,7 @@ describe("sandbox explain command", () => {
               workspaceRoot: "/tmp/openclaw-sandboxes",
             },
           },
-          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+          entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
         },
         session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
       };
@@ -308,7 +309,7 @@ describe("sandbox explain command", () => {
               workspaceRoot: state.statePath("sandboxes"),
             },
           },
-          list: [{ id: "builder", workspace: agentWorkspace }],
+          entries: { builder: { workspace: agentWorkspace } },
         },
         session: { store: storePath },
       };
@@ -348,7 +349,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };
@@ -363,7 +364,7 @@ describe("sandbox explain command", () => {
   });
 
   it("uses persisted spawned-session workspace and cwd overrides", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -376,25 +377,21 @@ describe("sandbox explain command", () => {
     mockCfg = {
       agents: {
         defaults: { sandbox: { mode: "off" } },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
       },
       session: { store: storePath },
     };
 
-    try {
-      const parsed = await explain({ json: true, session: sessionKey });
-      expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-        path.resolve("/tmp/openclaw-child-workspace"),
-      );
-      expect(parsed.sandbox.runtimeWorkdir).toBe("/tmp/openclaw-child-workspace/task");
-      expect(parsed.sandbox.workspaceSource).toBe("direct");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const parsed = await explain({ json: true, session: sessionKey });
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-child-workspace"),
+    );
+    expect(parsed.sandbox.runtimeWorkdir).toBe("/tmp/openclaw-child-workspace/task");
+    expect(parsed.sandbox.workspaceSource).toBe("direct");
   });
 
   it("mounts a persisted spawned workspace for sandboxed sessions", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -408,25 +405,21 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
       },
       session: { store: storePath },
     };
 
-    try {
-      const parsed = await explain({ json: true, session: sessionKey });
-      expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-        path.resolve("/tmp/openclaw-child-workspace"),
-      );
-      expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
-      expect(parsed.sandbox.workspaceMounts[0]).toMatchObject({
-        hostRoot: path.resolve("/tmp/openclaw-child-workspace"),
-        containerRoot: "/workspace",
-        writable: true,
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const parsed = await explain({ json: true, session: sessionKey });
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-child-workspace"),
+    );
+    expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
+    expect(parsed.sandbox.workspaceMounts[0]).toMatchObject({
+      hostRoot: path.resolve("/tmp/openclaw-child-workspace"),
+      containerRoot: "/workspace",
+      writable: true,
+    });
   });
 
   it("reports a global main session as direct in non-main mode", async () => {
@@ -440,7 +433,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "main", workspace: "/tmp/openclaw-main-workspace" }],
+        entries: { main: { workspace: "/tmp/openclaw-main-workspace" } },
       },
       session: {
         scope: "global",
@@ -457,19 +450,17 @@ describe("sandbox explain command", () => {
     expect(parsed.sandbox.workspaceMounts).toEqual([]);
   });
 
-  it("uses the configured default agent for global sessions", async () => {
+  it("uses the sole configured agent for global sessions", async () => {
     mockCfg = {
       agents: {
         defaults: {
           sandbox: { mode: "non-main" },
         },
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             workspace: "/tmp/openclaw-ops-workspace",
           },
-        ],
+        },
       },
       session: { scope: "global" },
     };
@@ -488,7 +479,7 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "non-main" },
         },
-        list: [{ id: "main" }, { id: "builder" }],
+        entries: { main: {}, builder: {} },
       },
     };
 

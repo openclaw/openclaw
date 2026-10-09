@@ -1,16 +1,8 @@
-/* ===========================================
-   Config Page
-   ===========================================
-
-   The schema-driven form itself renders through the settings design
+/* The schema-driven form itself renders through the settings design
    language (settings-section/settings-group/settings-row; see
    ui/src/styles/settings.css). This file keeps only the config page
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
-
-/* ===========================================
-   Lead column (toolbar / banner / nav above the form)
-   =========================================== */
 
 /* Mirrors the .settings-page column so config chrome lines up with it. */
 .config-lead {
@@ -29,7 +21,6 @@
   flex-shrink: 0;
 }
 
-/* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -38,7 +29,6 @@
   gap: var(--space-2) var(--space-3);
 }
 
-/* Raw mode file operations (open / discard / save) */
 .config-raw-actions {
   display: flex;
   align-items: center;
@@ -59,7 +49,7 @@
 .config-action-spinner svg {
   width: 14px;
   height: 14px;
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -68,7 +58,6 @@
   }
 }
 
-/* Diff Panel */
 .config-diff {
   margin: 12px 20px 0;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -124,10 +113,6 @@
   font-family: var(--mono);
 }
 
-:root[data-theme-mode="light"] .config-diff__item {
-  background: white;
-}
-
 .config-diff__path {
   font-weight: 600;
   color: var(--text);
@@ -155,7 +140,6 @@
   color: var(--ok);
 }
 
-/* Content Area */
 .config-content {
   flex: 1;
   overflow-y: auto;
@@ -206,10 +190,6 @@
   flex: 1 1 420px;
 }
 
-/* ===========================================
-   Appearance custom pickers (theme + text scale)
-   =========================================== */
-
 .settings-theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -259,11 +239,10 @@
   color: var(--accent);
 }
 
-.settings-theme-card__icon svg {
+.settings-theme-card__icon svg,
+.settings-accent-swatch__check svg {
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .settings-theme-card__label {
@@ -509,11 +488,6 @@
   color: var(--accent-foreground);
 }
 
-.settings-accent-swatch__check svg {
-  width: 18px;
-  height: 18px;
-}
-
 .settings-accent-swatch--custom {
   position: relative;
   overflow: hidden;
@@ -556,7 +530,8 @@
   color: var(--theme-chip-bg);
 }
 
-.settings-accent-swatch__reset svg {
+.settings-accent-swatch__reset svg,
+.config-accordion-group__icon svg {
   width: 16px;
   height: 16px;
 }
@@ -578,7 +553,8 @@
   width: 100%;
 }
 
-.settings-theme-import__copy {
+.settings-theme-import__copy,
+.settings-theme-import__meta {
   display: grid;
   gap: 4px;
 }
@@ -615,8 +591,6 @@
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   flex: 0 0 auto;
 }
 
@@ -636,8 +610,9 @@
   gap: 6px;
 }
 
-.settings-theme-import__label {
-  font-size: 12px; /* was 11px */
+.settings-theme-import__label,
+.settings-theme-import__meta-label {
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -671,19 +646,6 @@
   gap: 8px;
 }
 
-.settings-theme-import__meta {
-  display: grid;
-  gap: 4px;
-}
-
-.settings-theme-import__meta-label {
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-
 .settings-theme-import__meta-value {
   font-size: 12px;
   color: var(--text);
@@ -707,7 +669,8 @@
   color: var(--text);
 }
 
-.settings-text-scale {
+.settings-text-scale,
+.cfg-collection-draft__controls {
   display: grid;
   gap: 8px;
   width: 100%;
@@ -753,7 +716,7 @@
 
 .settings-text-scale__label {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -775,7 +738,6 @@
   min-width: 32px;
 }
 
-/* Loading State */
 .config-loading {
   display: flex;
   flex-direction: column;
@@ -792,20 +754,9 @@
   border: 2.5px solid var(--border);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ===========================================
-   Form specifics layered on settings rows
-   =========================================== */
-
-/* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {
   font-size: 12px;
   color: var(--danger);
@@ -842,12 +793,6 @@
   width: auto;
 }
 
-.cfg-collection-draft__controls {
-  display: grid;
-  gap: 8px;
-  width: 100%;
-}
-
 .cfg-collection-draft__actions {
   display: flex;
   justify-content: flex-end;
@@ -858,7 +803,6 @@
   border-color: var(--danger);
 }
 
-/* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;
 }
@@ -895,14 +839,12 @@
   }
 }
 
-/* MCP */
 .mcp-page {
   display: grid;
   gap: 14px;
   margin-top: 12px;
 }
 
-/* Memory */
 .memory-page {
   display: grid;
   gap: 0;
@@ -911,7 +853,7 @@
 /* Memory subviews vary substantially in height. Keep the shared hero anchored
    when switching between a view that needs the content scrollbar and one that
    does not. */
-.shell--settings .content:has(.memory-page) {
+.shell--settings .content.content--memory-page {
   scrollbar-gutter: stable;
 }
 
@@ -923,7 +865,7 @@
 /* Overview and Memories render a .settings-page descendant, while Dreams does
    not. Keep the shared header on the settings-page padding rhythm regardless
    of which tab is active so its title and actions do not jump by one space. */
-.shell--settings .content:has(.memory-page) .content-header.hub-page-header {
+.shell--settings .content.content--memory-page .content-header.hub-page-header {
   max-width: 1120px;
   padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
@@ -1008,7 +950,6 @@
   color: var(--danger);
 }
 
-/* Advanced Settings accordion navigation, rendered by view.ts. */
 .config-accordion-nav {
   margin-bottom: 20px;
 }
@@ -1050,11 +991,6 @@
   align-items: center;
   color: var(--accent);
   opacity: 0.7;
-}
-
-.config-accordion-group__icon svg {
-  width: 16px;
-  height: 16px;
 }
 
 .config-accordion-group__chevron {

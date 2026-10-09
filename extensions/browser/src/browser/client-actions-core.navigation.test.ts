@@ -6,7 +6,7 @@ const clientFetchMocks = vi.hoisted(() => ({
 
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
-import { browserNavigate } from "./client-actions-core.js";
+import { browserNavigate } from "./client-actions.js";
 
 function lastNavigationRequest(): {
   url: string;

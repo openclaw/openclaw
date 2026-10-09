@@ -11,6 +11,7 @@ import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as attachmentProcessor from "../media/attachment-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
@@ -38,8 +39,8 @@ const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
 }));
 
 const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
-  appendMessage: vi.fn<(message: unknown) => void>(),
-  admitWrite: vi.fn<(manager: unknown, write: () => void) => Promise<void>>(),
+  appendMessage: vi.fn<(message: unknown) => Promise<string | undefined>>(),
+  admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
   loadEntry: vi.fn<() => { entry: InternalSessionEntry } | undefined>(),
   removeSession:
     vi.fn<
@@ -78,7 +79,10 @@ vi.mock("../agents/internal-session-effects.js", () => ({
 }));
 vi.mock("../agents/sessions/index.js", () => ({
   SessionManager: {
-    openAsync: async () => ({ appendMessage, getSessionTarget: () => preparedTarget }),
+    openAsync: async () => ({
+      appendMessageAsync: appendMessage,
+      getSessionTarget: () => preparedTarget,
+    }),
   },
 }));
 vi.mock("../agents/simple-completion-runtime.js", () => ({
@@ -99,7 +103,7 @@ function createCompanion(cfg: OpenClawConfig = {}) {
         context: { empty: true, messages: [], sessionId: "session-1" },
       }),
     },
-    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "test/model-a",
   });
 }
@@ -123,13 +127,51 @@ describe("session companion embedded invocation", () => {
         new ProviderAuthError("missing-provider-auth", "anthropic", "No API key found"),
       );
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
-    appendMessage.mockReset();
+    appendMessage.mockReset().mockResolvedValue("seed-entry");
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
     runEmbeddedAgent.mockReset().mockResolvedValue({
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
     });
+  });
+
+  it("passes a selected-text comment to the model without persisting it as a file", async () => {
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What changed?",
+          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+        },
+        client: { connId: "selection-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
+          images: undefined,
+        }),
+      );
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
+      expect(
+        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
+      ).toEqual([
+        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
+      ]);
+      await companion.ask({ ...question, question: "What next?" });
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
+    } finally {
+      companion.dispose();
+    }
   });
 
   it.each([0, 2_000_001])(
@@ -166,6 +208,75 @@ describe("session companion embedded invocation", () => {
           }),
         );
       } finally {
+        companion.dispose();
+      }
+    },
+  );
+
+  it.each(["preparation", "dispatch", "accepted"] as const)(
+    "rechecks the original RPC image policy until model admission (%s)",
+    async (phase) => {
+      const cfg: OpenClawConfig = {};
+      let committed: OpenClawConfig = cfg;
+      const disable = () => {
+        committed = { gateway: { uploads: { enabled: false } } };
+      };
+      const companion = createCompanion(cfg);
+      const respond = vi.fn();
+      const prepare = attachmentProcessor.prepareMediaAttachment;
+      const preparation = vi.spyOn(attachmentProcessor, "prepareMediaAttachment");
+      if (phase === "preparation") {
+        preparation.mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
+          disable();
+          return result;
+        });
+      } else if (phase === "dispatch") {
+        admitWrite.mockImplementationOnce(async (_manager, write) => {
+          await write();
+          disable();
+        });
+      } else {
+        runEmbeddedAgent.mockImplementationOnce(async () => {
+          disable();
+          return { meta: { durationMs: 1, finalAssistantVisibleText: "Accepted image answer" } };
+        });
+      }
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "Describe the image",
+            attachments: [{ mimeType: "image/png", content: imageBase64 }],
+          },
+          client: { connId: "late-policy-image" },
+          context: {
+            sessionCompanion: companion,
+            getRuntimeConfig: () => cfg,
+            getCommittedRuntimeConfig: () => committed,
+          },
+          respond,
+        } as never);
+        if (phase === "accepted") {
+          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ answer: "Accepted image answer" }),
+          );
+        } else {
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              details: { code: "UPLOADS_DISABLED" },
+            }),
+          );
+          expect(companion.state(question).exchanges).toEqual([]);
+        }
+      } finally {
+        preparation.mockRestore();
         companion.dispose();
       }
     },
@@ -411,7 +522,7 @@ describe("session companion embedded invocation", () => {
     admitWrite.mockImplementationOnce(async (_manager, write) => {
       queued.resolve();
       await resume.promise;
-      write();
+      await write();
     });
     const companion = createCompanion();
     const pending = companion.ask(question);
@@ -447,7 +558,7 @@ describe("session companion embedded invocation", () => {
   ])("does not seed a session that is $name before admission", async ({ entry }) => {
     admitWrite.mockImplementationOnce(async (_manager, write) => {
       loadEntry.mockReturnValue(entry ? { entry } : undefined);
-      write();
+      await write();
     });
     const companion = createCompanion();
     try {
@@ -469,7 +580,7 @@ describe("session companion embedded invocation", () => {
     admitWrite.mockImplementationOnce(async (_manager, write) => {
       queued.resolve();
       await resume.promise;
-      write();
+      await write();
     });
     const companion = createCompanion();
     const controller = new AbortController();

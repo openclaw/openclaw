@@ -19,11 +19,27 @@ describe("Buzz outbound mentions", () => {
   it("resolves unique room-member names and preserves multi-word matching", () => {
     expect(
       resolveBuzzMessageMentions({
-        text: "Thanks @Alice Example, please review.",
-        members: members({ publicKey: ALICE_PUBLIC_KEY, displayName: "Alice Example" }),
+        text: "Thanks @Alice Example, please review. @ALICE EXAMPLE",
+        members: members({ publicKey: ALICE_PUBLIC_KEY, displayName: " Alice Example " }),
         senderPublicKey: BOT_PUBLIC_KEY,
       }),
     ).toEqual([ALICE_PUBLIC_KEY]);
+  });
+
+  it.each([
+    ["@Alice", true],
+    ["\t@Alice", true],
+    ["\n@Alice", true],
+    ["\r@Alice", true],
+    ["\v@Alice", true],
+    ["\f@Alice", true],
+    [" @é", true],
+    ["\u00a0@Alice", false],
+    ["(@Alice)", false],
+    ["@", false],
+    ["@ Alice", false],
+  ] as const)("uses Buzz's ASCII mention boundaries for %j", (text, hasAtMention) => {
+    expect(inspectBuzzMentionSyntax(text).hasAtMention).toBe(hasAtMention);
   });
 
   it("resolves a known non-ASCII room-member name without treating emails as mentions", () => {
@@ -82,7 +98,7 @@ describe("Buzz outbound mentions", () => {
 
     expect(
       resolveBuzzMessageMentions({
-        text: `Hello @Missing (nostr:${explicitBob})`,
+        text: `Hello @Missing (nostr:${explicitBob}) nostr:npub1invalid nostr:${explicitBob}`,
         members: roomMembers,
         senderPublicKey: BOT_PUBLIC_KEY,
       }),

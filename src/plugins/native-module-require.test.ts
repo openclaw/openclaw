@@ -1,7 +1,6 @@
 /** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -11,6 +10,7 @@ import {
   isJavaScriptModulePath,
   resolvePluginLoaderTryNative,
   tryNativeRequireJavaScriptModule,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -52,34 +52,16 @@ describe("tryNativeRequireJavaScriptModule", () => {
     }
   });
 
-  // Bun does not route module loads through Node's private Module._load hook.
-  it.runIf(!process.versions.bun)(
-    "declines an in-flight ESM require race for source-transform fallback",
-    () => {
-      const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "plugin.cjs");
-      fs.writeFileSync(modulePath, "module.exports = {};\n", "utf8");
-      const error = Object.assign(new Error("ESM is still loading"), {
-        code: "ERR_REQUIRE_ESM_RACE_CONDITION",
-      });
-      type ModuleLoad = (
-        request: string,
-        parent: NodeJS.Module | undefined,
-        isMain: boolean,
-      ) => unknown;
-      const originalLoad = Reflect.get(Module, "_load") as ModuleLoad;
-      Reflect.set(Module, "_load", () => {
-        throw error;
-      });
+  it("declines an in-flight ESM require race for source-transform fallback", () => {
+    const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "plugin.cjs");
+    fs.writeFileSync(
+      modulePath,
+      'throw Object.assign(new Error("ESM is still loading"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\n',
+      "utf8",
+    );
 
-      try {
-        expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({
-          ok: false,
-        });
-      } finally {
-        Reflect.set(Module, "_load", originalLoad);
-      }
-    },
-  );
+    expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
+  });
 
   it("declines missing target modules so callers can try source fallback", () => {
     const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "missing.cjs");
@@ -95,18 +77,6 @@ describe("tryNativeRequireJavaScriptModule", () => {
     fs.writeFileSync(modulePath, 'require("./missing-dependency.cjs");\n', "utf8");
 
     expect(() => tryNativeRequireJavaScriptModule(modulePath)).toThrow("missing-dependency.cjs");
-  });
-
-  it("does not retry an existing module after a missing dependency error", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk/core");\n', "utf8");
-
-    expect(() =>
-      tryNativeRequireJavaScriptModule(modulePath, {
-        fallbackOnMissingDependency: true,
-      }),
-    ).toThrow("openclaw/plugin-sdk/core");
   });
 
   beforeAll(() => {
@@ -198,6 +168,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
     const modulePath = path.join(dir, "space # percent% plugin.cjs");
     const probePath = path.join(dir, "probe.mjs");
+    const tsconfigPath = path.join(dir, "tsconfig.json");
+    fs.writeFileSync(tsconfigPath, "{}\n");
     fs.writeFileSync(
       probePath,
       `import assert from "node:assert/strict";
@@ -215,15 +187,26 @@ for (const target of [modulePath, pathToFileURL(modulePath).href]) {
 assert.deepEqual(load(pathToFileURL(modulePath + ".missing.cjs").href), { ok: false });
 fs.writeFileSync(modulePath + ".broken.cjs", 'require("./missing-dependency.cjs");\\n');
 assert.throws(() => load(pathToFileURL(modulePath + ".broken.cjs").href), /missing-dependency\\.cjs/);
+fs.writeFileSync(modulePath + ".missing-peer.cjs", 'require("openclaw/plugin-sdk/core");\\n');
+assert.throws(() => load(modulePath + ".missing-peer.cjs", {
+  fallbackOnMissingDependency: true,
+}), /openclaw\\/plugin-sdk\\/core/);
 console.log("native path + file URL process identity; missing target/dependency controls passed");
 `,
     );
-    const result = spawnSync(process.execPath, [probePath], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        ...(process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : []),
+        probePath,
+      ],
+      {
+        cwd: dir,
+        env: { ...process.env, NODE_OPTIONS: "" },
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(
@@ -231,8 +214,8 @@ console.log("native path + file URL process identity; missing target/dependency 
     );
   });
 
-  // Bun's public resolver owns aliases; this case exercises Node's private _resolveFilename hook.
-  it.runIf(!process.versions.bun)(
+  // Temporary ESM aliases belong to the selected Node hooks path; Bun owns its native resolver.
+  it.runIf(useNodeModuleHooks())(
     "retains terminal ESM failures across eviction and alias changes until a new path loads",
     async () => {
       const dir = tempDirs.make("openclaw-native-failed-generation-");

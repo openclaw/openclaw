@@ -9,10 +9,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import {
-  acquireAgentRunPreparedModelRuntimeMock,
-  resetCompactHooksHarnessMocks,
-} from "./compact.hooks.harness.js";
+import { resetCompactHooksHarnessMocks } from "./compact.hooks.harness.js";
 
 export function useCompactHooksSessionFixture(sessionKey: string) {
   let state: OpenClawTestState;
@@ -58,14 +55,6 @@ export function useCompactHooksSessionFixture(sessionKey: string) {
       await rm(directory, { force: true, recursive: true });
     },
   };
-}
-
-export async function acquiredPreparedModelRuntime() {
-  const pendingLease = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value;
-  if (!pendingLease) {
-    throw new Error("expected prepared model runtime acquisition");
-  }
-  return (await pendingLease).snapshot;
 }
 
 export function expectedNativeCompactionOptions(

@@ -26,7 +26,7 @@ function openActiveMemoryToggleStore(api: OpenClawPluginApi) {
   });
 }
 
-async function isSessionActiveMemoryDisabled(params: {
+export async function isSessionActiveMemoryDisabled(params: {
   api: OpenClawPluginApi;
   sessionKey?: string;
 }): Promise<boolean> {
@@ -47,7 +47,7 @@ async function isSessionActiveMemoryDisabled(params: {
   }
 }
 
-async function setSessionActiveMemoryDisabled(params: {
+export async function setSessionActiveMemoryDisabled(params: {
   api: OpenClawPluginApi;
   sessionKey: string;
   disabled: boolean;
@@ -64,7 +64,7 @@ async function setSessionActiveMemoryDisabled(params: {
   }
 }
 
-function resolveCommandSessionKey(params: {
+export function resolveCommandSessionKey(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
   sessionKey?: string;
@@ -89,7 +89,7 @@ function resolveCommandSessionKey(params: {
   return undefined;
 }
 
-function formatActiveMemoryCommandHelp(): string {
+export function formatActiveMemoryCommandHelp(): string {
   return [
     "Active Memory session toggle:",
     "/active-memory status",
@@ -103,7 +103,7 @@ function formatActiveMemoryCommandHelp(): string {
   ].join("\n");
 }
 
-function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
+export function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   const entry = asOptionalRecord(cfg.plugins?.entries?.["active-memory"]);
   if (entry?.enabled === false) {
     return false;
@@ -112,7 +112,7 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   return pluginConfig?.enabled !== false;
 }
 
-function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
+export function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
   const plugins = normalizePluginsConfig(cfg.plugins);
   if (!plugins.enabled || plugins.deny.includes("active-memory")) {
     return false;
@@ -123,7 +123,7 @@ function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
   return plugins.entries["active-memory"]?.enabled !== false;
 }
 
-function updateActiveMemoryGlobalEnabledInConfig(
+export function updateActiveMemoryGlobalEnabledInConfig(
   cfg: OpenClawConfig,
   enabled: boolean,
 ): OpenClawConfig {
@@ -148,7 +148,7 @@ function updateActiveMemoryGlobalEnabledInConfig(
   };
 }
 
-function lacksAdminToMutateActiveMemoryGlobal(params: {
+export function lacksAdminToMutateActiveMemoryGlobal(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
 }): boolean {
@@ -158,10 +158,10 @@ function lacksAdminToMutateActiveMemoryGlobal(params: {
   return params.senderIsOwner !== true;
 }
 
-const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
+export const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
   "⚠️ /active-memory global enable/disable changes require owner or operator.admin.";
 
-function isEnabledForAgent(
+export function isEnabledForAgent(
   config: ResolvedActiveRecallPluginConfig,
   agentId: string | undefined,
 ): boolean {
@@ -174,7 +174,7 @@ function isAgentHarnessSessionKey(sessionKey: string): boolean {
   return rest.startsWith("harness:");
 }
 
-function shouldSkipActiveMemoryForHarnessSession(params: {
+export function shouldSkipActiveMemoryForHarnessSession(params: {
   api: OpenClawPluginApi;
   agentId?: string;
   sessionKey?: string;
@@ -202,7 +202,7 @@ function shouldSkipActiveMemoryForHarnessSession(params: {
   }
 }
 
-function isEligibleInteractiveSession(ctx: {
+export function isEligibleInteractiveSession(ctx: {
   trigger?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -237,7 +237,7 @@ function isEligibleInteractiveSession(ctx: {
   return Boolean(ctx.channelId && ctx.channelId.trim());
 }
 
-function resolveChatType(ctx: {
+export function resolveChatType(ctx: {
   sessionKey?: string;
   messageProvider?: string;
   channelId?: string;
@@ -280,32 +280,6 @@ function resolveChatType(ctx: {
   return undefined;
 }
 
-function isAllowedChatType(
-  config: ResolvedActiveRecallPluginConfig,
-  ctx: {
-    sessionKey?: string;
-    messageProvider?: string;
-    channelId?: string;
-    mainKey?: string;
-  },
-): boolean {
-  const chatType = resolveChatType(ctx);
-  if (!chatType) {
-    return false;
-  }
-  return config.allowedChatTypes.includes(chatType);
-}
-
-function isPrivateRecallDestination(ctx: {
-  sessionKey?: string;
-  messageProvider?: string;
-  channelId?: string;
-  mainKey?: string;
-}): boolean {
-  const chatType = resolveChatType(ctx);
-  return chatType === "direct" || chatType === "explicit";
-}
-
 // Canonical peer keys end with <chatType>:<peerId...>, after optional channel
 // and account prefixes. Main sessions have no embedded peer; legacy dm is accepted.
 function resolveConversationId(ctx: {
@@ -340,7 +314,7 @@ function resolveConversationId(ctx: {
   return undefined;
 }
 
-function isAllowedChatId(
+export function isAllowedChatId(
   config: ResolvedActiveRecallPluginConfig,
   ctx: {
     sessionKey?: string;
@@ -365,21 +339,3 @@ function isAllowedChatId(
   }
   return true;
 }
-
-export {
-  ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
-  formatActiveMemoryCommandHelp,
-  isActiveMemoryGloballyEnabled,
-  isActiveMemoryPluginEnabled,
-  isAllowedChatId,
-  isAllowedChatType,
-  isEligibleInteractiveSession,
-  isEnabledForAgent,
-  isPrivateRecallDestination,
-  isSessionActiveMemoryDisabled,
-  lacksAdminToMutateActiveMemoryGlobal,
-  resolveCommandSessionKey,
-  setSessionActiveMemoryDisabled,
-  shouldSkipActiveMemoryForHarnessSession,
-  updateActiveMemoryGlobalEnabledInConfig,
-};

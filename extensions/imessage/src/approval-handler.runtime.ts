@@ -4,7 +4,6 @@ import {
   buildChannelApprovalResolvedText,
   type ChannelApprovalKind,
   createChannelApprovalNativeRuntimeAdapter,
-  type PendingApprovalView,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -13,11 +12,6 @@ import {
   buildApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-  SystemAgentApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -37,6 +31,7 @@ import {
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
@@ -54,7 +49,6 @@ const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 // gap keeps a poll posted second from sorting above the approval it follows.
 const APPROVAL_POLL_ORDERING_DELAY_MS = 1_100;
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type IMessagePendingDelivery = {
   /** Prompt text carrying the tapback hint; used when no poll will be sent. */
   text: string;
@@ -92,28 +86,6 @@ type IMessageFinalPayload = {
   text: string;
 };
 
-function buildPendingPayload(params: {
-  request: ApprovalRequest;
-  approvalKind: ChannelApprovalKind;
-  nowMs: number;
-  view: PendingApprovalView;
-}): IMessagePendingDelivery {
-  const pendingContent = buildApprovalReactionPendingContent({
-    request: params.request,
-    view: params.view as never,
-    nowMs: params.nowMs,
-  });
-  return {
-    text: pendingContent.reactionPayload.text ?? "",
-    // The native poll owns the primary controls. Manual commands stay in the
-    // details message because bridge capability cannot prove recipient support.
-    // Same bold headers and labels as the tapback prompt (#85954): both are
-    // delivered through the attributed-body send path.
-    pollText: buildApprovalNativeControlsPromptText({ view: params.view, nowMs: params.nowMs }),
-    allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
-  };
-}
-
 type IMessageApprovalTargetTransport = "imessage" | "sms" | "unknown";
 
 function classifyIMessageApprovalTargetTransport(params: {
@@ -145,13 +117,7 @@ function classifyIMessageApprovalTargetTransport(params: {
   return "unknown";
 }
 
-/**
- * Cache-only capability check, run before the prompt is sent so the tapback hint
- * can be omitted up front. Deliberately never probes: a probe spawns imsg and
- * would put seconds of latency in front of an approval prompt. An available
- * bridge status is cached for the process lifetime (see probe.ts), so the only
- * cost of a cold cache is that the first approval after start uses tapbacks.
- */
+// Never spawn a probe before an approval prompt; a cold cache falls back to tapbacks.
 function canIMessageApprovalUsePoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -200,28 +166,8 @@ function canIMessageApprovalUsePoll(params: {
   }
 }
 
-function resolveIMessageApprovalCliOptions(params: {
-  cfg: OpenClawConfig;
-  target: PreparedIMessageApprovalTarget;
-}): { cliPath: string; dbPath?: string; timeoutMs?: number } {
-  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.target.accountId });
-  return {
-    cliPath: account.config.cliPath?.trim() || "imsg",
-    dbPath: account.config.dbPath?.trim() || undefined,
-    timeoutMs: account.config.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
-  };
-}
-
-/**
- * Send the poll balloon after the approval details prompt. imsg normally echoes
- * every poll question as a separate caption after the balloon; suppress that
- * echo because OpenClaw already rendered the full context above the controls.
- *
- * Conversation-read authority: `chatGuid` is resolved from the approval's own
- * routing target (origin session or a configured approver), so this read is
- * host-originated and carries the server-owned direct-operator attestation.
- *
- */
+// Suppress imsg's duplicate caption. Routing targets are host-owned, so chat lookup
+// carries direct-operator authority rather than model-delegated authority.
 async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -237,14 +183,31 @@ async function deliverIMessageApprovalPoll(params: {
 } | null> {
   const options = buildApprovalPollOptions({ allowedDecisions: params.allowedDecisions });
   try {
-    const cliOptions = resolveIMessageApprovalCliOptions({
-      cfg: params.cfg,
-      target: params.target,
-    });
-    const chatGuid = await resolveIMessageApprovalChatGuid({
-      to: params.target.to,
-      cliOptions,
-    });
+    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.target.accountId });
+    const cliOptions = {
+      cliPath: account.config.cliPath?.trim() || "imsg",
+      dbPath: account.config.dbPath?.trim() || undefined,
+      timeoutMs: account.config.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    };
+    const target = parseIMessageTarget(params.target.to);
+    // Polls require a registered chat; synthesizing a new DM would lose the control.
+    let chatGuid: string | null;
+    if (target.kind === "chat_guid") {
+      chatGuid = target.chatGuid;
+    } else {
+      const runtime = await loadIMessageActionsRuntime();
+      chatGuid = await runtime.resolveChatGuidForTarget({
+        target:
+          target.kind === "handle"
+            ? {
+                kind: "chat_identifier",
+                chatIdentifier: `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`,
+              }
+            : target,
+        options: cliOptions,
+        conversationReadOrigin: "direct-operator",
+      });
+    }
     // chat_id and unprefixed identifiers do not carry their transport. Resolve
     // them before sending controls, then fail back to text for an SMS chat.
     if (!chatGuid || /^SMS;/i.test(chatGuid)) {
@@ -260,13 +223,9 @@ async function deliverIMessageApprovalPoll(params: {
       question: extractMarkdownFormatRuns(params.question).text,
       choices: options.map((option) => option.text),
       suppressComment: true,
-      options: { ...cliOptions, chatGuid },
+      options: cliOptions,
     });
-    const reportedGuid = sent.messageId.trim();
-    const pollGuid =
-      reportedGuid && reportedGuid !== "ok" && reportedGuid !== "unknown"
-        ? reportedGuid
-        : undefined;
+    const pollGuid = normalizeIMessageMessageId(sent.messageId);
     const optionDecisions = mapSentPollOptionsToDecisions({
       requested: options,
       sent: sent.pollOptions,
@@ -324,65 +283,6 @@ async function deliverIMessageApprovalPoll(params: {
   } catch (error) {
     log.warn(`imessage approvals: poll send failed, falling back to tapbacks: ${String(error)}`);
     return null;
-  }
-}
-
-/**
- * Polls must target a chat Messages already knows. Unlike send, we never
- * synthesize an unregistered DM identifier here: the bridge would reject it and
- * the poll would be lost.
- */
-async function resolveIMessageApprovalChatGuid(params: {
-  to: string;
-  cliOptions: { cliPath: string; dbPath?: string; timeoutMs?: number };
-}): Promise<string | null> {
-  const target = parseIMessageTarget(params.to);
-  if (target.kind === "chat_guid") {
-    return target.chatGuid;
-  }
-  const runtime = await loadIMessageActionsRuntime();
-  if (target.kind === "chat_id" || target.kind === "chat_identifier") {
-    return await runtime.resolveChatGuidForTarget({
-      target,
-      options: params.cliOptions,
-      conversationReadOrigin: "direct-operator",
-    });
-  }
-  if (target.kind !== "handle") {
-    return null;
-  }
-  const service = target.service === "sms" ? "SMS" : "iMessage";
-  return await runtime.resolveChatGuidForTarget({
-    target: { kind: "chat_identifier", chatIdentifier: `${service};-;${target.to}` },
-    options: params.cliOptions,
-    conversationReadOrigin: "direct-operator",
-  });
-}
-
-/**
- * The prompt went out without its tapback hint because a poll was expected.
- * If poll delivery fails, restore the complete reaction fallback while the
- * original details message still carries every manual command.
- */
-async function recoverIMessageApprovalTextFallback(params: {
-  cfg: OpenClawConfig;
-  target: PreparedIMessageApprovalTarget;
-  promptMessageId?: string;
-  fallbackText: string;
-  approvalPrompt: IMessageApprovalPromptBinding;
-}): Promise<string | undefined> {
-  try {
-    const result = await sendMessageIMessage(params.target.to, params.fallbackText, {
-      config: params.cfg,
-      approvalPrompt: params.approvalPrompt,
-      conversationReadOrigin: "direct-operator",
-      ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
-      ...(params.promptMessageId ? { replyToId: params.promptMessageId } : {}),
-    });
-    return result.guid;
-  } catch (error) {
-    log.error(`imessage approvals: text-fallback recovery failed: ${String(error)}`);
-    return undefined;
   }
 }
 
@@ -501,8 +401,15 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ request, approvalKind, nowMs, view }),
+    buildPendingPayload: ({ request, nowMs, view }) => {
+      const { reactionPayload } = buildApprovalReactionPendingContent({ request, view, nowMs });
+      return {
+        text: reactionPayload.text ?? "",
+        // Native polls own the controls; manual commands remain for older recipients.
+        pollText: buildApprovalNativeControlsPromptText({ view, nowMs }),
+        allowedDecisions: reactionPayload.allowedDecisions,
+      };
+    },
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
@@ -566,12 +473,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         const result = await sendMessageIMessage(preparedTarget.to, promptText, {
           config: cfg,
           ...(reactionFallbackVisible ? { approvalPrompt } : {}),
-          // Approval delivery is host-originated: the target comes from the
-          // approval's own routing (origin session or a configured approver),
-          // never from model input. Attest that so #99905's conversation-read
-          // policy sees the real authority instead of failing closed to
-          // "delegated". If the target ever becomes caller-influenced, this
-          // must go back to delegated.
+          // Authority comes from host-owned approval routing, never model input.
           conversationReadOrigin: "direct-operator",
           ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
         });
@@ -600,16 +502,21 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
                 allowedDecisions: pendingPayload.allowedDecisions,
               })
             : null;
-        const hintMessageId =
-          expectPoll && !poll && !reactionFallbackVisible
-            ? await recoverIMessageApprovalTextFallback({
-                cfg,
-                target: preparedTarget,
-                promptMessageId: result.guid,
-                fallbackText: pendingPayload.text,
-                approvalPrompt,
-              })
-            : undefined;
+        let hintMessageId: string | undefined;
+        if (expectPoll && !poll && !reactionFallbackVisible) {
+          try {
+            const fallback = await sendMessageIMessage(preparedTarget.to, pendingPayload.text, {
+              config: cfg,
+              approvalPrompt,
+              conversationReadOrigin: "direct-operator",
+              ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
+              replyToId: result.guid,
+            });
+            hintMessageId = fallback.guid;
+          } catch (error) {
+            log.error(`imessage approvals: text-fallback recovery failed: ${String(error)}`);
+          }
+        }
         const entry: PendingIMessageApprovalEntry = {
           accountId,
           to: preparedTarget.to,

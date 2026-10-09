@@ -46,7 +46,7 @@ type NativeTextState = {
 };
 
 /** Native identities keep saved-state recovery and live events on the same projection. */
-class AgentsApiMessageProjection {
+export class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
@@ -346,16 +346,23 @@ class AgentsApiMessageProjection {
       promptError: turn.error,
       turnCompleted: isAgentsApiTerminalTurn(turn.status),
     });
+    const replyItemId = `agentsapi:${this.remoteSessionId}:${turn.id}:reply`;
     if (text) {
-      this.reply.lastAssistant = await this.append({
-        ...assistant,
-        idempotencyKey: `agentsapi:${this.remoteSessionId}:${turn.id}`,
-      });
+      const assistantItemIds = this.visibleAssistantItemId
+        ? [this.visibleAssistantItemId, replyItemId]
+        : [replyItemId];
+      this.reply.lastAssistant = await this.append(
+        {
+          ...assistant,
+          idempotencyKey: `agentsapi:${this.remoteSessionId}:${turn.id}`,
+        },
+        assistantItemIds,
+      );
       this.assertCurrent();
       await this.params.onAssistantMessageStart?.();
       this.assertCurrent();
     }
-    await this.emitAssistantSnapshot(`agentsapi:${this.remoteSessionId}:${turn.id}:reply`, text);
+    await this.emitAssistantSnapshot(replyItemId, text);
     if (text) {
       this.assertCurrent();
       await this.params.onPartialReply?.({ text });
@@ -500,6 +507,14 @@ class AgentsApiMessageProjection {
     const id = this.identity(state.turnId, state.item.id);
     const text = joinTextParts(state.texts);
     if (state.item.phase === "commentary") {
+      if (this.visibleAssistantItemId === id) {
+        this.visibleAssistantItemId = undefined;
+        state.lastAssistantText = undefined;
+        await this.emit({
+          stream: "assistant",
+          data: { itemId: id, text: "", delta: "", replace: true },
+        });
+      }
       const phase = terminal ? "end" : "update";
       if (
         !text.trim() ||
@@ -657,18 +672,17 @@ class AgentsApiMessageProjection {
     this.assertCurrent();
   }
 
-  private append<TMessage extends AgentMessage>(message: TMessage): Promise<TMessage> {
-    return appendAgentsApiTranscriptMessage(this.params, message, this.assertCurrent);
+  private append<TMessage extends AgentMessage>(
+    message: TMessage,
+    assistantItemIds?: readonly string[],
+  ): Promise<TMessage> {
+    return appendAgentsApiTranscriptMessage(
+      this.params,
+      message,
+      this.assertCurrent,
+      assistantItemIds,
+    );
   }
-}
-
-export function createAgentsApiMessageProjection(
-  params: AgentHarnessAttemptParamsV2,
-  remoteSessionId: string,
-  emitEvent: (event: AgentEvent) => void | Promise<void>,
-  assertCurrent: () => void,
-) {
-  return new AgentsApiMessageProjection(params, remoteSessionId, emitEvent, assertCurrent);
 }
 
 const INTERNAL_EVENT_TYPES = new Set([

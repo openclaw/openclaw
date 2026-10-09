@@ -1,14 +1,35 @@
 import { aroundEach, vi } from "vitest";
 import type { SystemdServiceReadBinding } from "../daemon/service-types.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
 
-/** Synthetic services keep both native and SQLite locks in their owned fixture root. */
+type DoctorMaintenance = NonNullable<
+  Awaited<ReturnType<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>>
+>;
+
+export function createDoctorMaintenanceFixture(overrides: Partial<DoctorMaintenance> = {}) {
+  return {
+    signal: new AbortController().signal,
+    warnings: [],
+    failureFacts: [],
+    databaseWrites: undefined,
+    serviceUpdateVerdict: undefined,
+    run: <T>(operation: () => T): T => operation(),
+    releaseState: vi.fn(async () => {}),
+    repairSqliteNoCow: vi.fn(async () => {}),
+    enableSqliteReclamation: vi.fn(async () => {}),
+    cleanupRetainedRuntimes: vi.fn(async () => {}),
+    release: vi.fn(async () => {}),
+    finish: vi.fn(async () => {}),
+    ...overrides,
+  } satisfies DoctorMaintenance;
+}
+
+/** Synthetic services keep native lifecycle locks in their owned fixture root. */
 export function useDoctorMaintenanceRuntimeDirectory(createDirectory: () => string) {
   aroundEach((runTest) => {
     const directory = createDirectory();
     vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
-    return withStateDatabaseCoordinatorRuntimeDirectory(directory, runTest);
+    return runTest();
   });
 }
 
@@ -23,6 +44,9 @@ export function stoppedSystemdBinding(onPassiveRead: () => void): SystemdService
     StartLimitBurst: 5,
     ActiveEnterTimestampMonotonic: 100,
     InactiveEnterTimestampMonotonic: 200,
+    UnitFileState: "enabled",
+    RefuseManualStart: false,
+    CanStart: true,
     Result: "success",
     NRestarts: 0,
     MainPID: 0,

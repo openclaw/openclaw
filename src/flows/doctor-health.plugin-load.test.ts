@@ -1,6 +1,8 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -9,6 +11,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const { mocks } = await import("./doctor-health.test-support.js");
 
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -16,9 +22,7 @@ afterEach(() => {
 
 it.each([
   { failure: "ENOSPC", update: "standalone" },
-  { failure: "SyntaxError", update: "standalone" },
   { failure: "ENOSPC", update: "in-progress" },
-  { failure: "ENOSPC", update: "parent-only" },
 ])(
   "reports a plugin $failure during $update Doctor with its corresponding outcome",
   async ({ failure, update }) => {
@@ -58,24 +62,23 @@ it.each([
       mocks.config.mockReturnValue(cfg);
       let failedWrite = false;
       if (failure === "ENOSPC") {
-        const failCaptureWrite = (target: fs.PathLike) => {
-          if (path.basename(String(target)) === "index.cjs" && String(target) !== source) {
-            failedWrite = true;
-            throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
-          }
-        };
-        const copy = fs.copyFileSync;
-        vi.spyOn(fs, "copyFileSync").mockImplementation((from, target, ...args) => {
-          failCaptureWrite(target);
-          return copy(from, target, ...args);
-        });
-        // Platforms without descriptor paths create the bounded-copy destination directly.
-        const open = fs.openSync;
-        vi.spyOn(fs, "openSync").mockImplementation((target, flags, ...args) => {
-          if (flags === "w") {
-            failCaptureWrite(target);
-          }
-          return open(target, flags, ...args);
+        const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
+        vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+          const batch = createBatch();
+          return {
+            ...batch,
+            copyFile(options) {
+              if (options.source.absolutePath === source) {
+                failedWrite = true;
+                throw new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
+                  cause: Object.assign(new Error("fixture capture write failed"), {
+                    code: "ENOSPC",
+                  }),
+                });
+              }
+              return batch.copyFile(options);
+            },
+          };
         });
       }
       mocks.runContributions.mockImplementation(async () => {
@@ -89,6 +92,11 @@ it.each([
                 failure === "ENOSPC" ? "fixture capture write failed" : "fixture syntax failed",
               ),
             });
+            if (failure === "ENOSPC") {
+              expect(registry.plugins.find((plugin) => plugin.id === id)?.error).toContain(
+                "free space on the filesystem used by the plugin load and rerun Doctor",
+              );
+            }
           } finally {
             await disposePluginRegistryInstances(registry);
           }

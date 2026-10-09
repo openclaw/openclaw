@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   startMatrixQaFaultProxy,
   type MatrixQaFaultProxyExchange,
@@ -404,32 +405,24 @@ function buildExpectation(
     `${left.method} ${left.route}`.localeCompare(`${right.method} ${right.route}`),
   );
   const retries: MatrixQaScenarioRouteStateExpectation["retries"] = [];
-  const adjacentOperationRuns: MatrixQaInternalRecordedExchange[][] = [];
-  for (const record of orderedRecords) {
-    const currentRun = adjacentOperationRuns.at(-1);
-    if (currentRun?.[0]?.operationFingerprint === record.operationFingerprint) {
-      currentRun.push(record);
-    } else {
-      adjacentOperationRuns.push([record]);
-    }
-  }
-  for (const attempts of adjacentOperationRuns) {
-    if (attempts[0]?.request.route.endsWith("/sync")) {
+  for (let index = 0; index < orderedRecords.length; index += 1) {
+    const first = orderedRecords[index];
+    if (!first || first.response.status < 400 || first.request.route.endsWith("/sync")) {
       continue;
     }
-    for (let index = 0; index < attempts.length; index += 1) {
-      const first = attempts[index];
-      if (!first || first.response.status < 400) {
-        continue;
+    let retryEndIndex = index + 1;
+    while (retryEndIndex < orderedRecords.length) {
+      const attempt = orderedRecords[retryEndIndex];
+      if (attempt?.operationFingerprint !== first.operationFingerprint) {
+        break;
       }
-      const recoveryOffset = attempts
-        .slice(index + 1)
-        .findIndex((attempt) => attempt.response.status < 400);
-      const retryEndIndex = recoveryOffset < 0 ? attempts.length : index + recoveryOffset + 2;
-      const retryAttempts = attempts.slice(index, retryEndIndex);
-      if (retryAttempts.length < 2) {
-        continue;
+      retryEndIndex += 1;
+      if (attempt.response.status < 400) {
+        break;
       }
+    }
+    const retryAttempts = orderedRecords.slice(index, retryEndIndex);
+    if (retryAttempts.length > 1) {
       retries.push({
         attempts: retryAttempts.length,
         kind: "retry",
@@ -437,8 +430,8 @@ function buildExpectation(
         route: first.request.route,
         statuses: retryAttempts.map((attempt) => attempt.response.status),
       });
-      index = retryEndIndex - 1;
     }
+    index = retryEndIndex - 1;
   }
   const incrementalSyncRecords = orderedRecords.filter(
     (record) => record.sync?.since !== undefined,
@@ -484,17 +477,8 @@ export async function startMatrixQaRecordingProxy(params: {
   let sequence = 0;
   const records: MatrixQaInternalRecordedExchange[] = [];
   const syncTokensByPrincipal = new Map<string, Map<string, string>>();
-  const observer: Required<MatrixQaFaultProxyObserver> = {
-    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
-    onExchange(exchange: MatrixQaFaultProxyExchange) {
-      recordExchange(exchange);
-    },
-  };
   const recordExchange = (exchange: MatrixQaFaultProxyExchange) => {
-    const context =
-      typeof exchange.context === "object" && exchange.context !== null
-        ? (exchange.context as { scenarioId?: unknown; sequence?: unknown })
-        : undefined;
+    const context = asOptionalObjectRecord(exchange.context);
     const exchangeSequence = typeof context?.sequence === "number" ? context.sequence : ++sequence;
     const route = normalizeMatrixQaRoute(exchange.request.path);
     const exchangeScenarioId = route.endsWith("/sync")
@@ -504,10 +488,7 @@ export async function startMatrixQaRecordingProxy(params: {
         : "unattributed";
     const requestJson = parseJsonBody(exchange.request.body, exchange.request.headers);
     const responseJson = parseJsonBody(exchange.response.body, exchange.response.headers);
-    const responseMetadata =
-      typeof responseJson === "object" && responseJson !== null
-        ? (responseJson as { errcode?: unknown; next_batch?: unknown })
-        : undefined;
+    const responseMetadata = asOptionalObjectRecord(responseJson);
     const requestFields = collectStateFieldMarkers(requestJson);
     const responseFields = collectStateFieldMarkers(responseJson);
     const syncPrincipal = exchange.request.bearerToken ?? "anonymous";
@@ -516,14 +497,12 @@ export async function startMatrixQaRecordingProxy(params: {
     const sinceRaw = new URLSearchParams(exchange.request.search).get("since") ?? undefined;
     const since = sinceRaw ? (syncTokens.get(sinceRaw) ?? "sync-unknown") : undefined;
     const requestQuery = buildRedactedQuery(exchange.request.search, syncTokens);
-    const nextBatch =
-      typeof responseMetadata?.next_batch === "string" ? responseMetadata.next_batch : undefined;
+    const nextBatch = readStringField(responseMetadata, "next_batch");
     if (nextBatch && !syncTokens.has(nextBatch)) {
       syncTokens.set(nextBatch, `sync-${syncTokens.size + 1}`);
     }
     const nextBatchAlias = nextBatch ? syncTokens.get(nextBatch) : undefined;
-    const responseErrcode =
-      typeof responseMetadata?.errcode === "string" ? responseMetadata.errcode : undefined;
+    const responseErrcode = readStringField(responseMetadata, "errcode");
     const operationFingerprint = createHash("sha256")
       .update(exchange.request.method)
       .update("\0")
@@ -567,6 +546,10 @@ export async function startMatrixQaRecordingProxy(params: {
         : {}),
     });
   };
+  const observer: Required<MatrixQaFaultProxyObserver> = {
+    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
+    onExchange: recordExchange,
+  };
   const proxy = await startMatrixQaFaultProxy({
     targetBaseUrl: params.targetBaseUrl,
     rules: [],
@@ -605,7 +588,7 @@ export async function startMatrixQaRecordingProxy(params: {
         substrate,
       };
     },
-    installFaultRule: (rule) => proxy.installRule(rule),
+    installFaultRule: proxy.installRule.bind(proxy),
     records: () =>
       structuredClone(
         records
@@ -615,7 +598,7 @@ export async function startMatrixQaRecordingProxy(params: {
     setScenarioId(nextScenarioId) {
       scenarioId = nextScenarioId;
     },
-    setTargetBaseUrl: (targetBaseUrl) => proxy.setTargetBaseUrl(targetBaseUrl),
-    stop: () => proxy.stop(),
+    setTargetBaseUrl: proxy.setTargetBaseUrl.bind(proxy),
+    stop: proxy.stop.bind(proxy),
   };
 }

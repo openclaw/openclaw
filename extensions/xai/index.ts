@@ -31,13 +31,10 @@ import {
   isXaiGrokProxyBaseUrl,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
-import {
-  isModernXaiModel,
-  normalizeXaiResolvedModel,
-  resolveXaiForwardCompatModel,
-} from "./provider-models.js";
+import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveXaiTransport } from "./provider-routing.js";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
@@ -306,7 +303,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
+    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),

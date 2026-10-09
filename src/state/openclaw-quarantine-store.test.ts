@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -9,6 +10,7 @@ import {
   clearOpenClawDatabaseQuarantine,
   markOpenClawAgentIntegrityClean,
   readOpenClawAgentIntegrityVerification,
+  readOpenClawDatabaseQuarantineFailure,
   recordOpenClawAgentIntegrityVerification,
   recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
@@ -66,6 +68,128 @@ function failReceiptWrite(
     });
   }
 }
+
+it("sets the quarantine lock wait at open and reads each fresh decision in one statement", () => {
+  const fixture = createFixture();
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  const timeouts: unknown[] = [];
+  const statements: string[] = [];
+  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const database = open(...args);
+    if (args[0] === fixture.storePath) {
+      timeouts.push(database.prepare("PRAGMA busy_timeout").get()?.timeout);
+      const exec = database.exec.bind(database);
+      vi.spyOn(database, "exec").mockImplementation((sql) => {
+        statements.push(sql);
+        exec(sql);
+      });
+    }
+    return database;
+  });
+  const readDecision = () => {
+    const observation = observeSqliteReadSql(
+      nodeSqlite.requireNodeSqlite().StatementSync.prototype,
+    );
+    try {
+      const result = readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, {
+        env: fixture.env,
+      });
+      // The opening spy contributes one timeout observation; the decision contributes one read.
+      expect(observation.queries).toHaveLength(2);
+      return result;
+    } finally {
+      observation.restore();
+    }
+  };
+  expect(
+    recordOpenClawDatabaseQuarantine({
+      env: fixture.env,
+      path: fixture.pathname,
+      kind: "agent",
+      reason: "synthetic verified damage",
+    }),
+  ).toBe(true);
+  expect(readDecision()).toMatchObject({
+    name: "SqliteIntegrityError",
+    message: expect.stringContaining("synthetic verified damage"),
+  });
+  expect(clearOpenClawDatabaseQuarantine(fixture.pathname, { env: fixture.env })).toBe(true);
+  expect(readDecision()).toBeUndefined();
+  expect(timeouts).toEqual([5_000, 5_000, 5_000, 5_000]);
+  expect(statements.some((sql) => /\bPRAGMA\s+busy_timeout\s*=/i.test(sql))).toBe(false);
+});
+
+it.each([
+  { version: 0, error: undefined },
+  { version: 2, error: "no such table: quarantined_databases" },
+  { version: 3, error: "uses newer schema version 3" },
+])("preserves version $version missing-table cleanup outcomes", ({ version, error }) => {
+  const root = tempDirs.make("openclaw-quarantine-empty-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const pathname = path.join(root, "agent.sqlite");
+  const storePath = resolveQuarantineStorePath(env);
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  const empty = nodeSqlite.openNodeSqliteDatabase(storePath);
+  empty.exec(`PRAGMA user_version = ${version}`);
+  empty.close();
+  expect(readOpenClawDatabaseQuarantineFailure("agent", pathname, { env })).toBeUndefined();
+  const closeFailure = new Error("synthetic quarantine close failure");
+  const closeReaders: Array<() => void> = [];
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  const intercepted = vi
+    .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+    .mockImplementation((...args) => {
+      const database = open(...args);
+      closeReaders.push(database.close.bind(database));
+      vi.spyOn(database, "close").mockImplementation(() => {
+        throw closeFailure;
+      });
+      return database;
+    });
+  try {
+    expect(() => readOpenClawDatabaseQuarantineFailure("agent", pathname, { env })).toThrow(
+      expect.objectContaining({
+        name: "OpenClawQuarantineReadCleanupError",
+        errors: [
+          ...(error ? [expect.objectContaining({ message: expect.stringContaining(error) })] : []),
+          closeFailure,
+        ],
+      }),
+    );
+  } finally {
+    intercepted.mockRestore();
+    for (const close of closeReaders) {
+      close();
+    }
+  }
+});
+
+it("uses generation metadata only after its schema version admits it", () => {
+  const fixture = createFixture();
+  expect(
+    recordOpenClawDatabaseQuarantine({
+      env: fixture.env,
+      path: fixture.pathname,
+      kind: "agent",
+      reason: "legacy decision",
+    }),
+  ).toBe(true);
+  const database = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
+  try {
+    database.exec(
+      "PRAGMA user_version = 1; UPDATE quarantined_databases SET verified_generation = 'invalid'",
+    );
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, { env: fixture.env }),
+    ).toMatchObject({ name: "SqliteIntegrityError" });
+    database.exec("PRAGMA user_version = 2");
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, { env: fixture.env }),
+    ).toBeUndefined();
+  } finally {
+    database.close();
+  }
+});
 
 it.each([
   { operation: "consume", failure: "full" },

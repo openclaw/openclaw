@@ -264,10 +264,7 @@ export class BoardMcpAppLifecycle {
     renewed: boolean,
   ): void {
     this.renewalTimer = clearTimer(this.renewalTimer);
-    if (appView.status !== "ready") {
-      return;
-    }
-    if (!this.host.active()) {
+    if (appView.status !== "ready" || !this.host.active()) {
       return;
     }
     const key = this.key;

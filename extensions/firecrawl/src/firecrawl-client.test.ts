@@ -54,7 +54,9 @@ describe("Firecrawl search payloads", () => {
       {
         data: [
           {
+            url: 42,
             sourceURL: "https://www.example.com/source",
+            title: { text: "Ignore non-string title" },
             metadata: { title: "Fallback title" },
             description: "Fallback description",
             markdown: "Body",
@@ -157,7 +159,7 @@ describe("Firecrawl scrape payloads", () => {
         truncated: true,
       }),
     );
-    expect(String(result.text)).toContain("contentcontentconten");
+    expect(result.text).toContain("contentcontentconten");
     expect(String(result.title)).toContain("tttt");
   });
 

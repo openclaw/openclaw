@@ -36,7 +36,6 @@ test("waiting process poll keeps a one-shot runtime alive through background com
     },
   );
   expect(child.error, child.stderr).toBeUndefined();
-  expect(child.status === 0 || child.status === 13, child.stderr).toBe(true);
   expect(readFileSync(resultPath, "utf8"), child.stderr).toBe("background-complete");
   expect(child.signal, child.stderr).toBeNull();
   expect(child.status, child.stderr).toBe(0);

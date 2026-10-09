@@ -1,5 +1,3 @@
-// Openai plugin module implements tts behavior.
-
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -38,24 +36,24 @@ export function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
 }
 
 export function isCustomOpenAITtsBaseUrl(baseUrl?: string): boolean {
-  if (baseUrl != null) {
-    return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
-  }
-  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL) !== DEFAULT_OPENAI_BASE_URL;
+  return (
+    normalizeOpenAITtsBaseUrl(baseUrl ?? process.env.OPENAI_TTS_BASE_URL) !==
+    DEFAULT_OPENAI_BASE_URL
+  );
 }
 
 export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
   if (isCustomOpenAITtsBaseUrl(baseUrl)) {
     return true;
   }
-  return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
+  return OPENAI_TTS_MODELS.some((candidate) => candidate === model);
 }
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
   if (isCustomOpenAITtsBaseUrl(baseUrl)) {
     return true;
   }
-  return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
+  return OPENAI_TTS_VOICES.some((candidate) => candidate === voice);
 }
 
 function resolveOpenAITtsInstructions(
@@ -84,7 +82,19 @@ function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string,
   return sanitized;
 }
 
-export async function openaiTTS(params: {
+export async function openaiTTS({
+  text,
+  apiKey,
+  baseUrl,
+  model,
+  voice,
+  speed,
+  instructions,
+  responseFormat,
+  extraBody,
+  timeoutMs,
+  maxBytes = DEFAULT_TTS_MAX_BYTES,
+}: {
   text: string;
   apiKey: string;
   baseUrl: string;
@@ -97,19 +107,6 @@ export async function openaiTTS(params: {
   timeoutMs: number;
   maxBytes?: number;
 }): Promise<Buffer> {
-  const {
-    text,
-    apiKey,
-    baseUrl,
-    model,
-    voice,
-    speed,
-    instructions,
-    responseFormat,
-    extraBody,
-    timeoutMs,
-    maxBytes = DEFAULT_TTS_MAX_BYTES,
-  } = params;
   const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {

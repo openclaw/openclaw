@@ -1,29 +1,19 @@
 /** Tests embedded LSP runtime JSON-RPC, tool behavior, and cleanup. */
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bundleLspConfig from "../plugins/bundle-lsp.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as lspProcess from "./agent-bundle-lsp-process.js";
 import {
-  createBundleLspToolRuntime as createProductionBundleLspToolRuntime,
+  createBundleLspToolRuntime,
   disposeAllBundleLspRuntimes,
 } from "./agent-bundle-lsp-runtime.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 const spawnMock = vi.fn();
-const loadEmbeddedAgentLspConfigMock = vi.fn();
-
-function createBundleLspToolRuntime(
-  params: Parameters<typeof createProductionBundleLspToolRuntime>[0],
-) {
-  return createProductionBundleLspToolRuntime({
-    ...params,
-    dependencies: {
-      loadLspConfig: loadEmbeddedAgentLspConfigMock,
-      spawnServerProcess: spawnMock,
-    },
-  });
-}
+const loadLspConfigMock = vi.fn();
 
 function encodeLspMessage(body: unknown): string {
   const json = JSON.stringify(body);
@@ -167,11 +157,13 @@ class MockChildProcess extends EventEmitter implements OwnedStdioProcess {
 }
 
 function configureSingleLspServer(): void {
-  loadEmbeddedAgentLspConfigMock.mockReturnValue({
-    lspServers: {
-      typescript: {
-        command: "typescript-language-server",
-        args: ["--stdio"],
+  loadLspConfigMock.mockReturnValue({
+    config: {
+      lspServers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+        },
       },
     },
     diagnostics: [],
@@ -188,14 +180,20 @@ function waitForLspInitialization(child: MockChildProcess, creation: Promise<unk
 }
 
 describe("bundle LSP runtime", () => {
+  beforeEach(() => {
+    vi.spyOn(bundleLspConfig, "loadEnabledBundleLspConfig").mockImplementation(loadLspConfigMock);
+    vi.spyOn(lspProcess, "spawnLspServerProcess").mockImplementation(spawnMock);
+  });
+
   afterEach(async () => {
     await disposeAllBundleLspRuntimes();
     spawnMock.mockReset();
-    loadEmbeddedAgentLspConfigMock.mockReset();
+    loadLspConfigMock.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("reuses the prepared plugin manifest registry for bundle discovery", async () => {
-    loadEmbeddedAgentLspConfigMock.mockReturnValue({ lspServers: {}, diagnostics: [] });
+    loadLspConfigMock.mockReturnValue({ config: { lspServers: {} }, diagnostics: [] });
     const manifestRegistry = { plugins: [] };
 
     await createBundleLspToolRuntime({
@@ -203,7 +201,7 @@ describe("bundle LSP runtime", () => {
       manifestRegistry,
     });
 
-    expect(loadEmbeddedAgentLspConfigMock).toHaveBeenCalledWith({
+    expect(loadLspConfigMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       cfg: undefined,
       manifestRegistry,
@@ -364,11 +362,13 @@ describe("bundle LSP runtime", () => {
 
   it("cleans initialized and pending LSP servers on preparation abort without starting siblings", async () => {
     vi.useFakeTimers();
-    loadEmbeddedAgentLspConfigMock.mockReturnValue({
-      lspServers: {
-        first: { command: "first-language-server" },
-        second: { command: "second-language-server" },
-        third: { command: "third-language-server" },
+    loadLspConfigMock.mockReturnValue({
+      config: {
+        lspServers: {
+          first: { command: "first-language-server" },
+          second: { command: "second-language-server" },
+          third: { command: "third-language-server" },
+        },
       },
       diagnostics: [],
     });

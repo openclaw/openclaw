@@ -55,7 +55,10 @@ export type SqliteReaderDiagnostics = {
 
 const readerOwners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteReaderOwners"),
-  () => new AsyncLocalStorage<SqliteReaderOwner>(),
+  () =>
+    new AsyncLocalStorage<
+      SqliteReaderOwner & { timing: { preparedAtMs: number; hostAdmissionWaitMs: number } }
+    >(),
 );
 
 const activeReaders = resolveGlobalSingleton(Symbol.for("openclaw.sqliteActiveReaders"), () => ({
@@ -82,12 +85,28 @@ function boundedOperation(operation: string): string {
 }
 
 export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: () => T): T {
-  return readerOwners.run({ ...owner, operation: boundedOperation(owner.operation) }, operation);
+  return readerOwners.run(
+    {
+      ...owner,
+      operation: boundedOperation(owner.operation),
+      timing: { preparedAtMs: Date.now(), hostAdmissionWaitMs: 0 },
+    },
+    operation,
+  );
 }
 
 export function captureSqliteReaderOwner(): SqliteReaderOwner | undefined {
   const owner = readerOwners.getStore();
-  return owner ? { ...owner } : undefined;
+  if (!owner) {
+    return undefined;
+  }
+  const { timing: _, ...identity } = owner;
+  return identity;
+}
+
+/** Mutable diagnostic counters only; never source or write authority. */
+export function currentSqliteOperationTiming() {
+  return readerOwners.getStore()?.timing;
 }
 
 function currentOwner(
@@ -188,10 +207,11 @@ export function retainSqliteReader(
       }
       released = true;
       databaseReaders.delete(token);
-      if (databaseReaders.size === 0) {
-        if (activeReaders.byDatabase.get(database) === databaseReaders) {
-          activeReaders.byDatabase.delete(database);
-        }
+      if (
+        databaseReaders.size === 0 &&
+        activeReaders.byDatabase.get(database) === databaseReaders
+      ) {
+        activeReaders.byDatabase.delete(database);
       }
       pathReaders?.delete(token);
       if (
@@ -208,27 +228,14 @@ export function retainSqliteReader(
 function diagnostics(readers: Iterable<ActiveReader>): SqliteReaderDiagnostic[] {
   const now = Date.now();
   return [...readers]
-    .map((reader) => {
-      const diagnostic: SqliteReaderDiagnostic = {
-        operation: reader.operation,
-        ownerKind: reader.ownerKind,
-        kind: reader.kind,
-        connectionId: reader.connectionId,
-        threadId: reader.threadId,
-        ageMs: Math.max(0, now - reader.startedAtMs),
-        idleMs: Math.max(0, now - reader.lastProgressAtMs),
-      };
-      if (reader.actorId !== undefined) {
-        diagnostic.actorId = reader.actorId;
-      }
-      return diagnostic;
-    })
+    .map(({ startedAtMs, lastProgressAtMs, ...reader }) =>
+      Object.assign(reader, {
+        ageMs: Math.max(0, now - startedAtMs),
+        idleMs: Math.max(0, now - lastProgressAtMs),
+      }),
+    )
     .toSorted((left, right) => right.ageMs - left.ageMs)
     .slice(0, 8);
-}
-
-function readActiveSqliteReaders(database: DatabaseSync): SqliteReaderDiagnostic[] {
-  return diagnostics(activeReaders.byDatabase.get(database)?.values() ?? []);
 }
 
 /** Observed local activity is diagnostic evidence, not proof of which connection owns a WAL lock. */
@@ -279,7 +286,7 @@ export function readSqliteReaderDiagnosticsForPath(databasePath: string): Sqlite
 }
 
 export function assertNoActiveSqliteReaders(database: DatabaseSync, label: string): void {
-  const readers = readActiveSqliteReaders(database);
+  const readers = diagnostics(activeReaders.byDatabase.get(database)?.values() ?? []);
   if (readers.length === 0) {
     return;
   }

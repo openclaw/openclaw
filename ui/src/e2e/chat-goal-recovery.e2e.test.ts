@@ -83,12 +83,26 @@ suite.define(() => {
         await save.click();
         const request = await gateway.waitForRequest(method);
         expect(request.params).toMatchObject({ action: "edit", objective: corrected });
+        const committed = { ...goal, objective: corrected, updatedAt: now + 1 };
+        // The real Gateway commits before ACK; later reads must see the same Goal.
+        await gateway.setSessionsListResponse({
+          sessions: [{ ...(await gateway.getSessionRow("agent:main:main")), goal: committed }],
+        });
         await gateway.resolveDeferred(method, {
           status: "updated",
           goalId: goal.id,
-          goal: { ...goal, objective: corrected, updatedAt: now + 1 },
+          goal: committed,
         });
         await expect.poll(() => save.count()).toBe(0);
+        // Release the Goal refresh after the ACK to exercise the losing read order.
+        const lists = await gateway.deferNext("sessions.list");
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          reason: "goal",
+        });
+        await gateway.waitForRequest("sessions.list", { after: lists });
+        await gateway.resolveDeferred("sessions.list");
         await expect
           .poll(() => page.locator(".agent-chat__goal-objective").textContent())
           .toBe(corrected);
@@ -271,7 +285,14 @@ suite.define(() => {
         const method = "sessions.goal.update";
         const gateway = await installMockGateway(page, {
           sessionKey: "agent:main:main",
-          heldMethods: [method],
+          heldMethods: [method, "chat.startup"],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Goal recovery context loaded." }],
+              timestamp: now,
+            },
+          ],
           methodResponses: {
             "sessions.list": {
               ts: now,
@@ -300,9 +321,21 @@ suite.define(() => {
             },
           },
         });
+        const admitHistory = async () => {
+          await gateway.waitForRequest("chat.startup");
+          await gateway.resolveDeferred("chat.startup");
+          await page.getByText("Goal recovery context loaded.", { exact: true }).waitFor();
+        };
         await page.goto(`${suite.server.baseUrl}chat/main`);
-        await page.getByRole("button", { name: "Resume goal", exact: true }).click();
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".agent-chat__goal-objective").waitFor();
+        const resume = page.getByRole("button", { name: "Resume goal", exact: true });
+        expect(await resume.count()).toBe(0);
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+        await admitHistory();
+        await resume.click();
         const first = await gateway.waitForRequest(method);
+        expect(first.params).toMatchObject({ sessionId: "goal-check-session" });
         await gateway.rejectDeferred(method, {
           code: "UNAVAILABLE",
           message: "Gateway response unavailable",
@@ -310,6 +343,7 @@ suite.define(() => {
         const checkOutcome = page.getByRole("button", { name: "Check outcome", exact: true });
         await checkOutcome.waitFor();
         await page.reload();
+        await admitHistory();
         await checkOutcome.waitFor();
         await checkOutcome.click();
         const retried = await gateway.waitForRequest(method);
@@ -323,6 +357,7 @@ suite.define(() => {
         expect(await gateway.getRequests(method)).toHaveLength(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await page.reload();
+        await admitHistory();
         await checkOutcome.waitFor();
         expect(await gateway.getRequests(method)).toHaveLength(0);
       },

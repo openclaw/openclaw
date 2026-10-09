@@ -141,7 +141,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
+      await page
+        .locator(".chat-tool-msg-summary")
+        .getByRole("img", { name: "exec", exact: true })
+        .waitFor();
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       let agentSequence = 0;
       const commentaryText = "The active commentary stays visible.";
@@ -253,10 +256,6 @@ suite.define(() => {
         result: "process complete",
         toolCallId: "callProcess",
       });
-      const workingRowKey = await page
-        .locator("[data-virtual-row-key^='agent-run:']")
-        .last()
-        .getAttribute("data-virtual-row-key");
       const finalText = Array.from(
         { length: 18 },
         (_, index) =>
@@ -278,11 +277,6 @@ suite.define(() => {
         hasText: "Terminal response paragraph 1.",
       });
       await streamingBubble.waitFor();
-      const streamingRow = streamingBubble.locator(
-        "xpath=ancestor::div[contains(@class, 'chat-virtual-row')]",
-      );
-      await streamingRow.waitFor();
-      expect(await streamingRow.getAttribute("data-virtual-row-key")).not.toBe(workingRowKey);
       const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
       const steerElement = await steerBubble.elementHandle();
       // Scrolling between separate protocol reads can make adjacent rows appear to overlap.
@@ -300,12 +294,22 @@ suite.define(() => {
       await steerElement?.dispose();
       expect(steerBounds).not.toBeNull();
       expect(streamingBounds).not.toBeNull();
-      expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
+      expect(steerBounds!.y).toBeGreaterThanOrEqual(
+        streamingBounds!.y + streamingBounds!.height - 1,
+      );
       const durableFinalMessage = {
         role: "assistant",
         content: [{ text: finalText, type: "text" }],
-        __openclaw: { id: "ui4-final", seq: 5 },
+        __openclaw: { id: "ui4-final", seq: 5, runId },
       };
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "",
+        message: { role: "assistant", content: [] },
+        replace: true,
+        runId,
+        sessionKey: "agent:main:main",
+        state: "delta",
+      });
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [runId],
         clientRunId: runId,
@@ -370,7 +374,16 @@ suite.define(() => {
           page.locator("[data-virtual-row-key^='agent-run:'] .chat-bubble.streaming").count(),
         )
         .toBe(0);
-      await gateway.emitChatFinal({ runId, text: finalText });
+      await gateway.emitGatewayEvent("chat", {
+        runId,
+        sessionKey: "agent:main:main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: finalText }],
+          openclawDisplayContent: [],
+        },
+      });
       await expect
         .poll(() =>
           page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).count(),
@@ -385,7 +398,7 @@ suite.define(() => {
   });
 
   it.each(["before", "after"] as const)(
-    "keeps cumulative stream text ordered when history resolves %s the live steer event",
+    "keeps unsaved stream text together before its steer when history resolves %s the live event",
     async (historyOrder) => {
       const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
@@ -473,7 +486,7 @@ suite.define(() => {
                 .locator(".chat-bubble .chat-text")
                 .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim())),
             )
-            .toEqual([initialText, beforeText, steerText, afterText]);
+            .toEqual([initialText, `${beforeText}\n${afterText}`, steerText]);
         } finally {
           const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
           const artifactDir = artifactDirParent
@@ -492,7 +505,7 @@ suite.define(() => {
     },
   );
 
-  it("replaces a retained cumulative steer prefix with split history around keyed commentary", async () => {
+  it("replaces unsaved text with saved rows and keeps commentary and the live tail before its steer", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runId = "run-steer-split";
@@ -557,7 +570,11 @@ suite.define(() => {
       await transcript.getByText(initialText, { exact: true }).waitFor();
       await emitDelta(beforeText);
       await transcript.getByText(beforeText, { exact: true }).waitFor();
-      // The live steer closes one combined segment before split history replaces it.
+      await gateway.setMethodResponse("chat.history", {
+        messages: [userMessage, steerMessage],
+        inFlightRun: { runId, startedAt, text: beforeText },
+        sessionInfo,
+      });
       await gateway.emitGatewayEvent("session.message", {
         ...sessionInfo,
         clientRunId: steerRunId,
@@ -576,13 +593,13 @@ suite.define(() => {
             role: "assistant",
             content: "A",
             timestamp: startedAt,
-            __openclaw: { id: "split-a", idempotencyKey: runId, seq: 2 },
+            __openclaw: { id: "split-a", runId, seq: 2 },
           },
           {
             role: "assistant",
             content: commentaryText,
             timestamp: startedAt + 1_000,
-            __openclaw: { id: "split-commentary", idempotencyKey: runId, seq: 3 },
+            __openclaw: { id: "split-commentary", runId, seq: 3 },
             openclawStreamFallback: {
               itemId: "split-commentary-item",
               source: "segment",
@@ -594,14 +611,14 @@ suite.define(() => {
             role: "assistant",
             content: "B",
             timestamp: startedAt + 2_000,
-            __openclaw: { id: "split-b", idempotencyKey: runId, seq: 4 },
+            __openclaw: { id: "split-b", runId, seq: 4 },
           },
           steerMessage,
         ],
         inFlightRun: {
           runId,
           startedAt,
-          text: beforeText,
+          text: "",
           events: [
             {
               runId,
@@ -628,7 +645,7 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.startup");
       await transcript.getByText(commentaryText, { exact: true }).waitFor();
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-      await emitDelta(`${beforeText} ${afterText}`);
+      await emitDelta(afterText);
 
       try {
         await expect
@@ -638,9 +655,9 @@ suite.define(() => {
             "A",
             commentaryText,
             "B",
-            steerText,
             latestCommentaryText,
             afterText,
+            steerText,
           ]);
       } finally {
         await capture("recovered-continuation");

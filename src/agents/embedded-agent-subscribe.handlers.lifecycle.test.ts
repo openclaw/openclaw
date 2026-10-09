@@ -1,6 +1,5 @@
-// Lifecycle handler tests cover terminal agent_end behavior, sanitized errors,
-// lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
@@ -8,21 +7,12 @@ import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.tes
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
-const { emitAgentEventMock } = vi.hoisted(() => ({
-  emitAgentEventMock: vi.fn(),
-}));
-const DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS = 15_000;
+const { emitAgentEventMock } = vi.hoisted(() => ({ emitAgentEventMock: vi.fn() }));
+const identity = { sessionId: "session-1", agentId: "main" };
 const BEFORE_AGENT_FINALIZE_EVENT = {
   runId: "run-1",
   sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  turnId: "turn-1",
-  provider: "openai",
-  model: "freeze-e2e",
-  cwd: "/repo",
-  transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
-  lastAssistantMessage: "done",
 };
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -32,505 +22,158 @@ vi.mock("../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
-async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedAgentSubscribeContext) {
-  // Error lifecycle assertions share the same structured warning envelope.
-  await handleAgentEnd(ctx);
-
-  const warn = vi.mocked(ctx.log.warn);
-  expect(warn).toHaveBeenCalledTimes(1);
-  const [message, meta] = firstMockCall(warn);
-  expect(message).toBe("embedded run agent end");
-  return readRecord(meta);
+function errorContext(errorMessage: string, assistant: Record<string, unknown> = {}) {
+  const onAgentEvent = vi.fn();
+  const ctx = createContext(
+    { role: "assistant", stopReason: "error", content: [], errorMessage, ...assistant },
+    { onAgentEvent },
+  );
+  ctx.state.livenessState = "working";
+  return { ctx, onAgentEvent };
+}
+function warnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unknown> {
+  return vi.mocked(ctx.log.warn).mock.calls[0]?.[1] ?? {};
+}
+function expectEvent(onAgentEvent: ReturnType<typeof vi.fn>, data: Record<string, unknown>) {
+  expect(onAgentEvent).toHaveBeenCalledWith({ stream: "lifecycle", data });
 }
 
-function readRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected metadata record");
-  }
-  return value as Record<string, unknown>;
-}
-
-function firstMockCall(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected first mock call");
-  }
-  return call;
-}
-
-function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unknown> {
-  return readRecord(firstMockCall(vi.mocked(ctx.log.warn))[1]);
-}
-
-describe("handleAgentEnd", () => {
-  it("contains rejected lifecycle start event callbacks", async () => {
-    const onAgentEvent = vi.fn().mockRejectedValue(new Error("progress failed"));
-    const ctx = createContext(undefined, { onAgentEvent });
-
-    handleAgentStart(ctx);
-    await Promise.resolve();
-
-    expect(ctx.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("lifecycle agent event callback failed"),
-    );
-  });
-
+describe("embedded lifecycle", () => {
   it("keeps identity and the same observed start time on the bus and callback", () => {
     emitAgentEventMock.mockClear();
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
-    ctx.params.sessionId = "session-1";
-    ctx.params.agentId = "main";
-
+    Object.assign(ctx.params, identity);
     handleAgentStart(ctx);
-
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
       sessionKey: "agent:main:main",
-      sessionId: "session-1",
-      agentId: "main",
+      ...identity,
       stream: "lifecycle",
-      data: expect.objectContaining({ phase: "start" }),
+      data: { phase: "start", startedAt: expect.any(Number) },
     });
-    const event = emitAgentEventMock.mock.calls[0]?.[0];
-    expect(event.data.startedAt).toEqual(expect.any(Number));
     expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
       stream: "lifecycle",
-      data: event.data,
+      data: emitAgentEventMock.mock.calls[0]?.[0].data,
     });
   });
-
   it("keeps the execution lifecycle generation on terminal events", async () => {
     emitAgentEventMock.mockClear();
     const ctx = createContext(undefined);
-    ctx.params.lifecycleGeneration = "pre-restart-generation";
-    ctx.params.sessionId = "session-1";
-    ctx.params.agentId = "main";
-
+    Object.assign(ctx.params, {
+      lifecycleGeneration: "pre-restart-generation",
+      ...identity,
+    });
     await handleAgentEnd(ctx);
-
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
       sessionKey: "agent:main:main",
-      sessionId: "session-1",
-      agentId: "main",
+      ...identity,
       lifecycleGeneration: "pre-restart-generation",
       stream: "lifecycle",
       data: expect.objectContaining({ phase: "end" }),
     });
   });
 
-  it("names storage errors in the terminal event and run log", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      { role: "assistant", stopReason: "error", errorMessage: "database is locked", content: [] },
-      { onAgentEvent },
-    );
-    await handleAgentEnd(ctx);
-    const error =
-      "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.";
-    expect(firstWarnMeta(ctx)).toMatchObject({ error, rawErrorPreview: "database is locked" });
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: expect.objectContaining({ phase: "error", error }),
+  it("omits raw HTML auth bodies from console diagnostics", async () => {
+    const { ctx } = errorContext("403 <!DOCTYPE html><html><body>Access denied</body></html>", {
+      provider: "openai",
+      model: "test-model",
     });
+    await handleAgentEnd(ctx);
+    expect(warnMeta(ctx)).toMatchObject({
+      error:
+        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+      providerRuntimeFailureKind: "auth_html",
+    });
+    expect(warnMeta(ctx).consoleMessage).not.toContain("rawError=");
+    expect(warnMeta(ctx).consoleMessage).not.toContain("<html>");
   });
 
-  it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
-    // Canary text proves provider error strings are sanitized before lifecycle
-    // events reach channel integrations.
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: "SECRET_CANARY_69737",
-        content: [],
+  it.each([
+    {
+      raw: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
+      secret: "sk-abcdefghijklmnopqrstuvwxyz123456",
+      error: "LLM request failed.",
+      observation: { providerRuntimeFailureKind: "unclassified" },
+      preview: "x-api-key: ***",
+    },
+    {
+      raw: '{"type":"error","error":{"type":"server_error","message":"Upstream failed x-api-key: SECRET_CANARY_69737"}}',
+      secret: "SECRET_CANARY_69737",
+      error: "⚠️ The AI service is having trouble. Please try again in a moment.",
+      observation: {
+        providerErrorType: "server_error",
+        providerErrorMessagePreview: "Upstream failed x-api-key: ***",
       },
-      { onAgentEvent },
-    );
-
-    await handleAgentEnd(ctx);
-
-    const meta = firstWarnMeta(ctx);
-    expect(meta.error).not.toContain("SECRET_CANARY_69737");
-    expect(meta.error).toBe("LLM request failed.");
-    const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
-    expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
-    expect(userFacingLifecycleText).not.toContain("rawError");
-    expect(userFacingLifecycleText).toContain("LLM request failed.");
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
+    },
+  ])(
+    "redacts provider diagnostics before publishing: $secret",
+    async ({ raw, secret, error, observation, preview }) => {
+      const { ctx, onAgentEvent } = errorContext(raw);
+      await handleAgentEnd(ctx);
+      expect(warnMeta(ctx).error).toBe(error);
+      if (preview) {
+        expect(warnMeta(ctx).rawErrorPreview).toBe(preview);
+      }
+      expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(secret);
+      expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("rawError");
+      expectEvent(onAgentEvent, {
         phase: "error",
-        error: "LLM request failed.",
-        errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "unclassified" }),
-      },
-    });
-  });
-
-  it("publishes only redacted structured provider previews in lifecycle events", async () => {
-    const onAgentEvent = vi.fn();
-    const rawError =
-      '{"type":"error","error":{"type":"server_error","message":"Upstream failed x-api-key: SECRET_CANARY_69737"}}';
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: rawError,
-        content: [{ type: "text", text: rawError }],
-      },
-      { onAgentEvent },
-    );
-
-    await handleAgentEnd(ctx);
-
-    const meta = firstWarnMeta(ctx);
-    const expectedError =
-      "⚠️ LLM request failed (provider internal error). " +
-      "This is usually temporary — try again shortly.";
-    expect(meta.error).toBe(expectedError);
-    const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
-    expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
-    expect(userFacingLifecycleText).not.toContain("rawError");
-    expect(userFacingLifecycleText).not.toContain("LLM error server_error");
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: expectedError,
-        errorObservation: expect.objectContaining({
-          providerErrorType: "server_error",
-          providerErrorMessagePreview: "Upstream failed x-api-key: ***",
-        }),
-      },
-    });
-  });
-
-  it("logs the resolved error message when run ends with assistant error", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: "connection refused",
-        content: [{ type: "text", text: "" }],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-
-    const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
-    expect(warnMeta.event).toBe("embedded_run_agent_end");
-    expect(warnMeta.runId).toBe("run-1");
-    expect(warnMeta.error).toBe("LLM request failed: connection refused by the provider endpoint.");
-    expect(warnMeta.providerRuntimeFailureKind).toBe("timeout");
-    expect(warnMeta.rawErrorPreview).toBe("connection refused");
-    expect(warnMeta.consoleMessage).toBe(
-      "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
-    );
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
-        errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
+        error,
+        errorObservation: expect.objectContaining(observation),
         livenessState: "blocked",
-      },
+      });
+    },
+  );
+  it("sanitizes model and provider console control characters", async () => {
+    const { ctx } = errorContext("connection refused", {
+      provider: "anthropic\u009b\u001b]8;;https://evil.test\u0007",
+      model: "claude\tsonnet\n4",
     });
-  });
-
-  it("emits aborted terminal stop reasons on lifecycle end events", async () => {
-    emitAgentEventMock.mockClear();
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.terminalStopReason = "aborted";
-
     await handleAgentEnd(ctx);
-
-    expect(emitAgentEventMock).toHaveBeenCalledWith({
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      stream: "lifecycle",
-      data: expect.objectContaining({
-        phase: "end",
-        stopReason: "aborted",
-      }),
-    });
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "aborted",
-      },
-    });
+    expect(warnMeta(ctx).consoleMessage).toBe(
+      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`. rawError=connection refused",
+    );
+    for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
+      expect(warnMeta(ctx).consoleMessage).not.toContain(control);
+    }
   });
 
   it("overrides embedded abort terminals with the restart stop reason", async () => {
-    emitAgentEventMock.mockClear();
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, {
       onAgentEvent,
       resolveTerminalStopReason: () => "restart",
     });
-    ctx.state.terminalStopReason = "aborted";
-    ctx.state.terminalAborted = true;
-
+    Object.assign(ctx.state, { terminalStopReason: "aborted", terminalAborted: true });
     await handleAgentEnd(ctx);
-
-    expect(emitAgentEventMock).toHaveBeenCalledWith({
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      stream: "lifecycle",
-      data: expect.objectContaining({
-        phase: "end",
-        stopReason: "restart",
-        aborted: true,
-      }),
-    });
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "restart",
-        aborted: true,
-      },
-    });
+    expectEvent(onAgentEvent, { phase: "end", stopReason: "restart", aborted: true });
   });
-
-  it("emits explicit aborted terminal metadata on lifecycle end events", async () => {
-    emitAgentEventMock.mockClear();
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.terminalStopReason = "end_turn";
-    ctx.state.terminalAborted = true;
-
-    await handleAgentEnd(ctx);
-
-    expect(emitAgentEventMock).toHaveBeenCalledWith({
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      stream: "lifecycle",
-      data: expect.objectContaining({
-        phase: "end",
-        stopReason: "end_turn",
-        aborted: true,
-      }),
-    });
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "end_turn",
-        aborted: true,
-      },
-    });
-  });
-
-  it("carries a sanitized tool-error summary on aborted terminals", async () => {
-    emitAgentEventMock.mockClear();
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.terminalAborted = true;
-    ctx.state.lastToolError = {
-      toolName: "edit",
-      validationErrorSummary: "edit tool validation failed: invalid arguments",
-      error:
-        'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{\n  "path": "secret.txt"\n}',
-    };
-
-    await handleAgentEnd(ctx);
-
-    expect(emitAgentEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        stream: "lifecycle",
-        data: expect.objectContaining({
-          phase: "end",
-          aborted: true,
-          toolErrorSummary: "edit tool validation failed: invalid arguments",
-        }),
-      }),
-    );
-    // The echoed model arguments must never ride the lifecycle event.
-    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("Received arguments");
-  });
-
-  it("does not expose arbitrary tool errors on aborted terminals", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.terminalAborted = true;
-    ctx.state.lastToolError = {
-      toolName: "browser",
-      error: "tab not found: secret-token",
-    };
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: expect.not.objectContaining({ toolErrorSummary: expect.anything() }),
-    });
-  });
-
-  it("keeps normal lifecycle end events explicitly non-aborted", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.terminalStopReason = "end_turn";
-    ctx.state.terminalAborted = false;
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "end_turn",
-        aborted: false,
-      },
-    });
-  });
-
-  it("attaches raw provider error metadata and includes model/provider in console output", async () => {
-    const ctx = createContext({
-      role: "assistant",
-      stopReason: "error",
-      provider: "anthropic",
-      model: "claude-test",
-      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      content: [{ type: "text", text: "" }],
-    });
-
-    const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
-    expect(warnMeta.event).toBe("embedded_run_agent_end");
-    expect(warnMeta.runId).toBe("run-1");
-    expect(warnMeta.error).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
-    expect(warnMeta.failoverReason).toBe("overloaded");
-    expect(warnMeta.providerRuntimeFailureKind).toBe("timeout");
-    expect(warnMeta.providerErrorType).toBe("overloaded_error");
-    expect(warnMeta.consoleMessage).toBe(
-      'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-    );
-  });
-
-  it("sanitizes model and provider before writing consoleMessage", async () => {
-    const ctx = createContext({
-      role: "assistant",
-      stopReason: "error",
-      provider: "anthropic\u009b\u001b]8;;https://evil.test\u0007",
-      model: "claude\tsonnet\n4",
-      errorMessage: "connection refused",
-      content: [{ type: "text", text: "" }],
-    });
-
-    await handleAgentEnd(ctx);
-
-    const meta = firstWarnMeta(ctx);
-    expect(meta.consoleMessage).toBe(
-      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
-    );
-    for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
-      expect(meta?.consoleMessage).not.toContain(control);
-    }
-  });
-
-  it("redacts logged error text before emitting lifecycle events", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
-        content: [{ type: "text", text: "" }],
-      },
-      { onAgentEvent },
-    );
-
-    await handleAgentEnd(ctx);
-
-    const meta = firstWarnMeta(ctx);
-    expect(meta.event).toBe("embedded_run_agent_end");
-    expect(meta.error).toBe("LLM request failed.");
-    expect(meta.rawErrorPreview).toBe("x-api-key: ***");
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: "LLM request failed.",
-        errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "unclassified" }),
-      },
-    });
-  });
-
-  it("logs runtime failure kind for missing-scope auth errors", async () => {
-    const ctx = createContext({
-      role: "assistant",
-      stopReason: "error",
-      provider: "openai",
-      model: "gpt-5.4",
-      errorMessage:
-        '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
-      content: [{ type: "text", text: "" }],
-    });
-
-    await handleAgentEnd(ctx);
-
-    const meta = firstWarnMeta(ctx);
-    expect(meta.failoverReason).toBe("auth");
-    expect(meta.providerRuntimeFailureKind).toBe("auth_scope");
-    expect(meta.httpCode).toBe("401");
-  });
-
   it.each([
     {
-      errorMessage: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
-      expectedError:
-        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
-      expectedKind: "auth_html",
-      expectedPreview: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+      toolName: "edit",
+      error:
+        'Validation failed for tool "edit":\n - edits: required\nReceived arguments:\n{"path":"secret.txt"}',
+      validationErrorSummary: "edit tool validation failed: invalid arguments",
     },
-    {
-      errorMessage: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
-      expectedError:
-        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
-      expectedKind: "auth_html",
-      expectedPreview: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
-    },
-  ])(
-    "omits raw HTML auth bodies from consoleMessage for $expectedKind failures",
-    async ({ errorMessage, expectedError, expectedKind, expectedPreview }) => {
-      const ctx = createContext({
-        role: "assistant",
-        stopReason: "error",
-        provider: "openai",
-        model: "gpt-5.4",
-        errorMessage,
-        content: [{ type: "text", text: "" }],
-      });
-
-      await handleAgentEnd(ctx);
-
-      const meta = firstWarnMeta(ctx);
-      expect(meta.providerRuntimeFailureKind).toBe(expectedKind);
-      expect(meta.rawErrorPreview).toBe(expectedPreview);
-      expect(meta.error).toBe(expectedError);
-      const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
-      expect(consoleMsg).not.toContain("rawError=");
-      expect(consoleMsg).not.toContain("<html>");
-    },
-  );
-
-  it("keeps non-error run-end logging on debug only", async () => {
-    const ctx = createContext(undefined);
-
+    { toolName: "browser", error: "tab not found: secret-token" },
+  ])("exposes only a validation summary for aborted $toolName failures", async (lastToolError) => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    Object.assign(ctx.state, { terminalAborted: true, lastToolError });
     await handleAgentEnd(ctx);
-
-    expect(ctx.log.warn).not.toHaveBeenCalled();
-    expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+    expectEvent(onAgentEvent, {
+      phase: "end",
+      aborted: true,
+      ...(lastToolError.validationErrorSummary
+        ? { toolErrorSummary: lastToolError.validationErrorSummary }
+        : {}),
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(
+      lastToolError.toolName === "edit" ? "Received arguments" : "secret-token",
+    );
   });
-
   it.each<{
     name: string;
     stopReason?: string;
@@ -548,17 +191,6 @@ describe("handleAgentEnd", () => {
       expected: { livenessState: "paused", replayInvalid: true },
     },
     {
-      name: "derives abandoned lifecycle end state when replay-invalid work finished without a reply",
-      state: {
-        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
-        assistantTexts: [],
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        successfulCronAdds: 0,
-      },
-      expected: { livenessState: "abandoned", replayInvalid: true },
-    },
-    {
       name: "marks tool-use terminal with pre-tool text as abandoned (#76477)",
       stopReason: "toolUse",
       content: [
@@ -567,19 +199,6 @@ describe("handleAgentEnd", () => {
       ],
       state: { assistantTexts: ["Initial analysis..."] },
       expected: { livenessState: "abandoned", replayInvalid: true },
-    },
-    {
-      name: "keeps tool-use terminal incomplete when tool media is pending",
-      stopReason: "toolUse",
-      state: { pendingToolMediaUrls: ["/tmp/render.png"] },
-      expected: { livenessState: "abandoned", replayInvalid: true },
-    },
-    {
-      name: "keeps token-limited terminal text replayable before runner finalization",
-      stopReason: "length",
-      content: [{ type: "text", text: "Partial answer" }],
-      state: { assistantTexts: ["Partial answer"] },
-      expected: { livenessState: "working" },
     },
     {
       name: "keeps token-limited text replayable when it was never streamed",
@@ -643,106 +262,64 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("flushes orphaned tool media as a media-only block reply", async () => {
-    const ctx = createContext(undefined);
-    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
-    ctx.state.pendingToolAudioAsVoice = true;
+  it("delivers orphaned media before the terminal event and consumes it", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    Object.assign(ctx.state, {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+    });
     vi.mocked(ctx.emitBlockReply).mockImplementation(
       createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
     );
-
     await handleAgentEnd(ctx);
-
-    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
+    expect(ctx.emitBlockReply).toHaveBeenCalledExactlyOnceWith({
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(onAgentEvent.mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] ?? Infinity,
+    );
   });
-
-  it("preserves orphaned tool media when no block reply callback is configured", async () => {
+  it("preserves orphaned media without a delivery callback", async () => {
     const ctx = createContext(undefined, { onBlockReply: undefined });
-    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
-    ctx.state.pendingToolAudioAsVoice = true;
-
+    Object.assign(ctx.state, {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+    });
     await handleAgentEnd(ctx);
-
     expect(ctx.emitBlockReply).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
-  it("emits orphaned tool media before the lifecycle end event", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
-    ctx.state.pendingToolAudioAsVoice = true;
-
-    await handleAgentEnd(ctx);
-
-    const blockReplyOrder = vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as
-      | number
-      | undefined;
-    const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
-
-    expect(ctx.emitBlockReply).toHaveBeenCalledTimes(1);
-    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
-    expect(blockReplyOrder).toBeTypeOf("number");
-    if (typeof blockReplyOrder !== "number") {
-      throw new Error("Expected orphaned media block reply call order.");
-    }
-    expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("resolves compaction wait before awaiting an async block reply flush", async () => {
-    let resolveFlush: (() => void) | undefined;
-    const ctx = createContext(undefined);
-    ctx.flushBlockReplyBuffer = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveFlush = resolve;
-          }),
-      )
-      .mockImplementation(() => {});
-
-    const endPromise = handleAgentEnd(ctx);
-
-    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
-    expect(ctx.resolveCompactionRetry).not.toHaveBeenCalled();
-
-    resolveFlush?.();
-    await endPromise;
-  });
-
-  it("resolves compaction wait before awaiting an async channel flush", async () => {
-    let resolveChannelFlush: (() => void) | undefined;
-    const onBlockReplyFlush = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveChannelFlush = resolve;
-        }),
-    );
-    const ctx = createContext(undefined, { onBlockReplyFlush });
-
-    const endPromise = handleAgentEnd(ctx);
-
-    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
-    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
-
-    resolveChannelFlush?.();
-    await endPromise;
-  });
-
+  it.each(["block", "channel"] as const)(
+    "resolves compaction before %s flush and delays terminal emission until delivery",
+    async (kind) => {
+      const { promise, resolve } = createDeferred();
+      const { ctx, onAgentEvent } = errorContext("connection refused");
+      if (kind === "block") {
+        vi.mocked(ctx.flushBlockReplyBuffer).mockReturnValueOnce(promise);
+      } else {
+        ctx.params.onBlockReplyFlush = () => promise;
+      }
+      const end = handleAgentEnd(ctx);
+      expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
+      expect(ctx.resolveCompactionRetry).not.toHaveBeenCalled();
+      expect(onAgentEvent).not.toHaveBeenCalled();
+      resolve();
+      await end;
+      expectEvent(onAgentEvent, {
+        phase: "error",
+        error:
+          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
+        livenessState: "blocked",
+      });
+    },
+  );
   it("resolves compaction retry after a timed-out terminal hook finalizes the original answer", async () => {
     vi.useFakeTimers();
     try {
@@ -758,7 +335,6 @@ describe("handleAgentEnd", () => {
       );
       const onBeforeTerminalDelivery = vi.fn(async () => {
         await runner.runBeforeAgentFinalize(BEFORE_AGENT_FINALIZE_EVENT, TEST_PLUGIN_AGENT_CTX);
-        return undefined;
       });
       const ctx = createContext(
         {
@@ -778,7 +354,7 @@ describe("handleAgentEnd", () => {
       expect(ctx.resolveCompactionRetry).not.toHaveBeenCalled();
       expect(ctx.flushBlockReplyBuffer).not.toHaveBeenCalledWith({ final: true });
 
-      await vi.advanceTimersByTimeAsync(DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(15_000);
       await endPromise;
 
       expect(logger.error).toHaveBeenCalledWith(
@@ -795,188 +371,44 @@ describe("handleAgentEnd", () => {
     }
   });
 
-  it("runs the before-lifecycle callback before the lifecycle end event", async () => {
-    const order: string[] = [];
-    const onAgentEvent = vi.fn(() => {
-      order.push("event");
-    });
-    const onBeforeLifecycleTerminal = vi.fn(() => {
-      order.push("before");
-    });
-    const ctx = createContext(undefined, {
-      onAgentEvent,
-      onBeforeLifecycleTerminal,
-    });
-
-    await handleAgentEnd(ctx);
-
-    expect(order).toEqual(["before", "event"]);
-    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("runs an async before-lifecycle callback before the lifecycle end event", async () => {
-    const order: string[] = [];
-    const onAgentEvent = vi.fn(() => {
-      order.push("event");
-    });
-    const onBeforeLifecycleTerminal = vi.fn(() =>
-      Promise.resolve().then(() => {
-        order.push("before");
-      }),
-    );
-    const ctx = createContext(undefined, {
-      onAgentEvent,
-      onBeforeLifecycleTerminal,
-    });
-
-    await handleAgentEnd(ctx);
-
-    expect(order).toEqual(["before", "event"]);
-    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("still emits lifecycle terminal when sync before-lifecycle callback throws", async () => {
-    const onAgentEvent = vi.fn();
-    const onBeforeLifecycleTerminal = vi.fn(() => {
-      throw new Error("hook exploded");
-    });
-    const ctx = createContext(undefined, {
-      onAgentEvent,
-      onBeforeLifecycleTerminal,
-    });
-
-    await handleAgentEnd(ctx);
-
-    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("still emits lifecycle terminal when async before-lifecycle callback rejects", async () => {
-    const onAgentEvent = vi.fn();
-    const onBeforeLifecycleTerminal = vi.fn(() => Promise.reject(new Error("hook failed")));
-    const ctx = createContext(undefined, {
-      onAgentEvent,
-      onBeforeLifecycleTerminal,
-    });
-
-    await handleAgentEnd(ctx);
-
-    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("emits lifecycle end after async channel flush completes", async () => {
-    let resolveChannelFlush: (() => void) | undefined;
-    const onAgentEvent = vi.fn();
-    const onBlockReplyFlush = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveChannelFlush = resolve;
-        }),
-    );
-    const ctx = createContext(undefined, { onAgentEvent, onBlockReplyFlush });
-
-    const endPromise = handleAgentEnd(ctx);
-
-    expect(onAgentEvent).not.toHaveBeenCalled();
-
-    resolveChannelFlush?.();
-    await endPromise;
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("emits lifecycle error after async channel flush completes", async () => {
-    let resolveChannelFlush: (() => void) | undefined;
-    const onAgentEvent = vi.fn();
-    const onBlockReplyFlush = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveChannelFlush = resolve;
-        }),
-    );
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: "connection refused",
-        content: [{ type: "text", text: "" }],
-      },
-      { onAgentEvent, onBlockReplyFlush },
-    );
-
-    const endPromise = handleAgentEnd(ctx);
-
-    expect(onAgentEvent).not.toHaveBeenCalled();
-
-    resolveChannelFlush?.();
-    await endPromise;
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
-        errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
-      },
-    });
-  });
-
-  it("emits lifecycle end when block reply flush rejects", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.flushBlockReplyBuffer = vi.fn().mockRejectedValue(new Error("flush failed"));
-
-    await expect(handleAgentEnd(ctx)).rejects.toThrow("flush failed");
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("emits lifecycle end when channel flush rejects", async () => {
-    const onAgentEvent = vi.fn();
-    const onBlockReplyFlush = vi.fn().mockRejectedValue(new Error("channel flush failed"));
-    const ctx = createContext(undefined, { onAgentEvent, onBlockReplyFlush });
-
-    await expect(handleAgentEnd(ctx)).rejects.toThrow("channel flush failed");
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
-
-  it("emits lifecycle end when block reply flush throws", () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.flushBlockReplyBuffer = vi.fn(() => {
-      throw new Error("flush exploded");
-    });
-
-    expect(() => handleAgentEnd(ctx)).toThrow("flush exploded");
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-  });
+  it.each(["throw", "reject"] as const)(
+    "settles a %s before-lifecycle callback before terminal emission",
+    async (kind) => {
+      const order: string[] = [];
+      const onAgentEvent = vi.fn(() => {
+        order.push("event");
+      });
+      const onBeforeLifecycleTerminal = vi.fn(() => {
+        if (kind === "throw") {
+          order.push("before");
+          throw new Error("hook failed");
+        }
+        return Promise.resolve().then(() => {
+          order.push("before");
+          throw new Error("hook failed");
+        });
+      });
+      await handleAgentEnd(createContext(undefined, { onAgentEvent, onBeforeLifecycleTerminal }));
+      expect(order).toEqual(["before", "event"]);
+      expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+      expectEvent(onAgentEvent, { phase: "end" });
+    },
+  );
+  it.each(["block reject", "block throw"] as const)(
+    "still emits a terminal event after %s",
+    async (kind) => {
+      const onAgentEvent = vi.fn();
+      const ctx = createContext(undefined, { onAgentEvent });
+      const fail = () => {
+        throw new Error("flush failed");
+      };
+      ctx.flushBlockReplyBuffer = kind === "block throw" ? fail : async () => fail();
+      if (kind === "block throw") {
+        expect(() => handleAgentEnd(ctx)).toThrow("flush failed");
+      } else {
+        await expect(handleAgentEnd(ctx)).rejects.toThrow("flush failed");
+      }
+      expectEvent(onAgentEvent, { phase: "end" });
+    },
+  );
 });

@@ -13,69 +13,30 @@ import { extractWikiLinks } from "./markdown-links.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
-const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
+export const WIKI_PAGE_GROUPS = [
+  { kind: "source", dir: "sources", heading: "Sources" },
+  { kind: "entity", dir: "entities", heading: "Entities" },
+  { kind: "concept", dir: "concepts", heading: "Concepts" },
+  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
+  { kind: "report", dir: "reports", heading: "Reports" },
+] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
+export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
-type ParsedWikiMarkdown = {
+export type ParsedWikiMarkdown = {
   hasFrontmatter: boolean;
   frontmatter: Record<string, unknown>;
   body: string;
 };
 
-export type WikiClaimEvidence = {
-  kind?: string;
-  sourceId?: string;
-  path?: string;
-  lines?: string;
-  weight?: number;
-  confidence?: number;
-  privacyTier?: string;
-  note?: string;
-  updatedAt?: string;
-};
+export type WikiClaimEvidence = NonNullable<ReturnType<typeof normalizeWikiClaimEvidence>>;
+export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
+type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
+export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
 
-export type WikiClaim = {
-  id?: string;
-  text: string;
-  status?: string;
-  confidence?: number;
-  evidence: WikiClaimEvidence[];
-  updatedAt?: string;
-};
-
-type WikiPersonCard = {
-  canonicalId?: string;
-  handles: string[];
-  socials: string[];
-  emails: string[];
-  timezone?: string;
-  lane?: string;
-  askFor: string[];
-  avoidAskingFor: string[];
-  bestUsedFor: string[];
-  notEnoughFor: string[];
-  confidence?: number;
-  privacyTier?: string;
-  lastRefreshedAt?: string;
-};
-
-export type WikiRelationship = {
-  targetId?: string;
-  targetPath?: string;
-  targetTitle?: string;
-  kind?: string;
-  weight?: number;
-  confidence?: number;
-  evidenceKind?: string;
-  privacyTier?: string;
-  note?: string;
-  updatedAt?: string;
-};
-
-export type WikiPageFrontmatterError = {
+type WikiPageFrontmatterError = {
   relativePath: string;
   message: string;
 };
@@ -181,10 +142,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
+  const frontmatter = match[1]!;
   const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
   if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
@@ -225,14 +183,14 @@ function normalizeOptionalStringFields<K extends string>(
   return fields;
 }
 
-function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
+function normalizeWikiClaimEvidence(value: unknown) {
   const record = asNullableRecord(value);
   if (!record) {
     return null;
   }
   const weight = asFiniteNumber(record.weight);
   const confidence = asFiniteNumber(record.confidence);
-  const evidence: WikiClaimEvidence = {
+  const evidence = {
     ...normalizeOptionalStringFields(record, ["kind", "sourceId", "path", "lines"]),
     ...(weight !== undefined ? { weight } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
@@ -241,7 +199,7 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   return Object.keys(evidence).length > 0 ? evidence : null;
 }
 
-export function normalizeWikiClaims(value: unknown): WikiClaim[] {
+export function normalizeWikiClaims(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -274,13 +232,13 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
   });
 }
 
-function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
+function normalizeWikiPersonCard(value: unknown) {
   const record = asNullableRecord(value);
   if (!record) {
     return undefined;
   }
   const confidence = asFiniteNumber(record.confidence);
-  const card: WikiPersonCard = {
+  const card = {
     ...normalizeOptionalStringFields(record, ["canonicalId"]),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
@@ -293,22 +251,13 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
     ...(confidence !== undefined ? { confidence } : {}),
     ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
   };
-  const hasAnyValue =
-    Boolean(
-      card.canonicalId || card.timezone || card.lane || card.privacyTier || card.lastRefreshedAt,
-    ) ||
-    typeof card.confidence === "number" ||
-    card.handles.length > 0 ||
-    card.socials.length > 0 ||
-    card.emails.length > 0 ||
-    card.askFor.length > 0 ||
-    card.avoidAskingFor.length > 0 ||
-    card.bestUsedFor.length > 0 ||
-    card.notEnoughFor.length > 0;
+  const hasAnyValue = Object.values(card).some((field) =>
+    Array.isArray(field) ? field.length > 0 : field !== undefined,
+  );
   return hasAnyValue ? card : undefined;
 }
 
-function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
+function normalizeWikiRelationships(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -319,7 +268,7 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
     }
     const weight = asFiniteNumber(record.weight);
     const confidence = asFiniteNumber(record.confidence);
-    const relationship: WikiRelationship = {
+    const relationship = {
       ...normalizeOptionalStringFields(record, ["targetId", "targetPath", "targetTitle", "kind"]),
       ...(weight !== undefined ? { weight } : {}),
       ...(confidence !== undefined ? { confidence } : {}),
@@ -334,29 +283,12 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
   });
 }
 
-function normalizeMarkdownLines(markdown: string): string[] {
-  return markdown
-    .replace(/\r\n?/g, "\n")
-    .trimStart()
-    .split("\n")
-    .map((line) => line.trimEnd());
-}
-
 function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean {
-  const firstWrapperLineIndex = lines.findIndex(
-    (line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER,
-  );
-  if (firstWrapperLineIndex === -1 || !patterns[0]?.test(lines[firstWrapperLineIndex] ?? "")) {
-    return false;
-  }
-  const remainingLines = lines
-    .slice(firstWrapperLineIndex + 1)
-    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
-  if (patterns[1] && !patterns[1].test(remainingLines[0] ?? "")) {
+  if (!patterns[0]?.test(lines[0] ?? "") || (patterns[1] && !patterns[1].test(lines[1] ?? ""))) {
     return false;
   }
   let patternIndex = 2;
-  for (const line of remainingLines.slice(1)) {
+  for (const line of lines.slice(2)) {
     const pattern = patterns[patternIndex];
     if (!pattern) {
       return true;
@@ -366,10 +298,6 @@ function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean 
     }
   }
   return patternIndex === patterns.length;
-}
-
-function hasHumanNotesBlock(markdown: string): boolean {
-  return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
 }
 
 const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
@@ -466,11 +394,17 @@ const GENERATED_SOURCE_WRAPPERS: ReadonlyArray<{
 ];
 
 function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
-  const lines = normalizeMarkdownLines(markdown);
-  return hasHumanNotesBlock(lines.join("\n"))
-    ? GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
-        ?.kind
-    : undefined;
+  if (!markdown.includes(HUMAN_START_MARKER) || !markdown.includes(HUMAN_END_MARKER)) {
+    return undefined;
+  }
+  const lines = markdown
+    .replace(/\r\n?/g, "\n")
+    .trimStart()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
+  return GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
+    ?.kind;
 }
 
 function detectUnmanagedRawSourceBody(markdown: string): boolean {
@@ -513,32 +447,17 @@ export function formatWikiLink(params: {
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
-  const fenceSize = Math.max(
-    3,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length + 1),
-  );
+  let fenceSize = 3;
+  for (const match of content.matchAll(/`+/g)) {
+    fenceSize = Math.max(fenceSize, match[0].length + 1);
+  }
   const fence = "`".repeat(fenceSize);
   return `${fence}${infoString}\n${content}\n${fence}`;
 }
 
 function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
-  if (normalized.startsWith("entities/")) {
-    return "entity";
-  }
-  if (normalized.startsWith("concepts/")) {
-    return "concept";
-  }
-  if (normalized.startsWith("sources/")) {
-    return "source";
-  }
-  if (normalized.startsWith("syntheses/")) {
-    return "synthesis";
-  }
-  if (normalized.startsWith("reports/")) {
-    return "report";
-  }
-  return null;
+  return WIKI_PAGE_GROUPS.find((group) => normalized.startsWith(`${group.dir}/`))?.kind ?? null;
 }
 
 export function scanWikiPageSummary(params: {

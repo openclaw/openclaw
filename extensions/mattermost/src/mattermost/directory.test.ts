@@ -1,5 +1,6 @@
 // Mattermost tests cover directory plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listMattermostDirectoryGroups, listMattermostDirectoryPeers } from "./directory.js";
 
 const {
   listMattermostAccountIdsMock,
@@ -29,24 +30,17 @@ vi.mock("./client.js", () => {
   };
 });
 
-let listMattermostDirectoryGroups: typeof import("./directory.js").listMattermostDirectoryGroups;
-let listMattermostDirectoryPeers: typeof import("./directory.js").listMattermostDirectoryPeers;
-
 function mockDefaultAccount() {
   listMattermostAccountIdsMock.mockReturnValue(["default"]);
   resolveMattermostAccountMock.mockReturnValue({
     enabled: true,
     botToken: "token-default",
     baseUrl: "https://chat.example.com",
+    config: {},
   });
 }
 
 describe("mattermost directory", () => {
-  beforeAll(async () => {
-    ({ listMattermostDirectoryGroups, listMattermostDirectoryPeers } =
-      await import("./directory.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -59,8 +53,13 @@ describe("mattermost directory", () => {
     listMattermostAccountIdsMock.mockReturnValue(["broken", "healthy"]);
     resolveMattermostAccountMock.mockImplementation(({ accountId }) =>
       accountId === "broken"
-        ? { enabled: true, botToken: undefined, baseUrl: "https://chat.example.com" }
-        : { enabled: true, botToken: "token-healthy", baseUrl: "https://chat.example.com" },
+        ? { enabled: true, botToken: undefined, baseUrl: "https://chat.example.com", config: {} }
+        : {
+            enabled: true,
+            botToken: "token-healthy",
+            baseUrl: "https://chat.example.com",
+            config: {},
+          },
     );
     createMattermostClientMock.mockReturnValue(client);
     fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
@@ -78,6 +77,7 @@ describe("mattermost directory", () => {
       enabled: true,
       botToken: `token-${accountId}`,
       baseUrl: "https://chat.example.com",
+      config: {},
     }));
     createMattermostClientMock.mockReturnValue(personalClient);
     fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
@@ -120,9 +120,14 @@ describe("mattermost directory", () => {
     listMattermostAccountIdsMock.mockReturnValue(["default", "alerts", "infra"]);
     resolveMattermostAccountMock.mockImplementation(({ accountId }) => {
       if (accountId === "disabled") {
-        return { enabled: false };
+        return { enabled: false, config: {} };
       }
-      return { enabled: true, botToken: `token-${accountId}`, baseUrl: "https://chat.example.com" };
+      return {
+        enabled: true,
+        botToken: `token-${accountId}`,
+        baseUrl: "https://chat.example.com",
+        config: {},
+      };
     });
     createMattermostClientMock
       .mockReturnValueOnce(clientA)

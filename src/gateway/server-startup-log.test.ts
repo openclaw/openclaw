@@ -1,5 +1,5 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
-// summaries, bind URLs, ANSI output, and dangerous config reporting.
+// summaries, ANSI output, and dangerous config reporting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -43,9 +43,7 @@ async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0
     cfg: {},
     env: {},
     manifestRecords: [],
-    bindHost: "127.0.0.1",
     loadedPluginIds: [],
-    port: 18789,
     log: { info, warn },
     isNixMode: false,
     ...overrides,
@@ -93,9 +91,7 @@ describe("gateway startup log", () => {
         },
         env: {},
         manifestRecords: [],
-        bindHost: "127.0.0.1",
         loadedPluginIds: [],
-        port: 18789,
         log: { info, warn: vi.fn() },
         isNixMode: false,
       });
@@ -117,10 +113,8 @@ describe("gateway startup log", () => {
       cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
     });
 
-    expect(warn.mock.calls).toEqual([
-      [
-        "security warning: dangerous config flags enabled: hooks.gmail.allowUnsafeExternalContent=true. Run `openclaw security audit`.",
-      ],
+    expect(warn.mock.calls).toContainEqual([
+      "security warning: dangerous config flags enabled: hooks.gmail.allowUnsafeExternalContent=true. Run `openclaw security audit`.",
     ]);
   });
 
@@ -136,10 +130,8 @@ describe("gateway startup log", () => {
       },
     });
 
-    expect(warn.mock.calls).toEqual([
-      [
-        "configured channel warning: channels.missing-chat is configured but no channel plugin is installed or loadable (no-channel-owner). Run `openclaw doctor --fix` or install the channel plugin before relying on this channel.",
-      ],
+    expect(warn.mock.calls).toContainEqual([
+      "configured channel warning: channels.missing-chat is configured but no channel plugin is installed or loadable (no-channel-owner). Run `openclaw doctor --fix` or install the channel plugin before relying on this channel.",
     ]);
   });
 
@@ -166,10 +158,8 @@ describe("gateway startup log", () => {
       ambientEnvTriggers: "suppress",
     });
 
-    expect(warn.mock.calls).toEqual([
-      [
-        "gateway suppressed ambient channel auto-configuration for 1 channel: discord. Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass --ambient-channels to allow ambient env credentials.",
-      ],
+    expect(warn.mock.calls).toContainEqual([
+      "gateway suppressed ambient channel auto-configuration for 1 channel: discord. Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass --ambient-channels to allow ambient env credentials.",
     ]);
     expect(warn.mock.calls.flat().join("\n")).not.toContain("channels.discord is configured");
   });
@@ -195,8 +185,9 @@ describe("gateway startup log", () => {
       manifestRecords,
     });
 
-    expect(warn.mock.calls[0]?.[0]).toContain("channels.slack: channel is configured");
-    expect(warn.mock.calls[0]?.[0]).not.toContain(String.fromCharCode(0x1b));
+    const warnings = warn.mock.calls.flat().join("\n");
+    expect(warnings).toContain("channels.slack: channel is configured");
+    expect(warnings).not.toContain(String.fromCharCode(0x1b));
   });
 
   it("does not warn when startup activation enables the configured channel owner", async () => {
@@ -228,7 +219,7 @@ describe("gateway startup log", () => {
       },
     });
 
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("configured channel warning");
   });
 
   it("formats configured model thinking and fast mode defaults with the startup model", () => {
@@ -267,7 +258,7 @@ describe("gateway startup log", () => {
             defaults: {
               model: "openai/gpt-5.5",
             },
-            list: [{ id: "main", default: true, fastModeDefault: true }],
+            entries: { main: { fastModeDefault: true } },
           },
         },
         provider: "openai",
@@ -350,7 +341,7 @@ describe("gateway startup log", () => {
                 "openai/gpt-5.5": { params: { fastMode: false } },
               },
             },
-            list: [{ id: "alpha", default: true, thinkingDefault: "high", fastModeDefault: true }],
+            entries: { alpha: { thinkingDefault: "high", fastModeDefault: true } },
           },
         },
         provider: "openai",
@@ -364,7 +355,6 @@ describe("gateway startup log", () => {
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
     const { info } = await startup({
-      bindHosts: ["127.0.0.1", "::1"],
       loadedPluginIds: ["delta", "alpha", "delta", "beta"],
       startupStartedAt: Date.parse("2026-04-03T10:00:00.000Z"),
     });

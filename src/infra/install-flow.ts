@@ -1,4 +1,3 @@
-// Coordinates plugin install flow decisions from source detection through target preparation.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,8 +14,6 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
 
-// Install-flow helpers validate local install paths and unpack archives inside
-// temporary workspaces before handing the resolved package root to callers.
 type ExistingInstallPathResult =
   | {
       ok: true;
@@ -28,7 +25,6 @@ type ExistingInstallPathResult =
       error: string;
     };
 
-/** Resolve and stat a user-provided install path. */
 export async function resolveExistingInstallPath(
   inputPath: string,
 ): Promise<ExistingInstallPathResult> {
@@ -47,7 +43,6 @@ export type ExtractedArchiveVerification<TFailure extends { ok: false; error: st
   onExtractionError: (error: unknown) => TFailure;
 };
 
-/** Extract an archive to a temp dir and run work against the detected package root. */
 export async function withExtractedArchiveRoot<
   TResult extends { ok: boolean },
   TFailure extends { ok: false; error: string } = never,

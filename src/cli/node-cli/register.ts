@@ -1,4 +1,3 @@
-// Commander registration for foreground node host and node service lifecycle commands.
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -74,7 +73,11 @@ export function registerNodeCli(program: Command) {
       let gatewayOptions;
       try {
         const setupCode = opts.pair ?? opts.pairIfNeeded;
-        pair = setupCode ? resolveNodePairGatewayOptions(setupCode) : undefined;
+        pair = setupCode
+          ? resolveNodePairGatewayOptions(setupCode, {
+              allowExpired: opts.pairIfNeeded !== undefined,
+            })
+          : undefined;
         const existing = await loadNodeHostConfig();
         gatewayOptions = resolveNodeGatewayOptions(opts, existing, pair);
       } catch (error) {
@@ -104,6 +107,7 @@ export function registerNodeCli(program: Command) {
         gatewayCloudflareAccess: cloudflareAccess,
         gatewayCandidates,
         gatewayBootstrapToken: pair?.bootstrapToken,
+        gatewayBootstrapExpiresAtMs: pair?.expiresAtMs,
         preferGatewayBootstrapToken: opts.pair !== undefined,
         ...(opts.ephemeral === true || opts.sessionHost === true ? { forceWorkerRuns: true } : {}),
         ...(opts.ephemeral === true ? { ephemeral: true } : {}),
@@ -131,9 +135,7 @@ export function registerNodeCli(program: Command) {
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeIdentityShow(opts);
-    });
+    .action(runNodeIdentityShow);
 
   addNodeGatewayOptions(
     addNodeCommandOptions(
@@ -157,12 +159,7 @@ export function registerNodeCli(program: Command) {
       });
     });
 
-  for (const [name, action] of [
-    ["uninstall", "runNodeDaemonUninstall"],
-    ["stop", "runNodeDaemonStop"],
-    ["start", "runNodeDaemonStart"],
-    ["restart", "runNodeDaemonRestart"],
-  ] as const) {
+  for (const name of ["uninstall", "stop", "start", "restart"] as const) {
     node
       .command(name)
       .description(
@@ -170,8 +167,8 @@ export function registerNodeCli(program: Command) {
       )
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
-        const daemon = await import("./daemon.js");
-        await daemon[action](opts);
+        const { runNodeDaemonLifecycle } = await import("./daemon.js");
+        await runNodeDaemonLifecycle(name, opts);
       });
   }
 }

@@ -1,9 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  type SessionTranscriptDeliveryMirror,
-} from "../../config/sessions/transcript.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -12,7 +10,6 @@ import {
   type ReplyPayload,
   type ReplyPayloadMetadata,
 } from "../reply-payload.js";
-import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptMirror"]> & {
@@ -92,11 +89,11 @@ export function captureDeliveredTranscriptMirror(params: {
     if (info.kind !== "final") {
       return payload;
     }
-    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    if (payloadMetadata?.finalDeliveryCapture !== params.captureToken) {
       return payload;
     }
     observedFinal = true;
-    const payloadMetadata = getReplyPayloadMetadata(payload);
     const payloadMirror = payloadMetadata?.sourceReplyTranscriptMirror;
     if (
       payloadMirror &&
@@ -128,22 +125,4 @@ export function captureDeliveredTranscriptMirror(params: {
   });
   return () =>
     observedFinal ? deliveredMetadata : metadata.transcriptOwner ? undefined : metadata;
-}
-
-export async function mirrorTranscriptAfterDispatcherSettled(params: {
-  outcome: Promise<ReplyDispatchDeliveryOutcome>;
-  metadata: () => TranscriptMirror | undefined;
-  cfg: OpenClawConfig;
-}): Promise<void> {
-  if ((await params.outcome) !== "delivered") {
-    return;
-  }
-  const metadata = params.metadata();
-  if (!metadata) {
-    return;
-  }
-  await mirrorDeliveredReplyToTranscript({
-    metadata,
-    cfg: params.cfg,
-  });
 }

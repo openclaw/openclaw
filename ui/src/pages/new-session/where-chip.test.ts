@@ -609,7 +609,7 @@ describe("Where chip", () => {
   );
 
   it("hides unavailable operating systems from cloud configuration", () => {
-    const reason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+    const reason = "Upgrade Crabbox to enable this operating system.";
     const container = renderPicker(true, undefined, {
       cloudProfileId: "aws",
       cloudProfiles: readDraftCloudProfiles([
@@ -894,6 +894,15 @@ describe("Where chip", () => {
       disabled: true,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       label: "Slot utilization unavailable",
+    },
+    {
+      name: "admits worker execution by reclaiming the sole idle worker slot",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      workerSlots: { total: 1, available: 0, reclaimableIdle: 1 },
+      invocableCommands: [],
+      commandState: undefined,
+      disabled: false,
+      label: "1 of 1 session slots in use",
     },
     {
       name: "disables a declared remote command that the Gateway has not enabled",
