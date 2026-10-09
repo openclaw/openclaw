@@ -2,7 +2,9 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  formatEmbeddingModelInput,
   isEmbeddingBatchUnavailableError,
+  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -33,6 +35,7 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
+  runEmbeddingOperationWithTimeout,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -50,7 +53,6 @@ import type {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
-import { createPausedDeadline } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -93,51 +95,6 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
       .map(([source, count]) => `${source}=${count}`)
       .join(",") || "none"
   );
-}
-
-async function runEmbeddingOperationWithTimeout<T>(params: {
-  timeoutMs: number;
-  message: string;
-  /** Caller-owned cancellation, merged with the per-call watchdog abort. */
-  signal?: AbortSignal;
-  /** Managed readiness pauses this watchdog, while caller cancellation stays active. */
-  deadlineControl?: MemorySearchDeadlineControl;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
-  if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(signal);
-  }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const timeoutError = new Error(params.message);
-  const timeout = createDeferred<never>();
-  const deadline = createPausedDeadline({
-    kind: "embedding",
-    timeoutMs,
-    signal,
-    control: params.deadlineControl,
-    expire: () => {
-      timeout.reject(timeoutError);
-      controller.abort(timeoutError);
-    },
-  });
-  deadline.start();
-  try {
-    const operation = params.run(signal);
-    const result = await Promise.race([operation, timeout.promise]);
-    params.signal?.throwIfAborted();
-    // An overdue watchdog can run after provider success following an event-loop stall.
-    if (deadline.isExpired()) {
-      controller.abort(timeoutError);
-      throw timeoutError;
-    }
-    return result;
-  } finally {
-    deadline.close();
-  }
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCacheOps {
@@ -279,7 +236,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           run: () =>
             batchEmbed({
               agentId: this.agentId,
-              chunks: missingChunks,
+              chunks: resolveEmbeddingInputFormatVersion(provider.model)
+                ? missingChunks.map((chunk) => ({
+                    ...chunk,
+                    ...formatEmbeddingModelInput(chunk, provider.model, "document"),
+                    ...(chunk.embeddingInput
+                      ? {
+                          embeddingInput: formatEmbeddingModelInput(
+                            chunk.embeddingInput,
+                            provider.model,
+                            "document",
+                          ),
+                        }
+                      : {}),
+                  }))
+                : missingChunks,
               wait: this.batch.wait,
               concurrency: this.batch.concurrency,
               pollIntervalMs: this.batch.pollIntervalMs,
@@ -370,7 +341,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
                 message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
                 run: async (signal) =>
                   await provider.embedBatch(
-                    batchItems.map((item) => item.input),
+                    batchItems.map((item) =>
+                      formatEmbeddingModelInput(item.input, provider.model, "document"),
+                    ),
                     { signal, inputType: "document" },
                   ),
               });
@@ -483,7 +456,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
                 signal,
                 deadlineControl,
                 run: async (opSignal) =>
-                  await provider.embed(text, {
+                  await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
                     signal: opSignal,
                     inputType: "query",
                     ...(deadlineControl
