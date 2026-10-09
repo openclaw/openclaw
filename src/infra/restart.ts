@@ -830,7 +830,7 @@ export function scheduleGatewayRestart(opts?: {
   skipDeferral?: boolean;
   successorOwner?: GatewayRestartIntent["successorOwner"];
 }): ScheduledRestart {
-  const delayMs = normalizeGatewayRestartDelayMs(opts?.delayMs);
+  const requestedDelayMs = normalizeGatewayRestartDelayMs(opts?.delayMs);
   const reason = normalizeRestartIntentReason(opts?.reason);
   const mode: ScheduledRestart["mode"] =
     process.listenerCount("SIGUSR2") > 0
@@ -856,7 +856,7 @@ export function scheduleGatewayRestart(opts?: {
     coalesced: boolean,
     emitHooksQueued: boolean,
   ): ScheduledRestart => ({ ...restartResultBase, delayMs, coalesced, emitHooksQueued });
-  const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
+  const requestedDueAt = nowMs + requestedDelayMs + cooldownMsApplied;
   const skipDeferral = opts?.skipDeferral === true;
   let nextPendingSessionKey = opts?.sessionKey;
   let nextPendingReason = reason;

@@ -84,7 +84,9 @@ function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): voi
 function releaseSqliteIterator(
   iterator: Iterator<unknown>,
   reader: ReturnType<typeof retainSqliteReader>,
-): unknown {
+  failed: boolean,
+  cleanupErrorMessage: string,
+): void {
   let cleanupError: unknown;
   try {
     iterator.return?.();
@@ -92,7 +94,9 @@ function releaseSqliteIterator(
     cleanupError = error;
   }
   reader.release();
-  return cleanupError;
+  if (!failed && cleanupError !== undefined) {
+    throw toErrorObject(cleanupError, cleanupErrorMessage);
+  }
 }
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
@@ -136,12 +140,9 @@ function executeCompiledSqliteQuerySync<Row>(
           failed = true;
           failure = error;
         }
-        const cleanupError = releaseSqliteIterator(iterator, reader);
+        releaseSqliteIterator(iterator, reader, failed, "SQLite query cleanup failed");
         if (failed) {
           throw toErrorObject(failure, "SQLite query failed");
-        }
-        if (cleanupError !== undefined) {
-          throw toErrorObject(cleanupError, "SQLite query cleanup failed");
         }
         return { rows };
       }
@@ -284,10 +285,7 @@ export function iterateSqliteQuerySync<Row>(
         failed = true;
         throw toErrorObject(error, "SQLite iterator failed");
       } finally {
-        const cleanupError = releaseSqliteIterator(iterator, reader);
-        if (!failed && cleanupError !== undefined) {
-          throw toErrorObject(cleanupError, "SQLite iterator cleanup failed");
-        }
+        releaseSqliteIterator(iterator, reader, failed, "SQLite iterator cleanup failed");
       }
     } catch (error) {
       reportNodeSqliteKyselyQueryError(db, error);

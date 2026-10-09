@@ -267,7 +267,7 @@ export async function fetchClawHubSkillCatalog(
     const official = readClawHubBooleanField(value, trending ? "official" : "isOfficial", context);
     const summary = readClawHubStringField(value, "summary", context) ?? undefined;
     const icon = readClawHubStringField(value, "icon", context);
-    const display = { slug, displayName, official, summary, icon };
+    const entry = { score: 0, slug, displayName, official, summary, icon };
     if (trending) {
       const publisher = value.publisher;
       const metrics = value.metrics;
@@ -279,9 +279,7 @@ export async function fetchClawHubSkillCatalog(
       ) {
         throw new Error(`Malformed ClawHub ${context}: invalid trending identity or metrics.`);
       }
-      return {
-        score: 0,
-        ...display,
+      return Object.assign(entry, {
         source: readRequiredClawHubStringField(value, "source", context),
         install: {
           kind: readRequiredClawHubStringField(install, "kind", context),
@@ -291,19 +289,18 @@ export async function fetchClawHubSkillCatalog(
         updatedAt: metrics
           ? readRequiredClawHubNumberField(metrics, "updatedAt", context)
           : undefined,
-      };
+      });
     }
     if (value.family !== "skill") {
       throw new Error(`Malformed ClawHub ${context}: expected skill family.`);
     }
-    return {
-      score: query ? readRequiredClawHubNumberField(row, "score", context) : 0,
-      ...display,
+    entry.score = query ? readRequiredClawHubNumberField(row, "score", context) : 0;
+    return Object.assign(entry, {
       source: CLAWHUB_NATIVE_SOURCE_KIND,
       ownerHandle: readClawHubStringField(value, "ownerHandle", context),
       version: readClawHubStringField(value, "latestVersion", context) ?? undefined,
       updatedAt: readRequiredClawHubNumberField(value, "updatedAt", context),
-    };
+    });
   });
   const items = entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
   if (trending) {

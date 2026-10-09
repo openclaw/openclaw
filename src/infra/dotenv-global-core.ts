@@ -201,7 +201,7 @@ function resolveGlobalDotEnvFiles(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.
     onWarning: opts.onWarning,
   };
   return {
-    globalFiles: globalEnvPaths.map((filePath) => ({ ...readOptions, filePath })),
+    globalFiles: globalEnvPaths.map((filePath) => Object.assign({}, readOptions, { filePath })),
     gatewayFile: hasExplicitNonDefaultStateDir
       ? undefined
       : { ...readOptions, filePath: path.join(home, ".config", "openclaw", "gateway.env") },

@@ -104,7 +104,9 @@ function closeNativeBroker(source: NativeSource): Promise<void> {
   try {
     closing = source.broker?.close() ?? Promise.resolve();
   } catch (error) {
-    closing = Promise.reject(error);
+    const failed = createDeferredCore();
+    failed.reject(error);
+    closing = failed.promise;
   }
   return source.retiringBrokers.size
     ? joinNativeBrokerCloses([...source.retiringBrokers, closing])

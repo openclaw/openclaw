@@ -510,13 +510,13 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const canRelayToUser =
     visibility.showAlerts &&
     ((delivery.channel !== "none" && Boolean(delivery.to)) || internalProjection !== undefined);
-  const usesResponseTool = (sessionEntry: typeof entry, sessionKey: string) =>
+  const usesResponseTool = (sessionEntry: typeof entry, targetSessionKey: string) =>
     shouldUseHeartbeatResponseToolPrompt({
       cfg,
       agentId,
       heartbeat,
       entry: sessionEntry,
-      sessionKey,
+      sessionKey: targetSessionKey,
       chatType: delivery.chatType,
     });
   const useHeartbeatResponseToolPrompt = usesResponseTool(entry, sessionKey);
