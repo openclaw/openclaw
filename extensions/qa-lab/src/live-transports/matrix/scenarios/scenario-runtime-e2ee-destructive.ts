@@ -182,11 +182,11 @@ function createMatrixQaRecoveryCommands(
   context: MatrixQaScenarioContext,
 ) {
   return {
-    restore(
+    restore: (
       label: string,
       recoveryKey?: string,
       options: { allowNonZero?: boolean; timeoutMs?: number } = {},
-    ) {
+    ) => {
       return runMatrixQaCliJson({
         ...(options.allowNonZero === undefined ? {} : { allowNonZero: options.allowNonZero }),
         args: [
@@ -205,10 +205,10 @@ function createMatrixQaRecoveryCommands(
         timeoutMs: options.timeoutMs ?? context.timeoutMs,
       });
     },
-    status(
+    status: (
       label: string,
       options: { allowNonZero?: boolean; allowDegradedLocalState?: boolean } = {},
-    ) {
+    ) => {
       return runMatrixQaCliJson({
         ...(options.allowNonZero === undefined ? {} : { allowNonZero: options.allowNonZero }),
         args: [
