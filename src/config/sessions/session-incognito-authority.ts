@@ -116,6 +116,10 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return structuredClone(current(sessionKey)?.capability);
         },
+        readPolicy(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.policy);
+        },
       };
     },
     deadlines(this: void, assertBorrowed: () => void, assertAdmittedCurrent: () => void) {

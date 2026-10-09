@@ -41,6 +41,7 @@ import type {
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -459,9 +460,27 @@ function resolveSandboxRuntimeStatusForClassification(
     mainSessionKey,
     comparableSessionKey,
   } = classification;
+  const privateSource =
+    params.preparedSessionEntry === undefined && classificationSessionKey
+      ? captureIncognitoSessionSource({
+          agentId: classificationAgentId,
+          sessionKey: comparableSessionKey,
+          storePath: cfg?.session?.store
+            ? resolveSessionStorePathCore(cfg.session.store, { agentId: classificationAgentId })
+            : undefined,
+        })
+      : undefined;
+  // Explicit actor selection consumes its live policy receipt, including acknowledged absence.
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
-  const session =
-    params.preparedSessionEntry !== undefined
+  const session = privateSource
+    ? {
+        existing:
+          "kind" in privateSource
+            ? undefined
+            : privateSource.actor.sessions.readPolicy(comparableSessionKey),
+        normalizedKey: comparableSessionKey,
+      }
+    : params.preparedSessionEntry !== undefined
       ? { existing: params.preparedSessionEntry ?? undefined, normalizedKey: comparableSessionKey }
       : classificationSessionKey
         ? resolveSessionEntry(

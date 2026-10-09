@@ -1,5 +1,6 @@
 import { expect, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { withGatewaySessionEntry } from "../session-utils-store.js";
 import { taskSuggestionsHandlers } from "./task-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -103,4 +104,25 @@ export async function createLocalTaskSuggestion() {
     agentId: "main",
   });
   return (requirePayload(created) as { taskId: string }).taskId;
+}
+
+export function readTaskSuggestionRollbackFixture(
+  read: typeof withGatewaySessionEntry,
+  mode: "normal" | "present" | "throw",
+  ...[key, options, consume, ...routing]: Parameters<typeof withGatewaySessionEntry>
+) {
+  if (mode === "throw") {
+    throw new Error("session inspection unavailable");
+  }
+  return read(
+    key,
+    options,
+    (loaded, ...source) => {
+      if (mode === "present") {
+        loaded.entry = { sessionId: "surviving-session", updatedAt: 1 };
+      }
+      return consume(loaded, ...source);
+    },
+    ...routing,
+  );
 }

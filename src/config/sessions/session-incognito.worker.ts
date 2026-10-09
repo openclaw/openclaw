@@ -65,6 +65,7 @@ import {
 import { createIncognitoManagerWorker } from "./session-incognito-manager.worker.js";
 import { isIncognitoOutboxCommand } from "./session-incognito-outbox-contract.js";
 import { createIncognitoOutboxWorker } from "./session-incognito-outbox.worker.js";
+import { projectIncognitoSessionPolicyFacts } from "./session-incognito-policy-facts.js";
 import {
   incognitoSideDataKeys,
   isIncognitoSideDataWrite,
@@ -135,6 +136,7 @@ export function createIncognitoSessionWorker(
                 pendingProjectGitUrl: entry.pendingProjectGitUrl,
               }
             : undefined,
+          policy: projectIncognitoSessionPolicyFacts(entry),
           steering: entry
             ? {
                 lifecycleRevision: entry.lifecycleRevision,

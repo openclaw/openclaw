@@ -19,12 +19,16 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type { PreparedSessionMutationFacts } from "../session-sharing-policy.js";
+import {
+  prepareSessionMutationFacts,
+  type SessionFactsRead,
+} from "../session-sharing-preparation.js";
 import {
   authorizeSessionSharingTarget,
   createSessionListEntryFilter,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   beginTaskSuggestionAcceptance,
   createTaskSuggestion,
@@ -242,36 +246,53 @@ async function deliverSuggestedTaskToSourceSession(
   const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
-  let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
+  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts>;
   try {
-    source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    sourceFacts = await prepareSessionMutationFacts({
+      cfg: params.options.context.getRuntimeConfig(),
+      sessionKey: params.suggestion.sessionKey,
+      agentId,
+      allowMissing: true,
+    });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }
-  if (!source.entry?.sessionId) {
-    return fail(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a new session instead",
-      ),
-    );
+  try {
+    const source = sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target;
+    if (!source?.entry.sessionId) {
+      return fail(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "source session no longer exists; start it in a new session instead",
+        ),
+      );
+    }
+    const lifecycleError = resolveSessionWorkStartError(source.canonicalKey, source.entry);
+    if (lifecycleError) {
+      return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
+    }
+    const sendError = await sendSuggestedTaskPrompt({
+      ...params,
+      options: {
+        ...params.options,
+        sessionMutationCommitGuard: () => {
+          params.options.sessionMutationCommitGuard?.();
+          sourceFacts.readCurrent(params.options.context.getRuntimeConfig());
+        },
+      },
+      sessionKey: params.suggestion.sessionKey,
+      sessionId: source.entry.sessionId,
+    });
+    if (sendError) {
+      return fail(sendError);
+    }
+    return finishSuggestedTaskAcceptance({
+      ...params,
+      sessionKey: params.suggestion.sessionKey,
+    });
+  } finally {
+    sourceFacts.release();
   }
-  const lifecycleError = resolveSessionWorkStartError(source.canonicalKey, source.entry);
-  if (lifecycleError) {
-    return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
-  }
-  const sendError = await sendSuggestedTaskPrompt({
-    ...params,
-    sessionKey: params.suggestion.sessionKey,
-    sessionId: source.entry.sessionId,
-  });
-  if (sendError) {
-    return fail(sendError);
-  }
-  return finishSuggestedTaskAcceptance({
-    ...params,
-    sessionKey: params.suggestion.sessionKey,
-  });
 }
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {

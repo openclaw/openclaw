@@ -2,6 +2,7 @@ import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-cont
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
+import type { IncognitoSessionPolicyFacts } from "./session-incognito-policy-facts.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Content-free postimage; full entries remain owned by the requesting read. */
@@ -28,6 +29,7 @@ export type IncognitoSessionFacts = {
     | "pendingWorktree"
     | "pendingProjectGitUrl"
   > & { worktreeId?: string };
+  policy?: IncognitoSessionPolicyFacts;
   completionSources?: Array<{ sourceId: string; valid: boolean }>;
   steering?: Pick<
     SessionEntry,
