@@ -141,6 +141,7 @@ openclaw [--dev] [--profile <name>] <command>
     schema
     validate
   database
+    init
     preflight
     ownership
       status
