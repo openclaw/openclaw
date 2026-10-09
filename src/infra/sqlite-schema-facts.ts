@@ -237,8 +237,11 @@ function trackSchemaChanges(
       finishReadScope(wasTransaction, expiresRead, succeeded);
     };
   };
-  const execute = observeSqliteNativeOperations(database, native, (mutation) => ({
-    finish: beginMutation(mutation.schemaChange, mutation.control, mutation.dataChange),
+  const execute = observeSqliteNativeOperations(database, native, (mutation, phase) => ({
+    finish:
+      phase === "exec" || mutation.schemaChange || mutation.control || mutation.dataChange
+        ? beginMutation(mutation.schemaChange, mutation.control, mutation.dataChange)
+        : () => {},
   }));
   owner.installTempTrackingSchema = (schema) => {
     const { sql, unexpected } = prepareSqliteTempTrackingSchema(database, schema);
@@ -247,9 +250,7 @@ function trackSchemaChanges(
       // sqlite-allow-raw -- The schema owner generates only the declared connection-local tracking shapes.
       execute(() => native.DatabaseSync.prototype.exec.call(database, sql), {
         schemaChange: unexpected,
-        mainSchemaChange: unexpected,
         dataChange: true,
-        temporaryWriteTables: [],
         control: undefined,
       });
     } catch (error) {

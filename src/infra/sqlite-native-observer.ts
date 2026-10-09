@@ -24,7 +24,7 @@ export function hasPendingSqliteNativeExecution(database: DatabaseSync): boolean
 }
 
 export type SqliteNativeMutation = ReturnType<typeof classifySqliteMutation>;
-type NativePhase = "execute" | "bind" | "iterate";
+type NativePhase = "exec" | "execute" | "bind" | "iterate";
 type NativeOperation = {
   finish: (succeeded: boolean, abandoned?: boolean) => void;
   stepped?: () => void;
@@ -77,9 +77,7 @@ function createIteratorLifetime(
 }
 const bindingMutation: SqliteNativeMutation = {
   schemaChange: false,
-  mainSchemaChange: false,
   dataChange: false,
-  temporaryWriteTables: undefined,
   control: undefined,
 };
 
@@ -98,7 +96,7 @@ function refusedBeforeReset(error: unknown): boolean {
 }
 
 /** Dispose callbacks may refuse close; native custody expires only after SQLite has closed. */
-export function observeSqliteNativeClose(database: DatabaseSync, onClose: () => void): void {
+function observeSqliteNativeClose(database: DatabaseSync, onClose: () => void): void {
   for (const method of ["close", Symbol.dispose] as const) {
     if (typeof database[method] !== "function") {
       continue;
@@ -189,6 +187,7 @@ export function observeSqliteNativeOperations(
     execute(
       () => native.DatabaseSync.prototype.exec.call(database, sql),
       classifySqliteMutation(sql, "batch"),
+      "exec",
     );
   database.prepare = (...prepareArgs) => {
     const statement = native.DatabaseSync.prototype.prepare.call(database, ...prepareArgs);
