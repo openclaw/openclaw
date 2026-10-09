@@ -489,15 +489,47 @@ sidebarTitle: "Voice and speech"
     OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node --import tsx scripts/test-live.mts -- extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts
     ```
 
-    <Note>
-    GA backend OpenAI realtime bridges use the Realtime WebSocket session
-    shape, which does not accept `session.temperature`; the public GPT-Live API
-    uses its own Live session shape, while the Codex and unlisted/private routes
-    retain their separate transport contracts. Azure OpenAI
-    deployments remain available via `azureEndpoint` and `azureDeployment` and
-    keep the deployment-compatible session shape (including `temperature`).
+    #### Azure OpenAI Realtime deployments
+
+    Configure Azure on the Voice Call realtime provider. The Realtime
+    conversation deployment and input-transcription deployment may be different:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                providers: {
+                  openai: {
+                    azureEndpoint: "https://<resource>.openai.azure.com/openai",
+                    azureDeployment: "<realtime-deployment>",
+                    apiKey: "<azure-resource-key>",
+                    inputTranscriptionModel: "<transcription-deployment>",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Azure Realtime uses the GA WebSocket route
+    `/openai/v1/realtime?model=<realtime-deployment>` and sends the GA
+    `session.update` payload. Authentication uses the Azure `api-key` header.
+    Microsoft deprecated the Preview Realtime API on April 30, 2026 and directs
+    applications to migrate to GA; accordingly, `azureApiVersion` does not
+    select a Preview endpoint or protocol for this bridge. Remove any preview
+    API-version setting when migrating. The GA session configuration does not
+    send `temperature`.
+
+    `inputTranscriptionModel` selects the Azure deployment used only for input
+    transcription. If omitted, Azure defaults to `whisper-1`; the value must
+    identify a transcription deployment available on the Azure resource.
     Supports bidirectional tool calling and G.711 u-law audio.
-    </Note>
 
     <Note>
     Realtime voice is selected when the session is created. GA Realtime allows

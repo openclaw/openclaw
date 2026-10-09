@@ -151,6 +151,25 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it("uses Azure API-key authentication for GA realtime endpoint URLs", () => {
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: {
+        apiKey: "azure-test-key",
+        azureEndpoint: "https://example.openai.azure.com/openai",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    void bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.["api-key"]).toBe("azure-test-key");
+    expect(options?.headers).not.toHaveProperty("Authorization");
+  });
+
   it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -637,11 +656,32 @@ describe("OpenAI realtime voice bridge connection", () => {
     await connecting;
   });
 
+  it("uses a configured input transcription model in the GA session payload", async () => {
+    const bridge = createNativeBridge({
+      providerConfig: {
+        apiKey: "test-key",
+        inputTranscriptionModel: "transcribe-prod",
+      },
+    });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+
+    openSocket(socket);
+    await Promise.resolve();
+
+    expectRecordFields(
+      requireNestedRecord(requireSession(socket), ["audio", "input", "transcription"]),
+      "session transcription",
+      { model: "transcribe-prod" },
+    );
+    emitSessionUpdated(socket);
+    await connecting;
+  });
+
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
     const bridge = createNativeBridge({
       providerConfig: {
         apiKey: "test-api-key-test",
-        azureEndpoint: "https://example.openai.azure.com/",
+        azureEndpoint: "https://example.openai.azure.com/openai/",
         azureDeployment: "realtime-prod",
         azureApiVersion: "2024-10-01-preview",
         voice: "verse",
@@ -657,7 +697,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     const { connecting, socket } = beginBridgeConnection(bridge);
 
     expect(socket.args[0]).toBe(
-      "wss://example.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod",
+      "wss://example.openai.azure.com/openai/v1/realtime?model=realtime-prod",
     );
 
     openSocket(socket);
@@ -665,23 +705,27 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     const session = requireSession(socket);
     expectRecordFields(session, "session", {
-      modalities: ["text", "audio"],
+      type: "realtime",
       instructions: "Be helpful.",
-      voice: "verse",
-      input_audio_format: "pcm16",
-      output_audio_format: "pcm16",
-      input_audio_transcription: { model: "whisper-1" },
-      temperature: 0.8,
-    });
-    expectRecordFields(
-      requireRecord(session.turn_detection, "session turn detection"),
-      "turn detection",
-      {
-        create_response: true,
+      output_modalities: ["audio"],
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: 24000 },
+          noise_reduction: null,
+          transcription: { model: "whisper-1" },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+            create_response: true,
+          },
+        },
+        output: { format: { type: "audio/pcm", rate: 24000 }, voice: "verse" },
       },
-    );
-    expect(session).not.toHaveProperty("type");
-    expect(session).not.toHaveProperty("audio");
+    });
+    expect(session).not.toHaveProperty("modalities");
+    expect(session).not.toHaveProperty("input_audio_format");
     const tools = session.tools as Array<{ name?: string }>;
     expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
 
@@ -693,12 +737,17 @@ describe("OpenAI realtime voice bridge connection", () => {
       {
         type: "session.update",
         session: {
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-            create_response: false,
+          type: "realtime",
+          audio: {
+            input: {
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: false,
+              },
+            },
           },
         },
       },
@@ -709,15 +758,43 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(parseSent(socket).at(-1)).toEqual({
       type: "session.update",
       session: {
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
-          create_response: true,
+        type: "realtime",
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: true,
+            },
+          },
         },
       },
     });
+  });
+
+  it("allows an Azure transcription deployment to differ from the realtime deployment", async () => {
+    const bridge = createNativeBridge({
+      providerConfig: {
+        apiKey: "azure-test-key",
+        azureEndpoint: "https://example.openai.azure.com/",
+        azureDeployment: "realtime-prod",
+        inputTranscriptionModel: "transcribe-prod",
+      },
+    });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+
+    openSocket(socket);
+    await Promise.resolve();
+
+    expectRecordFields(
+      requireNestedRecord(requireSession(socket), ["audio", "input", "transcription"]),
+      "Azure session transcription",
+      { model: "transcribe-prod" },
+    );
+    emitSessionUpdated(socket);
+    await connecting;
   });
 
   it("rejects connection when session configuration fails before readiness", async () => {
