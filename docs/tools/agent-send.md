@@ -70,7 +70,7 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
 | Flag                        | Description                                                          |
 | --------------------------- | -------------------------------------------------------------------- |
 | `--message <text>`          | Inline message to send                                               |
-| `--message-file <path>`     | Read the message from a valid UTF-8 file (max 4 MiB)                 |
+| `--message-file <path>`     | Read valid UTF-8 from a file, or `-` for stdin (max 4 MiB)           |
 | `--to <dest>`               | Derive session key from a target (phone, chat id)                    |
 | `--session-key <key>`       | Use an explicit session key                                          |
 | `--agent <id>`              | Target a configured agent (uses its `main` session)                  |

@@ -320,7 +320,7 @@ These are observations, not statistical speed guarantees.
 ## Options
 
 - `-m, --message <text>`: message body
-- `--message-file <path>`: read the message body from a UTF-8 file
+- `--message-file <path>`: read the message body from a UTF-8 file; `-` reads stdin
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
@@ -352,6 +352,7 @@ restart, and session ownership changes continue to fence active writers.
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --agent ops --message-file ./task.md
+cat task.md | openclaw agent --agent ops --message-file -
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
