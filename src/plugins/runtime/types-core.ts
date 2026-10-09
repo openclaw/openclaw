@@ -404,6 +404,10 @@ export type PluginRuntimeCore = {
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
+      getSessionEntryAsync?: (
+        params: RuntimeSessionStoreReadParams,
+      ) => Promise<RuntimeSessionEntry | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];

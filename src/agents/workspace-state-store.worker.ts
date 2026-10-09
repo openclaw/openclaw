@@ -1,14 +1,21 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
+import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
+import { createWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   assertCanonicalIntegerTimestamp,
   assertCanonicalTimestamp,
@@ -23,7 +30,59 @@ import {
   type WorkspaceStateDatabase,
   type WorkspaceStateDatabaseHandle,
 } from "./workspace-state-store.kernel.js";
-import type { WorkspaceStateWorkerCommand } from "./workspace-state-store.worker-contract.js";
+import type {
+  WorkspaceStateDeletionPlan,
+  WorkspaceStateDeletionReceipt,
+  WorkspaceStateWorkerCommand,
+} from "./workspace-state-store.worker-contract.js";
+
+function deleteWorkspace(
+  database: WorkspaceStateDatabaseHandle,
+  plan: WorkspaceStateDeletionPlan,
+): WorkspaceStateDeletionReceipt {
+  const { lexicalAlias, currentCanonicalIdentity } = plan;
+  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const storedAlias = executeSqliteQueryTakeFirstSync(
+    database.db,
+    kysely
+      .selectFrom("workspace_path_aliases")
+      .selectAll()
+      .where("alias_key", "=", lexicalAlias.workspaceKey),
+  );
+  if (storedAlias && storedAlias.alias_path !== lexicalAlias.workspacePath) {
+    throw new Error("workspace path alias key collision");
+  }
+  let storedIdentity = storedAlias
+    ? createWorkspaceStateIdentity(storedAlias.workspace_path)
+    : undefined;
+  if (storedIdentity && storedIdentity.workspaceKey !== storedAlias?.workspace_key) {
+    throw new Error("workspace path alias target is invalid");
+  }
+  if (
+    storedIdentity &&
+    plan.pathEntryExisted &&
+    storedIdentity.workspaceKey !== currentCanonicalIdentity.workspaceKey
+  ) {
+    // A repointed alias no longer owns its former workspace; retire only its association.
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("workspace_path_aliases")
+        .where("alias_key", "=", lexicalAlias.workspaceKey),
+    );
+    storedIdentity = undefined;
+  }
+  const identity =
+    storedIdentity ??
+    (!storedAlias && lexicalAlias.workspaceKey === currentCanonicalIdentity.workspaceKey
+      ? currentCanonicalIdentity
+      : resolveWorkspaceIdentityFromDatabase({
+          workspaceDir: currentCanonicalIdentity.workspacePath,
+          database,
+        }).identity);
+  deleteWorkspaceStateRowsInDatabase(database, identity);
+  return { kind: "workspace-deleted", workspacePath: identity.workspacePath };
+}
 
 function mergeSetup(
   database: WorkspaceStateDatabaseHandle,
@@ -102,6 +161,29 @@ export function executeWorkspaceStateCommand(
   database: WorkspaceStateDatabaseHandle,
   options: OpenClawStateDatabaseOptions,
 ) {
+  if (command.type === "workspace.delete") {
+    return runOpenClawStateWriteTransaction((writer) => {
+      const deletion = command.input.deletion;
+      const assertCurrent = (stage: "transaction" | "commit") => {
+        if (deletion) {
+          assertOpenClawStateLeaseWorkerOwnedInTransaction(
+            writer.db,
+            deletion.lease,
+            "write",
+            stage,
+          );
+          assertAgentDeletionWorkerPredicate(writer, deletion.predicate);
+        } else {
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+        }
+      };
+      assertCurrent("transaction");
+      const result = deleteWorkspace(writer, command.input.plan);
+      assertCurrent("commit");
+      deferSqliteWorkerCommitReceipt(writer.db, result);
+      return result;
+    }, options);
+  }
   if (command.type === "workspace.snapshotAndRegister") {
     const initial = runSqliteDeferredTransactionSync(database.db, () => {
       assertAgentDeletionRecoveryHoldPredicate(database, command.input.recoveryHoldPredicate);

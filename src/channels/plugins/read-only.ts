@@ -330,6 +330,18 @@ function rebindChannelPluginConfig(
 ): ChannelPlugin["config"] {
   const rebind = (cfg: OpenClawConfig) =>
     rebindChannelConfig(cfg, sourceChannelId, targetChannelId);
+  const rebindWriter = <Params extends { cfg: OpenClawConfig }>(
+    read: () => ((params: Params) => OpenClawConfig) | undefined,
+  ) =>
+    read()
+      ? (params: Params) =>
+          restoreReboundChannelConfig({
+            original: params.cfg,
+            updated: read()?.call(config, { ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
+            sourceChannelId,
+            targetChannelId,
+          })
+      : undefined;
   return {
     ...config,
     listAccountIds: (cfg) => config.listAccountIds(rebind(cfg)),
@@ -343,25 +355,8 @@ function rebindChannelPluginConfig(
     defaultAccountId: config.defaultAccountId
       ? (cfg) => config.defaultAccountId?.(rebind(cfg)) ?? ""
       : undefined,
-    setAccountEnabled: config.setAccountEnabled
-      ? (params) =>
-          restoreReboundChannelConfig({
-            original: params.cfg,
-            updated:
-              config.setAccountEnabled?.({ ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
-            sourceChannelId,
-            targetChannelId,
-          })
-      : undefined,
-    deleteAccount: config.deleteAccount
-      ? (params) =>
-          restoreReboundChannelConfig({
-            original: params.cfg,
-            updated: config.deleteAccount?.({ ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
-            sourceChannelId,
-            targetChannelId,
-          })
-      : undefined,
+    setAccountEnabled: rebindWriter(() => config.setAccountEnabled),
+    deleteAccount: rebindWriter(() => config.deleteAccount),
     isEnabled: config.isEnabled
       ? (account, cfg) => config.isEnabled?.(account, rebind(cfg)) ?? false
       : undefined,

@@ -295,6 +295,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     context?: OpenClawStateReadContext;
     load?: () => Iterable<T>;
     selectCached?: (lookup: SubagentSessionReadLookup) => readonly string[];
+    liveRunIds?: ReadonlySet<string>;
     matches: (entry: SubagentRunReadRecord) => boolean;
   },
 ): Map<string, T> {
@@ -318,7 +319,9 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
       setOrDeleteRun(merged, runId, entry && (!scope || scope.matches(entry)) ? entry : undefined);
     }
   }
-  for (const [runId, entry] of inMemoryRuns) {
+  for (const [runId, entry] of scope?.liveRunIds
+    ? selectedEntries(inMemoryRuns, scope.liveRunIds)
+    : inMemoryRuns) {
     // Live memory wins even when a run moved out of the persisted scope.
     setOrDeleteRun(
       merged,

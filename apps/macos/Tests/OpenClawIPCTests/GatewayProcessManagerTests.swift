@@ -2973,13 +2973,13 @@ struct GatewayProcessManagerTests {
             port: port,
             statusPayload: self.loadedGatewayStatus(port: port))
         {
-            manager.setTestingLastFailureReason(nil)
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
             let descriptor = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
             defer {
-                manager.setTestingLastFailureReason(nil)
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
                 manager._testClearLaunchAgentInstallEvidence()
             }
@@ -3006,7 +3006,6 @@ struct GatewayProcessManagerTests {
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
@@ -3031,13 +3030,13 @@ struct GatewayProcessManagerTests {
             port: port,
             statusPayload: self.loadedGatewayStatus(port: port))
         {
-            manager.setTestingLastFailureReason(nil)
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
             let descriptor = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
             defer {
-                manager.setTestingLastFailureReason(nil)
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
                 manager._testClearLaunchAgentInstallEvidence()
             }
@@ -3065,7 +3064,6 @@ struct GatewayProcessManagerTests {
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
@@ -3086,13 +3084,13 @@ struct GatewayProcessManagerTests {
             port: port,
             statusPayload: self.loadedGatewayStatus(port: port))
         {
-            manager.setTestingLastFailureReason(nil)
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
             let descriptor = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
             defer {
-                manager.setTestingLastFailureReason(nil)
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
                 manager._testClearLaunchAgentInstallEvidence()
             }
@@ -3111,7 +3109,6 @@ struct GatewayProcessManagerTests {
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.count == 1)
@@ -3133,12 +3130,12 @@ struct GatewayProcessManagerTests {
             port: port,
             statusPayload: self.loadedGatewayStatus(port: port, pid: 4243))
         {
-            manager.setTestingLastFailureReason(nil)
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             defer {
-                manager.setTestingLastFailureReason(nil)
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
                 manager._testClearLaunchAgentInstallEvidence()
             }
@@ -3173,34 +3170,33 @@ struct GatewayProcessManagerTests {
                 self.loadedGatewayStatus(port: port, pid: 4242),
                 self.loadedGatewayStatus(port: port, pid: 4243),
                 self.loadedGatewayStatus(port: port, pid: 4243),
-            ])
-        {
-            manager.setTestingLastFailureReason(nil)
-            manager._testClearLaunchAgentReadinessFailure()
-            manager._testClearLaunchAgentInstallEvidence()
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
-            defer {
-                manager.setTestingLastFailureReason(nil)
+            ]) {
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
                 manager._testClearLaunchAgentInstallEvidence()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                defer {
+                    manager.lastFailureReason = nil
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testClearLaunchAgentInstallEvidence()
+                }
+
+                manager._testStartLaunchdGatewayReadiness(
+                    port: port,
+                    pid: 4242,
+                    readinessWindow: 0.05,
+                    firstInstallReadinessBudget: 5,
+                    hasFreshInstallEvidence: false)
+                await manager.waitForStartupAttempt()
+
+                // Standing grace would skip the second check and probe 4242 until the 5s budget.
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .filter { $0.first == "status" }.count == 3)
+                #expect(manager.status == .failed("Gateway did not become ready in time"))
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
             }
-
-            manager._testStartLaunchdGatewayReadiness(
-                port: port,
-                pid: 4242,
-                readinessWindow: 0.05,
-                firstInstallReadinessBudget: 5,
-                hasFreshInstallEvidence: false)
-            await manager.waitForStartupAttempt()
-
-            // Standing grace would skip the second check and probe 4242 until the 5s budget.
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .filter { $0.first == "status" }.count == 3)
-            #expect(manager.status == .failed("Gateway did not become ready in time"))
-            #expect(!manager._testHasLaunchAgentReadinessFailure())
-
-            await connection.shutdown()
-        }
     }
 
     @Test func `cancelled readiness probe preserves lifecycle state`() async throws {

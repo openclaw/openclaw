@@ -273,15 +273,13 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
           ?disabled=${props.actionsDisabled || props.detecting || !props.manualProviderId}
           @click=${props.onManualConnect}
         >
-          ${
+          ${t(
             testing
-              ? t("modelSetup.candidates.testingButton")
-              : t(
-                  props.embedded
-                    ? "modelSetup.discovery.connectForAgent"
-                    : "modelSetup.manual.connectAndVerify",
-                )
-          }
+              ? "modelSetup.candidates.testingButton"
+              : props.embedded
+                ? "modelSetup.discovery.connectForAgent"
+                : "modelSetup.manual.connectAndVerify",
+          )}
         </button>
       </div>
     </section>

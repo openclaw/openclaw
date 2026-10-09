@@ -23,13 +23,13 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
+import { prepareCronExecHostPolicyUse } from "./exec-approvals-cron-policy.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsPolicyReadOnlyAsync,
-  prepareCronExecHostPolicyUse,
   prepareExecApprovalsCurrentRead,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,

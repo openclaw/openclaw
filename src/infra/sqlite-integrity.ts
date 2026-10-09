@@ -232,14 +232,9 @@ export function confirmSqliteFileIntegrity(
 ): SqliteIntegrityConfirmation {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let initial: SqliteFileGeneration;
-    try {
-      initial = readStableSqliteFileGeneration(pathname);
-    } catch (error) {
-      return unboundSqliteIntegrityFailure(error);
-    }
-
     let database: DatabaseSync;
     try {
+      initial = readStableSqliteFileGeneration(pathname);
       database = openNodeSqliteDatabase(pathname, { readOnly: true });
     } catch (error) {
       // A failed SQLite open exposes no descriptor identity. Path snapshots

@@ -210,38 +210,34 @@ export function restoreDraftPlacePreferences(params: {
     if (project) {
       browser.selectProject({ kind: "local", id: project.id });
       state.folderSelectedByUser = false;
-      state.preferredProjectRestore = "";
-      changed = true;
-    } else if (browser.projectsReady) {
+    }
+    if (project || browser.projectsReady) {
       state.preferredProjectRestore = "";
       changed = true;
     }
   }
 
-  if (
-    (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
-    gateway.cloudProfilesReady
-  ) {
-    state.autoDevice = preferredWhere.kind === "auto-device";
-    state.deviceId = preferredWhere.kind === "device" ? preferredWhere.id : "";
-    state.cloudProfileId = "";
-    state.preferredWhereRestore = null;
-    changed = true;
-  } else if (preferredWhere?.kind === "cloud" && gateway.cloudProfilesReady) {
-    const preferredProfile = gateway.cloudProfiles.find(
-      (profile) => profile.id === preferredWhere.id,
-    );
-    if (
-      isAdmin() &&
-      preferredProfile &&
-      !modelControl.cloudRuntimeUnsupportedReason(preferredProfile)
-    ) {
-      state.deviceId = "";
-      state.autoDevice = false;
-      state.cloudProfileId = preferredWhere.id;
+  if (preferredWhere && preferredWhere.kind !== "local" && gateway.cloudProfilesReady) {
+    if (preferredWhere.kind === "cloud") {
+      const preferredProfile = gateway.cloudProfiles.find(
+        (profile) => profile.id === preferredWhere.id,
+      );
+      if (
+        isAdmin() &&
+        preferredProfile &&
+        !modelControl.cloudRuntimeUnsupportedReason(preferredProfile)
+      ) {
+        state.deviceId = "";
+        state.autoDevice = false;
+        state.cloudProfileId = preferredWhere.id;
+      } else {
+        state.cloudProfileId = "";
+        persistPreference({ where: { kind: "local" } });
+      }
     } else {
+      state.autoDevice = preferredWhere.kind === "auto-device";
+      state.deviceId = preferredWhere.kind === "device" ? preferredWhere.id : "";
       state.cloudProfileId = "";
-      persistPreference({ where: { kind: "local" } });
     }
     state.preferredWhereRestore = null;
     changed = true;

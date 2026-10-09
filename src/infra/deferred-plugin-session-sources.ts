@@ -473,11 +473,13 @@ export async function rebuildDeferredPluginSessionSourceIndex(
   const verifiedSourcePaths = new Set(recorded.sources.map((source) => source.path));
   const missingIndex =
     index && existingSessionSourcePaths(index.path, target, params.env, archives).length === 0;
+  const receiptStillBound = (current: LegacyMigrationReceipt | null | undefined) =>
+    isDeepStrictEqual(current, receipt) &&
+    databaseIdentity(params.sqlitePath, "physical") === physicalIdentity &&
+    databaseIdentity(params.sqlitePath) === currentDatabaseIdentity;
   const assertCurrent = () => {
     if (
-      !isDeepStrictEqual(readDeferredPluginSessionImportReceipt(params), receipt) ||
-      databaseIdentity(params.sqlitePath, "physical") !== physicalIdentity ||
-      databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity ||
+      !receiptStillBound(readDeferredPluginSessionImportReceipt(params)) ||
       (verifiedIndex &&
         !missingIndex &&
         !resolveVerifiedSessionSource(verifiedIndex, target, params.env)) ||
@@ -594,11 +596,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const current = readDeferredPluginSessionImportReceipt({ ...params, database: db });
-      if (
-        !isDeepStrictEqual(current, receipt) ||
-        databaseIdentity(params.sqlitePath, "physical") !== physicalIdentity ||
-        databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity
-      ) {
+      if (!receiptStillBound(current)) {
         throw new Error(
           `Deferred session import changed in ${path.dirname(params.target.storePath)} before its source index was rebuilt. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to retry.`,
         );

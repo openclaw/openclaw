@@ -48,6 +48,15 @@ function toDomId(value: string) {
   return normalized.replace(/^-+|-+$/g, "") || "preview";
 }
 
+function renderPreviewFact(value: string | number, label: string, secondary = false) {
+  return html`
+    <div class="md-preview-dialog__chip" data-priority=${secondary ? "secondary" : "essential"}>
+      <strong>${value}</strong>
+      <span>${label}</span>
+    </div>
+  `;
+}
+
 function closeAgentFilePreview(event: Event, focusEditor = false) {
   const button = event.currentTarget;
   if (!(button instanceof HTMLElement)) {
@@ -379,22 +388,9 @@ export function renderAgentFiles(
                                     >
                                       <strong>${previewStatusLabel}</strong>
                                     </div>
-                                    <div class="md-preview-dialog__chip" data-priority="essential">
-                                      <strong>${readingTimeLabel}</strong>
-                                      <span
-                                        >${t("agents.files.words", {
-                                          count: String(draftWordCount),
-                                        })}</span
-                                      >
-                                    </div>
-                                    <div class="md-preview-dialog__chip" data-priority="secondary">
-                                      <strong>${draftLineCount}</strong>
-                                      <span>${t("agents.files.lines")}</span>
-                                    </div>
-                                    <div class="md-preview-dialog__chip" data-priority="essential">
-                                      <strong>${draftByteSize}</strong>
-                                      <span>${previewUpdatedLabel}</span>
-                                    </div>
+                                    ${renderPreviewFact(readingTimeLabel, t("agents.files.words", { count: String(draftWordCount) }))}
+                                    ${renderPreviewFact(draftLineCount, t("agents.files.lines"), true)}
+                                    ${renderPreviewFact(draftByteSize, previewUpdatedLabel)}
                                   </div>
                                   <div class="md-preview-dialog__body">
                                     <article class="md-preview-dialog__reader sidebar-markdown">

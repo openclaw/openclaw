@@ -14,16 +14,16 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
-import { VERSION } from "../version.js";
-import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
 import {
   beginAgentDeletionJournal,
   claimCompletedAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
   removeAgentDeletionJournal,
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
-} from "./agent-deletion-journal.js";
+} from "../test-utils/agent-deletion-journal.js";
+import { VERSION } from "../version.js";
+import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
 import {

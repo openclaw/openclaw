@@ -42,6 +42,7 @@ import {
 } from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
 export type MemorySyncProgressState = {
@@ -90,6 +91,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
   protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected abstract readonly runInBackgroundContext: NonNullable<
+    MemoryCoreRuntimeHost["runInBackgroundContext"]
+  >;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
@@ -506,7 +510,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       }
       if (
         !this.database.readOnly &&
-        (await this.withDatabaseWrite(() => this.dropLegacyVectorTable()))
+        (await this.withDatabaseWrite(() => this.dropVectorTable(LEGACY_VECTOR_TABLE)))
       ) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
@@ -564,26 +568,18 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     this.vector.dims = dimensions;
   }
 
-  private dropLegacyVectorTable(): boolean {
-    if (!memoryTableExists(this.db, LEGACY_VECTOR_TABLE)) {
+  private dropVectorTable(
+    tableName: typeof VECTOR_TABLE | typeof LEGACY_VECTOR_TABLE = VECTOR_TABLE,
+  ): boolean {
+    const legacy = tableName === LEGACY_VECTOR_TABLE;
+    if (legacy && !memoryTableExists(this.db, tableName)) {
       return false;
     }
     try {
-      this.db.exec(`DROP TABLE ${LEGACY_VECTOR_TABLE}`);
+      this.db.exec(`DROP TABLE ${legacy ? "" : "IF EXISTS "}${tableName}`);
       return true;
     } catch (err) {
-      log.debug(`Failed to drop ${LEGACY_VECTOR_TABLE}: ${formatErrorMessage(err)}`);
-      return false;
-    }
-  }
-
-  private dropVectorTable(): boolean {
-    try {
-      this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
-      return true;
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
+      log.debug(`Failed to drop ${tableName}: ${formatErrorMessage(err)}`);
       return false;
     }
   }

@@ -210,6 +210,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
   custody: {
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
+    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     signal?: AbortSignal;
     assertCurrent(): void;
@@ -230,6 +231,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
       {
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
+        onNativeLost: custody.onNativeLost,
         onNativeStopped: custody.onNativeStopped,
         signal: custody.signal,
       },

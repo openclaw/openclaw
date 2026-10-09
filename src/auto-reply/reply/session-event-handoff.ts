@@ -53,7 +53,6 @@ export {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
   combineSessionEventTargetsForHost,
-  prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 export type {
   SessionEventReceipt,

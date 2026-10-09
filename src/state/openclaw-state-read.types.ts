@@ -120,7 +120,6 @@ import type {
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionWorkerSnapshot,
-  AgentDeletionJournalAuthority,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
@@ -229,7 +228,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
-  | { type: "agentDeletionJournal.authority"; agentId: string }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "sessionGroups.snapshot" }
@@ -343,10 +341,6 @@ export type OpenClawStateReadResult =
   | {
       type: "agentDeletionJournal.status";
       status: AgentDeletionJournalStatus;
-    }
-  | {
-      type: "agentDeletionJournal.authority";
-      authority: AgentDeletionJournalAuthority | undefined;
     }
   | {
       type: "deliveryQueue.outbound";

@@ -25,6 +25,10 @@ import {
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "./openclaw-agent-db-readonly-open.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
+import {
+  adoptOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseReadValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
@@ -34,6 +38,11 @@ export type OpenClawAgentDatabaseReadOnlyBehavior = {
 };
 
 type ReadTarget = OpenClawAgentDatabaseOptions & { agentId: string; path: string };
+type ReadScopeTarget = {
+  agentId: string;
+  path: string;
+  validation?: OpenClawAgentDatabaseReadValidation;
+};
 const readOnlyScope = new AsyncLocalStorage<OpenClawAgentDatabaseReadOnlyScope>();
 const log = createSubsystemLogger("state/agent-db");
 type ReadOnlyScopes = {
@@ -49,7 +58,7 @@ const retainedScopes = resolveGlobalSingleton<ReadOnlyScopes>(
 /** One retained connection, revoked by its caller, database lifecycle, or idle expiry. */
 export class OpenClawAgentDatabaseReadOnlyScope {
   private database?: OpenClawAgentReadOnlyDatabaseHandle;
-  private target?: { agentId: string; path: string };
+  private target?: ReadScopeTarget;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private unregisterResource?: () => void;
   private borrowers = 0;
@@ -137,7 +146,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     this.idleTimer.unref();
   }
 
-  run<T>(target: { agentId: string; path: string }, operation: () => T): T {
+  run<T>(target: ReadScopeTarget, operation: () => T): T {
     if (this.target?.agentId !== target.agentId || this.target.path !== target.path) {
       this.close();
     }
@@ -169,6 +178,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
       this.discardConnection();
     }
+    const retained = this.database !== undefined;
     if (!this.database) {
       let opened: ReturnType<typeof openOpenClawAgentDatabaseReadOnly>;
       try {
@@ -182,10 +192,11 @@ export class OpenClawAgentDatabaseReadOnlyScope {
         return opened;
       }
       this.database = opened.database;
-      this.target = { agentId: this.database.agentId, path: this.database.path };
+      this.target = { ...this.target, agentId: this.database.agentId, path: this.database.path };
       try {
         this.unregisterResource = registerOpenClawAgentDatabaseSyncResource({
-          ...this.target,
+          agentId: this.target.agentId,
+          path: this.target.path,
           revoke: () => this.close(),
           close: () => this.close(),
         });
@@ -202,10 +213,15 @@ export class OpenClawAgentDatabaseReadOnlyScope {
         this.discardConnection();
         throw error;
       }
-      return finish(opened.database);
     }
     const database = this.database;
-    if (snapshot) {
+    if (
+      this.target?.validation &&
+      !adoptOpenClawAgentDatabaseValidation(database, this.target.validation)
+    ) {
+      throw new Error("Session reader validation does not match its current physical owner");
+    }
+    if (!retained || snapshot) {
       return finish(database);
     }
     let result: ReturnType<typeof openOpenClawAgentDatabaseReadOnly> = {

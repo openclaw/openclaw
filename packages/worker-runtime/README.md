@@ -156,6 +156,10 @@ shorten that deadline, never renew it. Code Mode explicitly uses
 pauses; its response rearms the pool clock with the remaining execution budget.
 Timeout aborts the host signal without claiming that accepted host effects have
 settled. Those effects remain under their existing owner's cleanup contract.
+The abort reason preserves the task failure. A pending host callback timeout
+also emits `WORKER_HOST_CALLBACK_TIMEOUT` with a bounded operation label; callback
+payloads are never included. Host adapters must carry that signal into their
+queue and I/O owners so cancellation removes waiting work before admission.
 
 ### Async context lifetime
 

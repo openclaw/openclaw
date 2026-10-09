@@ -20,6 +20,10 @@ import { getProcessStartTime } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
+function showImmutableService(unit: string, properties: string) {
+  return execSystemctl(["--system", "show", unit, `--property=${properties}`], undefined, 5_000);
+}
+
 async function readImmutableService(
   service: ImmutableInstallDescriptor["service"],
   root: string,
@@ -64,15 +68,9 @@ async function readImmutableService(
     throw new Error("The immutable Gateway service definition could not be verified.");
   }
   target.unitPath = command.sourcePath;
-  const runtime = await execSystemctl(
-    [
-      "--system",
-      "show",
-      service.unit,
-      "--property=Id,LoadState,ActiveState,SubState,MainPID,ControlGroup,TasksCurrent,KillMode,DynamicUser,RootDirectory,RootImage,Job",
-    ],
-    undefined,
-    5_000,
+  const runtime = await showImmutableService(
+    service.unit,
+    "Id,LoadState,ActiveState,SubState,MainPID,ControlGroup,TasksCurrent,KillMode,DynamicUser,RootDirectory,RootImage,Job",
   );
   activation?.assertCurrent();
   const properties = parseKeyValueOutput(runtime.stdout, "=");
@@ -477,15 +475,9 @@ export async function controlImmutableService(
         if (action === "stop") {
           const deadline = performance.now() + (params.timeoutMs ?? 360_000);
           while (true) {
-            const result = await execSystemctl(
-              [
-                "--system",
-                "show",
-                descriptor.service.unit,
-                "--property=Id,ActiveState,MainPID,Job",
-              ],
-              undefined,
-              5_000,
+            const result = await showImmutableService(
+              descriptor.service.unit,
+              "Id,ActiveState,MainPID,Job",
             );
             assertCurrent();
             const current = parseKeyValueOutput(result.stdout, "=");

@@ -456,7 +456,8 @@ export async function handleDirectiveOnly(
         reassertLiveModelSwitchPending:
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
-        validateCommit: validateSelection,
+        commitGuard: modelResolution.modelSelectionSource,
+        validateCommit: preparedModel?.validateRuntimeSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =

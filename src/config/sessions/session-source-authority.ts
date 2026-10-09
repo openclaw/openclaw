@@ -4,6 +4,11 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+export type SessionSourceConversationPredicate = {
+  conversationRef: string;
+  sessionKey: string | null;
+};
+
 /** Prepared source facts are compared again on the existing writer's connection. */
 export type SessionSourcePredicate = {
   source: CapturedSessionEntryReadSource;
@@ -12,11 +17,21 @@ export type SessionSourcePredicate = {
   expected: Partial<SessionEntry> | undefined;
   members?: readonly string[];
   transcript?: { sessionId: string; version: SessionTranscriptContextVersion };
+  conversationAlternatives?: readonly (readonly SessionSourceConversationPredicate[])[];
 };
 
 export type SessionSourcePredicateFacts = {
   entry: SessionEntry | undefined;
   members?: readonly string[];
+};
+
+export type SessionSourceValidation = {
+  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
+  conversationMatches: Array<{
+    index: number;
+    alternatives: number[];
+    acceptedAlternatives?: number[];
+  }>;
 };
 
 export type PreparedSessionSourceAuthority = {
@@ -30,6 +45,8 @@ export type PreparedSessionSourceAuthority = {
   checks: {
     predicate: SessionSourcePredicate;
     refuse: (facts: SessionSourcePredicateFacts) => never;
+    /** The returned array is filled by the next host assertion. */
+    acceptConversationMatches?: (alternatives: readonly number[]) => number[];
   }[];
   release?: () => void | Promise<void>;
   scopedSources?: ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceAuthority>;
@@ -43,8 +60,41 @@ export type SessionSourceAssertion = (() => void) & {
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
 };
 
+/** Public boolean callbacks stay callable; bundled owners also carry their prepared writer source. */
+export type SessionSourceCheck = (() => boolean) & { sessionSource?: SessionSourceAssertion };
+
 export function sessionEntryCommitGuardOptions(source: SessionSourceAssertion | undefined) {
   return source?.nativeSource ? { assertCommitAllowed: source } : { workerGuard: { source } };
+}
+
+/** Install transaction facts before composed host assertions recheck their live alternatives. */
+export function acceptSessionSourceValidation(
+  source: PreparedSessionSourceAuthority,
+  validation: SessionSourceValidation | undefined,
+): void {
+  const refused = validation?.refusedSource;
+  if (refused) {
+    source.checks[refused.index]?.refuse(refused.facts);
+    throw new Error("Session source refusal omitted its prepared assertion");
+  }
+  for (const [index, check] of source.checks.entries()) {
+    if (!check.acceptConversationMatches) {
+      continue;
+    }
+    const matched = validation?.conversationMatches.find((entry) => entry.index === index);
+    if (
+      !matched ||
+      matched.alternatives.some(
+        (alternative) =>
+          !Number.isSafeInteger(alternative) ||
+          alternative < 0 ||
+          alternative >= (check.predicate.conversationAlternatives?.length ?? 0),
+      )
+    ) {
+      throw new Error("Session source validation omitted its matching alternatives");
+    }
+    matched.acceptedAlternatives = check.acceptConversationMatches(matched.alternatives);
+  }
 }
 
 const sessionSourceScopes = new AsyncLocalStorage<
@@ -186,7 +236,10 @@ export function createDynamicSessionSourceAssertion(
       prepareSessionSourceScope: () => prepareSelected(prepareSessionSourceScope),
     },
   );
-  return assertion;
+  return Object.defineProperty(assertion, "nativeSource", {
+    enumerable: true,
+    get: () => select()?.nativeSource,
+  });
 }
 
 /** Preserve each owner's error/lifetime wrapper while preparing its storage-dependent sources. */
@@ -243,8 +296,8 @@ export function composeSessionSourceAssertion(
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
         ...(scoped ? { scopedSources } : {}),
         checks: prepared.flatMap((source, index) =>
-          source.checks.map(({ predicate, refuse }) => ({
-            predicate,
+          source.checks.map(({ refuse, ...preparedCheck }) => ({
+            ...preparedCheck,
             refuse: (facts) => {
               check(() => {
                 prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
@@ -284,5 +337,8 @@ export function composeSessionSourceAssertion(
       prepareSessionSourceScope: () => prepare(true),
     },
   );
-  return assertion;
+  return Object.defineProperty(assertion, "nativeSource", {
+    enumerable: true,
+    get: () => sources.some((source) => source?.nativeSource),
+  });
 }

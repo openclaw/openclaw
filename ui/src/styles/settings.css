@@ -433,7 +433,8 @@
   gap: var(--space-1);
 }
 
-.settings-tab-icon__lobsters {
+.settings-tab-icon__lobsters,
+.settings-tab-icon__shapes {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -490,6 +491,28 @@
   width: 16px;
   height: 16px;
   object-fit: contain;
+}
+
+.settings-tab-icon__preview[data-avatar-shape] {
+  border-radius: 0;
+}
+
+.settings-tab-icon__preview[data-avatar-shape="rounded"] {
+  clip-path: inset(0 round 25%);
+}
+
+.settings-tab-icon__preview[data-avatar-shape="circle"] {
+  clip-path: circle(50%);
+}
+
+.settings-tab-icon__preview:not([data-avatar-shape="square"]) img {
+  object-fit: cover;
+}
+
+.settings-tab-icon__pick .settings-tab-icon__preview,
+.settings-tab-icon__pick .settings-tab-icon__preview img {
+  width: 30px;
+  height: 30px;
 }
 
 /* Trailing action rows hold only a button cluster: give it the full row

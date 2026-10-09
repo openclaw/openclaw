@@ -58,24 +58,22 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected readonly activeSessionResources = new ChatPaneActiveResources();
 
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
-    const state = this.state;
     const scope = this.captureConnectionScope();
-    if (!state || !scope) {
+    if (!scope) {
       return undefined;
     }
+    const { state } = scope;
     const sessionKey = state.sessionKey;
     const sessionId = state.currentSessionId;
     const agentId = resolveChatAgentId(state);
     return {
       state: this.progressCard.refreshState,
       onRefresh: (card) => {
-        const current = this.state;
         if (
-          current &&
           this.isConnectionScopeCurrent(scope) &&
-          current.sessionKey === sessionKey &&
-          current.currentSessionId === sessionId &&
-          resolveChatAgentId(current) === agentId
+          state.sessionKey === sessionKey &&
+          state.currentSessionId === sessionId &&
+          resolveChatAgentId(state) === agentId
         ) {
           this.progressCard.refresh(card);
         }
@@ -360,7 +358,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     const { promise, resolve } = createDeferredCore<boolean>();
     this.resetConfirmation = { scopeKey, promise, resolve };
-    this.resetConfirmationOpen = true;
     return promise;
   }
 
@@ -377,12 +374,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     this.resetConfirmation = undefined;
-    this.resetConfirmationOpen = false;
     pending.resolve(confirmed);
   }
 
   protected renderResetConfirmation() {
-    if (!this.resetConfirmationOpen) {
+    if (!this.resetConfirmation) {
       return nothing;
     }
     const title = t("chat.board.resetTitle");
@@ -479,14 +475,12 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           // authoritative start time and activity after a foreground return.
           void loadChatHistory(state, { deferBranches: true });
         }
-      }
-      if (
-        state &&
-        !deferredHydrationActive &&
-        (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey) ||
-          state.chatBranchesConnectionEpoch !== state.connectionEpoch)
-      ) {
-        void loadChatBranches(state);
+        if (
+          !areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey) ||
+          state.chatBranchesConnectionEpoch !== state.connectionEpoch
+        ) {
+          void loadChatBranches(state);
+        }
       }
       this.refreshSwarmRoster();
       void this.refreshSessionPullRequests();

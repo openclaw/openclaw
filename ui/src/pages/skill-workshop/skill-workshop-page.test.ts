@@ -1,6 +1,8 @@
 import type { SkillsWorkshopListResult, SkillWorkshopChange } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import "./skill-workshop-page.ts";
 import {
   createContext,
@@ -82,6 +84,60 @@ function button(page: HTMLElement, label: string) {
 afterEach(() => document.body.replaceChildren());
 
 describe("Skill Workshop page", () => {
+  it("shows a failed configuration read and retries only when requested", async () => {
+    const firstRead = createDeferredCore<unknown>();
+    const configRead = vi.fn().mockReturnValueOnce(firstRead.promise).mockResolvedValue({
+      config: {},
+      hash: "recovered",
+      valid: true,
+      issues: [],
+    });
+    const workshopRequest = workshopGateway();
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return configRead();
+      }
+      if (method === "skills.workshop.read") {
+        return Promise.resolve({
+          name: SKILL,
+          filePath: "SKILL.md",
+          content: "Synthetic procedure",
+          files: ["SKILL.md"],
+        });
+      }
+      return workshopRequest(method);
+    });
+    const context = createContext(request, { methods: ["config.patch"] });
+    const runtimeConfig = createRuntimeConfigCapability(context.gateway);
+    Object.assign(context, { runtimeConfig });
+    const page = await mount(context);
+    try {
+      const initialLoad = runtimeConfig.ensureLoaded();
+      firstRead.reject(new Error("Configuration temporarily unavailable"));
+      await initialLoad;
+      await page.updateComplete;
+
+      expect(configRead).toHaveBeenCalledOnce();
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+        "Configuration temporarily unavailable",
+      );
+      const retry = button(page, "Retry");
+      expect(retry).toBeDefined();
+      retry!.click();
+      expect(configRead).toHaveBeenCalledTimes(2);
+      await runtimeConfig.ensureLoaded();
+      await page.updateComplete;
+
+      expect(configRead).toHaveBeenCalledTimes(2);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("recovered");
+      expect(page.textContent).not.toContain("Configuration temporarily unavailable");
+      expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
+    } finally {
+      page.remove();
+      runtimeConfig.dispose();
+    }
+  });
+
   it("lists learned skills and undoes a change by restoring its saved version", async () => {
     const request = workshopGateway();
     const page = await mount(

@@ -230,8 +230,6 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
         "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
-        // Intl.Collator.compare is a getter returning a bound function.
-        "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",

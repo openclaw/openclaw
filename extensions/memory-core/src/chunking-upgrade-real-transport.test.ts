@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import type { MemoryIndexManager } from "./memory/manager.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
 import "./memory/test-runtime-mocks.js";
@@ -176,7 +177,13 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
   // Seeds a published index, then reopens its metadata as an older runtime's
   // index so the next search sees a pending OpenClaw chunking upgrade.
   async function seedPriorChunkingVersionIndex(cfg: OpenClawConfig): Promise<string> {
-    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     await manager.sync({ reason: "test", force: true });
     const dbPath = manager.status().dbPath;
     if (!dbPath) {
@@ -372,7 +379,13 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     );
     server.setMode("quota");
 
-    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     try {
       // A real quota rejection rate-limits the rebuild over the wire while the
       // published keyword index stays readable.

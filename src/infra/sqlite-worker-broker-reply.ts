@@ -20,7 +20,6 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
   type SqliteWorkerReply,
-  type SqliteWorkerCloseReceipt,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -289,13 +288,15 @@ export type SqliteWorkerReplyOwner = {
     error?: unknown,
     value?: unknown,
     settlement?: SqliteWorkerOperationSettlement,
-    closeReceipt?: SqliteWorkerCloseReceipt,
   ): void;
   dispatch(): void;
 };
 
 export function receiveSqliteWorkerReply(
-  slot: Pick<Slot, "current" | "failed"> & { worker: Pick<Slot["worker"], "postMessage"> },
+  slot: Pick<Slot, "current" | "failed"> & {
+    actors: ReadonlySet<Pick<Actor, "id" | "closeReceipt">>;
+    worker: Pick<Slot["worker"], "postMessage">;
+  },
   reply: SqliteWorkerReply,
   owner: SqliteWorkerReplyOwner,
 ): void {
@@ -377,7 +378,13 @@ export function receiveSqliteWorkerReply(
   }
   slot.current = undefined;
   if (job.request.type === "close") {
-    owner.finish(job, undefined, value, undefined, reply.closeReceipt);
+    if (reply.closeReceipt) {
+      const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+      if (actor) {
+        actor.closeReceipt = reply.closeReceipt;
+      }
+    }
+    owner.finish(job, undefined, value);
   } else {
     // Domains own handled refusal results; physical and request authority still fence delivery.
     const admission = job.operationAdmission?.admission;

@@ -189,7 +189,7 @@ describe("runDreamNarrative", () => {
             workspaceDir,
             data: { phase: "rem", snippets: ["A detached fragment."] },
             logger,
-            detached: true,
+            runInBackground: (run) => run(),
           }),
         ).resolves.toEqual({ status: "pending" });
         expect(subagent.complete).toHaveBeenCalledOnce();

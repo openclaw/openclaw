@@ -12,6 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -530,9 +531,9 @@ it.each(["target", "native-mutation"] as const)(
 );
 
 it.each(["snapshot", "document"] as const)(
-  "retains Board validation error identity from a worker %s read",
+  "retains Board validation errors without waiting on writer-dependent retirement (%s)",
   async (operation) => {
-    const { database, store, target } = fixture();
+    const { database, options, store, target } = fixture();
     await store.putWidget({
       ...target,
       name: "status",
@@ -541,12 +542,37 @@ it.each(["snapshot", "document"] as const)(
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
       .run(JSON.stringify({ contentOwner: "invalid" }), target.sessionKey);
+    const historyRetiring = createDeferredCore();
+    const writerSettled = createDeferredCore();
+    const releaseHistory = createDeferredCore();
+    const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+      historyRetiring.resolve();
+      return Promise.race([writerSettled.promise, releaseHistory.promise]);
+    });
     const read =
       operation === "snapshot"
         ? store.getSnapshot(target)
         : store.useWidgetDocument(target, "status", (document) => document);
-    await expect(read).rejects.toBeInstanceOf(BoardValidationError);
-    await expect(read).rejects.toMatchObject({ code: "invalid_operation" });
+    const outcome = read.catch((error: unknown) => error);
+    const following = runOpenClawAgentWorkerWrite(options, async () => {
+      writerSettled.resolve();
+      return "following writer";
+    });
+    try {
+      const result = await Promise.race([
+        outcome,
+        historyRetiring.promise.then(
+          () => new Error("Board read cleanup waits on its own queued writer"),
+        ),
+      ]);
+      expect(result).toBeInstanceOf(BoardValidationError);
+      expect(result).toMatchObject({ code: "invalid_operation" });
+      await expect(following).resolves.toBe("following writer");
+    } finally {
+      releaseHistory.resolve();
+      await Promise.allSettled([read, following]);
+      retirement.mockRestore();
+    }
   },
 );
 

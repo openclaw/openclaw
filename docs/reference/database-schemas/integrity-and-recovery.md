@@ -538,8 +538,8 @@ for the parent's close request to finish before releasing the thread for another
 database. If native cleanup is uncertain, writer admission and cleanup custody
 remain held until execution ends.
 
-During startup, reaching the inspection's foreground deadline records a warning
-and marks that agent **degraded** while the Gateway continues with healthy agents.
+During startup, reaching the inspection's foreground deadline records pending
+preparation and marks that agent **degraded** while the Gateway continues with healthy agents.
 Its sessions remain unavailable, and its database is excluded from automatic
 migration and ordinary writes. The inspection continues in the background within
 the same concurrency limit. Expiring the wait does not establish corruption.
@@ -552,6 +552,13 @@ and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Pending preparation does not produce a startup migration warning. Status and
+Doctor derive failed inspection and preparation warnings from current agent
+admission decisions, with the reason and repair guidance. Successful preparation
+clears the agent's pending refusal without requiring a restart. Genuine migration
+warnings remain recorded for the boot. This changes no stored state or update
+migration behavior.
 
 Every 60 seconds while recovery is pending, `agent database startup preparation
 still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;
@@ -678,6 +685,10 @@ using the same bounded statistics primitive.
 Shared-state database admission also preserves native SQLite result codes across worker transport. Lease and managed-worktree provisioning diagnostics retain the underlying storage failure even when acquisition fails before a lease is created.
 
 ### The state database is busy
+
+Lease renewal and release use nonblocking write admission. A contended attempt
+leaves retry and failure handling to the lease owner without logging a transaction
+lock-wait warning. Ordinary write waits and commit failures retain their diagnostics.
 
 Wait for the other OpenClaw process to finish its database work, then retry the
 command. `state-lifecycle` contention normally clears after startup, a write, or

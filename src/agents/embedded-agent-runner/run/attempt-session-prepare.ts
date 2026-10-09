@@ -1,6 +1,7 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import {
@@ -333,6 +334,25 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   const orphanRepair = preserveExactPrompt
     ? undefined
     : await withSessionManagerWrite(sessionManager, async () => {
+        input.abortSignal?.throwIfAborted();
+        const target = sessionManager.getSessionTarget();
+        const reader = target && getOwnedSessionTranscriptReader(target);
+        reader?.assertCurrent();
+        // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
+        if (
+          reader &&
+          reconcilePrePersistedCurrentUserTurn({
+            activeSession,
+            currentUserTurnMessage: attempt.skipPreparedUserTurnMessage
+              ? undefined
+              : (attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+                input.preparedUserTurnMessage),
+            durableUserTurnMessage: undefined,
+            userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
+          })
+        ) {
+          return undefined;
+        }
         // Speech can advance the transcript while this repair waits for write admission.
         await sessionManager.reloadPersistedTranscriptAsync(input.abortSignal);
         input.abortSignal?.throwIfAborted();

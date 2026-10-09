@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
@@ -8,7 +9,7 @@ import {
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -168,8 +169,8 @@ it("moves observer admission, publication, terminal and companion reads off the 
       const start = event({ stream: "lifecycle", data: { phase: "start" } });
       let inventories = 0;
       let entries = 0;
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
         if (
           result.ok &&
@@ -258,13 +259,14 @@ it.for(["rewrite", "native rewrite", "close"] as const)(
           event({ stream: "item", data: { kind: "preamble", progressText: "Previous lifecycle" } }),
         );
         let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+        const runExternalClose = AsyncLocalStorage.snapshot();
         interceptNextEntryRead(() => {
           if (change === "rewrite") {
             rewriteLifecycle();
           } else if (change === "native rewrite") {
             rewriteLifecycleWithoutPublication();
           } else {
-            closing = closeDatabase();
+            closing = runExternalClose(closeDatabase);
           }
         });
         try {

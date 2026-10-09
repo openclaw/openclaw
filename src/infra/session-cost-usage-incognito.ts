@@ -271,6 +271,7 @@ export function createIncognitoUsageCostAdapter(
       },
       writeRollup(
         request: IncognitoComputeOperations["session.compute.usage.writeRollup"]["input"]["request"],
+        signal?: AbortSignal,
       ) {
         return compute.execute(
           target
@@ -279,9 +280,10 @@ export function createIncognitoUsageCostAdapter(
                 input: { ...target, request },
               }
             : { type: "session.compute.store.writeRollup", input: { request } },
+          signal,
         );
       },
-      pruneRows(request: readonly SessionCostUsageRollupSnapshot[]) {
+      pruneRows(request: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
         return compute.execute(
           target
             ? {
@@ -289,10 +291,11 @@ export function createIncognitoUsageCostAdapter(
                 input: { ...target, request },
               }
             : { type: "session.compute.store.prune", input: { request } },
+          signal,
         );
       },
     },
-    async read(request: UsageCostWorkerHostRequest) {
+    async read(request: UsageCostWorkerHostRequest, signal?: AbortSignal) {
       switch (request.kind) {
         case "memory-instances":
           if (
@@ -310,10 +313,13 @@ export function createIncognitoUsageCostAdapter(
           return Promise.all(
             request.input.map((input) => {
               const selectedTarget = assertMarker(input);
-              return compute.execute({
-                type: "session.compute.usage.stats",
-                input: { ...selectedTarget, request: {} },
-              });
+              return compute.execute(
+                {
+                  type: "session.compute.usage.stats",
+                  input: { ...selectedTarget, request: {} },
+                },
+                signal,
+              );
             }),
           );
         case "memory-cache":
@@ -330,6 +336,7 @@ export function createIncognitoUsageCostAdapter(
                   type: "session.compute.store.cache",
                   input: { request: { filePaths: request.input.filePaths ?? filePaths } },
                 },
+            signal,
           );
         case "memory-cache-body":
           return compute.execute(
@@ -339,6 +346,7 @@ export function createIncognitoUsageCostAdapter(
                   input: { ...target, request: request.input },
                 }
               : { type: "session.compute.store.cacheBody", input: { request: request.input } },
+            signal,
           );
         case "memory-transcript": {
           const selectedTarget = assertMarker(request.input.marker);
@@ -346,16 +354,22 @@ export function createIncognitoUsageCostAdapter(
           let sourceId = sources.get(key);
           if (!sourceId) {
             sourceId = randomUUID();
-            await compute.execute({
-              type: "session.compute.source.open",
-              input: { ...selectedTarget, sourceId, range: request.input },
-            });
+            await compute.execute(
+              {
+                type: "session.compute.source.open",
+                input: { ...selectedTarget, sourceId, range: request.input },
+              },
+              signal,
+            );
             sources.set(key, sourceId);
           }
-          return compute.execute({
-            type: "session.compute.source.read",
-            input: { ...selectedTarget, sourceId },
-          });
+          return compute.execute(
+            {
+              type: "session.compute.source.read",
+              input: { ...selectedTarget, sourceId },
+            },
+            signal,
+          );
         }
         default:
           throw new Error("Invalid incognito usage read request");

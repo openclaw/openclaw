@@ -69,14 +69,8 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
 }
 
 function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
-  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
-    return false;
-  }
   const bodyIndex = targetSnippet.indexOf(bodySnippet);
-  if (bodyIndex <= 0) {
-    return false;
-  }
-  return sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
+  return bodyIndex > 0 && sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
 }
 
 function extractTargetHeadingBodySnippet(

@@ -996,7 +996,14 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   );
 }
 
-async function runGatewaySmoke(options, probe, successMessage) {
+async function runGatewaySmoke(initialOptions, probe, successMessage, isolatedState) {
+  let options = initialOptions;
+  if (isolatedState) {
+    const { label, config } = isolatedState;
+    const env = createIsolatedStateEnv(label);
+    writeConfig(ensureGatewayConfig(config, options.port), env);
+    options = { ...options, env };
+  }
   const child = startGateway(options);
   try {
     await waitForReady({ ...options, child });
@@ -1288,28 +1295,12 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     return;
   }
   const port = resolveRuntimeSmokePort(pluginIndex, 1);
-  const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
-  writeConfig(
-    ensureGatewayConfig(
-      {
-        plugins: {
-          enabled: false,
-        },
-        tts: {
-          provider: selectedProvider,
-        },
-      },
-      port,
-    ),
-    env,
-  );
   const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-${pluginId}-tts-disabled.log`;
   await runGatewaySmoke(
     {
       logPath,
       port,
       entrypoint,
-      env,
       skipChannels: true,
       pluginId: `${pluginId}:tts-disabled`,
     },
@@ -1319,6 +1310,17 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
       assertSpeechProviderVisible(providers, selectedProvider, "tts.providers global-disable");
     },
     `Global-disable TTS smoke passed for ${pluginId}/${selectedProvider}`,
+    {
+      label: `tts-disabled-${pluginId}`,
+      config: {
+        plugins: {
+          enabled: false,
+        },
+        tts: {
+          provider: selectedProvider,
+        },
+      },
+    },
   );
 }
 
@@ -1332,10 +1334,20 @@ async function smokeOpenAiTts(pluginIndex) {
     return;
   }
   const port = resolveRuntimeSmokePort(pluginIndex, 2);
-  const env = createIsolatedStateEnv("tts-openai-live");
-  writeConfig(
-    ensureGatewayConfig(
-      {
+  const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-openai-tts-live.log`;
+  await runGatewaySmoke(
+    { entrypoint, port, logPath, skipChannels: true, pluginId: "openai:tts-live" },
+    async (options) => {
+      await assertBaseGatewayProbes(options);
+      const result = await retryRpcCall("tts.convert", { text: "ok", provider: "openai" }, options);
+      if (!isNonEmptyString(result.audioPath) || !fs.existsSync(result.audioPath)) {
+        throw new Error(`tts.convert did not produce an audio file: ${JSON.stringify(result)}`);
+      }
+    },
+    "OpenAI key-backed TTS smoke passed",
+    {
+      label: "tts-openai-live",
+      config: {
         plugins: {
           enabled: true,
           allow: ["openai"],
@@ -1352,21 +1364,7 @@ async function smokeOpenAiTts(pluginIndex) {
           },
         },
       },
-      port,
-    ),
-    env,
-  );
-  const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-openai-tts-live.log`;
-  await runGatewaySmoke(
-    { entrypoint, port, logPath, env, skipChannels: true, pluginId: "openai:tts-live" },
-    async (options) => {
-      await assertBaseGatewayProbes(options);
-      const result = await retryRpcCall("tts.convert", { text: "ok", provider: "openai" }, options);
-      if (!isNonEmptyString(result.audioPath) || !fs.existsSync(result.audioPath)) {
-        throw new Error(`tts.convert did not produce an audio file: ${JSON.stringify(result)}`);
-      }
     },
-    "OpenAI key-backed TTS smoke passed",
   );
 }
 
