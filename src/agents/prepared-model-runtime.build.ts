@@ -63,6 +63,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
+  isPublished?: () => boolean;
   retirementSignal: AbortSignal;
   isBuildCurrent?: () => boolean;
   onBeforeAuthCapture?: () => void;
@@ -74,7 +75,7 @@ export type PreparedModelRuntimeBuildResult = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
-function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
+export function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
   candidates: readonly T[],
   keyOf: (candidate: T) => K,
 ): Map<K, T[]> {
@@ -126,26 +127,33 @@ async function buildSnapshotBatch(
   });
   const candidateByInput = new Map(candidates.map((candidate) => [candidate.input, candidate]));
   const results = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeBuildResult>();
-  const prepareSnapshot = (
+  const prepareSnapshot = async (
     candidate: (typeof candidates)[number],
     agentFacts: PreparedModelRuntimeAgentFacts,
     pluginGeneration: PreparedModelRuntimePluginGeneration,
     catalogFacts: PreparedModelRuntimeCatalogFacts,
   ) => {
-    const snapshot = createPreparedModelRuntimeSnapshot(
-      candidate.catalogOwner,
-      agentFacts,
-      pluginGeneration,
-      catalogFacts,
-      createFullModelCatalogAccess({
+    const catalogAccess = await createFullModelCatalogAccess(
+      {
+        catalogOwner: candidate.catalogOwner,
         agentFacts,
         nativeConfigFingerprint: candidate.nativeConfigFingerprint,
         catalogFacts,
         pluginGeneration,
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
+        isPublished: candidate.isPublished,
         retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
-      }),
+      },
+      () => assertBuildCurrent(candidate.input),
+    );
+    assertBuildCurrent(candidate.input);
+    const snapshot = createPreparedModelRuntimeSnapshot(
+      candidate.catalogOwner,
+      agentFacts,
+      pluginGeneration,
+      catalogFacts,
+      catalogAccess,
       candidate.requestedInput.config,
     );
     const result = { snapshot, pluginGeneration };
@@ -294,7 +302,7 @@ async function buildSnapshotBatch(
           assertBuildCurrent(candidate.input);
           const facts = batch.catalogs.get(candidate.input)!;
           preparedCatalogs.set(candidate.input, facts);
-          prepareSnapshot(
+          await prepareSnapshot(
             candidate,
             requirePreparedInput(candidate.input).agentFacts,
             prepared.pluginGeneration,
@@ -430,7 +438,7 @@ async function buildSnapshotBatch(
       if (!catalogFacts) {
         throw new Error(`prepared model runtime snapshot facts missing for ${input.agentDir}`);
       }
-      prepareSnapshot(candidate, agentFacts, pluginGeneration, catalogFacts);
+      await prepareSnapshot(candidate, agentFacts, pluginGeneration, catalogFacts);
     }
     assertPreparedModelRuntimeCandidatesCurrent(candidates);
     return candidates.map(({ input }) => results.get(input)!);

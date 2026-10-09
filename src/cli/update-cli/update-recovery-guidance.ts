@@ -35,6 +35,7 @@ export function resolveUpdateResultNextAction(params: {
   restart?: boolean;
   serviceRunning?: boolean;
   runningVersion?: string;
+  verifiedServingVersion?: string;
   verificationFailure?: string;
   env: NodeJS.ProcessEnv;
   /** Prepared before ledger writes so formatting performs no filesystem discovery. */
@@ -55,6 +56,32 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const doctorSettlement = result.steps.findLast(
+      (step) => step.name === "doctor process settlement",
+    );
+    if (doctorSettlement && doctorSettlement.exitCode !== 0) {
+      const detail =
+        doctorSettlement.failureFacts
+          ?.map((fact) => fact.message)
+          .filter(Boolean)
+          .join("; ") || doctorSettlement.stderrTail;
+      return `${detail ?? "Doctor process settlement could not be verified."} Keep the Gateway stopped while Doctor writers may still be running. Preserve the migrated state and recovery snapshots; after the recorded processes have stopped, run \`${formatCliCommand("openclaw update repair", env)}\`.`;
+    }
+    if (
+      result.reason === "state-migrated-no-rollback" &&
+      result.recovery?.serviceRestartSafe === true &&
+      result.recovery.service === "healthy"
+    ) {
+      if (doctorSettlement?.exitCode === 0) {
+        return `Doctor did not finish normally, but all tracked process groups stopped and the candidate Gateway is healthy on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+      }
+      if (result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0)) {
+        const refusal =
+          result.rollbackOutcome?.reason ??
+          result.steps.findLast((step) => step.name === "database rollback")?.stderrTail;
+        return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw doctor", env)}\` to inspect the remaining repair.`;
+      }
+    }
     if (
       result.reason === "update-failed" &&
       !result.recovery &&
@@ -76,11 +103,14 @@ export function resolveUpdateResultNextAction(params: {
       240,
     );
     const runningVersion = truncateUtf16Safe(params.runningVersion ?? "", 120);
-    const state = reason
-      ? params.serviceRunning === true
-        ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
-        : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
-      : "";
+    const servingVersion = truncateUtf16Safe(params.verifiedServingVersion ?? "", 120);
+    const state = servingVersion
+      ? `Your Gateway is still serving ${servingVersion}; nothing to restore.${reason ? ` Restart remains unsafe (${reason}).` : ""}`
+      : reason
+        ? params.serviceRunning === true
+          ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
+          : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
+        : "";
     const configRefusal = result.steps.findLast(
       (step) => step.name === "config-rollback",
     )?.stderrTail;
@@ -113,7 +143,12 @@ export function resolveUpdateResultNextAction(params: {
       deployment,
       configRefusal,
       state,
-      reason || !detail ? resolveUnsafeUpdateRecoveryGuidance(reason, env) : undefined,
+      servingVersion
+        ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
+        : undefined,
+      reason === "state-migration-started" || (!servingVersion && (reason || !detail))
+        ? resolveUnsafeUpdateRecoveryGuidance(reason, env)
+        : undefined,
     ]
       .filter(Boolean)
       .join(" ");

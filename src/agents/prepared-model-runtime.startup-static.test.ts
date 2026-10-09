@@ -173,6 +173,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   isPluginMetadataSnapshotCompatible: () => true,
   loadPluginMetadataSnapshot: () => mocks.metadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync: async () => mocks.resolvePluginMetadataSnapshot(),
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
@@ -237,7 +238,8 @@ vi.mock("./agent-model-discovery.js", () => ({
   discoverModelsFromCapturedSources: mocks.discoverModels,
 }));
 
-vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>()),
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
@@ -252,7 +254,8 @@ vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
 }));
 
-vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+vi.mock("./auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/runtime-snapshots.js")>()),
   // This fixture has no published auth owner, so usage stays with its captured store.
   createPreparedRuntimeAuthProfileUsageReader: () => (store: AuthProfileStore) => store,
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => undefined,

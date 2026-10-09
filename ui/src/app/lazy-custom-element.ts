@@ -37,7 +37,7 @@ export function ensureCustomElementDefined(
 export type OptionalCustomElement = {
   tagName: string;
   label: string;
-  loadModule: () => Promise<unknown>;
+  loadModule: CustomElementModuleLoader;
 };
 
 type UpdatingHost = {
@@ -240,10 +240,8 @@ export const DEBUG_OVERLAY_ELEMENT = {
   loadModule: () => import("../pages/debug/debug-overlay.ts"),
 } satisfies OptionalCustomElement;
 
-const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
-
 export const KEYBOARD_SHORTCUTS_ELEMENT = {
-  tagName: KEYBOARD_SHORTCUTS_TAG,
+  tagName: "openclaw-keyboard-shortcuts-dialog",
   get label() {
     return t("shortcutsOverlay.title");
   },
@@ -328,10 +326,8 @@ export const QUESTION_PAGE_ELEMENT = {
 
 // The card is in the chat graph, but modal-only queue controls stay off the
 // startup path until an approval is actually pending.
-const EXEC_APPROVAL_TAG = "openclaw-exec-approval";
-
 export const EXEC_APPROVAL_ELEMENT = {
-  tagName: EXEC_APPROVAL_TAG,
+  tagName: "openclaw-exec-approval",
   get label() {
     return t("tabs.approvals");
   },

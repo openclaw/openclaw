@@ -1,6 +1,8 @@
 import { request as httpRequest } from "node:http";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { sleep } from "../../utils/sleep.js";
 import { readNativeHookRelayClientBridgeRecord } from "./native-hook-relay-client-store.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
@@ -78,7 +80,7 @@ export async function invokeNativeHookRelayBridge(
       if (!isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs })) {
         break;
       }
-      await delay(Math.min(NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS, timeoutMs - elapsedMs));
+      await sleep(Math.min(NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS, timeoutMs - elapsedMs));
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -96,12 +98,6 @@ function postNativeHookRelayBridgeRecord(params: {
   const body = JSON.stringify(params.payload);
   return new Promise((resolve, reject) => {
     let settled = false;
-    const resolveOnce = (value: NativeHookRelayProcessResponse) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
@@ -145,7 +141,8 @@ function postNativeHookRelayBridgeRecord(params: {
               | { ok: true; result: NativeHookRelayProcessResponse }
               | { ok: false; error?: string };
             if (parsed.ok) {
-              resolveOnce(parsed.result);
+              settled = true;
+              resolve(parsed.result);
               return;
             }
             rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));
@@ -169,6 +166,7 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
     code === "ENOENT" ||
     code === "ECONNREFUSED" ||
     code === "EAGAIN" ||
+    isSqliteLockError(error) ||
     (error instanceof Error && error.message === "native hook relay bridge not found")
   );
 }
@@ -213,10 +211,4 @@ export function renderNativeHookRelayUnavailableResponse(params: {
     return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse("deny", message);
   }
   return codexNativeHookRelayResponseCodec.renderNoopResponse();
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(0, ms));
-  });
 }

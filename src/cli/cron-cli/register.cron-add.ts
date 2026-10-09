@@ -1,11 +1,9 @@
-// Cron status/list/add command registration and create-payload normalization.
 import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -27,6 +25,7 @@ import {
   parseCronNoOutputTimeoutOption,
   parseCronStringList,
   parseCronStringOption,
+  parseCronThinkingOption,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -56,24 +55,28 @@ export function registerCronListCommand(cron: Command) {
       .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
+      .option("--query <text>", "Filter automations by search text")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: { includeDisabled: boolean; agentId?: string } = {
+          const listParams: { includeDisabled: boolean; agentId?: string; query?: string } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = parseCronStringOption(opts.agent, "--agent");
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
           }
+          const query = normalizeOptionalString(opts.query);
+          if (query) {
+            listParams.query = query;
+          }
           const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(res));
             return;
           }
-          const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
           const deliveryPreviews = coerceCronDeliveryPreviews(res);
-          printCronList(jobs, defaultRuntime, { deliveryPreviews });
+          printCronList(res.jobs, defaultRuntime, { deliveryPreviews });
         } catch (err) {
           handleCronCliError(err);
         }
@@ -236,7 +239,7 @@ export function registerCronAddCommand(cron: Command) {
                 message,
                 model: normalizeOptionalString(opts.model),
                 fallbacks: parseCronStringList(opts.fallbacks),
-                thinking: normalizeOptionalString(opts.thinking),
+                thinking: parseCronThinkingOption(opts.thinking),
                 timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,
                 toolsAllow,

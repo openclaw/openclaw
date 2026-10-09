@@ -19,7 +19,6 @@ import {
 } from "./chat-audio-coordinator.ts";
 import {
   cacheAndRetainChatAudioBlob,
-  canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
@@ -28,7 +27,7 @@ import {
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { chatMediaSourceChanged, ChatMediaSourceController } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -111,10 +110,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     if (
       this.sourceController.readiness === "unavailable" &&
-      (changedProperties.has("src") ||
-        changedProperties.has("sourceIdentity") ||
-        changedProperties.has("playback") ||
-        changedProperties.has("authToken"))
+      chatMediaSourceChanged(changedProperties)
     ) {
       this.releaseWaveformBlob?.();
       this.releaseWaveformBlob = undefined;
@@ -124,10 +120,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   override updated(changedProperties: PropertyValues<this>): void {
     if (
-      changedProperties.has("src") ||
-      changedProperties.has("sourceIdentity") ||
-      changedProperties.has("playback") ||
-      changedProperties.has("authToken") ||
+      chatMediaSourceChanged(changedProperties) ||
       changedProperties.has("sizeBytes") ||
       changedProperties.has("serverDurationMs")
     ) {
@@ -334,7 +327,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const blobUrl = URL.createObjectURL(blob);
     let peaks: readonly number[] | undefined;
     let acceptedDecodedDuration: number | undefined;
-    if (canDecodeChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
+    if (shouldFetchChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
       let context: AudioContext | null = null;
       try {
         // Duration is trusted only from the server-side ffprobe metadata.

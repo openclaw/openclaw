@@ -3,13 +3,15 @@ import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type OpenClawPluginApi,
+  type PluginCommandContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildDevicePairPairingQrChannelData } from "./pairing-qr-channel-data.js";
-type NotifyModule = typeof import("./notify.js");
 
 const loadDevicePairApiModule = createLazyRuntimeModule(() => import("./api.js"));
 
@@ -31,28 +33,12 @@ type DevicePairPluginConfig = {
   publicUrl?: string;
 };
 
-type SetupPayload = {
-  url: string;
-  bootstrapToken: string;
-  expiresAtMs: number;
-  access: "full" | "limited";
-  accessDowngraded?: true;
-};
+type SetupPayload = Awaited<ReturnType<typeof issueSetupPayload>>;
 
-type ResolveUrlResult = {
-  url?: string;
-  source?: string;
-  error?: string;
-};
-
-type QrCommandContext = {
-  channel: string;
-  senderId?: string;
-  from?: string;
-  to?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-};
+type QrCommandContext = Pick<
+  PluginCommandContext,
+  "channel" | "senderId" | "from" | "to" | "accountId" | "messageThreadId"
+>;
 
 const QR_SUPPORTED_CHANNELS = new Set([
   "telegram",
@@ -172,10 +158,8 @@ function isMobilePairingCleartextAllowedHost(host: string): boolean {
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return "Resolved mobile pairing URL is invalid.";
   }
   const protocol =
@@ -190,17 +174,13 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
 }
 
 function isFullAccessMobilePairingUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === "wss:" || (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname))
-    );
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return (
+    parsed?.protocol === "wss:" || (parsed?.protocol === "ws:" && isLoopbackHost(parsed.hostname))
+  );
 }
 
-async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
+async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi) {
   const { resolvePairingGatewayUrl, runPluginCommandWithTimeout } = await loadDevicePairApiModule();
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
   const result = await resolvePairingGatewayUrl(api.config, {
@@ -352,7 +332,7 @@ async function issueSetupPayload(params: {
   url: string;
   allowFullAccess: boolean;
   assertCurrent?: () => void;
-}): Promise<SetupPayload> {
+}) {
   const assertCurrent = params.assertCurrent;
   const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
     await loadDevicePairApiModule();
@@ -374,8 +354,8 @@ async function issueSetupPayload(params: {
     url: params.url,
     bootstrapToken: issuedBootstrap.token,
     expiresAtMs: issuedBootstrap.expiresAtMs,
-    access: fullAccess ? "full" : "limited",
-    ...(accessDowngraded ? { accessDowngraded: true } : {}),
+    access: fullAccess ? ("full" as const) : ("limited" as const),
+    ...(accessDowngraded ? { accessDowngraded: true as const } : {}),
   };
 }
 
@@ -419,17 +399,12 @@ export default definePluginEntry({
   name: "Device Pair",
   description: "QR/bootstrap pairing helpers for OpenClaw devices",
   register(api: OpenClawPluginApi) {
-    let notifierService: ReturnType<NotifyModule["createPairingNotifierService"]> | undefined;
     api.registerService({
       id: "device-pair-notifier",
-      start: async (ctx) => {
-        const { createPairingNotifierService } = await loadNotifyModule();
-        notifierService = createPairingNotifierService(api);
-        await notifierService.start(ctx);
-      },
-      stop: async (ctx) => {
-        await notifierService?.stop?.(ctx);
-        notifierService = undefined;
+      apiVersion: 2,
+      start: async ({ scheduler }) => {
+        const { startPairingNotifier } = await loadNotifyModule();
+        startPairingNotifier(api, scheduler);
       },
     });
 
@@ -450,12 +425,8 @@ export default definePluginEntry({
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
-        const {
-          buildMissingPairingScopeReply,
-          buildMissingSetupHandoffScopeReply,
-          resolveAuthLabel,
-          resolvePairingCommandAuthState,
-        } = await loadPairCommandAuthModule();
+        const { resolveAuthLabel, resolvePairingCommandAuthState } =
+          await loadPairCommandAuthModule();
         const authState = resolvePairingCommandAuthState({
           channel: ctx.channel,
           gatewayClientScopes,
@@ -471,7 +442,7 @@ export default definePluginEntry({
         );
 
         if (authState.isMissingPairingPrivilege) {
-          return buildMissingPairingScopeReply();
+          return { text: "⚠️ This command requires operator.pairing." };
         }
         assertOwnerCurrent?.();
 
@@ -531,7 +502,9 @@ export default definePluginEntry({
         }
 
         if (authState.isMissingSetupHandoffPrivilege) {
-          return buildMissingSetupHandoffScopeReply();
+          return {
+            text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
+          };
         }
 
         const authLabelResult = resolveAuthLabel(api.config);
@@ -659,10 +632,9 @@ export default definePluginEntry({
                   markdown: true,
                 }).join("\n"),
               ].join("\n"),
-              channelData: buildDevicePairPairingQrChannelData({
-                setupCode,
-                expiresAtMs: payload.expiresAtMs,
-              }),
+              channelData: {
+                openclawPairingQr: { setupCode, expiresAtMs: payload.expiresAtMs },
+              },
               sensitiveMedia: true,
             };
           }

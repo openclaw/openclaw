@@ -1,11 +1,14 @@
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import {
+  AGENT_GIT_CONFIG_PARAMETERS,
   managedGitHubIdentityEnvironment,
+} from "../agents/github-tool-identity-env.js";
+import {
   removeManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
-  type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -163,5 +166,6 @@ export async function prepareWorkerGitHubEnvironment(params: {
     excludedStoreNames: [],
     credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
     localIdentityEnv,
+    localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
   };
 }

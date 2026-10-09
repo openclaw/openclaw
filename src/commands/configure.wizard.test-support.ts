@@ -4,7 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
 
 const wizardTestMocks = vi.hoisted(() => {
-  const writeConfigFile = vi.fn();
+  const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>();
   return {
     clackIntro: vi.fn(),
     clackOutro: vi.fn(),
@@ -15,12 +15,17 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
+    setupPluginConfig:
+      vi.fn<typeof import("../wizard/setup.plugin-config.js").configurePluginConfig>(),
+    setupSkills: vi.fn<typeof import("./onboard-skills.js").setupSkills>(),
+    ensureWorkspaceAndSessions: vi.fn(),
     assertConfigPathForWrite: vi.fn(),
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
     replaceConfigFile: vi.fn(
       async (params: {
-        nextConfig: unknown;
+        nextConfig: OpenClawConfig;
+        baseHash?: string;
         writeOptions?: { assertConfigPathForWrite?: () => void };
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
@@ -51,7 +56,9 @@ const wizardTestMocks = vi.hoisted(() => {
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai:default"]),
     ),
-    setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
+    setupChannels: vi.fn<typeof import("../flows/channel-setup.js").setupChannels>(
+      async (cfg) => cfg,
+    ),
     guardCancel: vi.fn((value: unknown, _runtime: RuntimeEnv, _exitCode?: number) => value),
   };
 });
@@ -152,7 +159,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
-  ensureWorkspaceAndSessions: vi.fn(),
+  ensureWorkspaceAndSessions: wizardTestMocks.ensureWorkspaceAndSessions,
   guardCancel: wizardTestMocks.guardCancel,
   printWizardHeader: wizardTestMocks.printWizardHeader,
   probeGatewayReachable: wizardTestMocks.probeGatewayReachable,
@@ -163,13 +170,16 @@ vi.mock("./onboard-helpers.js", () => ({
   waitForGatewayReachable: wizardTestMocks.waitForGatewayReachable,
 }));
 
-vi.mock("./health.js", () => ({
+vi.mock("./health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health.js")>()),
   healthCommandNonExiting: wizardTestMocks.healthCommand,
 }));
 
-vi.mock("./health-format.js", () => ({
-  formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure,
-}));
+vi.mock("./health-format.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./health-format.js")>();
+  wizardTestMocks.formatHealthCheckFailure = vi.fn(actual.formatHealthCheckFailure);
+  return { ...actual, formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure };
+});
 
 vi.mock("./configure.gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./configure.gateway.js")>()),
@@ -180,20 +190,21 @@ vi.mock("./configure.gateway-auth.js", () => ({
   promptAuthConfig: wizardTestMocks.promptAuthConfig,
 }));
 
-vi.mock("./configure.channels.js", () => ({
-  removeChannelConfigWizard: vi.fn(),
-}));
-
 vi.mock("./configure.daemon.js", () => ({
   maybeInstallDaemon: wizardTestMocks.maybeInstallDaemon,
 }));
 
-vi.mock("./onboard-remote.js", () => ({
+vi.mock("./onboard-remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-remote.js")>()),
   promptRemoteGatewayConfig: wizardTestMocks.promptRemoteGatewayConfig,
 }));
 
 vi.mock("./onboard-skills.js", () => ({
-  setupSkills: vi.fn(),
+  setupSkills: wizardTestMocks.setupSkills,
+}));
+
+vi.mock("../wizard/setup.plugin-config.js", () => ({
+  configurePluginConfig: wizardTestMocks.setupPluginConfig,
 }));
 
 vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
@@ -244,6 +255,8 @@ export function setupWizardTestDefaults() {
     port: 18789,
   }));
   wizardTestMocks.guardCancel.mockImplementation((value: unknown) => value);
+  wizardTestMocks.setupPluginConfig.mockImplementation(async ({ config }) => config);
+  wizardTestMocks.setupSkills.mockImplementation(async (config) => config);
 }
 
 export const EMPTY_CONFIG_SNAPSHOT = {

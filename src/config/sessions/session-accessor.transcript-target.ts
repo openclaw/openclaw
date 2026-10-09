@@ -1,8 +1,14 @@
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { isMainThread } from "node:worker_threads";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveConcreteSessionStorePath } from "./paths.js";
 import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
+import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import {
   resolveSqliteTranscriptScope,
@@ -15,8 +21,10 @@ import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
+import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 /** Binds runtime storage without changing keys that raw ownership checks and read fences validate. */
 export function bindSessionTranscriptStoreScope<
@@ -47,12 +55,63 @@ export async function resolveSessionTranscriptRuntimeTarget(
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
   const { storePath } = bindSessionTranscriptStoreScope({ ...scope, agentId }, config);
-  const persistedSessionKey = resolveSessionKeyBySessionId({
+  const bound = captureSessionTranscriptTargetBinding({
+    ...scope,
     agentId,
-    ...(scope.env ? { env: scope.env } : {}),
-    sessionId: scope.sessionId,
     storePath,
   });
+  if (
+    !isMainThread ||
+    isIncognitoSessionKey(scope.sessionKey) ||
+    isIncognitoOpenClawAgentSqlitePath(storePath, { agentId, env: bound.env })
+  ) {
+    return { ...readSessionTranscriptRuntimeTarget(bound, options), storePath };
+  }
+  const [{ withSessionStoreReaderInWorker }, { projectionLane }] = await Promise.all([
+    import("./session-entry-read-runtime.js"),
+    import("./session-transcript-worker-resources.js"),
+  ]);
+  const target = await withSessionStoreReaderInWorker(
+    bound,
+    async ({ reader, database, logicalAgentId, continuation, assertCurrent }) => {
+      const selected = await reader.readRuntimeTarget({
+        scope: {
+          agentId: logicalAgentId,
+          env: database.env,
+          sessionId: bound.sessionId,
+          sessionKey: bound.sessionKey,
+          storePath: database.path,
+        },
+        keyFormat: options.keyFormat,
+        continuation,
+      });
+      assertCurrent();
+      return selected;
+    },
+    { backing: true, lane: projectionLane, dataOnly: true },
+  );
+  return { ...target, storePath };
+}
+
+/** The admitted reader resolves the window and canonical row in its captured physical store. */
+export function readSessionTranscriptRuntimeTarget(
+  scope: SessionTranscriptRuntimeScope & { agentId: string; storePath: string },
+  options: {
+    keyFormat?: "agent-qualified";
+    databaseAgentId?: string;
+    continuation?: CanonicalSessionReaderContinuation;
+  } = {},
+  database?: Pick<OpenClawAgentDatabase, "db">,
+): Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>> {
+  const { agentId, storePath } = scope;
+  const persistedSessionKey = database
+    ? readSessionKeyBySessionIdInDatabase(database, scope.sessionId)
+    : resolveSessionKeyBySessionId({
+        agentId: options.databaseAgentId ?? agentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionId: scope.sessionId,
+        storePath,
+      });
   const selected =
     persistedSessionKey && !options.keyFormat
       ? undefined
@@ -67,6 +126,8 @@ export async function resolveSessionTranscriptRuntimeTarget(
             readOnly: true,
             keyFormat: options.keyFormat,
             allowCanonicalMove: !persistedSessionKey,
+            databaseAgentId: options.databaseAgentId,
+            continuation: options.continuation,
           },
         );
   const sessionKey = persistedSessionKey ?? selected?.normalizedKey ?? scope.sessionKey;

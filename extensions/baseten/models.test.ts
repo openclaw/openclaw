@@ -14,9 +14,11 @@ describe("Baseten model catalog", () => {
       catalog: manifest.modelCatalog.providers.baseten,
     }).models;
     const runtimeModels = new Map(buildStaticBasetenModels().map((model) => [model.id, model]));
-    const inkling = declaredModels.find((model) => model.id === "thinkingmachines/inkling");
+    const defaultModel = declaredModels.find(
+      (model) => model.id === "deepseek-ai/DeepSeek-V4.1-Flash",
+    );
 
-    expect.soft(inkling?.compat?.supportedReasoningEfforts).toContain("max");
+    expect.soft(defaultModel?.compat?.supportedReasoningEfforts).toContain("max");
     for (const model of declaredModels) {
       const runtimeModel = runtimeModels.get(model.id);
       expect(runtimeModel, model.id).toBeDefined();
@@ -87,14 +89,14 @@ describe("Baseten model catalog", () => {
   it("uses live capability metadata when present and curated metadata when absent", () => {
     const liveCapabilities = projectBasetenLiveModels([
       {
-        id: "thinkingmachines/inkling",
+        id: "deepseek-ai/DeepSeek-V4.1-Flash",
         object: "model",
         supported_features: [],
       },
     ])[0];
     const curatedCapabilities = projectBasetenLiveModels([
       {
-        id: "thinkingmachines/inkling",
+        id: "deepseek-ai/DeepSeek-V4.1-Flash",
         object: "model",
       },
     ])[0];
@@ -111,7 +113,10 @@ describe("Baseten model catalog", () => {
   });
 
   it("resolves future model ids without shadowing bundled rows", () => {
-    expect(resolveBasetenDynamicModel("thinkingmachines/inkling")).toBeUndefined();
+    expect(resolveBasetenDynamicModel("deepseek-ai/DeepSeek-V4.1-Flash")).toBeUndefined();
+    expect(resolveBasetenDynamicModel("thinkingmachines/inkling")?.id).toBe(
+      "thinkingmachines/inkling",
+    );
     expect(resolveBasetenDynamicModel("future/model")).toMatchObject({
       id: "future/model",
       provider: "baseten",
@@ -119,5 +124,22 @@ describe("Baseten model catalog", () => {
       baseUrl: "https://inference.baseten.co/v1",
       compat: { supportsTools: true, maxTokensField: "max_tokens" },
     });
+  });
+
+  it.each([
+    { id: "future/model", features: ["tools", "reasoning", "json_mode", "structured_outputs"] },
+    {
+      id: "deepseek-ai/DeepSeek-V4.1-Flash-custom",
+      features: ["tools", "reasoning", "json_mode", "structured_outputs"],
+    },
+    { id: "deepseek-ai/DeepSeek-V4-Pro-0813", features: [] },
+    { id: "deepseek-ai/DeepSeek-V4.1-Flash", features: ["tools"] },
+  ])("does not borrow documented Flash capabilities for $id with $features", ({ id, features }) => {
+    const [model] = projectBasetenLiveModels([
+      { id, object: "model", supported_features: features },
+    ]);
+    expect(model?.input).toEqual(["text"]);
+    expect(model?.compat?.supportsReasoningEffort).toBeUndefined();
+    expect(model?.compat?.supportedReasoningEfforts).toBeUndefined();
   });
 });

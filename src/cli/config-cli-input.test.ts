@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { buildConfigSetOperations, readConfigPatchOperations } from "./config-cli-input.js";
 import { parseConfigSetPath } from "./config-cli-path.js";
@@ -26,6 +27,37 @@ async function withPatchFile<T>(
 }
 
 describe("readConfigPatchOperations", () => {
+  it.each([
+    {
+      label: "malformed bytes",
+      chunks: [Buffer.from('{name:"'), Buffer.from([0xff]), Buffer.from('"}')],
+      error: "--stdin must be valid UTF-8",
+    },
+    {
+      label: "valid split Unicode",
+      chunks: [
+        Buffer.from('{name:"中文 😀 \uFFFD"}').subarray(0, 9),
+        Buffer.from('{name:"中文 😀 \uFFFD"}').subarray(9),
+      ],
+      value: "中文 😀 \uFFFD",
+    },
+  ])("reads stdin as bytes for $label", async ({ chunks, error, value }) => {
+    const original = Object.getOwnPropertyDescriptor(process, "stdin");
+    Object.defineProperty(process, "stdin", { configurable: true, value: Readable.from(chunks) });
+    try {
+      const result = readConfigPatchOperations({ stdin: true });
+      if (error) {
+        await expect(result).rejects.toThrow(error);
+      } else {
+        await expect(result).resolves.toMatchObject([{ setPath: ["name"], value }]);
+      }
+    } finally {
+      if (original) {
+        Object.defineProperty(process, "stdin", original);
+      }
+    }
+  });
+
   it.each(['{ "channels": { "custom": { "timeout": 1e999 } } }', nestedConfigRaw("1e999")])(
     "rejects patch files containing non-finite numbers",
     async (contents) => {
@@ -44,6 +76,26 @@ describe("readConfigPatchOperations", () => {
       expect(operations).toHaveLength(1);
       expect(operations[0]?.setPath).toHaveLength(DEEP_CONFIG_DEPTH);
       expect(operations[0]?.value).toBe(1);
+    });
+  });
+});
+
+// The replacement guard tells the user to retry with the path it printed; that retry has to
+// survive the shell and still match the leaf it named.
+describe("copied --replace-path retry", () => {
+  const patch = '{"models":{"providers":{"local]service":{"models":[{"id":"qwen3:8b"}]}}}}';
+  const leaf = ["models", "providers", "local]service", "models"];
+
+  it("replaces the leaf the refusal named", async () => {
+    await withPatchFile(patch, async (patchPath) => {
+      const operations = await readConfigPatchOperations({
+        file: patchPath,
+        replacePath: ['models.providers["local]service"].models'],
+      });
+
+      expect(operations).toHaveLength(1);
+      expect(operations[0]?.setPath).toEqual(leaf);
+      expect(operations[0]?.mutation).toBe("replace");
     });
   });
 });

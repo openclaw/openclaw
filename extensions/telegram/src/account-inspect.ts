@@ -1,7 +1,5 @@
-import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
@@ -12,15 +10,16 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
-  resolveDefaultTelegramAccountId,
   resolveTelegramAccountConfig,
+  resolveTelegramAccountFallback,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
+import { readTelegramTokenFile } from "./token.js";
 
-type CredentialUnavailableDiagnostic = Extract<
-  ReturnType<typeof tryReadSecretFileSync>,
-  { status: "configured_unavailable" }
->["diagnostic"];
+type InspectedTelegramCredential = Pick<
+  ResolvedTelegramAccount,
+  "token" | "tokenSource" | "tokenStatus" | "credentialDiagnostics"
+>;
 
 export type TelegramCredentialStatus = ResolvedTelegramAccount["tokenStatus"];
 
@@ -37,42 +36,26 @@ export type InspectedTelegramAccount = TelegramAccountInspection & {
 function inspectTokenFile(
   pathValue: unknown,
   configPath: string,
-): {
-  token: string;
-  tokenSource: "tokenFile" | "none";
-  tokenStatus: TelegramCredentialStatus;
-  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
-} | null {
+): InspectedTelegramCredential | null {
   const tokenFile = normalizeOptionalString(pathValue) ?? "";
   if (!tokenFile) {
     return null;
   }
-  const result = tryReadSecretFileSync(
-    tokenFile,
-    "Telegram bot token",
-    { rejectSymlink: true },
-    { configPath },
-  );
-  if (result.status === "configured_unavailable") {
-    return {
-      token: "",
-      tokenSource: "tokenFile",
-      tokenStatus: "configured_unavailable",
-      credentialDiagnostics: [result.diagnostic],
-    };
-  }
+  const result = readTelegramTokenFile(tokenFile, configPath);
   return {
-    token: result.status === "available" ? result.value : "",
-    tokenSource: "tokenFile",
-    tokenStatus: result.status === "available" ? "available" : "configured_unavailable",
+    token: result.token,
+    tokenSource: result.source,
+    tokenStatus: result.credentialDiagnostics ? "configured_unavailable" : "available",
+    ...(result.credentialDiagnostics
+      ? { credentialDiagnostics: result.credentialDiagnostics }
+      : {}),
   };
 }
 
-function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
-  token: string;
-  tokenSource: "config" | "env" | "none";
-  tokenStatus: TelegramCredentialStatus;
-} | null {
+function inspectTokenValue(params: {
+  cfg: OpenClawConfig;
+  value: unknown;
+}): InspectedTelegramCredential | null {
   const ref = coerceSecretRef(params.value, params.cfg.secrets?.defaults);
   if (ref?.source === "env") {
     const envValue = canResolveEnvSecretRefInReadOnlyPath({
@@ -89,18 +72,11 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
     };
   }
   const token = normalizeSecretInputString(params.value);
-  if (token) {
+  if (token || hasConfiguredSecretInput(params.value, params.cfg.secrets?.defaults)) {
     return {
-      token,
+      token: token || "",
       tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(params.value, params.cfg.secrets?.defaults)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
+      tokenStatus: token ? "available" : "configured_unavailable",
     };
   }
   return null;
@@ -124,6 +100,12 @@ function inspectTelegramAccountPrimary(params: {
   const accountId = normalizeAccountId(params.accountId);
   const merged = mergeTelegramAccountConfig(params.cfg, accountId);
   const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
+  const account = {
+    accountId,
+    enabled,
+    name: normalizeOptionalString(merged.name),
+    config: merged,
+  };
 
   const accountConfig = resolveTelegramAccountConfig(params.cfg, accountId);
   const allowChannelCredentialFallback =
@@ -142,12 +124,9 @@ function inspectTelegramAccountPrimary(params: {
       inspectTokenValue({ cfg: params.cfg, value: config?.botToken });
     if (credential) {
       return {
-        accountId,
-        enabled,
-        name: normalizeOptionalString(merged.name),
+        ...account,
         ...credential,
         configured: credential.tokenStatus !== "missing",
-        config: merged,
       };
     }
   }
@@ -160,21 +139,16 @@ function inspectTelegramAccountPrimary(params: {
     : "";
   if (envToken) {
     return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
+      ...account,
       token: envToken,
       tokenSource: "env",
       tokenStatus: "available",
       configured: true,
-      config: merged,
     };
   }
 
   return {
-    accountId,
-    enabled,
-    name: normalizeOptionalString(merged.name),
+    ...account,
     token: "",
     tokenSource: "none",
     tokenStatus: "missing",
@@ -182,7 +156,6 @@ function inspectTelegramAccountPrimary(params: {
     stateReason: allowChannelCredentialFallback
       ? undefined
       : `not configured: unknown accountId "${accountId}" in multi-bot setup`,
-    config: merged,
   };
 }
 
@@ -191,19 +164,9 @@ function readTelegramAccount(params: {
   accountId?: string | null;
   envToken?: string | null;
 }): TelegramAccountInspection {
-  const resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
-  return resolveAccountWithDefaultFallback({
-    accountId: resolvedAccountId,
-    normalizeAccountId,
-    resolvePrimary: (accountId) =>
-      inspectTelegramAccountPrimary({
-        cfg: params.cfg,
-        accountId,
-        envToken: params.envToken,
-      }),
-    hasCredential: (account) => account.tokenSource !== "none",
-    resolveDefaultAccountId: () => resolveDefaultTelegramAccountId(params.cfg),
-  });
+  return resolveTelegramAccountFallback(params, (accountId) =>
+    inspectTelegramAccountPrimary({ cfg: params.cfg, accountId, envToken: params.envToken }),
+  );
 }
 
 export function findTelegramTokenOwnerAccountId(params: {

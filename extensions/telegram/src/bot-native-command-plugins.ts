@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -15,11 +14,7 @@ import {
   resolveTelegramNativeCommandThreadContext,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
-import {
-  buildTelegramRoutingTarget,
-  buildTelegramGroupFrom,
-  buildTelegramThreadParams,
-} from "./bot/helpers.js";
+import { buildTelegramRoutingTarget, buildTelegramGroupFrom } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -34,61 +29,26 @@ type TelegramNativeReplyChannelData = {
   reaction?: { emoji?: unknown };
 };
 
-function resolveTelegramNativeReplyChannelData(
-  result: TelegramNativeReplyPayload,
-): TelegramNativeReplyChannelData | undefined {
-  return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
-}
-
-function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
-  const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
-  return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
-}
-
-function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
+function inspectTelegramNativeReply(result: TelegramNativeReplyPayload) {
+  const telegramData = result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
+  const reactionEmoji = telegramData?.reaction?.emoji;
+  const hasReaction = typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
   const { channelData: _channelData, ...portableContent } = result;
-  if (hasOutboundReplyContent(portableContent, { trimText: true })) {
-    return true;
-  }
-  const telegramData = resolveTelegramNativeReplyChannelData(result);
-  return Boolean(
-    buildInlineKeyboard(telegramData?.buttons) || hasTelegramNativeReplyReaction(result),
-  );
-}
-
-function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
-  const telegramData = resolveTelegramNativeReplyChannelData(result);
-  return Boolean(
-    typeof result.text === "string" &&
-    result.text.trim() &&
-    !result.mediaUrl &&
-    (!result.mediaUrls || result.mediaUrls.length === 0) &&
-    !result.presentation &&
-    !result.interactive &&
-    !result.btw &&
-    !hasTelegramNativeReplyReaction(result) &&
-    telegramData?.pin !== true,
-  );
-}
-
-async function cleanupTelegramProgressPlaceholder(params: {
-  bot: Bot;
-  chatId: number;
-  progressMessageId?: number;
-  runtime: TelegramCommandExecutorParams["runtime"];
-}): Promise<void> {
-  if (params.progressMessageId == null) {
-    return;
-  }
-  try {
-    await withTelegramApiErrorLogging({
-      operation: "deleteMessage",
-      runtime: params.runtime,
-      fn: () => params.bot.api.deleteMessage(params.chatId, params.progressMessageId!),
-    });
-  } catch {
-    // Best-effort cleanup before fallback or suppression exits.
-  }
+  return {
+    telegramData,
+    hasReaction,
+    renderable:
+      hasOutboundReplyContent(portableContent, { trimText: true }) ||
+      Boolean(buildInlineKeyboard(telegramData?.buttons) || hasReaction),
+    editable:
+      !result.mediaUrl &&
+      (!result.mediaUrls || result.mediaUrls.length === 0) &&
+      !result.presentation &&
+      !result.interactive &&
+      !result.btw &&
+      !hasReaction &&
+      telegramData?.pin !== true,
+  };
 }
 
 async function resolveTelegramCommandTranscriptContext(params: {
@@ -157,6 +117,21 @@ export async function executeTelegramPluginCommand(
       : `telegram:${dispatch.chatId}`;
   const { deliverReplies, emitTelegramMessageSentHooks } = await dispatch.loadDeliveryRuntime();
   let progressMessageId: number | undefined;
+  const cleanupProgressPlaceholder = async () => {
+    const messageId = progressMessageId;
+    if (messageId == null) {
+      return;
+    }
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "deleteMessage",
+        runtime: dispatch.runtime,
+        fn: () => dispatch.bot.api.deleteMessage(dispatch.chatId, messageId),
+      });
+    } catch {
+      // Best-effort cleanup before fallback or suppression exits.
+    }
+  };
   if (params.candidate.progressMessage) {
     try {
       const sent = await withTelegramApiErrorLogging({
@@ -166,13 +141,10 @@ export async function executeTelegramPluginCommand(
           dispatch.bot.api.sendMessage(
             dispatch.chatId,
             params.candidate.progressMessage!,
-            buildTelegramThreadParams(dispatch.threadSpec),
+            dispatch.threadParams,
           ),
       });
-      const maybeMessageId = (sent as { message_id?: unknown } | undefined)?.message_id;
-      if (typeof maybeMessageId === "number") {
-        progressMessageId = maybeMessageId;
-      }
+      progressMessageId = sent.message_id;
     } catch {
       // Fall back to the normal final reply path if the placeholder send fails.
     }
@@ -207,18 +179,11 @@ export async function executeTelegramPluginCommand(
       payload: result,
     }) || result.suppressReply === true;
   if (suppressReply) {
-    await cleanupTelegramProgressPlaceholder({
-      bot: dispatch.bot,
-      chatId: dispatch.chatId,
-      progressMessageId,
-      runtime: dispatch.runtime,
-    });
+    await cleanupProgressPlaceholder();
     return;
   }
-  const hasReaction = hasTelegramNativeReplyReaction(result);
-  const deliverableResult: TelegramNativeReplyPayload = hasRenderableTelegramNativeReplyPayload(
-    result,
-  )
+  const { hasReaction, renderable, editable, telegramData } = inspectTelegramNativeReply(result);
+  const deliverableResult: TelegramNativeReplyPayload = renderable
     ? hasReaction && !normalizeOptionalString(result.replyToId)
       ? { ...result, replyToId: String(dispatch.msg.message_id) }
       : result
@@ -227,12 +192,11 @@ export async function executeTelegramPluginCommand(
     typeof deliverableResult.text === "string" && deliverableResult.text.trim().length > 0
       ? deliverableResult.text
       : null;
-  const telegramResultData = resolveTelegramNativeReplyChannelData(deliverableResult);
   if (
     progressMessageId != null &&
     dispatch.telegramDeps.editMessageTelegram &&
     progressResultText &&
-    isEditableTelegramProgressResult(deliverableResult)
+    (!renderable || editable)
   ) {
     try {
       await dispatch.telegramDeps.editMessageTelegram(
@@ -244,7 +208,7 @@ export async function executeTelegramPluginCommand(
           accountId: dispatch.route.accountId,
           textMode: "markdown",
           linkPreview: dispatch.runtimeTelegramCfg.linkPreview,
-          buttons: telegramResultData?.buttons,
+          buttons: renderable ? telegramData?.buttons : undefined,
         },
       );
       await recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
@@ -266,18 +230,10 @@ export async function executeTelegramPluginCommand(
       // Fall through to cleanup + normal delivered reply if editing fails.
     }
   }
-  await cleanupTelegramProgressPlaceholder({
-    bot: dispatch.bot,
-    chatId: dispatch.chatId,
-    progressMessageId,
-    runtime: dispatch.runtime,
-  });
+  await cleanupProgressPlaceholder();
   await deliverReplies({
     replies: [deliverableResult],
-    ...dispatch.buildDeliveryBaseOptions({
-      sessionKeyForInternalHooks: dispatch.targetSessionKey,
-      policySessionKey: dispatch.targetSessionKey,
-    }),
+    ...dispatch.deliveryOptions,
     ...(hasReaction ? { replyToMode: "all" as const } : {}),
     silent:
       dispatch.runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,

@@ -85,7 +85,7 @@ async function releaseInRealWorker(
           {
             input: {
               ...(disk
-                ? { mode: "disk" as const, agentId: disk.agentId }
+                ? { mode: "disk" as const, agentId: disk.agentId, sessionIds: [] }
                 : { mode: "release" as const }),
               path: agentPath,
               stateDir: context.environment.OPENCLAW_STATE_DIR,

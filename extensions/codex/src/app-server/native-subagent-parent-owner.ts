@@ -8,7 +8,6 @@ import {
   notifyNativeModelSourceWaiters,
 } from "./native-subagent-model-source.js";
 import type {
-  ChildState,
   NativeModelBinding,
   NativeModelSource,
   NativeSubagentMonitorRuntime,
@@ -46,14 +45,12 @@ export type NativeParentRegistration = Pick<
 
 type ParentDependencies = {
   states: Map<string, ParentState>;
-  children: ReadonlyMap<string, ChildState>;
   isClosed: () => boolean;
   isRetired: (state: ParentState) => boolean;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
   assignments: Pick<CodexNativeSubagentAssignmentInventory, "restore" | "drain">;
   submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
-  deliverPending: (state: ParentState, child: ChildState) => Promise<void>;
   deliverDetached: (state: ParentState) => void;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
@@ -142,6 +139,10 @@ export async function registerNativeSubagentParent(
   const requesterSessionKey = state.requesterSessionKey;
   state.pendingRegistrations = (state.pendingRegistrations ?? 0) + 1;
   const registeredState = state;
+  const isCurrent = () =>
+    !dependencies.isClosed() &&
+    !dependencies.isRetired(registeredState) &&
+    dependencies.states.get(parentThreadId) === registeredState;
   const ownerKey = Symbol("codex-native-subagent-owner");
   let owner: ParentOwner = {
     configurationQualification: params.configurationQualification,
@@ -183,9 +184,7 @@ export async function registerNativeSubagentParent(
       ? await dependencies.runtime.captureAgentHarnessCompletionCustody(params.completionScope)
       : undefined;
     if (
-      dependencies.isClosed() ||
-      dependencies.isRetired(state) ||
-      dependencies.states.get(parentThreadId) !== state ||
+      !isCurrent() ||
       state.requesterSessionKey !== requesterSessionKey ||
       (owner.completionCustody && !owner.completionCustody.isCurrent())
     ) {
@@ -198,11 +197,7 @@ export async function registerNativeSubagentParent(
         params.modelSource,
         state,
         () => {
-          if (
-            dependencies.isClosed() ||
-            dependencies.isRetired(registeredState) ||
-            dependencies.states.get(parentThreadId) !== registeredState
-          ) {
+          if (!isCurrent()) {
             throw new Error("Codex native model source owner is no longer current");
           }
         },
@@ -227,11 +222,7 @@ export async function registerNativeSubagentParent(
     state.assignmentStore ??= params.assignmentStore;
     state.owners.set(ownerKey, owner);
     state.preparing = undefined;
-    for (const child of dependencies.children.values()) {
-      if (child.parentThreadId === parentThreadId && child.pendingCompletion) {
-        void dependencies.deliverPending(state, child);
-      }
-    }
+    dependencies.deliverDetached(state);
     dependencies.submissions.restore(state, owner);
   } catch (error) {
     releaseRootModelBinding();

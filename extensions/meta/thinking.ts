@@ -1,4 +1,3 @@
-// Meta plugin module implements thinking behavior.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,

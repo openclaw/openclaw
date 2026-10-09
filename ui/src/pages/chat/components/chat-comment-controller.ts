@@ -24,7 +24,14 @@ export function currentChatComments(attachments: readonly ChatAttachment[], sess
 
 /** Owns comment mutations even when plugins or history errors replace the transcript. */
 class ChatCommentController extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) props!: ChatAttachmentControlsProps;
+  // Only read ownership and staged comments affect the lifecycle; callbacks use current props.
+  @property({
+    attribute: false,
+    hasChanged: (next: ChatAttachmentControlsProps, previous?: ChatAttachmentControlsProps) =>
+      next.readSignal !== previous?.readSignal || next.attachments !== previous?.attachments,
+  })
+  props!: ChatAttachmentControlsProps;
+  @property({ type: Boolean }) disabled = false;
   @property() sessionKey = "";
   @property() paneId = "";
   @property({ type: Boolean }) presented = true;
@@ -68,7 +75,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     if (
       changed.has("sessionKey") ||
       !this.presented ||
-      this.props.disabled ||
+      this.disabled ||
       (this.editingId &&
         !currentChatComments(this.currentAttachments(), this.sessionKey).some(
           (item) => item.id === this.editingId,
@@ -97,7 +104,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     return (
       this.isConnected &&
       this.presented &&
-      !this.props.disabled &&
+      !this.disabled &&
       !signal?.aborted &&
       this.props.readSignal === signal &&
       Boolean(this.props.onAttachmentsChange)

@@ -131,10 +131,7 @@ function countArgumentFields(value: unknown): number {
     return value.length;
   }
   const record = readRecord(value);
-  if (record) {
-    return Object.keys(record).length;
-  }
-  return 1;
+  return record ? Object.keys(record).length : 1;
 }
 
 function hasExplicitErrorFlag(value: Record<string, unknown> | null): boolean {
@@ -155,10 +152,7 @@ function resolveStatus(data: Record<string, unknown>): ActivityStatus {
     return "error";
   }
   const exitCode = Number(result?.exitCode ?? data.exitCode);
-  if (Number.isFinite(exitCode) && exitCode !== 0) {
-    return "error";
-  }
-  return "done";
+  return Number.isFinite(exitCode) && exitCode !== 0 ? "error" : "done";
 }
 
 function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: number): string {
@@ -170,39 +164,55 @@ export function updateToolActivity(
   entries: ActivityEntry[],
   payload: ActivityEvent,
 ): ActivityEntry[] {
-  const data = payload.data ?? {};
-  if (payload.stream === "item") {
-    return updateAnswerCandidateActivity(entries, payload);
-  }
-  const toolCallId = toTrimmedString(data.toolCallId);
-  if (!toolCallId) {
+  const data = payload.data;
+  const answerCandidate = payload.stream === "item";
+  const toolCallId = toTrimmedString(answerCandidate ? data.itemId : data.toolCallId);
+  const candidateStatus = answerCandidate ? readAnswerCandidateStatus(data.status) : null;
+  if (!toolCallId || (answerCandidate && !candidateStatus)) {
     return entries;
   }
-  const toolName = toTrimmedString(data.name) ?? "tool";
-  const id = `${payload.runId}:${toolCallId}`;
-  const now = payload.receivedAt;
-  const startedAt = typeof payload.ts === "number" ? payload.ts : now;
-  const status = resolveStatus(data);
-  const outputValue =
-    data.phase === "update" ? data.partialResult : data.phase === "result" ? data.result : null;
-  const preview = buildOutputPreview(outputValue);
+  const toolName = answerCandidate ? "answer_candidate" : (toTrimmedString(data.name) ?? "tool");
+  const id = answerCandidate
+    ? `${payload.runId}:answer_candidate:${toolCallId}`
+    : `${payload.runId}:${toolCallId}`;
   const existing = entries.find((entry) => entry.id === id);
-  const hiddenArgCount =
-    data.args !== undefined ? countArgumentFields(data.args) : (existing?.hiddenArgumentCount ?? 0);
-  const outputPreview = preview.text ?? existing?.outputPreview;
+  const now = payload.receivedAt;
+  const startedAt = existing?.startedAt ?? payload.ts;
+  const status = answerCandidate
+    ? candidateStatus === "candidate"
+      ? "running"
+      : "done"
+    : resolveStatus(data);
+  const outputValue = answerCandidate
+    ? data.progressText
+    : data.phase === "update"
+      ? data.partialResult
+      : data.phase === "result"
+        ? data.result
+        : null;
+  const preview = buildOutputPreview(outputValue);
+  const hiddenArgCount = answerCandidate
+    ? 0
+    : data.args !== undefined
+      ? countArgumentFields(data.args)
+      : (existing?.hiddenArgumentCount ?? 0);
+  const outputPreview = answerCandidate ? preview.text : (preview.text ?? existing?.outputPreview);
   const nextEntry: ActivityEntry = {
     id,
     toolCallId,
     runId: payload.runId,
     ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
     toolName,
-    entryKind: "tool",
+    entryKind: answerCandidate ? "answer_candidate" : "tool",
+    ...(candidateStatus ? { itemId: toolCallId, candidateStatus } : {}),
     status,
-    startedAt: existing?.startedAt ?? startedAt,
+    startedAt,
     updatedAt: now,
-    durationMs: Math.max(0, now - (existing?.startedAt ?? startedAt)),
+    durationMs: Math.max(0, now - startedAt),
     outputTruncated: preview.truncated || existing?.outputTruncated === true,
-    summary: buildSummary(toolName, status, hiddenArgCount),
+    summary: answerCandidate
+      ? `answer_candidate.${candidateStatus}`
+      : buildSummary(toolName, status, hiddenArgCount),
     hiddenArgumentCount: hiddenArgCount,
     ...(outputPreview ? { outputPreview } : {}),
   };
@@ -214,42 +224,4 @@ export function updateToolActivity(
 
 function readAnswerCandidateStatus(value: unknown): "candidate" | "superseded" | "selected" | null {
   return value === "candidate" || value === "superseded" || value === "selected" ? value : null;
-}
-
-function updateAnswerCandidateActivity(
-  entries: ActivityEntry[],
-  payload: ActivityEvent,
-): ActivityEntry[] {
-  const itemId = toTrimmedString(payload.data.itemId);
-  const candidateStatus = readAnswerCandidateStatus(payload.data.status);
-  if (!itemId || !candidateStatus) {
-    return entries;
-  }
-  const id = `${payload.runId}:answer_candidate:${itemId}`;
-  const existing = entries.find((entry) => entry.id === id);
-  const now = payload.receivedAt;
-  const startedAt = existing?.startedAt ?? payload.ts;
-  const preview = buildOutputPreview(payload.data.progressText);
-  const nextEntry: ActivityEntry = {
-    id,
-    toolCallId: itemId,
-    itemId,
-    runId: payload.runId,
-    ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
-    toolName: "answer_candidate",
-    entryKind: "answer_candidate",
-    candidateStatus,
-    status: candidateStatus === "candidate" ? "running" : "done",
-    startedAt,
-    updatedAt: now,
-    durationMs: Math.max(0, now - startedAt),
-    outputTruncated: preview.truncated || existing?.outputTruncated === true,
-    summary: `answer_candidate.${candidateStatus}`,
-    hiddenArgumentCount: 0,
-    ...(preview.text ? { outputPreview: preview.text } : {}),
-  };
-  const next = existing
-    ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
-    : [...entries, nextEntry];
-  return next.length > ACTIVITY_ENTRY_LIMIT ? next.slice(-ACTIVITY_ENTRY_LIMIT) : next;
 }

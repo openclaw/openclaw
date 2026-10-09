@@ -1,4 +1,3 @@
-// Post-core plugin finalization and fresh-process handoff.
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,7 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
-  createPluginInstallRecordMap,
+  copyPluginInstallRecordMap,
   parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
@@ -155,6 +154,11 @@ export async function readPostCorePluginInstallRecordsFile(
   if (!filePath) {
     return undefined;
   }
+  const handoffError = (message: string, cause: unknown) =>
+    new Error(
+      `${message}: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause },
+    );
   // Missing handoff is optional (parent may omit the path). Corrupt / unreadable
   // handoff must fail closed: silent undefined previously dropped parent install
   // recovery context when the post-doctor index was still empty.
@@ -165,19 +169,13 @@ export async function readPostCorePluginInstallRecordsFile(
     if (hasErrnoCode(err, "ENOENT")) {
       return undefined;
     }
-    throw new Error(
-      `Unable to read plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
-      { cause: err },
-    );
+    throw handoffError("Unable to read plugin install records file", err);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(
-      `Malformed JSON in plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
-      { cause: err },
-    );
+    throw handoffError("Malformed JSON in plugin install records file", err);
   }
   try {
     const records = parsePluginInstallRecordMap(parsed);
@@ -186,10 +184,7 @@ export async function readPostCorePluginInstallRecordsFile(
     }
     return records;
   } catch (err) {
-    throw new Error(
-      `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
-      { cause: err },
-    );
+    throw handoffError("Invalid plugin install records in handoff file", err);
   }
 }
 
@@ -237,28 +232,10 @@ async function stopPostCoreUpdateChild(child: ChildProcess): Promise<void> {
       );
       return;
     } catch {
-      child.kill();
-      return;
+      // Fall back to signaling the direct child.
     }
   }
   child.kill();
-}
-
-/**
- * Returns the stdio mode for the post-core-update child process.
- *
- * Windows shells (PowerShell/CMD) wait for all processes that hold inherited console handles to
- * exit before returning the prompt, even after the immediate child has exited.  Using "pipe" on
- * Windows prevents the child (and any grandchildren it spawns) from ever receiving a reference to
- * the parent's console handles, eliminating the terminal hang seen in #78445.
- *
- * @internal exported for testing
- */
-export function resolvePostCoreUpdateChildStdio(
-  platform: NodeJS.Platform = process.platform,
-  jsonMode = false,
-): "inherit" | "pipe" {
-  return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
 /** @internal exported for focused handoff contract tests. */
@@ -273,22 +250,20 @@ export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
   if (runtimeComparison === null || runtimeComparison <= 0) {
     return params.records;
   }
-  let changed = false;
-  const next = createPluginInstallRecordMap<PluginInstallRecord>();
+  let next: Record<string, PluginInstallRecord> | undefined;
   for (const [pluginId, record] of Object.entries(params.records)) {
     const installedVersion = record.resolvedVersion ?? record.version;
     const comparison = installedVersion
       ? compareSemverStrings(installedVersion, params.targetVersion)
       : null;
     if (record.source !== "npm" || comparison === null || comparison <= 0) {
-      setPluginInstallRecordMapEntry(next, pluginId, record);
       continue;
     }
     const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
+    next ??= copyPluginInstallRecordMap(params.records);
     setPluginInstallRecordMapEntry(next, pluginId, rest);
-    changed = true;
   }
-  return changed ? next : params.records;
+  return next ?? params.records;
 }
 
 export async function continuePostCoreUpdateInFreshProcess(params: {
@@ -344,19 +319,14 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
   }
 
-  const argv = [entryPath, "update"];
-  if (params.opts.json) {
-    argv.push("--json");
-  }
-  if (params.opts.restart === false) {
-    argv.push("--no-restart");
-  }
-  if (params.opts.yes) {
-    argv.push("--yes");
-  }
-  if (params.opts.acceptCapabilities) {
-    argv.push("--accept-capabilities");
-  }
+  const argv = [
+    entryPath,
+    "update",
+    ...(params.opts.json ? ["--json"] : []),
+    ...(params.opts.restart === false ? ["--no-restart"] : []),
+    ...(params.opts.yes ? ["--yes"] : []),
+    ...(params.opts.acceptCapabilities ? ["--accept-capabilities"] : []),
+  ];
   // Older targets need the existing allowance. New targets recover operator intent
   // from the private handoff instead of treating this compatibility value as explicit.
   const handoff = {
@@ -396,7 +366,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   };
 
   try {
-    if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
+    if (pluginInstallRecords !== params.pluginInstallRecords) {
       await withPluginLifecycleLease({ assertCurrent: authority.assertCurrent }, async (lease) => {
         tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
           pluginInstallRecords,
@@ -412,7 +382,8 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     await writeJson(path.join(resultDir, "handoff.json"), handoff, { dirMode: 0o700 });
     const jsonMode = params.opts.json === true;
-    const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
+    // Windows descendants must not retain console handles after the updater exits (#78445).
+    const childStdio = process.platform === "win32" || jsonMode ? "pipe" : "inherit";
     const handoffEnv = buildPostCoreHandoffEnv({
       baseEnv,
       compatHostVersion: postCoreHostVersion,
@@ -454,6 +425,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           const input: UpdatePostCoreInput = {
             executor,
             runId,
+            originalRecoveryCapture: params.opts.run?.originalRecoveryCapture,
             root: params.root,
             requester: authority.requester?.requester,
             opts: {
@@ -653,10 +625,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       };
     }
     const pluginUpdate = postCoreResult;
-    if (exitCode !== 0) {
-      if (pluginUpdate) {
-        return { resumed: true, pluginUpdate };
-      }
+    if (exitCode !== 0 && !pluginUpdate) {
       await restoreTentativePluginIndex();
       return { resumed: false, exitCode };
     }
@@ -697,9 +666,10 @@ export function shouldResumePostCoreUpdateInFreshProcess(params: {
   }
   // A package-to-git switch can retain the target SHA and version while moving
   // the package root; the old process's hashed chunks are still unsafe.
-  if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
-    return true;
-  }
   // Successful Git activation replaces dist even when local commits leave HEAD unchanged.
-  return result.mode === "git";
+  return (
+    params.installKindChanged === true ||
+    isPackageManagerUpdateMode(result.mode) ||
+    result.mode === "git"
+  );
 }

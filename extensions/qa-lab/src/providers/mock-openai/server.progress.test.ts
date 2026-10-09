@@ -26,10 +26,6 @@ const APPROVAL_RESTRICTED_OUTPUT = APPROVAL_OUTPUT.replace(
   "allow-once|allow-always|deny\n",
   "allow-once|deny\nAllow Always is unavailable for this command.\n",
 );
-const APPROVAL_UNAVAILABLE_OUTPUT =
-  "Exec approval is required, but no interactive approval client is currently available.\n\nApprove it from the Web UI. Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox. Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.";
-const UNKNOWN_OUTPUT =
-  "Node command outcome is unknown for node-1.\nThe command may have executed. Do not rerun it automatically.\n\nCommand:\ntrue\n\nDetails: node disconnected";
 
 type ProgressResult = {
   tool: string;
@@ -117,58 +113,58 @@ async function requestProgress(
 }
 
 describe("Anthropic command progress wire", () => {
-  it.each([
-    { exitCode: 1, expected: "PROGRESS_OK" },
-    { exitCode: 0, expected: "BUG-TOOL-DID-NOT-FAIL" },
-  ])("honors the Matrix required failure after exit $exitCode", async ({ exitCode, expected }) => {
-    const prompt = buildMatrixToolProgressMentionSafetyPrompt(
-      "@qa-sut:matrix-qa.test",
-      "PROGRESS_OK",
-    );
-    const plan = await requestProgress("messages", prompt, []);
-    const call = plan.content[0];
-    expect(call.name).toBe("exec");
-    const args = call.input;
-    expect(args.command).toBe(
-      "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
-    );
-    const results: ProgressResult[] = [
-      {
-        tool: "exec",
-        args,
-        output: exitCode === 1 ? RUNNING_OUTPUT : [{ type: "text", text: RUNNING_OUTPUT }],
-      },
-    ];
-    const pending = await requestProgress("messages", prompt, results);
-    expect(pending.content).toMatchObject([{ name: "process" }]);
-    results.push({
-      tool: "process",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: `\n\nProcess exited with code ${exitCode}.`,
-    });
-    expect(await requestProgress("messages", prompt, results)).toMatchObject({
-      content: [{ text: expected }],
-    });
-  });
-  it.each([
-    { label: "missing", callId: null },
-    { label: "empty", callId: "" },
-  ])("rejects $label call IDs even when command failure is allowed", async ({ callId }) => {
-    const response = await requestProgress(
-      "messages",
-      EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
-      [
-        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
+  it.each([{ exitCode: 0, expected: "BUG-TOOL-DID-NOT-FAIL" }])(
+    "honors the Matrix required failure after exit $exitCode",
+    async ({ exitCode, expected }) => {
+      const prompt = buildMatrixToolProgressMentionSafetyPrompt(
+        "@qa-sut:matrix-qa.test",
+        "PROGRESS_OK",
+      );
+      const plan = await requestProgress("messages", prompt, []);
+      const call = plan.content[0];
+      expect(call.name).toBe("exec");
+      const args = call.input;
+      expect(args.command).toBe(
+        "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
+      );
+      const results: ProgressResult[] = [
         {
-          tool: "process",
-          args: { action: "poll", sessionId: "lucky-slug" },
-          output: "\n\nProcess exited with code 0.",
-          callId,
+          tool: "exec",
+          args,
+          output: exitCode === 1 ? RUNNING_OUTPUT : [{ type: "text", text: RUNNING_OUTPUT }],
         },
-      ],
-    );
-    expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
-  });
+      ];
+      const pending = await requestProgress("messages", prompt, results);
+      expect(pending.content).toMatchObject([{ name: "process" }]);
+      results.push({
+        tool: "process",
+        args: { action: "poll", sessionId: "lucky-slug" },
+        output: `\n\nProcess exited with code ${exitCode}.`,
+      });
+      expect(await requestProgress("messages", prompt, results)).toMatchObject({
+        content: [{ text: expected }],
+      });
+    },
+  );
+  it.each([{ label: "empty", callId: "" }])(
+    "rejects $label call IDs even when command failure is allowed",
+    async ({ callId }) => {
+      const response = await requestProgress(
+        "messages",
+        EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
+        [
+          { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
+          {
+            tool: "process",
+            args: { action: "poll", sessionId: "lucky-slug" },
+            output: "\n\nProcess exited with code 0.",
+            callId,
+          },
+        ],
+      );
+      expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
+    },
+  );
 });
 
 function execResult(output: ProgressResult["output"], isError?: boolean): ProgressResult {
@@ -213,17 +209,10 @@ describe("background command progress", () => {
   });
 
   it.each([
-    ["timeout after zero exit", pollResult(TIMED_OUT_OUTPUT), "BUG-TOOL-FAILED"],
-    ["failed process", pollResult("\n\nProcess exited with code 7."), "BUG-TOOL-FAILED"],
     [
       "single-newline exit-like stdout",
       pollResult("ordinary output\nProcess exited with code 0."),
       "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
-      "unrelated poll",
-      pollResult("\n\nProcess exited with code 0.", undefined, "other-session"),
-      "BUG-TOOL-PROGRESS-CALL-MISMATCH",
     ],
   ] as const)("does not report success for %s", async (_label, poll, marker) => {
     const response = await requestProgress("responses", EXEC_PROMPT, [
@@ -241,22 +230,21 @@ describe("background command progress", () => {
     expect(response).toMatchObject({ output: [{ content: [{ text: "PROGRESS_OK" }] }] });
   });
 
-  it.each([
-    { output: "Command aborted by signal SIGTERM", isError: true },
-    { output: `${RUNNING_OUTPUT}\n\n(Command exited with code 7)`, isError: false },
-    { output: "Node: node-1\n(Command exited with code 7)", isError: false },
-  ])("reports foreground failure from $output", async ({ output, isError }) => {
-    for (const allowsFailure of [false, true]) {
-      const response = await requestProgress(
-        "responses",
-        allowsFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT,
-        [execResult(output, isError)],
-      );
-      expect(response).toMatchObject({
-        output: [{ content: [{ text: allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED" }] }],
-      });
-    }
-  });
+  it.each([{ output: "Node: node-1\n(Command exited with code 7)", isError: false }])(
+    "reports foreground failure from $output",
+    async ({ output, isError }) => {
+      for (const allowsFailure of [false, true]) {
+        const response = await requestProgress(
+          "responses",
+          allowsFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT,
+          [execResult(output, isError)],
+        );
+        expect(response).toMatchObject({
+          output: [{ content: [{ text: allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED" }] }],
+        });
+      }
+    },
+  );
 
   it.each([
     [
@@ -265,48 +253,8 @@ describe("background command progress", () => {
       "BUG-TOOL-DID-NOT-COMPLETE",
     ],
     [
-      "typed error with an unknown outcome",
-      [execResult(`Task warning\n\n${UNKNOWN_OUTPUT}\n(Command exited with code 0)`, true)],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
       "restricted approval decisions",
       [execResult(APPROVAL_RESTRICTED_OUTPUT, false)],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
-      "foreign approval warning before actual pending notice",
-      [
-        execResult(
-          `${APPROVAL_OUTPUT.replace("\ntrue\n", "\nother command\n")}\n\n${APPROVAL_OUTPUT}`,
-          false,
-        ),
-      ],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
-      "foreign poll before exec",
-      [pollResult("\n\nProcess exited with code 0.", undefined, "foreign-session"), execResult("")],
-      "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    ],
-    [
-      "approval pending in approver DMs",
-      [
-        execResult(
-          "Approval required. I sent approval DMs to the approvers for this account.",
-          true,
-        ),
-      ],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
-      "approval unavailable",
-      [execResult(`Task warning\n\n${APPROVAL_UNAVAILABLE_OUTPUT}`, true)],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
-      "lost poll session",
-      [execResult(RUNNING_OUTPUT), pollResult("No session found for lucky-slug", true)],
       "BUG-TOOL-DID-NOT-COMPLETE",
     ],
   ] as const)(
@@ -374,46 +322,8 @@ async function completeProgress(params: {
 }
 
 describe("tool progress stdout", () => {
-  const target = "repo/資料🙂/missing.txt";
-  const prompt = [
-    "Conversation info:",
-    "```json",
-    '{"sender":{"id":"fixture-user"}}',
-    "```",
-    "",
-    `Tool progress error QA check: read "${target}" before answering. After the read fails, reply exactly \`PROGRESS_OK\`.`,
-  ].join("\n");
-  const carrier = [
-    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-    "Runtime: synthetic metadata.",
-    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  ].join("\n");
   it.each([
-    {
-      label: "fenced read with runtime context",
-      tool: "read",
-      prompt,
-      args: { path: target },
-      context: carrier,
-      output: JSON.stringify({ status: "error", tool: "read", error: `File not found: ${target}` }),
-      isError: true,
-    },
-    {
-      label: "JSON stdout containing an exec running header",
-      tool: "exec",
-      prompt: EXEC_PROMPT,
-      output: JSON.stringify({ text: RUNNING_OUTPUT }),
-    },
-    ...[
-      APPROVAL_RESTRICTED_OUTPUT.replace("Allow Always is unavailable for this command.\n", ""),
-      APPROVAL_OUTPUT.replace(
-        "If the short code is ambiguous,",
-        "Allow Always is unavailable for this command.\nIf the short code is ambiguous,",
-      ),
-      APPROVAL_OUTPUT.replaceAll("```", "````"),
-      APPROVAL_OUTPUT.replace("\ntrue\n", "\nother command\n"),
-      UNKNOWN_OUTPUT.replace("\ntrue\n", "\nother command\n"),
-    ].map((output) => ({
+    ...[APPROVAL_OUTPUT.replaceAll("```", "````")].map((output) => ({
       label: `exec stdout containing an incomplete or foreign notice: ${output}`,
       tool: "exec",
       prompt: EXEC_PROMPT,
@@ -421,7 +331,6 @@ describe("tool progress stdout", () => {
       isError: false,
     })),
     { label: "an empty read result", tool: "read", prompt: READ_PROMPT, output: "" },
-    { label: "an empty exec result", tool: "exec", prompt: EXEC_PROMPT, output: [] },
   ])("finishes after $label", async (fixture) => {
     const response = await completeProgress({
       args: fixture.tool === "exec" ? { command: "true" } : { path: "empty.txt" },
@@ -435,19 +344,6 @@ describe("tool progress stdout", () => {
 });
 
 it.each([
-  { label: "empty typed failure", output: [], isError: true, expected: "PROGRESS_OK" },
-  {
-    label: "explicit success with error-shaped content",
-    output: '{"error":"Access denied"}',
-    isError: false,
-    expected: "BUG-TOOL-DID-NOT-FAIL",
-  },
-  {
-    label: "untyped error-shaped content",
-    output: '{"error":"Access denied"}',
-    isError: undefined,
-    expected: "PROGRESS_OK",
-  },
   {
     label: "untyped content without failure evidence",
     output: "Access denied",

@@ -1,4 +1,3 @@
-// Control UI adapter for Web Awesome's accessible modal dialog.
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { css, html, type PropertyValues } from "lit";
@@ -7,6 +6,12 @@ import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.t
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
+
+function restoreFocus(target: HTMLElement): void {
+  target.focus({ preventScroll: true });
+  // Cross-origin frame adapters finish the return inside their own document.
+  target.dispatchEvent(new Event("openclaw:restore-focus"));
+}
 
 function setModalLayer(modal: HTMLElement, open: boolean) {
   const wasOpen = modalLayers.size > 0;
@@ -163,8 +168,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     @media (prefers-reduced-motion: reduce) {
+      wa-dialog,
       :host(.drawer) wa-dialog {
         --show-duration: 0ms;
+        --hide-duration: 0ms;
       }
 
       :host(.drawer) wa-dialog[open]::part(dialog) {
@@ -240,7 +247,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      returnFocus.focus({ preventScroll: true });
+      restoreFocus(returnFocus);
     }
     super.disconnectedCallback();
   }
@@ -290,18 +297,18 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    if (this.label) {
-      dialog.setAttribute("aria-label", this.label);
-    } else {
-      dialog.removeAttribute("aria-label");
-    }
-    if (this.description) {
-      dialog.setAttribute("aria-description", this.description);
-    } else {
-      dialog.removeAttribute("aria-description");
+    for (const [attribute, value] of Object.entries({
+      "aria-label": this.label,
+      "aria-description": this.description,
+    })) {
+      if (value) {
+        dialog.setAttribute(attribute, value);
+      } else {
+        dialog.removeAttribute(attribute);
+      }
     }
     if (this.open) {
-      if (!dialog?.open) {
+      if (!dialog.open) {
         this.#returnFocus =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         this.#initialFocusPending = true;
@@ -315,7 +322,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         generation === this.#syncGeneration &&
         this.isConnected &&
         this.open &&
-        dialog?.open &&
+        dialog.open &&
         this.#initialFocusPending
       ) {
         this.#initialFocusPending = false;
@@ -324,7 +331,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       return;
     }
     this.#initialFocusPending = false;
-    if (webAwesomeDialog.open || dialog?.open) {
+    if (webAwesomeDialog.open || dialog.open) {
       this.#suppressNextCancel = true;
       webAwesomeDialog.open = false;
     } else {
@@ -402,7 +409,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
           originalReturnFocus.blur();
         }
       } else if (returnFocus.isConnected) {
-        returnFocus.focus({ preventScroll: true });
+        restoreFocus(returnFocus);
       }
     }, 0);
   };

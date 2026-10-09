@@ -599,27 +599,33 @@ describe("startGmailWatcher", () => {
     expect(children).toHaveLength(expectedChildren);
   });
 
-  it.each([
-    {
-      name: "marker completed before tail truncation",
-      chunks: ["address alre", `ady in use ${"x".repeat(800)}`],
-      expectedChildren: 1,
-    },
-    {
-      name: "non-bind stderr",
-      chunks: ["some erro", "r message\n"],
-      expectedChildren: 2,
-    },
-  ])("classifies $name", async ({ chunks, expectedChildren }) => {
+  it("recovers after a transient bind conflict and cancels pending retries on stop", async () => {
     vi.useFakeTimers();
     const children = await startMockWatcher();
     const child = expectDefined(children[0], "watcher child");
-    for (const chunk of chunks) {
-      child.stderr.emit("data", Buffer.from(chunk));
-    }
+    child.stderr.emit("data", Buffer.from("listen: EADDRINUSE"));
     child.emit("close", 1, null);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(children).toHaveLength(2);
 
-    await vi.advanceTimersByTimeAsync(6000);
-    expect(children).toHaveLength(expectedChildren);
+    const replacement = expectDefined(children[1], "replacement watcher");
+    replacement.stderr.emit("data", Buffer.from("listen: EADDRINUSE"));
+    replacement.emit("close", 1, null);
+    await stopGmailWatcher();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(children).toHaveLength(2);
+  });
+
+  it("bounds bind retries even when a split marker exceeds the stderr tail", async () => {
+    vi.useFakeTimers();
+    const children = await startMockWatcher();
+    for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
+      const child = expectDefined(children.at(-1), "watcher child");
+      child.stderr.emit("data", Buffer.from("address alre"));
+      child.stderr.emit("data", Buffer.from(`ady in use ${"x".repeat(800)}`));
+      child.emit("close", 1, null);
+      await vi.advanceTimersByTimeAsync(delayMs);
+    }
+    expect(children).toHaveLength(4);
   });
 });

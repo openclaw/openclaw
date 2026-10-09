@@ -19,6 +19,7 @@ import {
   isRunningAsRoot,
   isSystemctlAvailable,
   reloadSystemdUserManager,
+  systemdInspectionError,
 } from "./systemd-exec.js";
 import {
   assertNoSystemGatewayOwnershipForActivation,
@@ -42,8 +43,8 @@ async function runSystemdServiceAction(
     reportMutation(`systemctl-${action}`);
     params.stdout.write(`${formatLine(`${label} systemd service`, unitName)}\n`);
   };
-  if (params.systemdIdentity && action !== "stop") {
-    if (params.systemdIdentity.scope === "user") {
+  if (params.systemdIdentity) {
+    if (params.systemdIdentity.scope === "user" && action !== "stop") {
       const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName };
       await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
     }
@@ -56,6 +57,9 @@ async function runSystemdServiceAction(
       identity: params.systemdIdentity,
       action,
       assertCurrent: params.assertCurrent,
+      beforeMutation: params.beforeMutation,
+      beforeEffect: params.beforeEffect,
+      prepareEffect: params.prepareEffect,
       warn:
         params.warn ??
         ((message) => {
@@ -79,12 +83,25 @@ async function runSystemdServiceAction(
       return execSystemctl(args, env);
     };
   } else {
-    await assertSystemdAvailable(env);
     if (action !== "stop") {
+      await assertSystemdAvailable(env);
       const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: unitName };
       await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
     }
-    runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
+    runSystemctl = (args) =>
+      execSystemctlUser(
+        env,
+        args,
+        undefined,
+        params.assertCurrent,
+        action === "stop"
+          ? {
+              warn:
+                params.warn ??
+                ((message) => params.stdout.write(`${formatLine("Warning", message)}\n`)),
+            }
+          : undefined,
+      );
   }
   if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
@@ -92,13 +109,19 @@ async function runSystemdServiceAction(
     params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
   }
-  params.assertCurrent?.();
+  if (action !== "stop") {
+    params.assertCurrent?.();
+  }
   if (action === "restart") {
     params.onRestartAttempted?.();
   }
   const res = await runSystemctl([action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${action} failed: ${res.stderr || res.stdout}`.trim());
+    throw systemdInspectionError(
+      res,
+      `systemctl ${action} failed: ${res.stderr || res.stdout}`.trim(),
+      installed?.scope,
+    );
   }
   report(unitName);
 }
@@ -140,20 +163,14 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
     const unitPath = resolveSystemdUnitPathForName(env, name);
-    let exists = false;
-    try {
-      await fs.access(unitPath);
-      exists = true;
-    } catch {
-      // ignore
-    }
-    let backupExists = false;
-    try {
-      await fs.access(`${unitPath}.bak`);
-      backupExists = true;
-    } catch {
-      // ignore
-    }
+    const exists = await fs.access(unitPath).then(
+      () => true,
+      () => false,
+    );
+    const backupExists = await fs.access(`${unitPath}.bak`).then(
+      () => true,
+      () => false,
+    );
     let enabled = false;
     if (systemctlAvailable) {
       const res = await execSystemctlUser(env, ["is-enabled", `${name}.service`]);

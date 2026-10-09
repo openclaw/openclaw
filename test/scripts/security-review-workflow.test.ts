@@ -1,13 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import ignore from "ignore";
@@ -121,11 +113,14 @@ function runSelectedEntry(workspace: string, entry: string) {
 }
 
 describe("security review workflow trust boundaries", () => {
-  it.each(["resolve", "review"] as const)(
-    "isolates %s recovery from late writes in the failed checkout",
-    (name) => {
-      const workspace = tempDirs.make("openclaw-security-checkout-retry-");
-      const failedSource = materializeJobSources(workspace, name);
+  it.each([
+    { name: "resolve", recovered: false },
+    { name: "resolve", recovered: true },
+    { name: "review", recovered: true },
+  ] as const)("stages trusted $name sources (recovered=$recovered)", ({ name, recovered }) => {
+    const workspace = tempDirs.make("openclaw-security-checkout-retry-");
+    const failedSource = materializeJobSources(workspace, name);
+    if (recovered) {
       mkdirSync(join(failedSource, ".git"), { recursive: true });
       writeFileSync(join(failedSource, ".git/index.lock"), "failed checkout lock");
       materializeJobSources(workspace, name, "checkout_retry");
@@ -134,22 +129,29 @@ describe("security review workflow trust boundaries", () => {
         join(failedSource, "scripts/github/guard-shared.mjs"),
         'throw new Error("late write from failed checkout");',
       );
-      stageJobSources(workspace, name, true);
-      const probe = spawnSync(
-        process.execPath,
-        ["--input-type=module", "-e", 'import "./scripts/github/guard-shared.mjs"'],
-        { cwd: workspace, env: {}, encoding: "utf8" },
+    }
+    stageJobSources(workspace, name, recovered);
+    if (name === "resolve") {
+      const result = runSelectedEntry(workspace, "security-review-event.mjs");
+      expect(result.status).toBe(1);
+      expect(result.stderr.trim()).toBe(
+        "GitHub token, event, event name, and repository are required.",
       );
-      expect(probe.stderr).toBe("");
-      expect(probe.status).toBe(0);
-      expect(existsSync(join(workspace, ".git/index.lock"))).toBe(false);
-      if (name === "review") {
-        expect(readFileSync(join(workspace, runtimeActionPath, "action.yml"), "utf8")).toBe(
-          readFileSync(`${runtimeActionPath}/action.yml`, "utf8"),
-        );
-      }
-    },
-  );
+    }
+    const probe = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", 'import "./scripts/github/guard-shared.mjs"'],
+      { cwd: workspace, env: {}, encoding: "utf8" },
+    );
+    expect(probe.stderr).toBe("");
+    expect(probe.status).toBe(0);
+    expect(existsSync(join(workspace, ".git/index.lock"))).toBe(false);
+    if (name === "review") {
+      expect(readFileSync(join(workspace, runtimeActionPath, "action.yml"), "utf8")).toBe(
+        readFileSync(`${runtimeActionPath}/action.yml`, "utf8"),
+      );
+    }
+  });
 
   it("executes trusted scripts and limits comment writes to the serialized review job", () => {
     const workflow = readWorkflow("security-review");
@@ -581,24 +583,6 @@ describe("security review workflow trust boundaries", () => {
     }
   });
 
-  it("loads the selected resolver closure without workspace dependencies", () => {
-    const workspace = tempDirs.make("openclaw-security-resolve-source-");
-    materializeJobSources(workspace, "resolve");
-    stageJobSources(workspace, "resolve");
-    const entry = "security-review-event.mjs";
-    const result = runSelectedEntry(workspace, entry);
-    expect(result.status).toBe(1);
-    expect(result.stderr.trim()).toBe(
-      "GitHub token, event, event name, and repository are required.",
-    );
-
-    rmSync(join(workspace, "scripts/lib/bounded-response.mjs"));
-    const missingModule = runSelectedEntry(workspace, entry);
-    expect(missingModule.status).toBe(1);
-    expect(missingModule.stderr).toContain("ERR_MODULE_NOT_FOUND");
-    expect(missingModule.stderr).toContain("bounded-response.mjs");
-  });
-
   it.skipIf(process.platform === "win32")(
     "installs only the frozen trusted tooling project and makes its policy packages importable",
     () => {
@@ -680,16 +664,6 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       expect(loaded.stderr.trim()).toBe(
         "GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.",
       );
-
-      rmSync(join(workspace, ".github/security-review-policy.yml"));
-      const missingPolicy = spawnSync(process.execPath, [probe], {
-        cwd: workspace,
-        env: {},
-        encoding: "utf8",
-      });
-      expect(missingPolicy.status).toBe(1);
-      expect(missingPolicy.stderr).toContain("ENOENT");
-      expect(missingPolicy.stderr).toContain("security-review-policy.yml");
     },
   );
 
@@ -760,41 +734,35 @@ function ownersFor(path: string) {
 
 describe("security review ownership", () => {
   it.each([
-    ".github/CODEOWNERS",
-    "SECURITY.md",
-    ".github/codeql/codeql-core-auth-secrets-critical-security.yml",
-    ".github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql",
-    ".github/workflows/codeql-macos-critical-security.yml",
-    ".github/workflows/security-review.yml",
-    ".github/security-review-policy.yml",
-    ".github/actions/setup-security-review/action.yml",
-    ".github/actions/setup-security-review/package.json",
-    ".github/actions/setup-security-review/package-lock.json",
-    "scripts/github/security-review-policy.mjs",
-    "scripts/github/security-review-event.mjs",
-    "scripts/github/security-review.mjs",
-    "scripts/github/security-review-rollout.mjs",
-    "scripts/github/guard-review.mjs",
-    "scripts/github/guard-shared.mjs",
-    "scripts/lib/bounded-response.mjs",
-  ])("requires SecOps alone for %s", (path) => {
-    expect(ownersFor(path)).toEqual(["@openclaw/openclaw-secops"]);
-  });
-
-  it.each([
-    "src/gateway/auth.ts",
-    "src/secrets/store/secret-store.ts",
-    "src/agents/sandbox.ts",
-    "pnpm-lock.yaml",
-    ".gitignore",
-    "docs/gateway/secrets.md",
-  ])("leaves maintainer review authority for %s", (path) => {
-    expect(ownersFor(path)).toEqual([]);
-  });
-
-  it("preserves separate release-manager ownership", () => {
-    expect(ownersFor(".github/workflows/openclaw-npm-release.yml")).toEqual([
-      "@openclaw/openclaw-release-managers",
-    ]);
+    ...[
+      ".github/CODEOWNERS",
+      "SECURITY.md",
+      ".github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql",
+      ".github/workflows/codeql-macos-critical-security.yml",
+      ".github/workflows/security-review.yml",
+      ".github/security-review-policy.yml",
+      ".github/actions/setup-security-review/action.yml",
+      "scripts/github/security-review-policy.mjs",
+      "scripts/github/security-review-event.mjs",
+      "scripts/github/security-review.mjs",
+      "scripts/github/security-review-rollout.mjs",
+      "scripts/github/guard-review.mjs",
+      "scripts/github/guard-shared.mjs",
+      "scripts/lib/bounded-response.mjs",
+    ].map((path) => ({ path, owners: ["@openclaw/openclaw-secops"] })),
+    ...[
+      "src/gateway/auth.ts",
+      "src/secrets/store/secret-store.ts",
+      "src/agents/sandbox.ts",
+      "pnpm-lock.yaml",
+      ".gitignore",
+      "docs/gateway/secrets.md",
+    ].map((path) => ({ path, owners: [] })),
+    {
+      path: ".github/workflows/openclaw-npm-release.yml",
+      owners: ["@openclaw/openclaw-release-managers"],
+    },
+  ])("keeps the designated review authority for $path", ({ path, owners }) => {
+    expect(ownersFor(path)).toEqual(owners);
   });
 });

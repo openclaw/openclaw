@@ -10,6 +10,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { catalog, pluginModule } from "./native-plugin-ui.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({ name: "Control UI selected text destinations" });
 const selectedText = "Review the deployment checklist.";
 const draft = "Please explain the next step.";
@@ -38,7 +39,9 @@ suite.define(() => {
           viewport: viewports[0],
           locale: "en-US",
           reducedMotion: "reduce",
-          recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } },
+          recordVideo: captureUiProof
+            ? { dir: suite.artifactDir, size: { width: 1440, height: 900 } }
+            : undefined,
         },
         async ({ page }) => {
           const passage = scenario === "oversized selection" ? "x".repeat(16_001) : selectedText;
@@ -197,7 +200,7 @@ suite.define(() => {
           locale: "en-US",
           reducedMotion: "reduce",
           serviceWorkers: "block",
-          recordVideo: { dir: suite.artifactDir, size: viewport },
+          recordVideo: captureUiProof ? { dir: suite.artifactDir, size: viewport } : undefined,
         },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {

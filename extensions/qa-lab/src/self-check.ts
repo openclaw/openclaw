@@ -22,7 +22,7 @@ export function isQaSelfCheckSuccessful(result: QaSelfCheckResult): boolean {
   );
 }
 
-export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
+function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
   if (params?.outputPath) {
     return params.outputPath;
   }

@@ -1,12 +1,20 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEvent,
+  Model,
+  TextContent as TextBlock,
+  ThinkingContent as ThinkingBlock,
+  ToolCall,
+} from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
   createOpenAIEncryptedToolCallReasoningTracker,
   finalizeOpenAICompletionsToolCalls,
+  hasOpenAICompletionsDeltaContent,
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
@@ -80,17 +88,13 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
   const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
     | Record<string, unknown>
     | undefined;
-  const fromExtra = extra?.thought_signature;
-  if (typeof fromExtra === "string" && fromExtra.length > 0) {
-    return fromExtra;
-  }
-  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
-    ?.thought_signature;
-  if (typeof fromFunction === "string" && fromFunction.length > 0) {
-    return fromFunction;
-  }
-  const fromToolCall = tc.thought_signature;
-  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+  return (
+    readNonEmptyStringPreservingWhitespace(extra?.thought_signature) ??
+    readNonEmptyStringPreservingWhitespace(
+      (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
+    ) ??
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+  );
 }
 
 export async function processCompletionsStream(
@@ -112,16 +116,7 @@ export async function processCompletionsStream(
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = {
-    type: "toolCall";
-    id: string;
-    name: string;
-    arguments: Record<string, unknown>;
-    partialArgs: string;
-    thoughtSignature?: string;
-  };
-  type TextBlock = { type: "text"; text: string; textSignature?: string };
-  type ThinkingBlock = { type: "thinking"; thinking: string; thinkingSignature?: string };
+  type ToolCallBlock = ToolCall & { partialArgs: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   let directTextBlock: TextBlock | null = null;
   let directThinkingBlock: ThinkingBlock | null = null;
@@ -130,7 +125,6 @@ export async function processCompletionsStream(
   let confirmedInterruptedTextBlock: TextBlock | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
-  let isFlushingPendingPostToolCallDeltas = false;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const encryptedReasoning = createOpenAIEncryptedToolCallReasoningTracker();
@@ -235,14 +229,9 @@ export async function processCompletionsStream(
     });
   };
   const flushPendingPostToolCallDeltas = () => {
-    if (
-      isFlushingPendingPostToolCallDeltas ||
-      currentBlock?.type === "toolCall" ||
-      pendingPostToolCallDeltas.length === 0
-    ) {
+    if (currentBlock?.type === "toolCall" || pendingPostToolCallDeltas.length === 0) {
       return;
     }
-    isFlushingPendingPostToolCallDeltas = true;
     const bufferedDeltas = pendingPostToolCallDeltas;
     pendingPostToolCallDeltas = [];
     pendingPostToolCallBytes = 0;
@@ -253,7 +242,6 @@ export async function processCompletionsStream(
         appendThinkingDeltaInternal(delta);
       }
     }
-    isFlushingPendingPostToolCallDeltas = false;
   };
   const appendThinkingDelta = (reasoningDelta: { signature?: string; text: string }) => {
     flushPendingPostToolCallDeltas();
@@ -284,7 +272,7 @@ export async function processCompletionsStream(
       }
       if (reasoningDelta.kind === "text") {
         appendTextDelta(reasoningDelta.text, reasoningDelta.source);
-      } else if (emitReasoning) {
+      } else {
         appendThinkingDelta(
           directMode && model.provider === "opencode-go" && reasoningDelta.signature === "reasoning"
             ? { ...reasoningDelta, signature: "reasoning_content" }
@@ -312,7 +300,6 @@ export async function processCompletionsStream(
       arguments: toolCall.arguments,
       partialArgs: toolCall.partialArgs,
     };
-    toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
     currentBlock = block;
     output.content.push(block);
     toolCallBlockIndices.set(block, output.content.length - 1);
@@ -340,12 +327,11 @@ export async function processCompletionsStream(
       }
     }
   };
-  const appendFilteredVisibleTextDelta = (text: string) => {
-    appendRecoveredParts(deepSeekToolCallRecoverer?.push(text) ?? [{ kind: "text", text }]);
-  };
   const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
     if (delta.kind === "text") {
-      appendFilteredVisibleTextDelta(delta.text);
+      appendRecoveredParts(
+        deepSeekToolCallRecoverer?.push(delta.text) ?? [{ kind: "text", text: delta.text }],
+      );
     }
   };
   const emitReasoningUsageActivity = (hasReasoningUsageActivity: boolean) => {
@@ -418,8 +404,6 @@ export async function processCompletionsStream(
     if (!rawChunk || typeof rawChunk !== "object") {
       continue;
     }
-    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
-    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
@@ -428,24 +412,30 @@ export async function processCompletionsStream(
     if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
       output.responseModel ||= chunk.model;
     }
-    let hasReasoningUsageActivity = false;
-    if (chunk.usage) {
-      output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
+    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    const usage = chunk.usage || choice?.usage;
+    const hasReasoningUsageActivity = Boolean(
+      usage && hasOpenAICompletionsReasoningUsageActivity(usage),
+    );
+    if (usage) {
+      output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
       });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
-    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    const rawChoiceDelta = choice?.delta ?? choice?.message;
+    // Classify before legacy-tool buffering and hidden-reasoning display filtering.
+    notifyLlmRequestActivity(
+      options?.signal,
+      Boolean(
+        usage ||
+        choice?.finish_reason ||
+        (rawChoiceDelta &&
+          (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
+      ),
+    );
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
-    }
-    const choiceUsage = choice.usage;
-    if (!chunk.usage && choiceUsage) {
-      output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
-        includeReasoningTokens: !directMode,
-      });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
@@ -457,7 +447,6 @@ export async function processCompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
@@ -622,7 +611,7 @@ export async function processCompletionsStream(
     allowSilentToolCallPromotion:
       finishReason === "stop" || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
     onConfirmedToolCall(block, contentIndex) {
-      if (directMode || block.type !== "toolCall") {
+      if (directMode) {
         return;
       }
       pushStreamEvent({
@@ -664,10 +653,7 @@ export function shouldEmitOpenAICompletionsReasoning(
     return false;
   }
   const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
-    return false;
-  }
-  return true;
+  return Boolean(effort) && isOpenAICompletionsThinkingEnabled(effort);
 }
 
 function hasOpenAICompletionsReasoningUsageActivity(

@@ -5,8 +5,12 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
+import * as doctorConfigFlow from "../commands/doctor-config-flow.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
+import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
@@ -19,6 +23,7 @@ import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "../infra/state-migrations.exec-approvals.js";
+import * as mediaArchiveTransform from "../infra/state-migrations.media-persistence-transform.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
   detectLegacyWorkspaceState,
@@ -35,6 +40,7 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
+import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -45,9 +51,11 @@ const { mocks } = await import("./doctor-health.test-support.js");
 
 type DoctorManagedRepairOutcome =
   | "ready"
-  | "clean-repair"
+  | "archive-verification"
   | "clean-stopped-repair"
-  | "clean-inspect"
+  | "clean-stopped-probe-timeout"
+  | "clean-stopped-owner-unknown"
+  | "clean-stopped-manager-unknown"
   | "clean-force-repair"
   | "clean-force-inspect"
   | "update-no-restart"
@@ -73,7 +81,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         // These cases own managed agent repair after shared-state initialization.
         materializeSharedStateDatabase(state.env);
         const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
-        const inspectionOnly = outcome === "clean-inspect" || outcome === "clean-force-inspect";
+        const archiveVerification = outcome === "archive-verification";
+        const current = clean || archiveVerification;
+        const inspectionOnly = outcome === "clean-force-inspect";
         const force = outcome.startsWith("clean-force-");
         const cfg: OpenClawConfig = {
           agents: {
@@ -85,7 +95,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           },
         };
         await state.writeConfig(
-          clean
+          current
             ? cfg
             : {
                 agents: {
@@ -126,10 +136,41 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
           );
         }
-        const open = clean ? openOpenClawAgentDatabase : openHistoricalAgentDatabase;
+        const open = current ? openOpenClawAgentDatabase : openHistoricalAgentDatabase;
         const initial = open({ agentId: "main", env: state.env });
         const secondary = open({ agentId: "research", env: state.env });
-        if (!clean) {
+        if (archiveVerification) {
+          const bytes = Buffer.from(
+            '{"type":"message","message":{"role":"user","content":"retained history"}}\n',
+          );
+          const archiveName = "retained.jsonl.deleted.1234";
+          ensureSessionTranscriptArchiveSchema(initial.db);
+          initial.db
+            .prepare(
+              `INSERT INTO session_transcript_archives
+               (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+                archive_name,created_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+            )
+            .run(
+              "retained",
+              "retained-generation",
+              "agent:main:retained",
+              "deleted",
+              "identity",
+              bytes,
+              sha256Hex(bytes),
+              archiveName,
+              1234,
+              1234,
+            );
+          const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
+            agentId: "main",
+            path: initial.path,
+          });
+          fs.mkdirSync(archiveDirectory, { recursive: true });
+          fs.writeFileSync(path.join(archiveDirectory, archiveName), bytes);
+        }
+        if (!current) {
           secondary.db.close();
           initial.db.close();
         }
@@ -142,7 +183,13 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
         const initiallyStopped =
-          outcome === "clean-stopped-repair" || outcome === "update-no-restart-stopped";
+          outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
+        const inconclusiveActivation =
+          outcome.startsWith("clean-stopped-") && outcome !== "clean-stopped-repair";
+        const platform =
+          outcome === "clean-stopped-manager-unknown"
+            ? vi.spyOn(process, "platform", "get").mockReturnValue("linux")
+            : undefined;
         let running = !initiallyStopped;
         if (initiallyStopped) {
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
@@ -166,41 +213,61 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         const restart = vi.fn(async () => {
           events.push("restart");
           if (outcome === "ready") {
-            expect(() =>
-              assertNoOpenClawAgentDatabaseLeases("main", { env: state.env }),
-            ).not.toThrow();
-            expect(() =>
-              assertNoOpenClawAgentDatabaseLeases("research", { env: state.env }),
-            ).not.toThrow();
+            for (const agentId of ["main", "research"]) {
+              expect(() =>
+                assertNoOpenClawAgentDatabaseLeases(agentId, { env: state.env }),
+              ).not.toThrow();
+            }
           }
-          const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-          expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_AGENT_SCHEMA_VERSION,
-          );
-          const research = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
-          expect(research.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_AGENT_SCHEMA_VERSION,
-          );
+          // A refusal before schema convergence restores the captured service,
+          // whose prior runtime already served this state. Other cases prove that
+          // the candidate can reopen every migrated database before health passes.
+          if (outcome !== "repair-failed" && outcome !== "config-refused") {
+            for (const agentId of ["main", "research"]) {
+              const reopened = openOpenClawAgentDatabase({ agentId, env: state.env });
+              expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+                OPENCLAW_AGENT_SCHEMA_VERSION,
+              );
+            }
+          }
           running = true;
           return { outcome: "completed" as const };
         });
+        const start = vi.fn(async () => {
+          events.push("start");
+          running = true;
+        });
         mocks.service.mockReturnValue({
-          readCommand: async () => command,
+          readCommand: async () => {
+            if (events.includes("repair")) {
+              if (outcome === "clean-stopped-probe-timeout") {
+                throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+              }
+              if (outcome === "clean-stopped-owner-unknown") {
+                return null;
+              }
+            }
+            return command;
+          },
           readRuntime: async () => ({
             status: running ? "running" : "stopped",
-            systemd: { managerUid: process.getuid?.() ?? 2001 },
+            systemd:
+              outcome === "clean-stopped-manager-unknown" && events.includes("repair")
+                ? undefined
+                : { managerUid: process.getuid?.() ?? 2001 },
             ...(running ? { pid } : {}),
           }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
           isLoaded: async () => running,
           isEnabled: async () => running,
           stop,
+          start,
           restart,
         });
         mocks.runContributions.mockImplementation(async (ctx) => {
           events.push("repair");
           expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly);
-          if (clean) {
+          if (clean || archiveVerification) {
             return;
           }
           if (outcome === "repair-failed") {
@@ -256,6 +323,23 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const archiveTransform = archiveVerification
+          ? vi.spyOn(mediaArchiveTransform, "transformMediaArchiveContent")
+          : undefined;
+        const loadConfig = doctorConfigFlow.loadAndMaybeMigrateDoctorConfig;
+        const archiveRepair = archiveVerification
+          ? vi
+              .spyOn(doctorConfigFlow, "loadAndMaybeMigrateDoctorConfig")
+              .mockImplementation(async (params) => {
+                expect(running).toBe(false);
+                expect(
+                  await migrateLegacyMediaPersistence({
+                    preparedDiscovery: params.agentDatabaseMigrationDiscovery,
+                  }),
+                ).toEqual({ changes: [], warnings: [] });
+                return await loadConfig(params);
+              })
+          : undefined;
         const expectProcessOwnerReleased = () => {
           const owner = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(state.env));
           expect(owner).not.toBeNull();
@@ -306,6 +390,21 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
             return;
           }
+          if (inconclusiveActivation) {
+            await run;
+            expect(events).toEqual(["repair"]);
+            expect(running).toBe(false);
+            expect(start).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+            expect(runtime.log).toHaveBeenCalledWith(
+              expect.stringMatching(
+                /Gateway activation skipped.*inconclusive.*gateway status --deep/s,
+              ),
+            );
+            expectProcessOwnerReleased();
+            return;
+          }
           if (outcome === "ancestor-blocked") {
             await expect(run).rejects.toThrow("openclaw doctor --fix");
             await expect(run).rejects.toThrow("from a shell outside the gateway service");
@@ -319,7 +418,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
           } else if (outcome === "config-refused") {
-            await expect(run).rejects.toThrow("persisted repair state is not ready");
+            await run;
             expect(runtime.exit).toHaveBeenCalledWith(1);
           } else if (outcome === "store-close-failed") {
             await expect(run).rejects.toThrow("synthetic database close failure");
@@ -344,10 +443,15 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           const shouldRestart =
             outcome === "ready" ||
+            archiveVerification ||
+            outcome === "repair-failed" ||
+            outcome === "store-close-failed" ||
+            outcome === "config-refused" ||
+            outcome === "workspace-cleanup-failed" ||
             outcome === "restart-unhealthy" ||
-            outcome === "clean-repair" ||
             outcome === "clean-stopped-repair" ||
             outcome === "clean-force-repair" ||
+            approvalsBlocked ||
             outcome === "approvals-migrated" ||
             outcome === "update-legacy";
           expect(events).toEqual(
@@ -357,10 +461,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
                 ? [...(initiallyStopped ? [] : ["stop"]), "repair", "restart"]
                 : ["stop", "repair"],
           );
-          expect(stop).toHaveBeenCalledTimes(inspectionOnly || initiallyStopped ? 0 : 1);
-          expect(restart).toHaveBeenCalledTimes(shouldRestart ? 1 : 0);
           if (shouldRestart) {
-            expect(running).toBe(true);
             expect(restart).toHaveBeenCalledWith(
               expect.objectContaining({ preserveDefinition: true }),
             );
@@ -371,6 +472,12 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           if (clean) {
             expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+          }
+          if (archiveTransform) {
+            expect(archiveTransform).toHaveBeenCalledTimes(1);
+            expect(archiveTransform.mock.invocationCallOrder[0]).toBeLessThan(
+              stop.mock.invocationCallOrder[0]!,
+            );
           }
           if (approvalsCase) {
             if (approvalsBlocked) {
@@ -389,13 +496,21 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
               ).toBe(serializeExecApprovals(canonicalApprovals));
             }
           }
-          if (outcome === "ready" || clean || outcome === "approvals-migrated") {
+          if (
+            outcome === "ready" ||
+            clean ||
+            archiveVerification ||
+            outcome === "approvals-migrated"
+          ) {
             expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
           } else {
             expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
           }
         } finally {
+          archiveRepair?.mockRestore();
+          archiveTransform?.mockRestore();
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+          platform?.mockRestore();
         }
       });
     },

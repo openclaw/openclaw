@@ -6,7 +6,10 @@ import { createRuntimePathLookup } from "../infra/update-runtime-path-index.js";
 import { collectBundledPluginPublicSurfaceArtifacts } from "./bundled-plugin-scan.js";
 import { isPluginControlUiAssetPath } from "./control-ui-assets.js";
 import { loadPluginManifest } from "./manifest.js";
-import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import {
+  listBuiltRuntimeEntryCandidates,
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+} from "./package-entrypoints.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES } from "./package-manifest.js";
 import {
   parsePluginCacheJson,
@@ -20,7 +23,6 @@ import {
   PLUGIN_TOOL_ACTIVITY_ICON_DIR,
   PORTABLE_PLUGIN_ICON_PATH,
 } from "./portable-icon-paths.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 /** These files must keep independent inodes for the existing plugin safety checks. */
 export function collectPluginSafetyInspectedFiles(
@@ -30,6 +32,7 @@ export function collectPluginSafetyInspectedFiles(
   const entryKinds = new Map(entries.map((entry) => [entry.path, entry.kind]));
   const activityScopes: Array<readonly [string, string]> = [];
   const browserScopes: Array<readonly [string, string]> = [];
+  const skillScopes: Array<readonly [string, string]> = [];
   withPluginCache(createPluginCache({ kind: "operation" }), () => {
     for (const entry of entries) {
       if (path.basename(entry.path) !== "openclaw.plugin.json") {
@@ -110,6 +113,13 @@ export function collectPluginSafetyInspectedFiles(
       if (browser && isPathInside(rootDir, browser)) {
         browserScopes.push([browser, browser]);
       }
+      for (const skill of manifest?.skills ?? []) {
+        const directory = path.resolve(rootDir, skill);
+        const real = isPathInside(rootDir, directory) ? pluginCacheRealpathSync(directory) : null;
+        if (real && isPathInside(rootDir, real) && entryKinds.get(real) === "directory") {
+          skillScopes.push([real, real]);
+        }
+      }
     }
   });
   // Nested contracts validate paths relative to their own root, not an ancestor.
@@ -117,6 +127,7 @@ export function collectPluginSafetyInspectedFiles(
     right.length - left.length;
   const activityScope = createRuntimePathLookup(activityScopes.toSorted(deepestFirst));
   const browserScope = createRuntimePathLookup(browserScopes.toSorted(deepestFirst));
+  const skillScope = createRuntimePathLookup(skillScopes.toSorted(deepestFirst));
   for (const entry of entries) {
     if (entry.kind !== "file") {
       continue;
@@ -126,6 +137,7 @@ export function collectPluginSafetyInspectedFiles(
     if (
       // Peer repair reads ordinary dependency manifests with the same strict inode guard.
       path.basename(entry.path) === "package.json" ||
+      (path.basename(entry.path) === "SKILL.md" && skillScope(entry.path) !== undefined) ||
       (activity &&
         path.dirname(entry.path) === activity &&
         entry.path.endsWith(".svg") &&

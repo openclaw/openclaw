@@ -1,4 +1,3 @@
-// Mattermost type declarations derive plugin contracts from the runtime schema.
 import type { z } from "zod";
 import type { MattermostAccountSchemaBase, MattermostConfigSchema } from "./config-schema-core.js";
 

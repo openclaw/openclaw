@@ -47,6 +47,32 @@ export interface SmokeCliOptions extends SmokeHostOptions, SmokeRunOptions {
   vmName: string;
 }
 
+export const smokeDefaultOptions = {
+  hostIp: undefined,
+  hostPortExplicit: false,
+  installVersion: "",
+  json: false,
+  keepServer: false,
+  latestVersion: "",
+  mode: "both",
+  modelId: undefined,
+  npmRegistry: undefined,
+  provider: "openai",
+  targetPackageSpec: "",
+} satisfies Omit<SmokeCliOptions, "hostPort" | "installUrl" | "snapshotHint" | "vmName">;
+
+export const smokeDefaultStatus = {
+  freshAgent: "skip",
+  freshGateway: "skip",
+  freshMain: "skip",
+  freshVersion: "skip",
+  latestInstalledVersion: "skip",
+  upgrade: "skip",
+  upgradeAgent: "skip",
+  upgradeGateway: "skip",
+  upgradeVersion: "skip",
+};
+
 type SmokeCliParserConfig<TOptions extends SmokeCliOptions> = {
   flagHandlers?: Record<string, (options: TOptions) => void>;
   usage: () => string;
@@ -127,32 +153,6 @@ interface SmokeLaneStatuses {
   upgradeAgent: string;
   upgradeGateway: string;
   upgradeVersion: string;
-}
-
-interface CommonSmokeSummary {
-  currentHead: string;
-  freshMain: {
-    agent: string;
-    gateway: string;
-    status: string;
-    version: string;
-  };
-  installVersion: string;
-  latestVersion: string;
-  mode: Mode;
-  provider: Provider;
-  runDir: string;
-  snapshotHint: string;
-  snapshotId: string;
-  targetPackageSpec: string;
-  upgrade: {
-    agent: string;
-    gateway: string;
-    latestVersionInstalled: string;
-    mainVersion: string;
-    status: string;
-  };
-  vm: string;
 }
 
 export abstract class SmokeRunController<TOptions extends SmokeRunOptions & SmokeHostOptions> {
@@ -478,7 +478,7 @@ export function buildCommonSmokeSummary(input: {
   snapshot: SnapshotInfo;
   status: SmokeLaneStatuses;
   vmName: string;
-}): CommonSmokeSummary {
+}) {
   return {
     currentHead: input.artifact?.buildCommitShort || currentGitHeadShort(),
     freshMain: {
@@ -520,5 +520,5 @@ export function printSmokeTargetSummary(input: {
 }
 
 function currentGitHeadShort(): string {
-  return run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
+  return run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim();
 }

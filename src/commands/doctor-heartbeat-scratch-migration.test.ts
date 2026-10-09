@@ -6,7 +6,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import {
   loadCronJobsStore,
   resolveCronJobsStorePath,
@@ -61,7 +62,7 @@ async function createFixture() {
   const cfg = {
     agents: {
       defaults: { heartbeat: { every: "30m" } },
-      list: [{ id: "main", workspace }],
+      entries: { main: { workspace } },
     },
   } as OpenClawConfig;
   return { root, stateDir, workspace, cfg, heartbeatPath: path.join(workspace, "HEARTBEAT.md") };
@@ -83,10 +84,10 @@ function sharedHeartbeatConfig(workspace: string, ollamaEvery = "0m") {
   return {
     agents: {
       defaults: { workspace },
-      list: [
-        { id: "main", workspace, heartbeat: { every: "30m" } },
-        { id: "ollama", workspace, heartbeat: { every: ollamaEvery } },
-      ],
+      entries: {
+        main: { workspace, heartbeat: { every: "30m" } },
+        ollama: { workspace, heartbeat: { every: ollamaEvery } },
+      },
     },
   } as OpenClawConfig;
 }
@@ -149,7 +150,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     // Recreate a retired source after an operator edit: doctor must not overwrite it.
     const { monitor, storePath } = await loadMonitor();
     const current = readCronJobScratchState(storePath, monitor.id);
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath,
       jobId: monitor.id,
       content: "operator scratch\n",
@@ -177,10 +178,10 @@ describe("HEARTBEAT.md cron scratch migration", () => {
       {
         agents: {
           defaults: { heartbeat: { every: "30m" } },
-          list: [
-            { id: "main", workspace: fixture.workspace },
-            { id: "ops", workspace: fixture.workspace },
-          ],
+          entries: {
+            main: { workspace: fixture.workspace },
+            ops: { workspace: fixture.workspace },
+          },
         },
       } as OpenClawConfig,
       "main",
@@ -210,10 +211,10 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "30m" }, workspace: fixture.workspace },
-        list: [
-          { id: "main", workspace: fixture.workspace },
-          { id: "ollama", workspace: fixture.workspace, heartbeat: { every: "0m" } },
-        ],
+        entries: {
+          main: { workspace: fixture.workspace },
+          ollama: { workspace: fixture.workspace, heartbeat: { every: "0m" } },
+        },
       },
     } as OpenClawConfig;
     await fs.writeFile(fixture.heartbeatPath, "shared checklist\n", "utf8");
@@ -357,7 +358,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     await maybeMigrateHeartbeatFilesToScratch({ cfg: fixture.cfg, shouldRepair: true });
     const { monitor, storePath } = await loadMonitor();
     const state = readCronJobScratchState(storePath, monitor.id);
-    const unset = writeCronJobScratch({
+    const unset = writeCronJobScratchForMaintenance({
       storePath,
       jobId: monitor.id,
       content: null,

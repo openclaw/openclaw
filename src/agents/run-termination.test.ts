@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -171,29 +172,49 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
 });
 
 describe("resolveAgentRunErrorLifecycleFields", () => {
-  it("preserves an unphased provider-started timeout from the public harness result", () => {
-    const outcome = buildAgentRunTerminalOutcomeFromAttempt({
-      terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
-      promptTimeoutOutcome: { providerStarted: true },
-    });
-    expect(outcome).toMatchObject({
-      reason: "hard_timeout",
-      status: "timeout",
-      providerStarted: true,
-    });
-    expect(outcome).not.toHaveProperty("timeoutPhase");
-    const error = new FailoverError("Attempt timed out", {
-      reason: "timeout",
-      timeout: { timeoutPhase: outcome.timeoutPhase, providerStarted: outcome.providerStarted },
-    });
+  it.each(["failover", "canonical", "wrapped canonical"])(
+    "preserves an unphased provider-started timeout through %s errors unless cancelled",
+    (wrapper) => {
+      const outcome = buildAgentRunTerminalOutcomeFromAttempt({
+        terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
+        promptTimeoutOutcome: { providerStarted: true },
+      });
+      expect(outcome).toMatchObject({
+        reason: "hard_timeout",
+        status: "timeout",
+        providerStarted: true,
+      });
+      expect(outcome).not.toHaveProperty("timeoutPhase");
+      const failure =
+        wrapper === "failover"
+          ? new FailoverError("Attempt timed out", {
+              reason: "timeout",
+              timeout: {
+                timeoutPhase: outcome.timeoutPhase,
+                providerStarted: outcome.providerStarted,
+              },
+            })
+          : new AgentRunTerminalOutcomeError(
+              new Error("Persisted user turn changed before replay admission"),
+              outcome,
+            );
+      const error =
+        wrapper === "wrapped canonical" ? new Error("Attempt failed", { cause: failure }) : failure;
 
-    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+      const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
 
-    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-    ).toBe("hard_timeout");
-  });
+      expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+      ).toBe("hard_timeout");
+      const controller = new AbortController();
+      controller.abort();
+      expect(resolveAgentRunErrorLifecycleFields(error, controller.signal)).toEqual({
+        aborted: true,
+        stopReason: "aborted",
+      });
+    },
+  );
 
   it.each(["direct", "fallback summary"])(
     "does not promote a retryable HTTP 500 to a provider timeout through %s",
@@ -363,15 +384,4 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
       expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
     },
   );
-
-  it("preserves explicit cancellation over a concurrent timeout error", () => {
-    const controller = new AbortController();
-    controller.abort();
-    const error = createCliWatchdogError();
-
-    expect(resolveAgentRunErrorLifecycleFields(error, controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "aborted",
-    });
-  });
 });

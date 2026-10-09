@@ -17,7 +17,7 @@ export function createEmbeddedAttemptPreparation(options: {
   return async <T>(stage: string, run: () => Promise<T> | T): Promise<T> => {
     // Only start turns are serialized. Async work overlaps, and a failed or cancelled
     // attempt cannot reject the shared tail or inherit another caller's async context.
-    const start = nextPreparationStart.then(async () => {
+    nextPreparationStart = nextPreparationStart.then(async () => {
       if (
         preparationStarts >= MAX_PREPARATION_STARTS_PER_SLICE ||
         preparationSyncMs >= PREPARATION_SLICE_MS
@@ -28,8 +28,7 @@ export function createEmbeddedAttemptPreparation(options: {
       }
       preparationStarts++;
     });
-    nextPreparationStart = start;
-    await start;
+    await nextPreparationStart;
     // Check before acquisition; the caller must receive each result before another
     // checkpoint can throw so its existing finally blocks own every acquired resource.
     const startedAt = performance.now();

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
-import type { CronPayload, CronSchedule } from "./types.js";
+import type { CronJob, CronPayload, CronSchedule } from "./types.js";
 
 // Default, minimum, and maximum are shared by normalization and runtime reads.
 const CRON_STREAM_BATCHING_BOUNDS = {
@@ -10,6 +10,22 @@ const CRON_STREAM_BATCHING_BOUNDS = {
 const CRON_STREAM_TRUNCATED_MARKER = "[truncated]";
 
 export type CronStreamSchedule = Extract<CronSchedule, { kind: "stream" }>;
+
+/** A committed identity is a result fact; later writes still require the normal source checks. */
+export class CronStreamSourceRetirementError extends Error {
+  constructor(
+    readonly retirement: {
+      jobId: string;
+      scheduleKey: string;
+      previousIdentity: string;
+      identity: string;
+    },
+    cause: unknown,
+  ) {
+    super("Cron stream source retirement committed before the operation failed", { cause });
+    this.name = "CronStreamSourceRetirementError";
+  }
+}
 
 /** Opaque identity for one logical stream source across child-process restarts. */
 export function createCronStreamSourceIdentity(): string {
@@ -90,4 +106,17 @@ export function appendCronPayloadText(payload: CronPayload, text: string): CronP
     return { ...payload, message: `${payload.message}\n\n${text}` };
   }
   return payload;
+}
+
+/** Returns whether a stream event still belongs to the job's current logical source. */
+export function ownsStreamSource(
+  job: CronJob,
+  streamScheduleKey: string,
+  streamSourceIdentity: string,
+): boolean {
+  return (
+    job.schedule.kind === "stream" &&
+    cronStreamScheduleKey(job.schedule) === streamScheduleKey &&
+    job.state.streamSourceIdentity === streamSourceIdentity
+  );
 }

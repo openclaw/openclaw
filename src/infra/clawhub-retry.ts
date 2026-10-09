@@ -22,13 +22,7 @@ class RetryableClawHubResponse<T extends ClawHubResponseHandle> extends Error {
 }
 
 function isRetryableClawHubStatus(status: number, retryRateLimit: boolean): boolean {
-  return (
-    (retryRateLimit && status === 429) ||
-    status === 500 ||
-    status === 502 ||
-    status === 503 ||
-    status === 504
-  );
+  return (retryRateLimit && status === 429) || [500, 502, 503, 504].includes(status);
 }
 
 function parseRetryAfterMs(headers: Headers): number | undefined {

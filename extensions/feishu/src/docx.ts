@@ -100,11 +100,6 @@ type DocxChildrenCreatePayload = NonNullable<
 type DocxChildrenCreateChild = NonNullable<
   NonNullable<DocxChildrenCreatePayload["data"]>["children"]
 >[number];
-type DriveMediaUploadAllPayload = NonNullable<
-  Parameters<Lark.Client["drive"]["media"]["uploadAll"]>[0]
->;
-type DriveMediaUploadFile = NonNullable<NonNullable<DriveMediaUploadAllPayload["data"]>["file"]>;
-
 // Convert API may return `blocks` in a non-render order.
 // Reconstruct the document tree using first_level_block_ids plus children/parent links,
 // then emit blocks in pre-order so Descendant/Children APIs receive one normalized tree contract.
@@ -191,10 +186,9 @@ async function insertBlocks(
   client: Lark.Client,
   docToken: string,
   blocks: FeishuDocxBlock[],
-  parentBlockId?: string,
+  blockId: string,
 ): Promise<FeishuDocxBlockChild[]> {
   const cleaned = blocks.filter((block) => !UNSUPPORTED_CREATE_TYPES.has(block.block_type));
-  const blockId = parentBlockId ?? docToken;
 
   // Insert blocks one at a time to preserve document order.
   // The batch API (sending all children at once) does not guarantee ordering
@@ -280,6 +274,24 @@ async function deleteBlockChildren(
   assertFeishuApiSuccess(res);
 }
 
+async function deleteChildBlock(
+  client: Lark.Client,
+  docToken: string,
+  parentId: string,
+  blockId: string,
+): Promise<boolean> {
+  const children = await client.docx.documentBlockChildren.get({
+    path: { document_id: docToken, block_id: parentId },
+  });
+  assertFeishuApiSuccess(children);
+  const index = (children.data?.items ?? []).findIndex((item) => item.block_id === blockId);
+  if (index === -1) {
+    return false;
+  }
+  await deleteBlockChildren(client, docToken, parentId, index, index + 1);
+  return true;
+}
+
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
   const existing = await client.docx.documentBlock.list({
     path: { document_id: docToken },
@@ -303,7 +315,7 @@ async function uploadImageToDocx(
   blockId: string,
   imageBuffer: Buffer,
   fileName: string,
-  docToken?: string,
+  docToken: string,
 ): Promise<string> {
   const res = await client.drive.media.uploadAll({
     data: {
@@ -314,7 +326,7 @@ async function uploadImageToDocx(
       // Pass Buffer directly so form-data can calculate Content-Length correctly.
       // Readable.from() produces a stream with unknown length, causing Content-Length
       // mismatch that silently truncates uploads for images larger than ~1KB.
-      file: imageBuffer as DriveMediaUploadFile,
+      file: imageBuffer,
       // Required when the document block belongs to a non-default datacenter:
       // tells the drive service which document the block belongs to for routing.
       // Per API docs: certain upload scenarios require the cloud document token.
@@ -326,6 +338,11 @@ async function uploadImageToDocx(
   if (!fileToken) {
     throw new Error("Image upload failed: no file_token returned");
   }
+  const patchRes = await client.docx.documentBlock.patch({
+    path: { document_id: docToken, block_id: blockId },
+    data: { replace_image: { token: fileToken } },
+  });
+  assertFeishuApiSuccess(patchRes);
   return fileToken;
 }
 
@@ -357,21 +374,7 @@ async function processImages(
         maxBytes,
         remoteReadTimeoutMs: imageReadTimeoutMs,
       });
-      const fileToken = await uploadImageToDocx(
-        client,
-        blockId,
-        upload.buffer,
-        upload.fileName,
-        docToken,
-      );
-
-      const patchRes = await client.docx.documentBlock.patch({
-        path: { document_id: docToken, block_id: blockId },
-        data: {
-          replace_image: { token: fileToken },
-        },
-      });
-      assertFeishuApiSuccess(patchRes);
+      await uploadImageToDocx(client, blockId, upload.buffer, upload.fileName, docToken);
 
       processed++;
     } catch (err) {
@@ -414,17 +417,15 @@ async function editDoc(
   );
   const inserted =
     blocks.length > BATCH_SIZE
-      ? (
-          await insertBlocksInBatches(
-            client,
-            docToken,
-            orderedBlocks,
-            rootIds,
-            logger,
-            target?.parentBlockId,
-            target?.index,
-          )
-        ).children
+      ? await insertBlocksInBatches(
+          client,
+          docToken,
+          orderedBlocks,
+          rootIds,
+          logger,
+          target?.parentBlockId,
+          target?.index,
+        )
       : await insertDocxDescendants(
           client,
           docToken,
@@ -454,28 +455,13 @@ async function editDoc(
 
 async function uploadImageBlock(
   client: Lark.Client,
-  docToken: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-  localRoots?: readonly string[],
-  url?: string,
-  filePath?: string,
-  parentBlockId?: string,
-  filename?: string,
-  index?: number,
-  imageInput?: string, // data URI, plain base64, or local path
+  {
+    doc_token: docToken,
+    parent_block_id: parentBlockId,
+    index,
+  }: Extract<FeishuDocParams, { action: "upload_image" }>,
+  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
 ) {
-  // Resolve first so rejected or stalled input cannot leave an empty document block behind.
-  const upload = await resolveDocxUploadInput({
-    url,
-    filePath,
-    image: imageInput,
-    maxBytes,
-    localRoots,
-    fileName: filename,
-    remoteReadTimeoutMs: imageReadTimeoutMs,
-  });
-
   // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
@@ -499,12 +485,6 @@ async function uploadImageBlock(
     docToken, // drive_route_token for multi-datacenter routing
   );
 
-  const patchRes = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: imageBlockId },
-    data: { replace_image: { token: fileToken } },
-  });
-  assertFeishuApiSuccess(patchRes);
-
   return {
     success: true,
     block_id: imageBlockId,
@@ -516,25 +496,15 @@ async function uploadImageBlock(
 
 async function uploadFileBlock(
   client: Lark.Client,
-  docToken: string,
-  maxBytes: number,
-  localRoots?: readonly string[],
-  url?: string,
-  filePath?: string,
-  parentBlockId?: string,
-  filename?: string,
+  {
+    doc_token: docToken,
+    parent_block_id: parentBlockId,
+  }: Extract<FeishuDocParams, { action: "upload_file" }>,
+  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
 ) {
   const blockId = parentBlockId ?? docToken;
 
   // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
-  const upload = await resolveDocxUploadInput({
-    url,
-    filePath,
-    maxBytes,
-    localRoots,
-    fileName: filename,
-  });
-
   const placeholderMd = "[file](https://example.com/placeholder)";
   const converted = await convertMarkdown(client, placeholderMd);
   const { orderedBlocks } = normalizeConvertedBlockTree(
@@ -549,15 +519,7 @@ async function uploadFileBlock(
   }
 
   const parentId = placeholderBlock.parent_id ?? blockId;
-  const childrenRes = await client.docx.documentBlockChildren.get({
-    path: { document_id: docToken, block_id: parentId },
-  });
-  assertFeishuApiSuccess(childrenRes);
-  const items = childrenRes.data?.items ?? [];
-  const placeholderIdx = items.findIndex((item) => item.block_id === placeholderBlock.block_id);
-  if (placeholderIdx >= 0) {
-    await deleteBlockChildren(client, docToken, parentId, placeholderIdx, placeholderIdx + 1);
-  }
+  await deleteChildBlock(client, docToken, parentId, placeholderBlock.block_id);
 
   const fileRes = await client.drive.media.uploadAll({
     data: {
@@ -565,7 +527,7 @@ async function uploadFileBlock(
       parent_type: "docx_file",
       parent_node: docToken,
       size: upload.buffer.length,
-      file: upload.buffer as DriveMediaUploadFile,
+      file: upload.buffer,
     },
   });
 
@@ -625,12 +587,11 @@ async function readDoc(client: Lark.Client, docToken: string) {
 
 async function createDoc(
   client: Lark.Client,
-  title: string,
-  folderToken?: string,
-  options?: { grantToRequester?: boolean; requesterOpenId?: string },
+  params: Extract<FeishuDocParams, { action: "create" }>,
+  requesterOpenId: string | undefined,
 ) {
   const res = await client.docx.document.create({
-    data: { title, folder_token: folderToken },
+    data: { title: params.title, folder_token: params.folder_token },
   });
   assertFeishuApiSuccess(res);
   const doc = res.data?.document;
@@ -638,8 +599,7 @@ async function createDoc(
   if (!docToken) {
     throw new Error("Document creation succeeded but no document_id was returned");
   }
-  const shouldGrantToRequester = options?.grantToRequester !== false;
-  const requesterOpenId = options?.requesterOpenId?.trim();
+  const shouldGrantToRequester = params.grant_to_requester !== false;
   const requesterPermType = "edit" as const;
 
   let requesterPermissionAdded = false;
@@ -873,58 +833,6 @@ async function writeTableCells(
   };
 }
 
-async function updateBlock(
-  client: Lark.Client,
-  docToken: string,
-  blockId: string,
-  content: string,
-) {
-  await getBlock(client, docToken, blockId);
-
-  const res = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: blockId },
-    data: {
-      update_text_elements: {
-        elements: [{ text_run: { content } }],
-      },
-    },
-  });
-  assertFeishuApiSuccess(res);
-
-  return { success: true, block_id: blockId };
-}
-
-async function deleteBlock(client: Lark.Client, docToken: string, blockId: string) {
-  const { block } = await getBlock(client, docToken, blockId);
-  const parentId = block?.parent_id ?? docToken;
-
-  const children = await client.docx.documentBlockChildren.get({
-    path: { document_id: docToken, block_id: parentId },
-  });
-  assertFeishuApiSuccess(children);
-
-  const items = children.data?.items ?? [];
-  const index = items.findIndex((item) => item.block_id === blockId);
-  if (index === -1) {
-    throw new Error("Block not found");
-  }
-
-  await deleteBlockChildren(client, docToken, parentId, index, index + 1);
-
-  return { success: true, deleted_block_id: blockId };
-}
-
-async function listBlocks(client: Lark.Client, docToken: string) {
-  const res = await client.docx.documentBlock.list({
-    path: { document_id: docToken },
-  });
-  assertFeishuApiSuccess(res);
-
-  return {
-    blocks: res.data?.items ?? [],
-  };
-}
-
 async function getBlock(client: Lark.Client, docToken: string, blockId: string) {
   const res = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
@@ -933,21 +841,6 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
 
   return {
     block: res.data?.block,
-  };
-}
-
-async function listAppScopes(client: Lark.Client) {
-  const res = await client.application.scope.list({});
-  assertFeishuApiSuccess(res);
-
-  const scopes = res.data?.scopes ?? [];
-  const granted = scopes.filter((s) => s.grant_status === 1);
-  const pending = scopes.filter((s) => s.grant_status !== 1);
-
-  return {
-    granted: granted.map((s) => ({ name: s.scope_name, type: s.scope_type })),
-    pending: pending.map((s) => ({ name: s.scope_name, type: s.scope_type })),
-    summary: `${granted.length} granted, ${pending.length} pending`,
   };
 }
 
@@ -992,54 +885,59 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "insert":
             return json(await editDoc(client, p, mediaMaxBytes, imageReadTimeoutMs, api.logger));
           case "create":
-            return json(
-              await createDoc(client, p.title, p.folder_token, {
-                grantToRequester: p.grant_to_requester,
-                requesterOpenId: trustedRequesterOpenId,
-              }),
-            );
-          case "list_blocks":
-            return json(await listBlocks(client, p.doc_token));
+            return json(await createDoc(client, p, trustedRequesterOpenId));
+          case "list_blocks": {
+            const res = await client.docx.documentBlock.list({
+              path: { document_id: p.doc_token },
+            });
+            assertFeishuApiSuccess(res);
+            return json({ blocks: res.data?.items ?? [] });
+          }
           case "get_block":
             return json(await getBlock(client, p.doc_token, p.block_id));
-          case "update_block":
-            return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
-          case "delete_block":
-            return json(await deleteBlock(client, p.doc_token, p.block_id));
+          case "update_block": {
+            await getBlock(client, p.doc_token, p.block_id);
+            const res = await client.docx.documentBlock.patch({
+              path: { document_id: p.doc_token, block_id: p.block_id },
+              data: {
+                update_text_elements: { elements: [{ text_run: { content: p.content } }] },
+              },
+            });
+            assertFeishuApiSuccess(res);
+            return json({ success: true, block_id: p.block_id });
+          }
+          case "delete_block": {
+            const { block } = await getBlock(client, p.doc_token, p.block_id);
+            const parentId = block?.parent_id ?? p.doc_token;
+            if (!(await deleteChildBlock(client, p.doc_token, parentId, p.block_id))) {
+              throw new Error("Block not found");
+            }
+            return json({ success: true, deleted_block_id: p.block_id });
+          }
           case "create_table":
           case "create_table_with_values":
             return json(await createTable(client, p));
           case "write_table_cells":
             return json(await writeTableCells(client, p.doc_token, p.table_block_id, p.values));
           case "upload_image":
+          case "upload_file": {
+            // Resolve input before either upload path can create a document block.
+            const upload = await resolveDocxUploadInput({
+              url: p.url,
+              filePath: p.file_path,
+              maxBytes: mediaMaxBytes,
+              localRoots: mediaLocalRoots,
+              fileName: p.filename,
+              ...(p.action === "upload_image"
+                ? { image: p.image, remoteReadTimeoutMs: imageReadTimeoutMs }
+                : {}),
+            });
             return json(
-              await uploadImageBlock(
-                client,
-                p.doc_token,
-                mediaMaxBytes,
-                imageReadTimeoutMs,
-                mediaLocalRoots,
-                p.url,
-                p.file_path,
-                p.parent_block_id,
-                p.filename,
-                p.index,
-                p.image, // data URI or plain base64
-              ),
+              await (p.action === "upload_image"
+                ? uploadImageBlock(client, p, upload)
+                : uploadFileBlock(client, p, upload)),
             );
-          case "upload_file":
-            return json(
-              await uploadFileBlock(
-                client,
-                p.doc_token,
-                mediaMaxBytes,
-                mediaLocalRoots,
-                p.url,
-                p.file_path,
-                p.parent_block_id,
-                p.filename,
-              ),
-            );
+          }
           case "color_text":
             return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
           case "insert_table_row":
@@ -1063,14 +961,21 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     parameters: Type.Object({}),
     createExecute(ctx, cfg) {
       return async (_params) => {
-        const result = await listAppScopes(
-          createFeishuToolClient({
-            cfg,
-            defaultAccountId: ctx.agentAccountId,
-            requiredTool: { family: "scopes", label: "App Scopes" },
-          }),
-        );
-        return json(result);
+        const client = createFeishuToolClient({
+          cfg,
+          defaultAccountId: ctx.agentAccountId,
+          requiredTool: { family: "scopes", label: "App Scopes" },
+        });
+        const res = await client.application.scope.list({});
+        assertFeishuApiSuccess(res);
+        const scopes = res.data?.scopes ?? [];
+        const granted = scopes.filter((s) => s.grant_status === 1);
+        const pending = scopes.filter((s) => s.grant_status !== 1);
+        return json({
+          granted: granted.map((s) => ({ name: s.scope_name, type: s.scope_type })),
+          pending: pending.map((s) => ({ name: s.scope_name, type: s.scope_type })),
+          summary: `${granted.length} granted, ${pending.length} pending`,
+        });
       };
     },
   });

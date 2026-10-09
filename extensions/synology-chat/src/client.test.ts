@@ -3,6 +3,8 @@ import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { PassThrough } from "node:stream";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import type { SynologyHostedMediaUrl } from "./outbound-media.js";
 
@@ -163,6 +165,69 @@ const tlsVerificationDefaultCases: Array<{ name: string; invoke: () => Promise<u
 describe("Synology Chat TLS verification defaults", () => {
   installFakeTimerHarness();
 
+  it.each(
+    tlsVerificationDefaultCases.flatMap(({ name, invoke }) => [
+      { name, invoke, refused: false },
+      { name, invoke, refused: true },
+    ]),
+  )(
+    "prepares $name webhook POST before handoff (refused=$refused)",
+    async ({ name, invoke, refused }) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const handedOff = createDeferred<void>();
+      const acknowledgment = createDeferred<void>();
+      const refusal = new Error("Synology message authority ended");
+      const authority = fetchRuntime.captureEffectAuthority();
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (refused) {
+            throw refusal;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      vi.mocked(https.request).mockImplementation(((...args) => {
+        handedOff.resolve();
+        const res = createMockResponseEmitter(200);
+        void acknowledgment.promise.then(() => {
+          args[2]?.(res);
+          res.end('{"success":true}');
+        });
+        return createMockRequestEmitter();
+      }) as MockRequestHandler);
+      const sending = invoke();
+      try {
+        await Promise.race([
+          preparing.promise,
+          handedOff.promise.then(() => {
+            throw new Error("webhook POST bypassed preparation");
+          }),
+        ]);
+        expect(https.request).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!refused) {
+          await handedOff.promise;
+          acknowledgment.resolve();
+        }
+        if (refused) {
+          await expect(sending).rejects.toBe(refusal);
+        } else {
+          expect(await sending).toEqual(name === "sendMessage" ? true : { status: "accepted" });
+        }
+        expect(https.request).toHaveBeenCalledTimes(refused ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        acknowledgment.resolve();
+        await sending.catch(() => {});
+        capture.mockRestore();
+      }
+    },
+  );
+
   it.each(tlsVerificationDefaultCases)("$name verifies TLS by default", async ({ invoke }) => {
     mockSuccessResponse();
     await settleTimers(invoke());
@@ -173,6 +238,77 @@ describe("Synology Chat TLS verification defaults", () => {
 
 describe("sendMessage", () => {
   installFakeTimerHarness();
+
+  it.each(["authority", "dispatch", "transport", "rejection"] as const)(
+    "preserves acknowledged chunks when a later chunk fails at %s",
+    async (failurePoint) => {
+      const cause = new Error(`Synology ${failurePoint} failure`);
+      const authority = fetchRuntime.captureEffectAuthority();
+      let preparations = 0;
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparations += 1;
+          if (failurePoint === "authority" && preparations === 3) {
+            throw cause;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      let requests = 0;
+      vi.mocked(https.request).mockImplementation(((_url, _options, callback) => {
+        requests += 1;
+        const lastChunk = requests === 3;
+        const req = createMockRequestEmitter();
+        process.nextTick(() => {
+          if (lastChunk && failurePoint === "transport") {
+            req.emit("error", cause);
+            return;
+          }
+          const res = createMockResponseEmitter(200);
+          callback?.(res);
+          res.end(JSON.stringify({ success: !(lastChunk && failurePoint === "rejection") }));
+        });
+        return req;
+      }) as MockRequestHandler);
+      let dispatches = 0;
+      const onPlatformSendDispatch = async () => {
+        dispatches += 1;
+        if (failurePoint === "dispatch" && dispatches === 3) {
+          throw cause;
+        }
+      };
+      try {
+        const sending = sendMessage(
+          "https://nas.example.com/incoming",
+          "a".repeat(4001),
+          "42",
+          false,
+          onPlatformSendDispatch,
+        );
+        const outcome = await settleTimers(
+          sending.then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+          ),
+        );
+        expect(outcome).toMatchObject({
+          error: {
+            code: "CHANNEL_PARTIAL_DELIVERY",
+            ...(failurePoint === "rejection"
+              ? { message: "Failed to send message to Synology Chat (rejected)" }
+              : { cause }),
+            deliveryResult: { visibleReplySent: true, content: "a".repeat(4000) },
+          },
+        });
+        expect(https.request).toHaveBeenCalledTimes(
+          failurePoint === "authority" || failurePoint === "dispatch" ? 2 : 3,
+        );
+      } finally {
+        capture.mockRestore();
+      }
+    },
+  );
 
   it("returns false on server error without replaying", async () => {
     mockFailureResponse(500);

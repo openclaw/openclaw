@@ -168,6 +168,78 @@ describe("createInboundDebouncer", () => {
     await debouncer.drain();
   });
 
+  it("re-arms the quiet window when the flush check holds the batch", async () => {
+    const shouldHoldFlush = vi.fn(() => false).mockReturnValueOnce(true);
+    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 10, shouldHoldFlush });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(9);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1"]]);
+    await debouncer.drain();
+  });
+
+  it("supersedes a pending flush check when another item appends", async () => {
+    const check = createDeferred<boolean>();
+    const { calls, debouncer } = createRecordingDebouncer({
+      debounceMs: 10,
+      shouldHoldFlush: () => check.promise,
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(5);
+    await debouncer.enqueue({ key: "a", id: "2" });
+    check.resolve(false);
+    await vi.advanceTimersByTimeAsync(9);
+    expect(calls).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1", "2"]]);
+    await debouncer.drain();
+  });
+
+  it.each([false, true])(
+    "forces the deadline flush without another hold check (check pending: %s)",
+    async (pending) => {
+      const check = createDeferred<boolean>();
+      const shouldHoldFlush = vi.fn(() => (pending ? check.promise : true));
+      const { calls, debouncer } = createRecordingDebouncer({
+        debounceMs: 10,
+        maxWaitMs: 30,
+        shouldHoldFlush,
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(calls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(calls).toEqual([["1"]]);
+      expect(shouldHoldFlush).toHaveBeenCalledTimes(pending ? 1 : 2);
+      check.resolve(false);
+      await debouncer.drain();
+    },
+  );
+
+  it("flushes an explicit key without consulting the hold check", async () => {
+    const shouldHoldFlush = vi.fn(() => true);
+    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 10, shouldHoldFlush });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.flushKey("a");
+
+    expect(calls).toEqual([["1"]]);
+    expect(shouldHoldFlush).not.toHaveBeenCalled();
+    await debouncer.drain();
+  });
+
   it("reports buffered items when cancelling a key", async () => {
     const canceled: Array<string[]> = [];
 

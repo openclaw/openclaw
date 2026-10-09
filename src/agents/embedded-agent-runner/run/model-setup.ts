@@ -1,11 +1,24 @@
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntriesFromStoresInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import {
+  prepareSessionRowPublicationScope,
+  sessionChangeAffectsStoredRow,
+} from "../../../sessions/session-row-facts.js";
+import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
+import { resolveSessionAgentIdsStrict } from "../../agent-scope.js";
+import { createNativeModelOwnedRuntimeModel } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
@@ -29,55 +42,157 @@ import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
-import {
-  buildBeforeModelResolveAttachments,
-  createNativeModelOwnedRuntimeModel,
-  resolveHookModelSelection,
-} from "./setup.js";
+import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./setup.js";
 
 export type PreparedNativeSessionRuntime = {
   harness: AgentHarness;
   assertCurrent: () => Promise<void>;
 } & ({ auth: "native"; modelRef?: ModelRef } | { auth: "host"; modelRef: ModelRef });
 
-function prepareNativeSessionRuntime(
+class NativeSessionOwnershipReadRaceError extends Error {}
+
+async function prepareNativeSessionRuntime(
   runParams: RunEmbeddedAgentInternalParams,
   harness: AgentHarness,
-  admission: ReturnType<typeof assertAgentHarnessRunAdmission>,
-): PreparedNativeSessionRuntime | undefined {
+  admission: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>,
+  assertCallerCurrent: () => void,
+): Promise<PreparedNativeSessionRuntime | undefined> {
   const pinnedHarnessId = resolveSessionPinnedHarnessId(admission?.entry);
   if (!admission || !pinnedHarnessId || !harness.resolveSessionRuntimeOwnership) {
     return undefined;
   }
   const { sessionId, lifecycleRevision } = admission.entry;
-  const resolveOwnership = () =>
-    readSessionRuntimeOwnership({
-      config: runParams.config,
-      agentId: admission.agentId,
-      sessionKey: admission.sessionKey,
-      storePath: admission.storePath,
-      sessionEntry: admission.entry,
-      assertCurrent: () => {
-        runParams.abortSignal?.throwIfAborted();
-        if (runParams.lifecycleGeneration) {
-          assertAgentRunLifecycleGenerationCurrent(runParams.lifecycleGeneration);
-        }
-        const current = loadSessionEntryReadOnly(admission);
-        const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
-        if (
-          getRegisteredAgentHarness(pinnedHarnessId)?.harness !== harness ||
-          current?.sessionId !== sessionId ||
-          current?.lifecycleRevision !== lifecycleRevision ||
-          resolveSessionPinnedHarnessId(current) !== pinnedHarnessId ||
-          (expectedWriter !== undefined && current?.activeWriterRunId !== expectedWriter)
-        ) {
-          throw new AgentHarnessPreflightError(
-            "Native model ownership changed during run preparation. Reattach the original native session before retrying.",
-          );
-        }
-      },
+  const ownershipChangedMessage =
+    "Native model ownership changed during run preparation. Reattach the original native session before retrying.";
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
+    config: runParams.config,
+    agentId: admission.agentId,
+    sessionKey: admission.sessionKey,
+  });
+  const readOwnership = async () => {
+    assertCallerCurrent();
+    const publication = prepareSessionRowPublicationScope([
+      admission.storePath,
+      ...(isIncognitoSessionKey(admission.sessionKey)
+        ? [resolveIncognitoOpenClawAgentSqlitePath({ agentId: sessionAgentId })]
+        : []),
+    ]);
+    let changed = false;
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if (
+        sessionChangeAffectsStoredRow(change, {
+          ...publication,
+          agentId: sessionAgentId,
+          sessionKeys: [admission.sessionKey],
+        })
+      ) {
+        changed = true;
+      }
     });
-  const ownership = resolveOwnership();
+    try {
+      const consume = (current: SessionEntry | undefined, assertReadCurrent: () => void) => {
+        const assertCurrent = () => {
+          assertCallerCurrent();
+          runParams.abortSignal?.throwIfAborted();
+          if (runParams.lifecycleGeneration) {
+            assertAgentRunLifecycleGenerationCurrent(runParams.lifecycleGeneration);
+          }
+          try {
+            assertReadCurrent();
+            if (changed) {
+              throw new NativeSessionOwnershipReadRaceError();
+            }
+          } catch (cause) {
+            if (cause instanceof NativeSessionOwnershipReadRaceError) {
+              throw cause;
+            }
+            throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause });
+          }
+          const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
+          if (
+            getRegisteredAgentHarness(pinnedHarnessId)?.harness !== harness ||
+            current?.sessionId !== sessionId ||
+            current?.lifecycleRevision !== lifecycleRevision ||
+            resolveSessionPinnedHarnessId(current) !== pinnedHarnessId ||
+            (expectedWriter !== undefined && current?.activeWriterRunId !== expectedWriter)
+          ) {
+            throw new AgentHarnessPreflightError(ownershipChangedMessage);
+          }
+        };
+        assertCurrent();
+        return readSessionRuntimeOwnership({
+          config: runParams.config,
+          agentId: admission.agentId,
+          sessionKey: admission.sessionKey,
+          storePath: admission.storePath,
+          sessionEntry: current,
+          assertCurrent,
+          readPreparedPreviousSessionId: () => current?.previousSessionId,
+        });
+      };
+      if (isIncognitoSessionKey(admission.sessionKey)) {
+        return consume(loadSessionEntryReadOnly(admission), () => {});
+      }
+      const reader = getReplyOperationSessionReader(runParams.replyOperation);
+      if (reader) {
+        publication.prepareSource(
+          reader.database,
+          readDatabasePathIdentitySync(reader.database.path),
+        );
+        return await reader.withRead(
+          {
+            sessionKeys: [admission.sessionKey],
+            lifecycleSessionKey: admission.sessionKey,
+            snapshotFields: [],
+          },
+          assertCallerCurrent,
+          (read, assertCurrent) =>
+            consume(
+              read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+              assertCurrent,
+            ),
+        );
+      }
+      return await withSessionEntriesFromStoresInWorker(
+        [
+          {
+            agentId: sessionAgentId,
+            sessionKeys: [admission.sessionKey],
+            lifecycleSessionKey: admission.sessionKey,
+            storePath: admission.storePath,
+            includeAuthorization: true,
+            snapshotFields: [],
+          },
+        ],
+        ([read]) =>
+          consume(
+            read!.result.entries.find((item) => item.sessionKey === admission.sessionKey)?.entry,
+            read!.assertCurrent,
+          ),
+        { prepareSource: (_input, ...source) => publication.prepareSource(...source) },
+      );
+    } finally {
+      stop();
+    }
+  };
+  const resolveOwnership = async () => {
+    // A row publication can race the worker reply; re-read once under the same caller authority.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const ownership = await readOwnership();
+        assertCallerCurrent();
+        return ownership;
+      } catch (error) {
+        if (!(error instanceof NativeSessionOwnershipReadRaceError)) {
+          throw error;
+        }
+        if (attempt > 0) {
+          throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause: error });
+        }
+      }
+    }
+  };
+  const ownership = await resolveOwnership();
   if (!ownership) {
     throw new AgentHarnessPreflightError(
       "The pinned runtime's native session ownership is unavailable. Reattach the original native session instead of starting a replacement model run.",
@@ -103,7 +218,7 @@ function prepareNativeSessionRuntime(
         }),
     // Compare host-prepared auth against its exact tuple; native auth may follow its owner's model.
     assertCurrent: async () => {
-      const current = resolveOwnership();
+      const current = await resolveOwnership();
       assertOperatorModelAllowed(operatorAuthority, current?.modelRef);
       if (
         current?.model !== ownership.model ||
@@ -124,7 +239,7 @@ function prepareNativeSessionRuntime(
 export async function resolveEmbeddedRunModelSetup(params: {
   assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
-  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
+  sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
   provider: string;
   modelId: string;
   agentDir: string;
@@ -172,7 +287,12 @@ export async function resolveEmbeddedRunModelSetup(params: {
     ? getRegisteredAgentHarness(pinnedHarnessId)?.harness
     : undefined;
   const nativeSessionRuntime = pinnedHarness
-    ? prepareNativeSessionRuntime(runParams, pinnedHarness, params.sessionAdmission)
+    ? await prepareNativeSessionRuntime(
+        runParams,
+        pinnedHarness,
+        params.sessionAdmission,
+        params.assertCurrent,
+      )
     : undefined;
   if (nativeSessionRuntime?.auth === "host") {
     provider = nativeSessionRuntime.modelRef.provider;
@@ -247,13 +367,15 @@ export async function resolveEmbeddedRunModelSetup(params: {
   let nativeCatalogFailure: { error: unknown } | undefined;
   const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
+  const hasSelectedNativeModel = () =>
+    catalog?.entries.some(ownsSelectedNativeModel) === true ||
+    catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
     agentHarness.loadModelCatalog &&
     params.preparedModelRuntime?.loadNativeModelCatalog &&
-    !catalog?.entries.some(ownsSelectedNativeModel) &&
-    !catalog?.routeVariants.some(ownsSelectedNativeModel)
+    !hasSelectedNativeModel()
   ) {
     try {
       catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
@@ -271,12 +393,8 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
   const nativeModelOwned =
-    nativeSessionRuntime !== undefined ||
-    (pluginHarnessOwnsTransport &&
-      (catalog?.entries.some(ownsSelectedNativeModel) === true ||
-        catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
+    nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
   const modelConfigProvider = provider;
-  let resolvedModelProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {
     modelResolution = {
@@ -309,13 +427,12 @@ export async function resolveEmbeddedRunModelSetup(params: {
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
     });
-    resolvedModelProvider = tieredResolution.provider;
+    provider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;
     if (modelResolution.model) {
       modelId = modelResolution.logicalRef.model;
     }
   }
-  provider = resolvedModelProvider;
   if (!modelResolution.model) {
     if (nativeCatalogFailure) {
       throw nativeCatalogFailure.error;

@@ -2,12 +2,10 @@
 // list of packed group plans. Extracted from .github/workflows/ci.yml so the
 // execution policy is unit-testable and plans can run concurrently.
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import {
   constants,
   cpSync,
   existsSync,
-  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -366,6 +364,17 @@ export function resolveShardChildCommand(
   testProjectsEntrypoint = resolveTestProjectsEntrypoint(),
   workerRun?: VitestWorkerRun,
 ) {
+  if (args[0] === "--native-bun") {
+    return {
+      command: nodeExecPath,
+      args: [
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("./run-vitest.mts", import.meta.url)),
+        ...args,
+      ],
+    };
+  }
   const loaderArgs = testProjectsEntrypoint.endsWith(".mts") ? ["--import", "tsx"] : [];
   return {
     command: nodeExecPath,
@@ -441,6 +450,10 @@ async function runChild(
   timingKey: string,
   context?: Awaited<ReturnType<typeof createWorkerContext>>,
 ) {
+  const spawnEnv =
+    args[0] === "--native-bun" && context
+      ? { ...childEnv, OPENCLAW_NATIVE_BUN_PARENT_IPC: "1" }
+      : childEnv;
   // Use Node directly. `pnpm exec node` may reconcile the workspace before
   // tests, which destroys the sticky dependency fast path.
   const childCommand = resolveShardChildCommand(
@@ -457,7 +470,7 @@ async function runChild(
       command: childCommand.command,
       args: childCommand.args,
       options: {
-        env: childEnv,
+        env: spawnEnv,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
       homeMode: "tooling",
@@ -481,7 +494,7 @@ async function runChild(
     );
   } else {
     child = spawn(childCommand.command, childCommand.args, {
-      env: childEnv,
+      env: spawnEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     completion = new Promise<number>((resolve) => {
@@ -510,35 +523,6 @@ async function runChild(
   }
   process.stdout.write(`[shard:${timingKey}] end (exit ${code})\n`);
   return code;
-}
-
-function readUiNativeShardReceipt(
-  file: string,
-  requestId: string,
-  expectedFiles: ReadonlySet<string>,
-): Set<string> | undefined {
-  try {
-    const stat = lstatSync(file);
-    if (!stat.isFile() || stat.size > 1024 * 1024) {
-      return undefined;
-    }
-    const receipt: unknown = JSON.parse(readFileSync(file, "utf8"));
-    if (
-      !isRecord(receipt) ||
-      receipt.version !== 1 ||
-      receipt.requestId !== requestId ||
-      receipt.config !== join(process.cwd(), "ui/vitest.config.ts").replaceAll("\\", "/") ||
-      receipt.root !== join(process.cwd(), "ui").replaceAll("\\", "/") ||
-      !isStringArray(receipt.files) ||
-      receipt.files.length === 0 ||
-      receipt.files.some((candidateFile) => !expectedFiles.has(candidateFile))
-    ) {
-      return undefined;
-    }
-    return new Set(receipt.files);
-  } catch {
-    return undefined;
-  }
 }
 
 export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions = {}) {
@@ -778,50 +762,12 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             },
             policy,
           ) ?? [{ runtime: "node" as const }];
-        const [nodeSelection, bunSelection] = selections;
-        // Only the proven UI partition has native sharding after discovery.
-        // Run it once on Bun and reuse that owner's facts, never its algorithm.
-        const uiReceipt =
-          context &&
-          policy === "bun-compatible" &&
-          entry.kind === "group" &&
-          entry.plan.configs.length === 1 &&
-          entry.plan.configs[0] === "ui/vitest.config.ts" &&
-          selections.length === 2 &&
-          nodeSelection?.runtime === "node" &&
-          nodeSelection.includeAfterShard &&
-          nodeSelection.includePatterns?.length &&
-          bunSelection?.runtime === "bun" &&
-          bunSelection.includeAfterShard &&
-          bunSelection.includePatterns?.length
-            ? {
-                directory: mkdtempSync(join(scratchDir, "ui-native-shard-")),
-                requestId: randomUUID(),
-                expectedFiles: new Set([
-                  ...nodeSelection.includePatterns,
-                  ...bunSelection.includePatterns,
-                ]),
-                selections: [bunSelection, nodeSelection],
-              }
-            : undefined;
-        let nativeShardFiles: Set<string> | undefined;
-        for (const selection of uiReceipt?.selections ?? selections) {
+        for (const selection of selections) {
           if (interrupted) {
             return;
           }
           const runtime = selection.runtime;
-          const nativeFiles = nativeShardFiles;
-          if (
-            runtime === "node" &&
-            nativeFiles &&
-            selection.includePatterns &&
-            !selection.includePatterns.some((file) => nativeFiles.has(file))
-          ) {
-            process.stdout.write(
-              `[shard:node-subset:${entry.name}] skipped (native shard has no Node-only files)\n`,
-            );
-            continue;
-          }
+          const nativeBun = selection.engine === "bun-test";
           const selectedEntry =
             entry.kind === "group" && (selection.configs || selection.includePatterns)
               ? {
@@ -835,13 +781,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               : entry;
           const selectedArgs =
             selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs;
-          const args =
-            vitestExtraArgs.length > 0 ? [...selectedArgs, "--", ...vitestExtraArgs] : selectedArgs;
-          const childEnv = buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
-            serial: concurrency === 1,
-            cacheSlot,
-            runtime,
-          });
+          const args = nativeBun
+            ? ["--native-bun", ...selection.files.map((file) => `./${file}`)]
+            : vitestExtraArgs.length > 0
+              ? [...selectedArgs, "--", ...vitestExtraArgs]
+              : selectedArgs;
+          const childEnv = nativeBun
+            ? prepareChildEnv(entry, { ...baseEnv, OPENCLAW_VITEST_RUNTIME: "bun" })
+            : buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
+                serial: concurrency === 1,
+                cacheSlot,
+                runtime,
+              });
+          if (nativeBun) {
+            delete childEnv[FS_MODULE_CACHE_ROOT_ENV_KEY];
+            delete childEnv[FS_MODULE_CACHE_PATH_ENV_KEY];
+            delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+          }
           if (selection.includeAfterShard) {
             childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE =
               childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
@@ -856,15 +812,10 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             }
           }
           Object.assign(childEnv, selection.env);
-          delete childEnv.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
-          delete childEnv.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID;
-          if (uiReceipt && runtime === "bun") {
-            childEnv.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT = join(uiReceipt.directory, "files.json");
-            childEnv.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID = uiReceipt.requestId;
-          }
           const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
-          const timingPrefix =
-            runtime === "bun"
+          const timingPrefix = nativeBun
+            ? "bun-native:"
+            : runtime === "bun"
               ? "bun:"
               : selection.configs || selection.includePatterns
                 ? "node-subset:"
@@ -877,18 +828,6 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             `${timingPrefix}${entry.name}`,
             `${timingPrefix}${timingKey}`,
           );
-          if (uiReceipt && runtime === "bun") {
-            // runner() has joined the child and its descendants before these
-            // facts can suppress a process or their scratch directory retires.
-            if (code === 0 && !interrupted) {
-              nativeShardFiles = readUiNativeShardReceipt(
-                join(uiReceipt.directory, "files.json"),
-                uiReceipt.requestId,
-                uiReceipt.expectedFiles,
-              );
-            }
-            rmSync(uiReceipt.directory, { recursive: true, force: true });
-          }
           // A dual-runtime envelope always completes both ordinary test runs;
           // its first failure still stops admission of later envelopes.
           if (code !== 0) {

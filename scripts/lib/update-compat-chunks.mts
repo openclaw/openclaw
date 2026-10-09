@@ -13,7 +13,7 @@ import { isUpdatePackageAssetImport } from "./update-compat-source-imports.mts";
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup\.ts$)/;
+const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
 
 // These verified releases coalesced lifecycle declarations under the cache module's region.
 // Keep this provenance correction only while those releases remain in the supported upgrade window.
@@ -465,6 +465,7 @@ export function writeUpdateCompatibilityChunks(params: {
       relative.startsWith("extensions/") ||
       relative.startsWith("plugin-sdk/") ||
       relative.startsWith("config-doctor/") ||
+      relative.startsWith("state-retention/") ||
       relative.startsWith("native-hook-relay/")
     ) {
       continue;

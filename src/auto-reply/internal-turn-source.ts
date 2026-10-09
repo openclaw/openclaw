@@ -46,6 +46,7 @@ export function normalizeInternalTurnContext(ctx: InternalTurnContext): void {
     "heartbeat",
     "cron",
     "exec",
+    "event",
     "progress-card-refresh",
   ] as const)
     ? ctx.InternalTurnSource

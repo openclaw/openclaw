@@ -14,7 +14,6 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 
 registerSettingsEnglish();
 
-/** Manifest bounds for a numeric field; `count` is `{integer, minimum}`, `ratio` is `0..1`. */
 type DreamingNumberBounds = { integer: boolean; min: number; max?: number };
 
 const COUNT_FROM_ZERO: DreamingNumberBounds = { integer: true, min: 0 };
@@ -44,8 +43,7 @@ type DreamingFieldSpec = {
 );
 
 // Mirrors the memory-core manifest configSchema/uiHints
-// (extensions/memory-core/openclaw.plugin.json). Everything here previously
-// required hand-editing openclaw.json. `bounds` restates that manifest's
+// (extensions/memory-core/openclaw.plugin.json). `bounds` restates that manifest's
 // integer/minimum/maximum constraints so a rejected value is caught at the input
 // instead of after autosave hands it to the gateway.
 //
@@ -112,26 +110,15 @@ type DreamingSettingsProps = {
   onPatch: (path: readonly string[], value: unknown) => void;
 };
 
-function readAtPath(root: Record<string, unknown> | null, path: readonly string[]): unknown {
+function fieldAtPath(root: Record<string, unknown> | null, path: readonly string[]) {
   let value: unknown = root;
+  let overridden = path.length > 0;
   for (const key of path) {
-    value = asConfigRecord(value)?.[key];
+    const current = asConfigRecord(value);
+    overridden &&= current !== null && Object.hasOwn(current, key);
+    value = current?.[key];
   }
-  return path.length ? value : undefined;
-}
-
-function hasAtPath(root: Record<string, unknown> | null, path: readonly string[]): boolean {
-  let current: Record<string, unknown> | null = root;
-  for (const [index, key] of path.entries()) {
-    if (!current || !Object.hasOwn(current, key)) {
-      return false;
-    }
-    if (index === path.length - 1) {
-      return true;
-    }
-    current = asConfigRecord(current[key]);
-  }
-  return false;
+  return { value: path.length ? value : undefined, overridden };
 }
 
 function normalizeStorageMode(value: unknown): StorageMode {
@@ -139,7 +126,7 @@ function normalizeStorageMode(value: unknown): StorageMode {
 }
 
 function resolveDreamingModelDefault(dreaming: Record<string, unknown> | null): string {
-  const model = readAtPath(dreaming, ["execution", "defaults", "model"]);
+  const { value: model } = fieldAtPath(dreaming, ["execution", "defaults", "model"]);
   return typeof model === "string" && model.trim()
     ? model.trim()
     : t("memoryPage.dreaming.model.default");
@@ -158,8 +145,7 @@ function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number 
 }
 
 function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
-  const value = readAtPath(props.dreaming, spec.path);
-  const overridden = hasAtPath(props.dreaming, spec.path);
+  const { value, overridden } = fieldAtPath(props.dreaming, spec.path);
   const defaultValue =
     spec.kind === "toggle"
       ? spec.fallback
@@ -258,11 +244,11 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
 
 /** The global dreaming knobs, editable only when the slot owner stores them. */
 export function renderDreamingSettings(props: DreamingSettingsProps): TemplateResult {
-  const storageModeValue = readAtPath(props.dreaming, ["storage", "mode"]);
-  const storageMode = normalizeStorageMode(storageModeValue);
+  const storage = fieldAtPath(props.dreaming, ["storage", "mode"]);
+  const storageMode = normalizeStorageMode(storage.value);
   const storageDefaultDescription = renderSettingsDefaultDescription(
     t("memoryPage.dreaming.storage.modes.separate"),
-    hasAtPath(props.dreaming, ["storage", "mode"]),
+    storage.overridden,
   );
   return html`
     ${renderSettingsSection(

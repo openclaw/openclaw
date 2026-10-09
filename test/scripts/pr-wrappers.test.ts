@@ -20,6 +20,8 @@ import {
   isCoreQuotaExhausted,
   isGraphqlQuotaExhausted,
 } from "../../scripts/pr-lib/gh-api-preflight.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_HEAD,
@@ -332,10 +334,10 @@ function makeMismatchedWrapperRepo({
   const git = createWrapperGit(fixtureEnv);
   // Copy private object stores before creating worktrees, whose absolute
   // back-links must refer to this fixture. No refs or mutable files are shared.
-  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-  cpSync(template.bin, bin, copyOptions);
-  cpSync(template.canonical, canonical, copyOptions);
-  cpSync(template.origin, origin, copyOptions);
+  // PATH stubs and canonical scripts/pr are executed directly.
+  copyTreeCloseOnExec(template.bin, bin);
+  copyTreeCloseOnExec(template.canonical, canonical);
+  cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
 
@@ -441,7 +443,7 @@ describe("scripts/pr wrappers", () => {
       input: "[[]]",
     });
     expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("completed review is missing or expired");
+    expect(result.stderr).toContain("completed review is missing.");
     expect(existsSync(join(fixture.linked, "scripts/pr-lib/clawsweeper-review-gate.mjs"))).toBe(
       true,
     );
@@ -577,6 +579,34 @@ describe("scripts/pr wrappers", () => {
       expect(result.stdout).toContain("Usage:");
       expect(result.stderr).not.toContain("only support PRs targeting main");
     }
+  });
+
+  itPosix("forwards explicit stale-head auto recovery only with a replacement head", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const oid = "a".repeat(40);
+    const replacement = "b".repeat(40);
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        oid,
+        "--confirmed-operator-recovery",
+        "--replacement-head",
+        replacement,
+        "--auto-merge",
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<true>\n<${oid}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<>\n<false>\n`,
+    );
   });
 
   itPosix("dispatches public correction commands to the explicit native owners", () => {
@@ -1247,7 +1277,6 @@ exec "$OPENCLAW_TEST_NODE" "$@"
   });
 
   it("materializes the origin/main anchor wrapper when canonical is parked elsewhere", () => {
-    const fixture = makeMismatchedWrapperRepo();
     const names = [
       "space name",
       ...(process.platform === "win32"
@@ -1255,6 +1284,18 @@ exec "$OPENCLAW_TEST_NODE" "$@"
         : ["tab\tname", 'quote"name', "backslash\\name", "control\u0001name", "newline\nname"]),
     ];
     const directory = "scripts/pr-lib/path-spelling";
+    const fixture = makeMismatchedWrapperRepo({
+      dispatchBody: `node -e '
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const { strictEqual } = require("node:assert");
+for (const name of ${JSON.stringify(names)}) {
+  strictEqual(readFileSync(join(process.argv[1], "pr-lib/path-spelling", name), "utf8"), "anchored path bytes\\n");
+}
+console.log("anchored paths verified");
+' "$script_parent_dir" || return;
+echo "canonical wrapper executed";`,
+    });
     mkdirSync(join(fixture.canonical, directory));
     for (const name of names) {
       writeFileSync(join(fixture.canonical, directory, name), "anchored path bytes\n");
@@ -1272,6 +1313,7 @@ exec "$OPENCLAW_TEST_NODE" "$@"
     // The anchor (pushed main) marker proves materialized anchor code ran,
     // not the linked worktree's wrapper and not the parked canonical one.
     expect(result.stdout).toContain("canonical wrapper executed");
+    expect(result.stdout).toContain("anchored paths verified");
     expect(result.stdout).not.toContain("local wrapper executed");
     expect(result.stdout).not.toContain("parked canonical executed");
     expect(result.stderr).toContain(
@@ -1281,12 +1323,7 @@ exec "$OPENCLAW_TEST_NODE" "$@"
     const anchors = readdirSync(fixture.root).filter((name) =>
       name.startsWith("openclaw-pr-anchor."),
     );
-    expect(anchors).toHaveLength(1);
-    for (const name of names) {
-      expect(readFileSync(join(fixture.root, anchors[0]!, directory, name), "utf8")).toBe(
-        "anchored path bytes\n",
-      );
-    }
+    expect(anchors).toHaveLength(0);
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
@@ -1530,8 +1567,9 @@ exit 99
       parkCanonicalOffAnchor(fixture);
       const anchor = materializeAnchor(fixture);
       writeFileSync(join(fixture.bin, "gh"), "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n");
+      const nodeExecPath = requireNodeTool("node");
       const run = (args: string[]) =>
-        spawnSync(process.execPath, args, {
+        spawnSync(nodeExecPath, args, {
           cwd: anchor,
           encoding: "utf8",
           env: fixture.env,
@@ -1550,7 +1588,7 @@ exit 99
       // Import the actual adapter closure before it rejects missing arguments.
       // Real provisioning and allocation-lease renewal have separate flows.
       const provision = spawnSync(
-        process.execPath,
+        nodeExecPath,
         [
           "--import",
           join(anchor, "scripts/tsx.mjs"),
@@ -1641,7 +1679,7 @@ exit 99
       fixture.git(fixture.linked, ["commit", "-m", "test: candidate change"]);
       const head = fixture.git(fixture.linked, ["rev-parse", "HEAD"]).stdout.trim();
       const planned = spawnSync(
-        process.execPath,
+        nodeExecPath,
         [join(anchor, "scripts/pr-lib/crabbox-gate-plan.mts"), "--base", base, "--head", head],
         {
           cwd: fixture.linked,
@@ -1711,29 +1749,33 @@ exit 99
     },
   );
 
-  it("routes a mismatched landing subcommand through the materialized anchor", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    seedReadyReview(fixture);
-    parkCanonicalOffAnchor(fixture);
-    const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["prepare-run", "123"], {
-      cwd: fixture.linked,
-      encoding: "utf8",
-      env: fixture.env,
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
-    );
-    // The stubbed gh reports a non-main base: reaching this gate proves the
-    // materialized anchor wrapper ran the landing subcommand.
-    expect(result.stderr).toContain(
-      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-    );
-    expect(result.stderr).not.toContain("Refusing to silently substitute");
-  });
+  it.each(["prepare-run", "prepare-baseline-refresh"])(
+    "routes mismatched %s through the materialized anchor",
+    (command) => {
+      const fixture = makeMismatchedWrapperRepo();
+      seedReadyReview(fixture);
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), [command, "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
+      );
+      // The stubbed gh reports a non-main base: reaching this gate proves the
+      // materialized anchor wrapper ran the landing subcommand.
+      expect(result.stderr).toContain(
+        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+      );
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
+    },
+  );
 
   it("initializes stamped review artifacts through the materialized anchor", () => {
     const fixture = makeMismatchedWrapperRepo();
+    const dependencyTarget = realpathSync(join(fixture.canonical, "node_modules/tsx"));
     writeFileSync(
       join(fixture.bin, "gh"),
       `#!/bin/sh
@@ -1776,6 +1818,11 @@ exit 99
       headSha: fixture.localRevision,
     });
     expect(existsSync(join(reviewRoot, ".local", "review.md"))).toBe(false);
+    expect(
+      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+    ).toEqual([]);
+    expect(realpathSync(join(fixture.canonical, "node_modules/tsx"))).toBe(dependencyTarget);
+    expect(existsSync(join(dependencyTarget, "package.json"))).toBe(true);
   });
 
   it.each([
@@ -1853,14 +1900,19 @@ exit 99
   ])(
     "loads matching linked helper dependencies (installed=$installed, dev-wrapper=$devWrapper)",
     ({ installed, devWrapper }) => {
+      const dependencies = ["tsx", "zod", "minimatch", "yaml"];
       const fixture = makeMismatchedWrapperRepo({
-        dispatchBody: 'node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;',
+        dispatchBody: `node -e '
+const { realpathSync } = require("node:fs");
+const { join } = require("node:path");
+console.log("anchor-dependencies=" + JSON.stringify(${JSON.stringify(dependencies)}.map((name) => realpathSync(join(process.argv[1], "..", "node_modules", name)))));
+' "$script_parent_dir" || return;
+node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       });
       fixture.git(fixture.linked, ["reset", "--hard", "refs/remotes/origin/main"]);
       parkCanonicalOffAnchor(fixture);
       const linkedModules = join(fixture.linked, "node_modules");
       expect(existsSync(linkedModules)).toBe(false);
-      const dependencies = ["tsx", "zod", "minimatch", "yaml"];
       const targets = dependencies.map((name) =>
         realpathSync(join(fixture.canonical, "node_modules", name)),
       );
@@ -1885,15 +1937,16 @@ exit 99
       const anchors = readdirSync(fixture.root).filter((name) =>
         name.startsWith("openclaw-pr-anchor."),
       );
-      expect(anchors).toHaveLength(installed ? 0 : 1);
+      expect(anchors).toHaveLength(0);
+      const dependencyProof = result.stdout
+        .split("\n")
+        .find((line) => line.startsWith("anchor-dependencies="));
+      expect(dependencyProof).toBeDefined();
+      expect(JSON.parse(dependencyProof!.slice("anchor-dependencies=".length))).toEqual(targets);
+      expect(targets.every((target) => existsSync(target))).toBe(true);
       if (!installed) {
         expect(result.stderr).toContain("matches origin/main but has no node_modules directory");
         expect(result.stderr).toContain("running wrapper code materialized from");
-        expect(
-          dependencies.map((name) =>
-            realpathSync(join(fixture.root, anchors[0]!, "node_modules", name)),
-          ),
-        ).toEqual(targets);
       }
     },
   );
@@ -2089,6 +2142,11 @@ exit 99
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/gh"), "#!/bin/sh\nexit 99\n");
     chmodSync(join(dir, "bin/gh"), 0o755);
+    // These tests cover wrapper trust routing, not the host command inventory.
+    for (const command of ["pnpm", "rg"]) {
+      writeFileSync(join(dir, "bin", command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "bin", command), 0o755);
+    }
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
@@ -2169,6 +2227,11 @@ exit 99
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/gh"), "#!/bin/sh\nexit 99\n");
     chmodSync(join(dir, "bin/gh"), 0o755);
+    // These tests cover wrapper trust routing, not the host command inventory.
+    for (const command of ["pnpm", "rg"]) {
+      writeFileSync(join(dir, "bin", command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "bin", command), 0o755);
+    }
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);

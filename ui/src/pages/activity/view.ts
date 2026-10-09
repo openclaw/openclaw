@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -41,10 +41,6 @@ function formatDuration(value: number): string {
     return t("common.na");
   }
   return formatDurationCompact(value) ?? "0ms";
-}
-
-function statusLabel(status: ActivityStatus): string {
-  return t(`activity.status.${status}`);
 }
 
 function hiddenArgumentsLabel(count: number): string {
@@ -92,15 +88,12 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
 
 function filterEntries(props: ActivityProps): ActivityEntry[] {
   const needle = normalizeLowercaseStringOrEmpty(props.filterText);
-  return props.entries.filter((entry) => {
-    if (!props.statusFilters[entry.status]) {
-      return false;
-    }
-    if (props.toolFilter && entry.toolName !== props.toolFilter) {
-      return false;
-    }
-    return matchesEntry(entry, needle);
-  });
+  return props.entries.filter(
+    (entry) =>
+      props.statusFilters[entry.status] &&
+      (!props.toolFilter || entry.toolName === props.toolFilter) &&
+      matchesEntry(entry, needle),
+  );
 }
 
 function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
@@ -112,15 +105,9 @@ function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
         @change=${(event: Event) =>
           props.onStatusToggle(status, (event.target as HTMLInputElement).checked)}
       />
-      <span>${statusLabel(status)}</span>
+      <span>${t(`activity.status.${status}`)}</span>
     </label>
   `;
-}
-
-function setLiveFilterExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
 }
 
 function renderToolFilter(props: ActivityProps, toolNames: string[]) {
@@ -144,8 +131,8 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
       aria-label=${t("activity.filters")}
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => setLiveFilterExpanded(event, true)}
-      @wa-hide=${(event: Event) => setLiveFilterExpanded(event, false)}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="activity-live-filter-popover__panel">
         <label class="field">
@@ -160,8 +147,11 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
               }
             }}
           >
-            <option value="">${t("activity.allTools")}</option>
-            ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+            <option value="" .selected=${props.toolFilter === ""}>${t("activity.allTools")}</option>
+            ${toolNames.map(
+              (name) =>
+                html`<option value=${name} .selected=${name === props.toolFilter}>${name}</option>`,
+            )}
           </select>
         </label>
       </div>
@@ -228,7 +218,7 @@ function renderEntry(
           <span class="activity-entry__title">
             ${renderSettingsStatus({
               kind: STATUS_KINDS[entry.status],
-              label: statusLabel(entry.status),
+              label: t(`activity.status.${entry.status}`),
             })}
             <span class="activity-entry__tool mono">${entryLabel(entry)}</span>
           </span>
@@ -286,10 +276,6 @@ export function renderActivity(props: ActivityProps) {
   );
   const toolNames = sortUniqueStrings(props.entries.map((entry) => entry.toolName));
   const filtered = filterEntries(props);
-  const hasAnyFilters =
-    props.filterText.trim() ||
-    props.toolFilter ||
-    STATUS_ORDER.some((status) => !props.statusFilters[status]);
 
   // The stream fills the remaining viewport height; the settings-page column
   // wrapper is intentionally skipped so the fill-height flex chain
@@ -306,30 +292,24 @@ export function renderActivity(props: ActivityProps) {
               total: String(props.entries.length),
             })}
           </span>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${filtered.length === 0}
-            @click=${props.onExpandAll}
-          >
-            ${t("activity.expandAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${props.expandedIds.size === 0}
-            @click=${props.onCollapseAll}
-          >
-            ${t("activity.collapseAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            ?disabled=${props.entries.length === 0}
-            @click=${props.onClear}
-          >
-            ${t("activity.clear")}
-          </button>
+          ${[
+            { action: "expandAll", disabled: filtered.length === 0, onClick: props.onExpandAll },
+            {
+              action: "collapseAll",
+              disabled: props.expandedIds.size === 0,
+              onClick: props.onCollapseAll,
+            },
+            { action: "clear", disabled: props.entries.length === 0, onClick: props.onClear },
+          ].map(
+            ({ action, disabled, onClick }) => html`<button
+              type="button"
+              class=${action === "clear" ? "btn btn--sm danger" : "btn btn--sm"}
+              ?disabled=${disabled}
+              @click=${onClick}
+            >
+              ${t(`activity.${action}`)}
+            </button>`,
+          )}
         </div>
       </div>
       <div class="settings-group activity-group">
@@ -345,9 +325,7 @@ export function renderActivity(props: ActivityProps) {
               ? html`
                   <div class="activity-empty">
                     ${
-                      props.entries.length === 0 || !hasAnyFilters
-                        ? t("activity.empty")
-                        : t("activity.emptyFiltered")
+                      props.entries.length === 0 ? t("activity.empty") : t("activity.emptyFiltered")
                     }
                   </div>
                 `

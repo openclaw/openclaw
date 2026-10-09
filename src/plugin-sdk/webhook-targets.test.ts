@@ -9,11 +9,13 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createWebhookInFlightLimiter } from "./webhook-request-guards.js";
 import {
   canonicalizeWebhookRouteKey,
+  normalizeWebhookPath,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
+  resolveWebhookPath,
   resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
@@ -54,7 +56,30 @@ afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
-describe("canonicalizeWebhookRouteKey", () => {
+describe("webhook paths", () => {
+  it.each([
+    ["  ", "/"],
+    ["/", "/"],
+    [" hook/ ", "/hook"],
+    ["/hook//", "/hook/"],
+  ])("normalizes configured path %j without canonicalizing it", (raw, expected) => {
+    expect(normalizeWebhookPath(raw)).toBe(expected);
+  });
+
+  it.each([
+    { params: { webhookPath: " explicit/ ", webhookUrl: "invalid" }, expected: "/explicit" },
+    {
+      params: { webhookUrl: "https://example.test/hook%2Fpart/?q=1#fragment" },
+      expected: "/hook%2Fpart",
+    },
+    { params: { webhookUrl: "invalid", defaultPath: "/fallback/" }, expected: null },
+    { params: { webhookUrl: "  ", defaultPath: "/fallback/" }, expected: "/fallback/" },
+    { params: { webhookUrl: "https://example.test" }, expected: "/" },
+    { params: {}, expected: null },
+  ])("resolves callback path from $params", ({ params, expected }) => {
+    expect(resolveWebhookPath(params)).toBe(expected);
+  });
+
   it.each([
     ["hook", "/hook"],
     ["/Hooks//Zalo/Media/", "/hooks/zalo/media"],

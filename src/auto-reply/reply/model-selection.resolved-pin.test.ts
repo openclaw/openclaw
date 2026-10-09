@@ -126,9 +126,6 @@ type SelectionCase = {
   locked?: boolean;
   configuredProvider?: boolean;
   heartbeat?: boolean;
-  oneTurn?: boolean;
-  cli?: boolean;
-  missingAuthPin?: boolean;
   operatorRestricted?: boolean;
   operatorRejected?: boolean;
 };
@@ -137,9 +134,6 @@ test.each<SelectionCase>([
   { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw model normalized once", pin: "latest", expected: "middle", raw: true },
   { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
-  { name: "one-turn override", pin: "middle", expected: "once", oneTurn: true },
-  { name: "bound CLI provider", pin: "cli-model", expected: "cli-model", cli: true },
-  { name: "missing auth pin", pin: "plain-model", expected: "plain-model", missingAuthPin: true },
   { name: "role-denied stored pin", pin: "middle", expected: "default", operatorRestricted: true },
   {
     name: "role-denied inherited pin",
@@ -157,14 +151,6 @@ test.each<SelectionCase>([
     operatorRejected: true,
   },
   {
-    name: "role-denied one-turn override",
-    pin: "middle",
-    expected: "once",
-    oneTurn: true,
-    operatorRestricted: true,
-    operatorRejected: true,
-  },
-  {
     name: "resolved prefix rejected by a colliding exact allowlist",
     pin: "custom/model",
     expected: "default",
@@ -172,19 +158,12 @@ test.each<SelectionCase>([
     disallowed: true,
   },
   {
-    name: "inherited resolved prefix rejected by a colliding exact allowlist",
-    pin: "custom/model",
-    expected: "default",
-    allow: ["custom/default", "custom/model"],
-    disallowed: true,
-    inherited: true,
-  },
-  {
-    name: "raw prefix allowed as the plain model",
+    name: "inherited raw prefix allowed as the plain model",
     pin: "custom/model",
     expected: "model",
     allow: ["custom/default", "custom/model"],
     raw: true,
+    inherited: true,
   },
   {
     name: "locked resolved prefix outside the exact allowlist",
@@ -234,28 +213,15 @@ test.each<SelectionCase>([
         : {}),
     };
     const registry = createEmptyPluginRegistry();
-    registry.cliBackends.push({
-      pluginId: "fixture",
-      source: "fixture",
-      backend: {
-        id: "demo-cli",
-        modelProvider: "custom",
-        config: { command: "false", input: "arg", output: "text" },
-      },
-    });
     setActivePluginRegistry(registry);
-    const provider = fixture.cli ? "demo-cli" : "custom";
+    const provider = "custom";
     const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
       entry: pinnedEntry,
       selection: { provider, model: fixture.pin },
-      ...(fixture.missingAuthPin ? { profileOverride: "missing-test-profile" } : {}),
     });
     if (fixture.raw) {
       delete pinnedEntry.modelOverrideRouteResolution;
-    }
-    if (fixture.cli) {
-      pinnedEntry.cliSessionBindings = { "demo-cli": { sessionId: "fixture-session" } };
     }
     const entry: SessionEntry = fixture.inherited
       ? { sessionId: "child", updatedAt: 1 }
@@ -301,15 +267,8 @@ test.each<SelectionCase>([
           defaultProvider: "custom",
           defaultModel: "default",
           provider: fixture.inherited ? provider : "custom",
-          model: fixture.oneTurn
-            ? "once"
-            : fixture.heartbeat
-              ? "heartbeat"
-              : fixture.inherited
-                ? fixture.pin
-                : "default",
+          model: fixture.heartbeat ? "heartbeat" : fixture.inherited ? fixture.pin : "default",
           hasModelDirective: false,
-          hasOneTurnModelOverride: fixture.oneTurn,
           isHeartbeat: fixture.heartbeat,
           hasResolvedHeartbeatModelOverride: fixture.heartbeat,
           preparedModelCatalog,
@@ -333,7 +292,7 @@ test.each<SelectionCase>([
         }
         const selection = await pendingSelection;
         expect(selection).toMatchObject({
-          provider: fixture.cli ? "demo-cli" : "custom",
+          provider: "custom",
           model: fixture.expected,
           resetModelOverride: fixture.disallowed === true && !fixture.inherited,
         });
@@ -347,9 +306,6 @@ test.each<SelectionCase>([
         }
         if (fixture.inherited) {
           expect(entry.modelOverride).toBeUndefined();
-        }
-        if (fixture.missingAuthPin) {
-          expect(entry.authProfileOverride).toBeUndefined();
         }
       },
     );

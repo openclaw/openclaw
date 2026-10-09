@@ -42,41 +42,22 @@ export type PackagePostInstallVerifier = (
   results: UpdateStepResult[],
 ) => Promise<UpdateStepResult | null>;
 
-function isNormalProcessExit(step: {
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  outputLimitExceeded?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-}): boolean {
-  return (
-    step.termination !== "timeout" &&
-    step.termination !== "no-output-timeout" &&
-    step.termination !== "signal" &&
-    step.killed !== true &&
-    step.outputLimitExceeded !== true &&
-    (step.signal === undefined || step.signal === null)
-  );
-}
-
 export function markPackagePostInstallDoctorAdvisory<
-  T extends {
-    exitCode: number | null;
-    stderrTail?: string | null;
-    signal?: NodeJS.Signals | null;
-    killed?: boolean;
-    outputLimitExceeded?: boolean;
-    termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-    advisory?: UpdateStepResult["advisory"];
-    failureFacts?: UpdateStepResult["failureFacts"];
-  },
+  T extends Pick<
+    UpdateStepResult,
+    | "exitCode"
+    | "stderrTail"
+    | "signal"
+    | "killed"
+    | "outputLimitExceeded"
+    | "termination"
+    | "advisory"
+    | "failureFacts"
+  >,
 >(
   step: T,
   result: UpdatePostInstallDoctorResult | null,
-): T & {
-  advisory?: UpdateStepResult["advisory"];
-  warnings?: UpdateStepResult["warnings"];
-  failureFacts?: UpdateStepResult["failureFacts"];
-} {
+): T & Pick<UpdateStepResult, "advisory" | "warnings" | "failureFacts"> {
   if (result?.status === "error" || result?.failureFacts?.length) {
     const failureFacts = result.failureFacts?.length
       ? result.failureFacts
@@ -95,7 +76,12 @@ export function markPackagePostInstallDoctorAdvisory<
   }
   if (
     !result ||
-    !isNormalProcessExit(step) ||
+    step.termination === "timeout" ||
+    step.termination === "no-output-timeout" ||
+    step.termination === "signal" ||
+    step.killed === true ||
+    step.outputLimitExceeded === true ||
+    (step.signal !== undefined && step.signal !== null) ||
     !(
       (step.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
         result.status === "advisory") ||
@@ -152,14 +138,6 @@ function failedVerification(root: string, code: string, message: string): Update
   };
 }
 
-function missingPackageVerificationStep(root: string): UpdateStepResult {
-  return failedVerification(
-    root,
-    "verification-result-missing",
-    "Required post-install verification did not produce a result; Gateway activation is unsafe.",
-  );
-}
-
 export function failedPackageVerificationStep(
   root: string,
   error: unknown,
@@ -197,7 +175,14 @@ export async function runPackagePostInstallVerification(
 ): Promise<UpdateStepResult> {
   const results: UpdateStepResult[] = [];
   try {
-    return (await verify(root, results)) ?? missingPackageVerificationStep(root);
+    return (
+      (await verify(root, results)) ??
+      failedVerification(
+        root,
+        "verification-result-missing",
+        "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+      )
+    );
   } catch (error) {
     return failedPackageVerificationStep(root, error, results.at(-1));
   }

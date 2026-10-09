@@ -41,12 +41,7 @@ export function evaluateRequirementsFromMetadataWithRemote(
     metadata?: RequirementsMetadata;
     remote?: RequirementRemote;
   },
-): {
-  required: Requirements;
-  missing: Requirements;
-  eligible: boolean;
-  configChecks: RequirementConfigCheck[];
-} {
+) {
   const required: Requirements = {
     bins: params.metadata?.requires?.bins ?? [],
     anyBins: params.metadata?.requires?.anyBins ?? [],

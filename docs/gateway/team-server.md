@@ -59,7 +59,7 @@ activation and verification. See [Keep operations recoverable](/gateway/team-ser
 A Gateway is one trust boundary. Roles and session ownership support
 collaboration; they do not isolate hostile users from each other. Keep untrusted
 code in sandboxes or remote workers. Use separate Gateways, OS users, or hosts
-for mutually untrusted teams. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+for mutually untrusted teams. See [Security trust model](/gateway/security/trust-model).
 
 ## 1. Install under one service account
 
@@ -329,7 +329,9 @@ write permission to every repository. See
 [GitHub identity for agent tools](/gateway/config-tools/github-identity).
 
 An optional `gateway.controlUi.github.token` serves GitHub lookups and project
-discovery. Keep it in a dedicated SecretRef instead of accidentally selecting a
+discovery. For Enterprise, set `gateway.controlUi.github.host` to the selected
+`gateway.github.host` so the service credential is used only for that host.
+Keep it in a dedicated SecretRef instead of accidentally selecting a
 publisher through a process-wide `GH_TOKEN` or `GITHUB_TOKEN`. Read credentials,
 publication credentials, and each person's sign-in identity have different jobs.
 

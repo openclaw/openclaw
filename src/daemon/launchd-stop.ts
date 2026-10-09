@@ -1,4 +1,3 @@
-/** LaunchAgent stop semantics and in-service maintenance parking. */
 import { isDeepStrictEqual } from "node:util";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
@@ -196,7 +195,7 @@ export async function stopLaunchAgent({
         updateOwned &&
         updateHandoff &&
         (await (
-          await import("../infra/update-managed-service-handoff.js")
+          await import("../infra/update-managed-service-handoff-current.js")
         ).isCurrentManagedServiceUpdateHandoffProcess({ ...updateHandoff, env: intentEnv }));
       if (!authorized) {
         throw launchAgentStopError(

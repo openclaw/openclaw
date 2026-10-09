@@ -1,7 +1,8 @@
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
 import {
-  agentRunFrameGroups,
   assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
   coalesceActivityRuns,
@@ -10,20 +11,25 @@ import {
   collapseCompletedTurnWork,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getChatItemsGeneration,
   persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
+import { isInterSessionGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
-import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import type { StreamGroupPart } from "./chat-message.ts";
+import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
+import type { StreamGroupPart } from "./chat-message-stream.ts";
 import { projectChatPositions, type ChatPositionIndex } from "./chat-position-projection.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
 type TranscriptChain = {
+  searchActive: boolean;
+  workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
   transcriptItems: readonly ChatRenderItem[];
   /** Active status parts shown inside the preceding reply, keyed by that reply's group. */
@@ -37,6 +43,8 @@ type TranscriptIndex = {
   positionIndex: ChatPositionIndex;
   rows: readonly TranscriptRow<ChatRenderItem>[];
 };
+
+type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems">;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
 type StreamOwner = Extract<ChatRenderItem, { kind: "stream-run" | "agent-run-frame" }>;
@@ -62,7 +70,7 @@ type ChainEntry = {
   live?: LiveSlot;
 };
 type BaseIndex = {
-  chain: TranscriptChain;
+  chain: TranscriptIndexSource;
   index: TranscriptIndex;
   ownerRowIndex: number;
 };
@@ -70,9 +78,61 @@ type BaseIndex = {
 // Structural inputs and terminal outcomes invalidate the full projection. A live
 // slot replacement derives immutable tail updates from that structural entry.
 const chains = new WeakMap<object, ChainEntry>();
-const liveChains = new WeakMap<TranscriptChain, LiveProjection>();
-const indexes = new WeakMap<object, { key: readonly unknown[]; value: TranscriptIndex }>();
-const baseIndexes = new WeakMap<object, { key: readonly unknown[]; value: BaseIndex }>();
+const liveChains = new WeakMap<TranscriptIndexSource, LiveProjection>();
+const indexes = createTranscriptMemo<TranscriptIndex>();
+const baseIndexes = createTranscriptMemo<BaseIndex>();
+
+// Fold only the final presentation, after causal run/turn ownership is settled.
+// Every original message and its reply identity remains in chronological order.
+function coalesceInterSessionUpdates(items: ChatRenderItem[]): ChatRenderItem[] {
+  const result: ChatRenderItem[] = [];
+  let pending: MessageGroup[] = [];
+  const flush = () => {
+    const first = pending[0];
+    if (first) {
+      result.push(
+        pending.length === 1
+          ? first
+          : {
+              ...first,
+              runId: undefined,
+              messages: pending.flatMap((group) => group.messages),
+              visibleContent: pending.some((group) => group.visibleContent === "non-text")
+                ? "non-text"
+                : pending.some((group) => group.visibleContent === "text")
+                  ? "text"
+                  : "none",
+            },
+      );
+    }
+    pending = [];
+  };
+  for (const item of items) {
+    if (
+      item.kind !== "group" ||
+      !isInterSessionGroup(item) ||
+      !item.senderSession?.sessionKey ||
+      // Reply targets retain the original group's run and prompt attribution.
+      item.messages.some(({ message }) => normalizeMessage(message).replyTarget)
+    ) {
+      flush();
+      result.push(item);
+      continue;
+    }
+    const first = pending[0];
+    if (
+      first &&
+      (first.senderSession?.sessionKey !== item.senderSession.sessionKey ||
+        first.senderSession?.agentId !== item.senderSession.agentId ||
+        first.senderSession?.label !== item.senderSession.label)
+    ) {
+      flush();
+    }
+    pending.push(item);
+  }
+  flush();
+  return result;
+}
 
 function ownsStream(item: ChatRenderItem, stream: LiveStream): item is StreamOwner {
   return item.kind === "stream-run"
@@ -112,21 +172,6 @@ function replaceOwnerStream(
       };
 }
 
-function memoize<T>(
-  cache: WeakMap<object, { key: readonly unknown[]; value: T }>,
-  owner: object,
-  key: readonly unknown[],
-  build: () => T,
-): T {
-  const cached = cache.get(owner);
-  if (cached?.key.every((value, index) => Object.is(value, key[index]))) {
-    return cached.value;
-  }
-  const value = build();
-  cache.set(owner, { key, value });
-  return value;
-}
-
 export function projectTranscriptChain(
   chatItems: ReturnType<typeof buildCachedChatItems>,
   options: {
@@ -138,6 +183,7 @@ export function projectTranscriptChain(
 ): TranscriptChain {
   const { session } = options;
   const key = [
+    getChatItemsGeneration(chatItems),
     options.sessionKey,
     options.runWorking,
     options.searchActive,
@@ -163,7 +209,7 @@ export function projectTranscriptChain(
       const transcriptItems = cached.value.transcriptItems.slice();
       collapsedItems[live.owner.collapsedIndex] = owner;
       transcriptItems[live.owner.transcriptIndex] = owner;
-      const value = { collapsedItems, transcriptItems, continuations: cached.value.continuations };
+      const value = { ...cached.value, collapsedItems, transcriptItems };
       const updatedOwner = { ...live.owner, item: owner };
       const updatedLive = { ...live, item: next, owner: updatedOwner };
       liveChains.set(value, {
@@ -175,43 +221,51 @@ export function projectTranscriptChain(
       return value;
     }
   }
-  const build = () => {
-    const collapsedItems = coalesceAgentRunFrames(
-      coalesceActivityRuns(
-        collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
-        options,
-      ),
+  const frames = coalesceAgentRunFrames(
+    coalesceActivityRuns(
+      collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
       options,
-    );
-    const continuations = new Map<string, StreamGroupPart[]>();
-    const transcriptItems = collapsedItems.filter((item, index) => {
-      const previous = collapsedItems[index - 1];
-      const activeStatusParts =
-        item.kind === "stream-run" && item.parts.every((part) => part.kind === "reading-indicator")
-          ? item.parts
-          : item.kind === "agent-run-frame"
-            ? agentRunFrameActiveStatusParts(item)
-            : undefined;
-      const activeStatusRunId =
-        item.kind === "stream-run" || item.kind === "agent-run-frame" ? item.runId : undefined;
-      if (
-        previous?.kind !== "group" ||
-        !activeStatusParts ||
-        !assistantGroupCanOwnActiveRunStatus(previous) ||
-        (previous.runId !== undefined &&
-          activeStatusRunId !== undefined &&
-          previous.runId !== activeStatusRunId)
-      ) {
-        return true;
-      }
-      // A reply and its still-running state are one turn-level presentation.
-      // Keeping the status in the reply avoids a second claw/assistant row.
-      continuations.set(previous.key, activeStatusParts);
+    ),
+    options,
+  );
+  const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
+  const continuations = new Map<string, StreamGroupPart[]>();
+  const transcriptItems = collapsedItems.filter((item, index) => {
+    // A handoff boundary only shapes the grouping above; it has no row of its own.
+    if (item.kind === "notice" && item.handoffBoundary) {
       return false;
-    });
-    return { collapsedItems, transcriptItems, continuations };
+    }
+    const previous = collapsedItems[index - 1];
+    const activeStatusParts =
+      item.kind === "stream-run" && item.parts.every((part) => part.kind === "reading-indicator")
+        ? item.parts
+        : item.kind === "agent-run-frame"
+          ? agentRunFrameActiveStatusParts(item)
+          : undefined;
+    const activeStatusRunId =
+      item.kind === "stream-run" || item.kind === "agent-run-frame" ? item.runId : undefined;
+    if (
+      previous?.kind !== "group" ||
+      !activeStatusParts ||
+      !assistantGroupCanOwnActiveRunStatus(previous) ||
+      (previous.runId !== undefined &&
+        activeStatusRunId !== undefined &&
+        previous.runId !== activeStatusRunId)
+    ) {
+      return true;
+    }
+    // A reply and its still-running state are one turn-level presentation.
+    // Keeping the status in the reply avoids a second claw/assistant row.
+    continuations.set(previous.key, activeStatusParts);
+    return false;
+  });
+  const value = {
+    collapsedItems,
+    transcriptItems,
+    workGroups: transcriptItems.filter((item) => item.kind === "work-group"),
+    continuations,
+    searchActive: options.searchActive,
   };
-  const value = build();
   const index = findLiveStreamIndex(chatItems);
   const item = chatItems[index];
   let live: LiveSlot | undefined;
@@ -238,7 +292,7 @@ export function projectTranscriptChain(
 }
 
 export function projectTranscriptIndex(
-  chain: TranscriptChain,
+  chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
   props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
 ): TranscriptIndex {
@@ -249,7 +303,7 @@ export function projectTranscriptIndex(
     props.userId,
     props.userName,
   ];
-  return memoize(indexes, chain, key, () => {
+  return indexes(chain, key, () => {
     const live = liveChains.get(chain);
     if (!live) {
       return buildTranscriptIndex(chain, expandedToolCards, props);
@@ -258,9 +312,10 @@ export function projectTranscriptIndex(
       chain.transcriptItems.slice(live.owner.transcriptIndex),
       expandedToolCards,
       new Map(),
+      chain.searchActive,
     );
     const visible = tail.markerIdsByMessageId.has(live.item.key);
-    const base = memoize(baseIndexes, live.structuralChain, [...key, visible], () => {
+    const base = baseIndexes(live.structuralChain, [...key, visible], () => {
       const index = buildTranscriptIndex(chain, expandedToolCards, props);
       const ownerRowIndex = index.rows.findLastIndex((row) => row.key === live.owner.item.key);
       if (ownerRowIndex < 0) {
@@ -296,22 +351,13 @@ export function projectTranscriptIndex(
 }
 
 function buildTranscriptIndex(
-  chain: TranscriptChain,
+  chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
   props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
 ): TranscriptIndex {
   const loadedReplySources = new Map<string, LoadedReplySource>();
-  const { messageRowKeysById, transcriptMessageKeys } = projectTranscriptMessageIndex(
-    chain.transcriptItems,
-    expandedToolCards,
-    props,
-    loadedReplySources,
-  );
-  const positionIndex = projectChatPositions(
-    chain.transcriptItems,
-    expandedToolCards,
-    messageRowKeysById,
-  );
+  const messageRowKeysById = new Map<string, string>();
+  const transcriptMessageKeys = new Map<string, string>();
   // New row keys measure expanded work immediately; existing keys keep their
   // cached height until ResizeObserver reports the changed layout.
   const rows: TranscriptRow<ChatRenderItem>[] = [];
@@ -322,48 +368,8 @@ function buildTranscriptIndex(
         rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
       }
     }
-  }
-  return { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows };
-}
-
-export function expandReplyTargetWork(
-  transcriptItems: readonly ChatRenderItem[],
-  expandedToolCards: Map<string, boolean>,
-  messageId: string,
-): void {
-  for (const item of transcriptItems) {
     const parts = item.kind === "agent-run-frame" ? item.parts : [item];
-    for (const part of parts) {
-      if (
-        part.kind === "work-group" &&
-        part.groups.some((group) =>
-          group.messages.some((source) => persistedMessageEntryId(source.message) === messageId),
-        )
-      ) {
-        setExpansionState(expandedToolCards, part.key, true);
-      }
-    }
-  }
-}
-
-function projectTranscriptMessageIndex(
-  transcriptItems: readonly ChatRenderItem[],
-  expandedToolCards: ReadonlyMap<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
-  loadedReplySources: Map<string, LoadedReplySource>,
-) {
-  const messageRowKeysById = new Map<string, string>();
-  const transcriptMessageKeys = new Map<string, string>();
-  for (const item of transcriptItems) {
-    const parts = item.kind === "agent-run-frame" ? item.parts : [item];
-    const groups =
-      item.kind === "agent-run-frame"
-        ? agentRunFrameGroups(item)
-        : item.kind === "group"
-          ? [item]
-          : item.kind === "work-group" || item.kind === "activity-run"
-            ? item.groups
-            : [];
+    const groups = chatItemGroups(item);
     const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
     // The anchor owner uses the first key, so keep stream and persisted keys
     // in their actual presentation order, including within a mixed run frame.
@@ -377,18 +383,8 @@ function projectTranscriptMessageIndex(
       } else if (part.kind === "stream") {
         transcriptMessageKeys.set(part.key, item.key);
       }
-      const partGroups =
-        part.kind === "group"
-          ? [part]
-          : part.kind === "work-group" || part.kind === "activity-run"
-            ? part.groups
-            : [];
-      for (const group of partGroups) {
-        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, {
-          assistantName: props.assistantName,
-          userId: props.userId,
-          userName: props.userName,
-        });
+      for (const group of chatItemGroups(part)) {
+        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
         const rowKey =
           item.kind === "work-group" && expandedToolCards.get(item.key)
             ? item.key + ":" + group.key
@@ -408,5 +404,38 @@ function projectTranscriptMessageIndex(
       }
     }
   }
-  return { messageRowKeysById, transcriptMessageKeys };
+  const positionIndex = projectChatPositions(
+    chain.transcriptItems,
+    expandedToolCards,
+    messageRowKeysById,
+    chain.searchActive,
+  );
+  return { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows };
+}
+
+export function expandReplyTargetWork(
+  transcriptItems: readonly ChatRenderItem[],
+  expandedToolCards: Map<string, boolean>,
+  messageId: string,
+): void {
+  for (const item of transcriptItems) {
+    const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+    for (const part of parts) {
+      if (
+        part.kind === "group" &&
+        isInterSessionGroup(part) &&
+        part.messages.some((source) => persistedMessageEntryId(source.message) === messageId)
+      ) {
+        setExpansionState(expandedToolCards, "inter-session:" + part.key, true);
+      }
+      if (
+        part.kind === "work-group" &&
+        part.groups.some((group) =>
+          group.messages.some((source) => persistedMessageEntryId(source.message) === messageId),
+        )
+      ) {
+        setExpansionState(expandedToolCards, part.key, true);
+      }
+    }
+  }
 }

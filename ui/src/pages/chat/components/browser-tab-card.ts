@@ -43,18 +43,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.theme,
-      (theme, notify) => theme.subscribe(notify),
-    );
+    this.subscriptions.watchStore(() => this.context?.gateway);
+    this.subscriptions.watchStore(() => this.context?.config);
+    this.subscriptions.watchStore(() => this.context?.theme);
   }
 
   static override styles = [
@@ -110,8 +101,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         justify-content: center;
         color: var(--muted);
       }
-      .icon svg,
-      .icon img {
+      .icon svg {
         width: 16px;
         height: 16px;
       }
@@ -346,6 +336,17 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     }
   };
 
+  private renderImage(src: string) {
+    return html`<img
+      src=${src}
+      alt=""
+      @error=${() => {
+        this.failedImages.add(src);
+        this.requestUpdate();
+      }}
+    />`;
+  }
+
   override render() {
     const preview = this.preview;
     if (!preview) {
@@ -381,14 +382,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                   ?data-new-tab-action=${this.opensExternally}
                   @click=${this.open}
                 >
-                  <img
-                    src=${image}
-                    alt=""
-                    @error=${() => {
-                      this.failedImages.add(image);
-                      this.requestUpdate();
-                    }}
-                  />
+                  ${this.renderImage(image)}
                 </button>
               `
             : nothing
@@ -396,16 +390,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         <div class="bar">
           <span class="icon" aria-hidden="true"
             >${
-              favicon && !this.failedImages.has(favicon)
-                ? html`<img
-                    src=${favicon}
-                    alt=""
-                    @error=${() => {
-                      this.failedImages.add(favicon);
-                      this.requestUpdate();
-                    }}
-                  />`
-                : icons.globe
+              favicon && !this.failedImages.has(favicon) ? this.renderImage(favicon) : icons.globe
             }</span
           >
           <span class="identity">

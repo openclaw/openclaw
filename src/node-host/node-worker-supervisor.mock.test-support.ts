@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { NodeWorkerJournalWorker as JournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchStore as LaunchStore } from "./node-worker-launch-store.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import type { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
 
 const mocks = vi.hoisted(() => ({
   launchClaim: vi.fn<LaunchStore["claim"]>(),
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   turnMatching: vi.fn<NodeWorkerTurnStore["getMatching"]>(),
   turnFinish: vi.fn<NodeWorkerTurnStore["finish"]>(),
   drain: vi.fn<JournalWorker["drain"]>(async () => {}),
+  quiescenceClose: vi.fn<NodeWorkerWorkspaceQuiescence["close"]>(async () => {}),
   acquirePreparedWorkspace:
     vi.fn<
       typeof import("./node-worker-workspace.js").NodeWorkerWorkspaceRuntime.prototype.acquirePreparedWorkspace
@@ -72,17 +74,23 @@ vi.mock("./node-worker-container-lifecycle.js", () => ({
     remove = mocks.remove;
   },
 }));
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    acquirePreparedWorkspace = mocks.acquirePreparedWorkspace;
-    applyRetainSnapshot = mocks.retain;
-    processes = {
-      hasActiveWork: () => false,
-      stopEnvironment: async () => {},
-      close: async () => {},
-    };
-  },
-}));
+vi.mock("./node-worker-workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./node-worker-workspace.js")>();
+  const { NodeWorkerWorkspaceProcesses } = await import("./node-worker-workspace-processes.js");
+  return {
+    ...actual,
+    NodeWorkerWorkspaceRuntime: class {
+      acquirePreparedWorkspace = mocks.acquirePreparedWorkspace;
+      applyRetainSnapshot = mocks.retain;
+      quiescence = {
+        hasActiveWork: () => false,
+        close: mocks.quiescenceClose,
+      };
+      processes = new NodeWorkerWorkspaceProcesses();
+    },
+  };
+});
+
 vi.mock("./node-worker-process-identity.js", () => ({
   requireNodeWorkerProcessIdentity: (pid: number) => ({ pid, startTime: 1 }),
   inspectNodeWorkerProcessIdentity: mocks.inspectIdentity,

@@ -34,14 +34,6 @@ export function requireString(value: unknown, label: string): string {
   return value;
 }
 
-/** Validates a base64 payload parameter as a string; decoding happens at call sites. */
-export function requireBase64String(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`${label} must be a string.`);
-  }
-  return value;
-}
-
 export function requireNumber(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${label} must be a finite number.`);

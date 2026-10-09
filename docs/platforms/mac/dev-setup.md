@@ -42,38 +42,66 @@ Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
 default and fails if none is available. Ad-hoc signing is an explicit opt-in;
 it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
 
-Packaging builds the JavaScript runtime and Control UI, then provisions a
-private Node worker from the canonical package artifact for every requested
-`BUILD_ARCHS` architecture. The root worker tarball uses the repository-pinned
-pnpm packer; Corepack-only setups are supported. Packaging verifies native
-capabilities and worker readiness in temporary state before and after signing,
-then replaces the previous app. `scripts/restart-mac.sh` uses
-the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
-content-checked build caches still avoid unnecessary declaration work.
+Packaging builds the JavaScript runtime and Control UI, then stages the full
+canonical package with production dependencies under
+`Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
+package's `files` filter, including its CLI, Gateway, Control UI, npm, and
+optional `sqlite-vec`; on-demand plugins excluded from that package remain
+excluded. The root tarball uses the repository-pinned pnpm packer; Corepack-only
+setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
+build-time Node and npm, then stages Bun and SQLite. No Node executable or
+npm/corepack/npx shims ship in the app.
 
-Worker pruning follows module imports, runtime launch descriptors, and named
-worker entrypoints transitively. Helpers launched by another retained worker
-remain packaged with their imports and runtime dependencies.
+The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
+consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
+`scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`
+downloads it; Darwin accepts both architectures for a universal binary.
+Archives are cached under `.cache/openclaw-bun/<tag>/`. Staging verifies the
+release manifest against `SHA256SUMS`, its identity and artifact fields against
+the pin, each archive against both sources, then the executable checksum,
+native architecture, and runnable fork revision. The fork's package auto-install
+default stays off; OpenClaw's runtime admission still applies at launch.
+`scripts/build-mac-sqlite.sh` builds
+the pinned amalgamation in `scripts/lib/sqlite-macos.json`, cached under
+`apps/macos/.build/sqlite/<version>/`. The resulting signed library supports
+SQLite extensions without relying on Apple's system SQLite or Homebrew.
+
+Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
+`sqlite-vec` loading, native capabilities, and worker readiness in temporary
+state before and after signing, then replaces the previous app. It also rejects
+any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
+`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
+caches still avoid unnecessary declaration work.
 
 The private worker preserves the app's saved desktop-sharing preference and
 profile selection. Packaging checks startup with sharing enabled, disabled,
 and unspecified, including named-profile launches, before and after signing.
 
 Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
-version for every private worker. If unset or empty, the CLI installer's default
-applies. Packaging installs and verifies the complete worker with that runtime.
+version for the temporary package installation. If unset or empty, the CLI
+installer's default applies. This build-time override does not change the
+bundled Bun pin.
 
-Each worker keeps native binaries that support its architecture and omits
-incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
-dependencies from triggering macOS compatibility warnings in Apple silicon
-builds. Compatible universal binaries, JavaScript, WASM, and other resources
-remain intact.
+The runtime shares one JavaScript package across requested `BUILD_ARCHS`
+architectures. Universal builds combine Bun and SQLite into universal binaries
+and retain the separate arm64 and x64 Darwin native packages. Staging installs
+each CPU's optional dependencies separately, merges matching shared files, and
+combines distinct Mach-O slices at shared paths. Other shared-file conflicts
+fail packaging. Single-architecture
+builds retain only their compatible native payloads. Linux and Windows prebuilds
+are removed; compatible JavaScript, WASM, and other resources remain intact.
+Universal staging on Apple silicon requires Rosetta for x64 dependency install
+hooks, which execute native code using a temporary x64 Node driver.
 
-Universal builds require both arm64 and x86_64 runtimes to execute during
-validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
-architecture or nonportable native dependency fails packaging. Node downloads
-and package installation need network access. The larger app includes its
-complete private runtime; it does not update an independently managed Gateway.
+Packaging executes verification for each runnable architecture. Verifying
+x86_64 on Apple silicon requires Rosetta; without it, packaging reports that
+architecture's execution checks as skipped. Missing binary architectures or
+nonportable native dependencies fail packaging. Downloads and package
+installation need network access on the build host. A packaged app needs no
+runtime download during onboarding: it seeds that payload into the profile's
+state directory and hosts the Gateway with Bun. The stage script writes the
+package's `openclaw-install-owner.json` marker so Gateway updates remain owned
+by the app.
 
 Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
 and copies its SwiftPM resource bundles into `Contents/Resources`. The native
@@ -102,11 +130,52 @@ Ad-hoc signed apps may trigger security prompts. If the app crashes
 immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 </Note>
 
+### Shared Bun pin and repin gate
+
+The JSON schema has top-level `tag`, `commit`, `revision`, and `artifacts`.
+`artifacts` is keyed by `darwin-arm64`, `darwin-x64`, `linux-arm64`, and
+`linux-x64`; each entry contains `asset`, `sha256`, `executable`, and
+`executableSha256`. These are a projection of the published fork release's
+`manifest.json`, not independently maintained app or CI pins. Windows Tauri
+retains its current runtime until a signed fork Windows build is published;
+unsigned dry-run artifacts are not shippable.
+
+Every repin requires both gates on the same published tag: CI's paired Bun-lane
+replay and Bun-only smoke, plus the macOS runtime checks and two-binary test set.
+Neither app nor CI advances when either gate fails. A Linux-only regression
+also stops the shared repin. Preserve the last tag admitted by both gates while
+investigating; a published prerelease alone is not admission. Record the exact
+tag and gate evidence in the PR. See [CI runtime selection](/ci/pipeline#test-runtime-selection).
+
+After the gates pass, download `manifest.json` and `SHA256SUMS` from that exact
+release and verify the manifest checksum. Regenerate all four entries together:
+
+```sh
+jq '{tag, commit: .bun.commit, revision: .bun.revision,
+  artifacts: (.assets | map(
+    select(.target | IN("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64")) |
+    {key: .target, value: {asset: .name, sha256,
+      executable: .executable.path, executableSha256: .executable.sha256}}
+  ) | from_entries)}' manifest.json > scripts/lib/openclaw-bun.json
+```
+
+Repin one shared owner in one PR and run staging for all four targets; execute
+native proofs on matching hosts (Rosetta can verify Darwin x64). Do not advance
+an individual artifact or copy the pin into an app or workflow.
+
 ## 3. Install the CLI and Gateway
 
-The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
-fresh profile, choose **This Mac** during onboarding; the app installs the
-matching user-space CLI and runtime before starting the Gateway wizard.
+On a fresh profile in a packaged app, choose **This Mac** during onboarding.
+The app prepares its bundled Bun runtime, starts the Gateway as its child,
+and creates the profile's terminal CLI shim. It does not invoke
+`scripts/install-cli.sh`, install Node, or ask for an install channel.
+Unbundled DEBUG builds retain the installer and channel chooser.
+
+Runtime copies live at `<state>/runtime/<runtimeBuildId>/`. App-hosted children
+and app-managed Bun LaunchAgents use concrete build paths; only the terminal
+shim uses `runtime/current`. Post-update setup reseeds the payload and refreshes
+app-owned Bun service pins before verifying health and collecting old builds.
+See [Gateway on macOS](/platforms/mac/bundled-gateway).
 
 For manual development recovery, install the matching CLI yourself. Read the
 version from the app: choose **About OpenClaw** in the menu bar, or run
@@ -208,6 +277,23 @@ launcher's root. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
 and `AppDefaults` freeze their identity for the process. Tests needing another
 singleton identity require a fresh process. The cooperative helper does not
 isolate unrelated tests or the process from the host.
+
+Swift Testing runs suites concurrently in one process, so never replace the
+global executor (for example `withMainSerialExecutor` or
+`uncheckedUseMainSerialExecutor` from ConcurrencyExtras). Its hook moves every
+other suite's global jobs, actor work, and timer wakeups onto the main thread;
+one non-yielding loop there starves the timeout that would cancel it, and the
+job hangs until CI cancels it. To assert that a late reply changed nothing,
+await the task that settles that reply, as provider wizard and manual-key
+actions return it.
+
+Work a test starts must end with the test, because the process outlives it.
+Shut down Gateway channels and connections a test opens; their watchdog
+otherwise keeps reconnecting through the test's fixture. Fake transports and
+sockets must stop waiting when their read is cancelled, as the production stream
+transports do: `AsyncTimeout` cancels and abandons the operation that loses its
+race instead of joining it, so a fake that ignores cancellation keeps polling for
+the rest of the run.
 
 ## Troubleshooting
 

@@ -9,15 +9,12 @@ beforeAll(async () => {
 afterAll(() => restoreMigrationRuntime?.());
 
 describe("legacy config migrate validation", () => {
-  it("leaves pre-June keys unresolved while migrating supported config", () => {
+  it("leaves retired keys unresolved while migrating supported config", () => {
     const raw = {
       heartbeat: { every: "30m", showOk: true },
       agents: {
         defaults: {
           llm: { idleTimeoutSeconds: 120 },
-          embeddedPi: { executionContract: "strict-agentic" },
-          embeddedHarness: { runtime: "claude-cli", fallback: "none" },
-          sandbox: { perSession: true },
         },
       },
       session: { typingMode: "thinking" },

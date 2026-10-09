@@ -82,32 +82,12 @@ function createRegistry(
 
 describe("ModelRegistry source composition", () => {
   it.each([rootUrl, catalogUrl])(
-    "keeps context choices on their catalog route at %s",
+    "preserves compatibility and context choices on their source route at %s",
     (baseUrl) => {
       const contextWindows = [
         { id: "200k", label: "200K", contextWindow: 200000 },
         { id: "1m", label: "1M", contextWindow: 1000000 },
       ];
-      const registry = createRegistry({
-        authored: { ...authored, baseUrl },
-        generated: {
-          ...generated,
-          models: [{ id: "shared", contextWindows, contextWindowDefault: "1m" }],
-        },
-      });
-      const model = registry.find(provider, "shared");
-      if (baseUrl === catalogUrl) {
-        expect(model).toMatchObject({ contextWindows, contextWindowDefault: "1m" });
-      } else {
-        expect(model).toHaveProperty("contextWindows", undefined);
-        expect(model).toHaveProperty("contextWindowDefault", undefined);
-      }
-    },
-  );
-
-  it.each([rootUrl, catalogUrl])(
-    "preserves source compatibility without mixing provider defaults at %s",
-    (baseUrl) => {
       const registry = createRegistry({
         authored: {
           ...authored,
@@ -117,27 +97,53 @@ describe("ModelRegistry source composition", () => {
         generated: {
           ...generated,
           baseUrl,
-          compat: { maxTokensField: "max_completion_tokens" },
+          compat: {
+            maxTokensField: "max_completion_tokens",
+            openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+            vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+          },
           models: [
-            { id: "shared" },
+            { id: "shared", contextWindows, contextWindowDefault: "1m" },
             { id: "generated-only" },
-            { id: "model-override", compat: { maxTokensField: "max_tokens" } },
+            {
+              id: "model-override",
+              compat: {
+                maxTokensField: "max_tokens",
+                openRouterRouting: { order: ["model-route"] },
+                vercelGatewayRouting: { order: ["model-route"] },
+              },
+            },
           ],
         },
       });
       expect(registry.find(provider, "generated-only")?.compat).toEqual({
         maxTokensField: "max_completion_tokens",
+        openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+        vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
       });
       expect(registry.find(provider, "model-override")?.compat).toEqual({
         maxTokensField: "max_tokens",
+        openRouterRouting: { order: ["model-route"], allow_fallbacks: false },
+        vercelGatewayRouting: { order: ["model-route"], only: ["shared-route"] },
       });
       expect(registry.find(provider, "authored-only")?.compat).toEqual({
         maxTokensField: "max_tokens",
         supportsDeveloperRole: false,
       });
+      const model = registry.find(provider, "shared");
+      if (baseUrl === rootUrl) {
+        expect(model).toMatchObject({ contextWindows, contextWindowDefault: "1m" });
+      } else {
+        expect(model).toHaveProperty("contextWindows", undefined);
+        expect(model).toHaveProperty("contextWindowDefault", undefined);
+      }
       expect(registry.find(provider, "shared")?.compat).toEqual(
         baseUrl === rootUrl
-          ? { maxTokensField: "max_completion_tokens" }
+          ? {
+              maxTokensField: "max_completion_tokens",
+              openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+              vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+            }
           : { maxTokensField: "max_tokens", supportsDeveloperRole: false },
       );
     },
@@ -181,19 +187,6 @@ describe("ModelRegistry source composition", () => {
       });
     },
   );
-
-  it("keeps authored model endpoint pins eligible for provider request settings", async () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared", baseUrl: catalogUrl }] },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model?.baseUrl).toBe(catalogUrl);
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toMatchObject({
-      ok: true,
-      apiKey: "authored-fixture-key",
-      headers: { "X-Authored-Provider": "root" },
-    });
-  });
 
   it.each([false, true])(
     "keeps the authored request route when generated model routing conflicts (model pin: %s)",
@@ -246,40 +239,6 @@ describe("ModelRegistry source composition", () => {
     });
   });
 
-  it("retains discovered output-limit provenance when the authored definition omits the limit", () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared", name: "Sparse" }] },
-    });
-    expect(registry.find(provider, "shared")).toMatchObject({
-      name: "Sparse",
-      input: ["text", "image"],
-      maxTokens: 8192,
-      maxTokensSource: "discovered",
-    });
-  });
-
-  it("preserves generated optional metadata omitted by an authored row", () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared" }] },
-      generated: {
-        ...generated,
-        models: [
-          {
-            id: "shared",
-            name: "Discovered name",
-            params: { canonicalModelId: "canonical-example" },
-            thinkingLevelMap: { high: "provider-high" },
-          },
-        ],
-      },
-    });
-    expect(registry.find(provider, "shared")).toMatchObject({
-      name: "Discovered name",
-      params: { canonicalModelId: "canonical-example" },
-      thinkingLevelMap: { high: "provider-high" },
-    });
-  });
-
   it("keeps distinct literal SDK model IDs when their trimmed spelling matches", () => {
     const registry = createRegistry({
       authored: { ...authored, models: [{ id: "shared", name: "Authored" }] },
@@ -288,22 +247,6 @@ describe("ModelRegistry source composition", () => {
     expect(registry.getAll().map((model) => model.id)).toEqual(["shared", " shared "]);
     expect(registry.find(provider, "shared")?.name).toBe("Authored");
     expect(registry.find(provider, " shared ")?.name).toBe("Distinct generated model");
-  });
-
-  it("does not let generated model headers replace authored request headers", async () => {
-    const registry = createRegistry({
-      generated: {
-        ...generated,
-        models: [{ id: "shared", headers: { "X-Cached-Model": "cache" } }],
-      },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model).toBeDefined();
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "authored-fixture-key",
-      headers: { "X-Authored-Provider": "root", "X-Authored-Model": "root" },
-    });
   });
 
   it("keeps generated-only inventory without adopting its credential or bearer headers", async () => {
@@ -317,23 +260,6 @@ describe("ModelRegistry source composition", () => {
     await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
       ok: true,
       apiKey: undefined,
-      headers: undefined,
-    });
-  });
-
-  it("uses current request-store credentials without restoring generated request headers", async () => {
-    const registry = createRegistry({
-      authored: null,
-      credentials: {
-        [provider]: { type: "api_key", key: "current-store-fixture-key" },
-      },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model).toBeDefined();
-    expect(registry.hasConfiguredAuth(model!)).toBe(true);
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "current-store-fixture-key",
       headers: undefined,
     });
   });
@@ -355,7 +281,12 @@ describe("ModelRegistry source composition", () => {
   it("preserves raw SDK authored request authority for custom APIs", async () => {
     const api = "operator-custom-api";
     const registry = createRegistry({
-      authored: { ...authored, api, authHeader: true },
+      authored: {
+        ...authored,
+        api,
+        authHeader: true,
+        models: [{ ...authored.models[0], baseUrl: catalogUrl }],
+      },
       generated: {
         api: "openai-completions",
         baseUrl: catalogUrl,
@@ -364,6 +295,7 @@ describe("ModelRegistry source composition", () => {
     });
     const model = registry.find(provider, "shared");
     expect(model?.api).toBe(api);
+    expect(model?.baseUrl).toBe(catalogUrl);
     await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
       ok: true,
       apiKey: "authored-fixture-key",

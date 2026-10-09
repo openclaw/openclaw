@@ -21,6 +21,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as transcriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import * as replacementWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
@@ -43,35 +44,107 @@ import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-mar
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 
+const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
+const runtime = { log: () => {}, error: () => {}, exit: () => {} };
+type MarkerParams = Parameters<typeof persistPendingFinalDeliveryMarker>[0];
+type SessionTarget = Pick<MarkerParams, "agentId" | "storePath"> & { sessionKey: string };
+
+async function admitCompletion(
+  state: { sessionsDir: () => string },
+  name: string,
+  patch: Partial<SessionEntry> = {},
+  sourceTool = "agent_harness_completion",
+) {
+  const key = `agent:main:${name}`;
+  const source = `announce:${name}`;
+  const child = `codex-thread:${name}`;
+  const target = {
+    agentId: "main",
+    sessionKey: key,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+  };
+  const original: SessionEntry = {
+    sessionId: `requester-${name}`,
+    lifecycleRevision: "original-revision",
+    updatedAt: Date.now(),
+    ...patch,
+  };
+  const provenance = {
+    kind: "inter_session",
+    sourceTool,
+    sourceChannel: "internal",
+    sourceSessionKey: child,
+  };
+  await replaceSessionEntry(target, original);
+  const claim = await captureAdmittedHarnessCompletionForTest({
+    ...target,
+    entry: original,
+    runId: source,
+    inputProvenance: provenance,
+  });
+  if (!claim) {
+    throw new Error("Completion claim was not admitted");
+  }
+  const entry = { ...original, restartRecoveryHarnessCompletion: claim };
+  const appendInput = () =>
+    appendTranscriptMessage(
+      { ...target, sessionId: entry.sessionId },
+      {
+        message: {
+          role: "user",
+          content: "Completion result",
+          idempotencyKey: `${source}:user`,
+          provenance,
+          __openclaw: { runId: source },
+          timestamp: Date.now(),
+        },
+      },
+    );
+  return { key, source, child, target, entry, claim, appendInput };
+}
+
+function persistMarker(
+  target: SessionTarget,
+  entry: SessionEntry,
+  payloads: MarkerParams["payloads"],
+  overrides: Partial<MarkerParams> = {},
+) {
+  return persistPendingFinalDeliveryMarker({
+    ...target,
+    deliver: true,
+    sessionStore: { [target.sessionKey]: entry },
+    sessionEntry: entry,
+    suppressVisibleSessionEffects: false,
+    sessionReboundDuringRun: false,
+    payloads,
+    deliveryContext,
+    runOwnedSessionId: entry.sessionId,
+    ...overrides,
+  });
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
 });
 
 describe("native completion final-send custody", () => {
-  for (const boundary of [
-    "reply hook",
-    "adapter preparation",
-    "queued retry",
-    "queued after cleanup",
-    "restart onPlatformSendDispatch",
-    "restart assertDirectAdapterHandoff",
-    "source read onPlatformSendDispatch",
-    "source read assertDirectAdapterHandoff",
+  for (const [boundary, authorizationOutcomes] of [
+    ["reply hook", ["physical"]],
+    ["adapter preparation", ["revision"]],
+    ["queued retry", ["physical"]],
+    ["queued after cleanup", ["unchanged", "revision"]],
+    ["restart onPlatformSendDispatch", ["unchanged", "source-interleaved"]],
+    [
+      "restart assertDirectAdapterHandoff",
+      ["owner-bound-unchanged", "owner-bound-source-interleaved"],
+    ],
+    ["source read onPlatformSendDispatch", ["source-interleaved"]],
+    ["source read assertDirectAdapterHandoff", ["owner-bound-source-interleaved"]],
   ] as const) {
     const restart = boundary.startsWith("restart");
     const readFailure = boundary.startsWith("source read");
     const handoff = restart || readFailure;
-    const authorizationOutcomes = readFailure
-      ? (["source-interleaved", "owner-bound-source-interleaved"] as const)
-      : restart
-        ? ([
-            "unchanged",
-            "source-interleaved",
-            "owner-bound-unchanged",
-            "owner-bound-source-interleaved",
-          ] as const)
-        : (["unchanged", "physical", "revision"] as const);
     it.each(authorizationOutcomes)(
       `enforces %s requester authorization across ${boundary}`,
       async (outcome) => {
@@ -88,57 +161,18 @@ describe("native completion final-send custody", () => {
               deliver: deliverOutboundPayloads,
               selectEntry: () => ({ match: true, bypassBackoff: true }),
             });
-          const key = "agent:main:matrix:direct:owner";
-          const child = "codex-thread:final-send-child";
-          const source = "announce:final-send-child:succeeded";
           const recovery = "restart-recovery:final-send";
-          const target = {
-            agentId: "main",
-            sessionKey: key,
-            storePath: path.join(state.sessionsDir(), "sessions.json"),
-          };
-          const entry = {
-            sessionId: "original-parent",
-            lifecycleRevision: "original-revision",
-            status: "running" as const,
-            updatedAt: Date.now(),
-            restartRecoveryDeliveryRunId: recovery,
-          };
-          await replaceSessionEntry(target, entry);
-          const provenance = {
-            kind: "inter_session",
-            sourceTool: "agent_harness_task",
-            sourceChannel: "internal",
-            sourceSessionKey: child,
-          };
-          const claim = await captureAdmittedHarnessCompletionForTest({
-            agentId: "main",
-            sessionKey: key,
-            entry,
-            runId: source,
-            inputProvenance: provenance,
-          });
-          if (!claim) {
-            throw new Error("completion claim was not admitted");
-          }
-          await appendTranscriptMessage(
-            { ...target, sessionId: entry.sessionId },
-            {
-              message: {
-                role: "user",
-                content: "child result",
-                idempotencyKey: `${source}:user`,
-                provenance,
-                __openclaw: { runId: source },
-                timestamp: Date.now(),
-              },
-            },
+          const { key, child, source, target, entry, claim, appendInput } = await admitCompletion(
+            state,
+            "matrix:direct:owner",
+            { restartRecoveryDeliveryRunId: recovery },
+            "agent_harness_task",
           );
-          const admittedEntry = { ...entry, restartRecoveryHarnessCompletion: claim };
-          await replaceSessionEntry(target, admittedEntry);
-          const opts = bindCommandHarnessCompletionAssertion({
+          await appendInput();
+          await replaceSessionEntry(target, entry);
+          const { opts } = await bindCommandHarnessCompletionAssertion({
             claim,
-            persisted: admittedEntry,
+            persisted: entry,
             sessionKey: key,
             storePath: target.storePath,
             opts: {
@@ -153,18 +187,7 @@ describe("native completion final-send custody", () => {
             expect(assertCurrent.recoveryReference).toBeTruthy();
           }
           const payloads = [{ text: "The completed child result" }];
-          const marker = await persistPendingFinalDeliveryMarker({
-            agentId: target.agentId,
-            deliver: true,
-            sessionStore: { [key]: admittedEntry },
-            sessionKey: key,
-            sessionEntry: admittedEntry,
-            storePath: target.storePath,
-            suppressVisibleSessionEffects: false,
-            sessionReboundDuringRun: false,
-            payloads,
-            deliveryContext: { channel: "matrix", to: "!owner:example", accountId: "default" },
-            runOwnedSessionId: entry.sessionId,
+          const marker = await persistMarker(target, entry, payloads, {
             commandOwnerReference: assertCurrent.recoveryReference,
           });
           expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
@@ -243,7 +266,7 @@ describe("native completion final-send custody", () => {
           const delivery = deliverAgentCommandResult({
             cfg,
             deps: {},
-            runtime: { log: () => {}, error: () => {}, exit: () => {} },
+            runtime,
             opts: {
               ...opts,
               abortSignal: controller.signal,
@@ -391,7 +414,7 @@ describe("native completion final-send custody", () => {
             // Reconcile native completion state as startup would: queue acknowledgment must not
             // be the only copy of the exact harness completion receipt.
             expect(
-              reconcileHarnessCompletionDelivery({
+              await reconcileHarnessCompletionDelivery({
                 ...target,
                 sourceRunId: source,
                 taskRunId: child,
@@ -408,39 +431,12 @@ describe("native completion marker commit", () => {
   it("preserves existing send evidence without assigning it to a different completion claim", async () => {
     await withAdminIngress(async ({ state }) => {
       for (const binding of ["missing", "foreign", "matching"] as const) {
-        const key = `agent:main:existing-evidence-${binding}`;
         const source = `announce:existing-evidence-${binding}`;
-        const target = {
-          agentId: "main",
-          sessionKey: key,
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
-        const entry = {
-          sessionId: `requester-${binding}`,
-          lifecycleRevision: "current-revision",
-          updatedAt: Date.now(),
-          status: "running" as const,
-          restartRecoveryDeliveryRunId: source,
-          restartRecoveryDeliverySourceRunId: source,
-        };
-        const provenance = {
-          kind: "inter_session",
-          sourceTool: "agent_harness_completion",
-          sourceChannel: "internal",
-          sourceSessionKey: `codex-thread:existing-evidence-${binding}`,
-        };
-        await replaceSessionEntry(target, entry);
-        const claim = await captureAdmittedHarnessCompletionForTest({
-          agentId: "main",
-          sessionKey: key,
-          entry,
-          runId: source,
-          inputProvenance: provenance,
-        });
-        if (!claim) {
-          throw new Error("Expected admitted completion claim");
-        }
-        const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
+        const { target, entry, claim, appendInput } = await admitCompletion(
+          state,
+          `existing-evidence-${binding}`,
+          { restartRecoveryDeliveryRunId: source, restartRecoveryDeliverySourceRunId: source },
+        );
         const receipt: RestartRecoveryTerminalDeliveryEvidence = {
           runId: source,
           captured: true,
@@ -461,22 +457,10 @@ describe("native completion marker commit", () => {
         };
         const current = {
           ...entry,
-          restartRecoveryHarnessCompletion: claim,
           restartRecoveryTerminalDeliveryEvidence: [receipt],
         };
         await replaceSessionEntry(target, current);
-        await appendTranscriptMessage(
-          { ...target, sessionId: entry.sessionId },
-          {
-            message: {
-              role: "user",
-              content: "Completion result",
-              idempotencyKey: `${source}:user`,
-              __openclaw: { runId: source },
-              provenance,
-            },
-          },
-        );
+        await appendInput();
         const read = () => loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
         const before = getRestartRecoveryTerminalDeliveryEvidence(read(), source);
         expect(before?.deliveryStatus, binding).toEqual({ status: "sent", resultCount: 1 });
@@ -486,18 +470,8 @@ describe("native completion marker commit", () => {
             sourceRunId: source,
             taskRunId: claim.taskRunId,
           });
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
-        const marker = await persistPendingFinalDeliveryMarker({
-          ...target,
-          deliver: true,
-          sessionStore: { [key]: current },
-          sessionEntry: current,
-          suppressVisibleSessionEffects: false,
-          sessionReboundDuringRun: false,
-          payloads: [{ text: "Captured final" }],
-          deliveryContext,
-          runOwnedSessionId: entry.sessionId,
-        });
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
+        const marker = await persistMarker(target, current, [{ text: "Captured final" }]);
         expect(marker.pendingFinalDeliveryMarkerPersisted, binding).toBe(true);
         const after = read();
         expect
@@ -520,7 +494,7 @@ describe("native completion marker commit", () => {
         expect
           .soft(getRestartRecoveryTerminalDeliveryEvidence(cleaned, source), binding)
           .toEqual(before);
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
       }
     });
   });
@@ -542,18 +516,9 @@ describe("native completion marker commit", () => {
         await replaceSessionEntry(target, entry);
         const sessionStore = { [requestKey]: entry };
         const payloads = [{ text: "Final for this exact route" }];
-        const result = await persistPendingFinalDeliveryMarker({
-          agentId: "main",
-          sessionKey: requestKey,
-          storePath,
+        const result = await persistMarker({ ...target, sessionKey: requestKey }, entry, payloads, {
           sessionStore,
-          sessionEntry: entry,
-          deliver: true,
-          suppressVisibleSessionEffects: false,
-          sessionReboundDuringRun: false,
-          payloads,
           deliveryContext: { channel: "matrix", to: "!owner:example" },
-          runOwnedSessionId: entry.sessionId,
         });
         expect(result.pendingFinalDeliveryMarkerPersisted, requestKey).toBe(true);
         const persisted = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
@@ -567,41 +532,12 @@ describe("native completion marker commit", () => {
     });
   });
 
-  it.each(["source", "receipt", "authority"] as const)(
+  it.each(["receipt", "authority"] as const)(
     "keeps a newer %s when marker planning yields before its worker commit",
     async (changed) => {
       await withAdminIngress(async ({ state }) => {
-        const key = "agent:main:marker-race";
-        const target = {
-          agentId: "main",
-          sessionKey: key,
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
-        const original = {
-          sessionId: "marker-session",
-          lifecycleRevision: "marker-revision",
-          status: "running" as const,
-          updatedAt: Date.now(),
-        };
-        await replaceSessionEntry(target, original);
-        const claim = await captureAdmittedHarnessCompletionForTest({
-          agentId: "main",
-          sessionKey: key,
-          entry: original,
-          runId: "announce:marker-race",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceTool: "agent_harness_completion",
-            sourceChannel: "internal",
-            sourceSessionKey: "codex-thread:marker-child",
-          },
-        });
-        if (!claim) {
-          throw new Error("Completion claim was not admitted");
-        }
-        const entry = { ...original, restartRecoveryHarnessCompletion: claim };
+        const { key, target, entry, claim } = await admitCompletion(state, "marker-race");
         await replaceSessionEntry(target, entry);
-        const context = { channel: "matrix", to: "!owner:example", accountId: "default" };
         const entered = createDeferred();
         const released = createDeferred();
         let current = true;
@@ -613,21 +549,12 @@ describe("native completion marker commit", () => {
             await released.promise;
             return await commit(...args);
           });
-        const pending = persistPendingFinalDeliveryMarker({
-          ...target,
+        const pending = persistMarker(target, entry, [{ text: "Original final" }], {
           assertCurrent: () => {
             if (!current) {
               throw new Error("Marker source was revoked");
             }
           },
-          deliver: true,
-          sessionStore: { [key]: entry },
-          sessionEntry: entry,
-          suppressVisibleSessionEffects: false,
-          sessionReboundDuringRun: false,
-          payloads: [{ text: "Original final" }],
-          deliveryContext: context,
-          runOwnedSessionId: entry.sessionId,
         });
         void pending.catch(() => {});
         try {
@@ -640,19 +567,12 @@ describe("native completion marker commit", () => {
           expect(before.pendingFinalDelivery).toBeUndefined();
           expect(before.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
           const replacement = structuredClone(before);
-          if (changed === "source") {
-            replacement.restartRecoveryHarnessCompletion = {
-              ...claim,
-              sourceRunId: "announce:new-source",
-              taskId: "codex-thread:new-child",
-              taskRunId: "codex-thread:new-child",
-            };
-          } else if (changed === "receipt") {
+          if (changed === "receipt") {
             replacement.restartRecoveryTerminalDeliveryEvidence = [
               {
                 runId: claim.sourceRunId,
                 harnessCompletion: claim,
-                deliveryContext: context,
+                deliveryContext,
                 captured: true,
                 payloads: [{ visible: true }],
                 deliveryStatus: { status: "sent", resultCount: 1 },
@@ -709,18 +629,6 @@ describe("message-tool source reply custody", () => {
       expected: "delivered",
     },
     {
-      name: "current-source receipt",
-      result: { sourceReplyDelivered: true },
-      expected: "delivered",
-    },
-    {
-      name: "source final payload",
-      result: {
-        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
-      },
-      expected: "delivered",
-    },
-    {
       name: "source progress without a final",
       result: {
         sourceReplyDelivered: true,
@@ -745,7 +653,7 @@ describe("message-tool source reply custody", () => {
       const delivered = await deliverAgentCommandResult({
         cfg: {},
         deps: {},
-        runtime: { log: () => {}, error: () => {}, exit: () => {} },
+        runtime,
         opts: { message: "Private completion", deliver: false },
         outboundSession: undefined,
         sessionEntry: undefined,

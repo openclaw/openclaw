@@ -1,16 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
-  resolveThreadBindingConversationIdFromBindingId,
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createAccountScopedBindingAdapter } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
@@ -20,8 +20,6 @@ import {
 import { reconcileTelegramAcpBindingsOnStartup } from "./thread-bindings-reconcile.js";
 import {
   fromSessionBindingInput,
-  normalizeDurationMs,
-  normalizeTimestampMs,
   resolveBindingKey,
   summarizeLifecycleForLog,
   toSessionBindingRecord,
@@ -50,6 +48,7 @@ type TelegramThreadBindingManagerParams = {
   idleTimeoutMs?: number;
   maxAgeMs?: number;
   enableSweeper?: boolean;
+  prepareAcpSession?: Parameters<typeof reconcileTelegramAcpBindingsOnStartup>[0]["prepareSession"];
 };
 
 export async function createTelegramThreadBindingManager(
@@ -81,11 +80,14 @@ async function initializeThreadBindingManager(
   }
 
   const persist = params.persist ?? true;
-  const idleTimeoutMs = normalizeDurationMs(
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(
     params.idleTimeoutMs,
     DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   );
-  const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
+  const maxAgeMs = resolveNonNegativeIntegerOption(
+    params.maxAgeMs,
+    DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+  );
 
   const loaded = await loadBindingsFromStore(accountId);
   for (const entry of loaded) {
@@ -102,6 +104,7 @@ async function initializeThreadBindingManager(
   await reconcileTelegramAcpBindingsOnStartup({
     accountId,
     persist,
+    prepareSession: params.prepareAcpSession,
   });
 
   let sweepTimer: NodeJS.Timeout | null = null;
@@ -123,6 +126,11 @@ async function initializeThreadBindingManager(
         finishBindingMutationScope(manager);
       }
     });
+  };
+
+  const captureConversationMutation = (raw: string) => {
+    const conversationId = normalizeOptionalString(raw);
+    return conversationId ? captureBindingMutation(manager, conversationId) : undefined;
   };
 
   const manager: TelegramThreadBindingManager = {
@@ -155,16 +163,12 @@ async function initializeThreadBindingManager(
     touchConversation: (conversationIdRaw, at) => {
       const activityAt = at ?? Date.now();
       return mutate(async () => {
-        const conversationId = normalizeOptionalString(conversationIdRaw);
-        if (!conversationId) {
+        const mutation = captureConversationMutation(conversationIdRaw);
+        if (!mutation?.previous) {
           return null;
         }
-        const mutation = captureBindingMutation(manager, conversationId);
         const existingLocal = mutation.previous;
-        if (!existingLocal) {
-          return null;
-        }
-        const requestedActivityAt = normalizeTimestampMs(activityAt);
+        const requestedActivityAt = resolveNonNegativeIntegerOption(activityAt, Date.now());
         const nextRecord: TelegramThreadBindingRecord = {
           ...existingLocal,
           lastActivityAt:
@@ -172,79 +176,43 @@ async function initializeThreadBindingManager(
               ? Math.max(existingLocal.lastActivityAt, requestedActivityAt)
               : requestedActivityAt,
         };
-        mutation.prepare(nextRecord);
-        const committed = await persistBindingMutation({
-          accountId,
-          persist: manager.shouldPersistMutations(),
-          binding: nextRecord,
-          reason: "touch",
-          assertCurrent: mutation.assertCurrent,
-        });
-        mutation.publish(nextRecord, committed);
+        await mutation.commit(nextRecord, { reason: "touch" });
         return nextRecord;
       });
     },
     unbindConversation: ({ conversationId: conversationIdRaw, throwOnPersistError }) =>
       mutate(async () => {
-        const conversationId = normalizeOptionalString(conversationIdRaw);
-        if (!conversationId) {
+        const mutation = captureConversationMutation(conversationIdRaw);
+        if (!mutation?.previous) {
           return null;
         }
-        const mutation = captureBindingMutation(manager, conversationId);
-        const removed = mutation.previous ?? null;
-        if (!removed) {
-          return null;
-        }
-        mutation.prepare(null);
-        const committed = await persistBindingMutation({
-          accountId,
-          persist: manager.shouldPersistMutations(),
-          binding: removed,
+        const removed = mutation.previous;
+        await mutation.commit(removed, {
           remove: true,
           reason: "unbind-conversation",
           throwOnError: throwOnPersistError,
-          assertCurrent: mutation.assertCurrent,
         });
-        mutation.publish(null, committed);
         return removed;
       }),
     unbindBySessionKey: ({ targetSessionKey: targetSessionKeyRaw, throwOnPersistError }) =>
-      mutate(async () => {
-        const targetSessionKey = targetSessionKeyRaw.trim();
-        if (!targetSessionKey) {
-          return [];
-        }
-        const removed: TelegramThreadBindingRecord[] = [];
-        for (const entry of listBindingsForAccount(accountId)) {
-          if (entry.targetSessionKey !== targetSessionKey) {
-            continue;
-          }
-          const mutation = captureBindingMutation(manager, entry.conversationId);
-          const current = mutation.previous;
-          if (!current || current.targetSessionKey !== targetSessionKey) {
-            continue;
-          }
-          mutation.prepare(null);
-          const committed = await persistBindingMutation({
-            accountId,
-            persist: manager.shouldPersistMutations(),
-            binding: current,
+      mutate(() =>
+        updateTelegramBindingsBySessionKey({
+          manager,
+          targetSessionKey: targetSessionKeyRaw,
+          mutationOptions: {
             remove: true,
             reason: "unbind-session",
             throwOnError: throwOnPersistError,
-            assertCurrent: mutation.assertCurrent,
-          });
-          mutation.publish(null, committed);
-          removed.push(current);
-        }
-        return removed;
-      }),
+          },
+        }),
+      ),
     updateBySessionKey: (targetSessionKey, update) =>
       mutate(() =>
         updateTelegramBindingsBySessionKey({
           manager,
           targetSessionKey,
           update,
+          mutationOptions: { reason: "session-lifecycle-update" },
         }),
       ),
     updateConversationSync: (conversationIdRaw, update) => {
@@ -305,7 +273,7 @@ async function initializeThreadBindingManager(
 
   const projectSessionBinding = (record: TelegramThreadBindingRecord) =>
     toSessionBindingRecord(record, { idleTimeoutMs, maxAgeMs });
-  const sessionBindingAdapter: SessionBindingAdapter = {
+  const sessionBindingAdapter = createAccountScopedBindingAdapter({
     channel: "telegram",
     accountId,
     capabilities: {
@@ -423,68 +391,29 @@ async function initializeThreadBindingManager(
         return projectSessionBinding(record);
       });
     },
-    listBySession: (targetSessionKey) =>
-      manager.listBySessionKey(targetSessionKey).map(projectSessionBinding),
-    resolveByConversation: (ref) => {
-      if (ref.channel !== "telegram") {
-        return null;
-      }
-      const conversationId = normalizeOptionalString(ref.conversationId);
-      if (!conversationId) {
-        return null;
-      }
-      const record = manager.getByConversationId(conversationId);
-      return record ? projectSessionBinding(record) : null;
+    project: projectSessionBinding,
+    listBySessionKey: manager.listBySessionKey,
+    getByConversation: (ref) => manager.getByConversationId(ref.conversationId),
+    touchConversation: (conversationId, at) => {
+      const lastActivityAt = resolveNonNegativeIntegerOption(at, Date.now());
+      manager.updateConversationSync(conversationId, (current) => ({ ...current, lastActivityAt }));
     },
-    touch: (bindingId, at) => {
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId,
-      });
-      if (conversationId) {
-        const lastActivityAt = normalizeTimestampMs(at ?? Date.now());
-        manager.updateConversationSync(conversationId, (current) => ({
-          ...current,
-          lastActivityAt,
-        }));
-      }
-    },
-    touchAsync: async (bindingId, at) => {
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId,
-      });
-      if (!conversationId) {
-        return;
-      }
-      await manager.touchConversation(conversationId, at);
-    },
-    unbind: async (input) => {
-      if (input.targetSessionKey?.trim()) {
-        const removed = await manager.unbindBySessionKey({
-          targetSessionKey: input.targetSessionKey,
-          reason: input.reason,
-          sendFarewell: false,
-          throwOnPersistError: true,
-        });
-        return removed.map(projectSessionBinding);
-      }
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId: input.bindingId,
-      });
-      if (!conversationId) {
-        return [];
-      }
-      const removed = await manager.unbindConversation({
+    touchConversationAsync: manager.touchConversation,
+    unbindConversation: (conversationId, reason) =>
+      manager.unbindConversation({
         conversationId,
-        reason: input.reason,
+        reason,
         sendFarewell: false,
         throwOnPersistError: true,
-      });
-      return removed ? [projectSessionBinding(removed)] : [];
-    },
-  };
+      }),
+    unbindBySessionKey: (targetSessionKey, reason) =>
+      manager.unbindBySessionKey({
+        targetSessionKey,
+        reason,
+        sendFarewell: false,
+        throwOnPersistError: true,
+      }),
+  });
 
   registerSessionBindingAdapter(sessionBindingAdapter);
 
@@ -512,16 +441,10 @@ async function initializeThreadBindingManager(
           if (expiresAt === undefined || now < expiresAt) {
             continue;
           }
-          mutation.prepare(null);
-          const committed = await persistBindingMutation({
-            accountId,
-            persist,
-            binding: record,
+          await mutation.commit(record, {
             remove: true,
             reason: reason ?? "expired",
-            assertCurrent: mutation.assertCurrent,
           });
-          mutation.publish(null, committed);
         }
       })
         .catch((error: unknown) => {
@@ -547,68 +470,63 @@ export function getTelegramThreadBindingManager(
 async function updateTelegramBindingsBySessionKey(params: {
   manager: TelegramThreadBindingManager;
   targetSessionKey: string;
-  update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord;
+  update?: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord;
+  mutationOptions: { reason: string; remove?: boolean; throwOnError?: boolean };
 }): Promise<TelegramThreadBindingRecord[]> {
   const targetSessionKey = params.targetSessionKey.trim();
   if (!targetSessionKey) {
     return [];
   }
-  const now = Date.now();
+  const now = params.update ? Date.now() : 0;
   const updated: TelegramThreadBindingRecord[] = [];
-  for (const entry of params.manager.listBySessionKey(targetSessionKey)) {
+  const candidates = params.update
+    ? params.manager.listBySessionKey(targetSessionKey)
+    : listBindingsForAccount(params.manager.accountId);
+  for (const entry of candidates) {
+    if (!params.update && entry.targetSessionKey !== targetSessionKey) {
+      continue;
+    }
     const mutation = captureBindingMutation(params.manager, entry.conversationId);
     const current = mutation.previous;
     if (!current || current.targetSessionKey !== targetSessionKey) {
       continue;
     }
-    const next = params.update(current, now);
-    mutation.prepare(next);
-    const committed = await persistBindingMutation({
-      accountId: params.manager.accountId,
-      persist: params.manager.shouldPersistMutations(),
-      binding: next,
-      reason: "session-lifecycle-update",
-      assertCurrent: mutation.assertCurrent,
-    });
-    mutation.publish(next, committed);
+    const next = params.update ? params.update(current, now) : current;
+    await mutation.commit(next, params.mutationOptions);
     updated.push(next);
   }
   return updated;
 }
 
-export async function setTelegramThreadBindingIdleTimeoutBySessionKeyAsync(params: {
+type TelegramThreadBindingLifecycleField = "idleTimeoutMs" | "maxAgeMs";
+type TelegramThreadBindingLifecycleParams<Field extends TelegramThreadBindingLifecycleField> = {
   targetSessionKey: string;
   accountId?: string;
-  idleTimeoutMs: number;
-}): Promise<TelegramThreadBindingRecord[]> {
-  const manager = getTelegramThreadBindingManager(params.accountId);
-  if (!manager) {
-    return [];
-  }
-  const idleTimeoutMs = normalizeDurationMs(params.idleTimeoutMs, 0);
-  return manager.updateBySessionKey(params.targetSessionKey, (entry, now) => ({
-    ...entry,
-    idleTimeoutMs,
-    lastActivityAt: now,
-  }));
+} & Record<Field, number>;
+
+function createAsyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleField>(
+  field: Field,
+) {
+  return async (
+    params: TelegramThreadBindingLifecycleParams<Field>,
+  ): Promise<TelegramThreadBindingRecord[]> => {
+    const manager = getTelegramThreadBindingManager(params.accountId);
+    if (!manager) {
+      return [];
+    }
+    const value = resolveNonNegativeIntegerOption(params[field], 0);
+    return manager.updateBySessionKey(params.targetSessionKey, (entry, now) => ({
+      ...entry,
+      [field]: value,
+      lastActivityAt: now,
+    }));
+  };
 }
 
-export async function setTelegramThreadBindingMaxAgeBySessionKeyAsync(params: {
-  targetSessionKey: string;
-  accountId?: string;
-  maxAgeMs: number;
-}): Promise<TelegramThreadBindingRecord[]> {
-  const manager = getTelegramThreadBindingManager(params.accountId);
-  if (!manager) {
-    return [];
-  }
-  const maxAgeMs = normalizeDurationMs(params.maxAgeMs, 0);
-  return manager.updateBySessionKey(params.targetSessionKey, (entry, now) => ({
-    ...entry,
-    maxAgeMs,
-    lastActivityAt: now,
-  }));
-}
+export const setTelegramThreadBindingIdleTimeoutBySessionKeyAsync =
+  createAsyncLifecycleSetter("idleTimeoutMs");
+export const setTelegramThreadBindingMaxAgeBySessionKeyAsync =
+  createAsyncLifecycleSetter("maxAgeMs");
 
 function updateTelegramBindingsSynchronously(params: {
   accountId?: string;
@@ -633,28 +551,21 @@ function updateTelegramBindingsSynchronously(params: {
   return updated;
 }
 
-/** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
-export function setTelegramThreadBindingIdleTimeoutBySessionKey(params: {
-  targetSessionKey: string;
-  accountId?: string;
-  idleTimeoutMs: number;
-}): TelegramThreadBindingRecord[] {
-  const idleTimeoutMs = normalizeDurationMs(params.idleTimeoutMs, 0);
-  return updateTelegramBindingsSynchronously({
-    ...params,
-    update: (entry, now) => ({ ...entry, idleTimeoutMs, lastActivityAt: now }),
-  });
+function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleField>(
+  field: Field,
+) {
+  return (params: TelegramThreadBindingLifecycleParams<Field>): TelegramThreadBindingRecord[] => {
+    const value = resolveNonNegativeIntegerOption(params[field], 0);
+    return updateTelegramBindingsSynchronously({
+      ...params,
+      update: (entry, now) => ({ ...entry, [field]: value, lastActivityAt: now }),
+    });
+  };
 }
 
 /** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
-export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
-  targetSessionKey: string;
-  accountId?: string;
-  maxAgeMs: number;
-}): TelegramThreadBindingRecord[] {
-  const maxAgeMs = normalizeDurationMs(params.maxAgeMs, 0);
-  return updateTelegramBindingsSynchronously({
-    ...params,
-    update: (entry, now) => ({ ...entry, maxAgeMs, lastActivityAt: now }),
-  });
-}
+export const setTelegramThreadBindingIdleTimeoutBySessionKey =
+  createSyncLifecycleSetter("idleTimeoutMs");
+
+/** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
+export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");

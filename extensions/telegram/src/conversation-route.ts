@@ -258,10 +258,7 @@ export function resolveTelegramTargetSession(params: {
 }): string {
   const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
   const threadKeys =
-    shouldUseTelegramDmThreadSession({
-      dmThreadId: params.dmThreadId,
-      botHasTopicsEnabled: params.botHasTopicsEnabled,
-    }) && params.dmThreadId != null
+    shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
       ? resolveThreadSessionKeys({
           baseSessionKey,
           threadId: `${params.chatId}:${params.dmThreadId}`,

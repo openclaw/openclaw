@@ -32,8 +32,6 @@ func (docChunkTranslator) TranslateRaw(_ context.Context, text, _, _ string) (st
 	}
 }
 
-func (docChunkTranslator) Close() {}
-
 type docLeafFallbackTranslator struct{}
 
 func (docLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -51,8 +49,6 @@ func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 	return text, nil
 }
 
-func (docLeafFallbackTranslator) Close() {}
-
 type docFrontmatterTranslator struct{}
 
 func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -67,8 +63,6 @@ func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) 
 func (docFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return "extra text outside tagged sections", nil
 }
-
-func (docFrontmatterTranslator) Close() {}
 
 type docFrontmatterFallbackTranslator struct{}
 
@@ -101,8 +95,6 @@ func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _,
 	return text, nil
 }
 
-func (docFrontmatterFallbackTranslator) Close() {}
-
 type docWrappedLeafTranslator struct{}
 
 func (docWrappedLeafTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -121,8 +113,6 @@ func (docWrappedLeafTranslator) TranslateRaw(_ context.Context, text, _, _ strin
 	}, "\n"), nil
 }
 
-func (docWrappedLeafTranslator) Close() {}
-
 type docComponentLeafFallbackTranslator struct{}
 
 func (docComponentLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -135,8 +125,6 @@ func (docComponentLeafFallbackTranslator) TranslateRaw(_ context.Context, text, 
 	}
 	return text, nil
 }
-
-func (docComponentLeafFallbackTranslator) Close() {}
 
 type docPromptBudgetTranslator struct {
 	rawInputs []string
@@ -155,8 +143,6 @@ func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ s
 	return replacer.Replace(text), nil
 }
 
-func (t *docPromptBudgetTranslator) Close() {}
-
 type boundaryWrapperTranslator struct{}
 
 func (boundaryWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -170,8 +156,6 @@ func (boundaryWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 	return strings.NewReplacer("First item", "Erster Eintrag", "Second item", "Zweiter Eintrag").Replace(text), nil
 }
 
-func (boundaryWrapperTranslator) Close() {}
-
 type oversizedBlockTranslator struct {
 	rawInputs []string
 }
@@ -184,8 +168,6 @@ func (t *oversizedBlockTranslator) TranslateRaw(_ context.Context, text, _, _ st
 	t.rawInputs = append(t.rawInputs, text)
 	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
 }
-
-func (t *oversizedBlockTranslator) Close() {}
 
 type singletonFenceRetryTranslator struct {
 	rawInputs []string
@@ -202,8 +184,6 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 	}
 	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
 }
-
-func (t *singletonFenceRetryTranslator) Close() {}
 
 type fencedLiteralMaskingTranslator struct {
 	rawInputs []string
@@ -226,8 +206,6 @@ func (t *fencedLiteralMaskingTranslator) TranslateRaw(_ context.Context, text, _
 	).Replace(text), nil
 }
 
-func (t *fencedLiteralMaskingTranslator) Close() {}
-
 type docSyntaxMaskingTranslator struct {
 	rawInputs []string
 }
@@ -243,8 +221,6 @@ func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ 
 	return translated, nil
 }
 
-func (t *docSyntaxMaskingTranslator) Close() {}
-
 type accidentalListMarkerTranslator struct{}
 
 func (accidentalListMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -255,8 +231,6 @@ func (accidentalListMarkerTranslator) TranslateRaw(_ context.Context, text, _, _
 	return strings.ReplaceAll(text, "September begins the standard rate.", "1. September beginnt der Standardtarif."), nil
 }
 
-func (accidentalListMarkerTranslator) Close() {}
-
 type translatedOrdinalTranslator struct{}
 
 func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -266,8 +240,6 @@ func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ strin
 func (translatedOrdinalTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return strings.NewReplacer("1st failure", "1. Fehler", "2nd failure", "2. Fehler").Replace(text), nil
 }
-
-func (translatedOrdinalTranslator) Close() {}
 
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
@@ -287,8 +259,6 @@ func (t *duplicateFirstFencedPlaceholderTranslator) TranslateRaw(_ context.Conte
 	}
 	return strings.ReplaceAll(text, "Human prose.", "Prosa humana."), nil
 }
-
-func (t *duplicateFirstFencedPlaceholderTranslator) Close() {}
 
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
@@ -878,9 +848,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 		"",
 	}, "\n")
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	wantLiterals := []string{"`command`", "`` label: `command` ``", "`callback`", "`value`", "`C:\\`"}
 	for _, literal := range wantLiterals {
@@ -894,7 +862,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 		}
 	}
 	maskedLiterals := []string{}
-	for _, value := range mapping {
+	for _, value := range state.mapping {
 		if strings.HasPrefix(value, "`") {
 			maskedLiterals = append(maskedLiterals, value)
 		}
@@ -902,7 +870,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	if !sameStringMultiset(wantLiterals, maskedLiterals) {
 		t.Fatalf("masked inline literals = %v, want %v", maskedLiterals, wantLiterals)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -920,9 +888,7 @@ func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
 		"",
 	}, "\n")
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	if strings.Contains(masked, "[Discord](/channels/discord)") {
 		t.Fatalf("expected protected link %q to be masked:\n%s", "Discord", masked)
@@ -936,7 +902,7 @@ func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
 	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
 		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -946,9 +912,7 @@ func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) 
 
 	source := "Read [Slack](/channels/slack) and nearby Slack setup notes.\n"
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	if strings.Contains(masked, "[Slack]") || strings.Contains(masked, "/channels/slack") {
 		t.Fatalf("expected protected link label and destination to share one opaque placeholder:\n%s", masked)
@@ -956,10 +920,10 @@ func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) 
 	if !strings.Contains(masked, "nearby Slack setup notes") {
 		t.Fatalf("expected ordinary surrounding product prose to remain visible:\n%s", masked)
 	}
-	if len(placeholders) != 1 || mapping[placeholders[0]] != "[Slack](/channels/slack)" {
-		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", placeholders, mapping)
+	if len(state.placeholders) != 1 || state.mapping[state.placeholders[0]] != "[Slack](/channels/slack)" {
+		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", state.placeholders, state.mapping)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }

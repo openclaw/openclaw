@@ -86,7 +86,11 @@ const doctorResultEvidence = {
   configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
   configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.optional(),
   databaseWrites: z
-    .object({ unchanged: z.boolean(), generations: z.record(z.string(), z.string().nullable()) })
+    .object({
+      unchanged: z.boolean(),
+      fromGenerations: z.record(z.string(), z.string().nullable()).optional(),
+      generations: z.record(z.string(), z.string().nullable()),
+    })
     .optional()
     .catch(undefined),
 };
@@ -164,8 +168,14 @@ export type DoctorConfigCapture = {
 export type UpdateDoctorWriteAuthority = {
   inputHash: string;
   assertCurrent: () => void;
+  commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  originalRecoveryCapture?: {
+    runId: string;
+    installRoot: string;
+    ref?: import("./update-recovery-baseline-capture.js").UpdateRecoveryBaselineRef;
+  };
 };
 
 /** Receipts describe the caller's existing maintenance interval without owning its lifecycle. */
@@ -183,6 +193,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     return undefined;
   }
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
+  let fromGenerations: UpdateDatabaseGenerations | undefined;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
   const read = async () => {
@@ -219,6 +230,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       receipt = undefined;
       const generations = await read();
       if (generations && expectedGenerations) {
+        fromGenerations ??= generations;
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= Object.entries(expectedGenerations).every(
           ([pathname, generation]) => generations[pathname] === generation,
@@ -227,9 +239,13 @@ export function createUpdateDoctorDatabaseWriteCapture(
     },
     async settle() {
       const generations = await read();
-      if (generations) {
-        receipt = { unchanged, generations };
-        expectedGenerations = generations;
+      if (generations && expectedGenerations) {
+        // Maintenance excludes Gateway writers, not independent SQLite writers.
+        // Without transaction attribution, even Doctor-time changes are unknown.
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
+        receipt = { unchanged, fromGenerations, generations };
       }
     },
   };

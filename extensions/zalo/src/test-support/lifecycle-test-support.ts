@@ -202,9 +202,7 @@ export function createImageLifecycleCore() {
         resolveStorePath: vi.fn(
           () => "/tmp/zalo-sessions.json",
         ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
-        readSessionUpdatedAt: vi.fn(
-          () => undefined,
-        ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
         recordInboundSession:
           recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
       },

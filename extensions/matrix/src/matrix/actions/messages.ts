@@ -154,7 +154,7 @@ export async function readMatrixMessages(
     const dir = opts.after ? "f" : "b";
     const threadId = normalizeOptionalString(opts.threadId);
     const isThreadRelationsStartCursor = threadId
-      ? isMatrixThreadRelationsStartCursor(rawBefore, threadId)
+      ? rawBefore === encodeMatrixThreadRelationsStartCursor(threadId)
       : false;
     const token = isThreadRelationsStartCursor ? undefined : (rawBefore ?? rawAfter);
     const includeThreadRoot = threadId !== undefined && !token && !isThreadRelationsStartCursor;
@@ -285,30 +285,6 @@ export async function readMatrixMessages(
 function encodeMatrixThreadRelationsStartCursor(threadId: string): string {
   const payload = Buffer.from(JSON.stringify({ v: 1, threadId }), "utf8").toString("base64url");
   return `${MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX}${payload}`;
-}
-
-function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: string): boolean {
-  if (!raw?.startsWith(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX)) {
-    return false;
-  }
-  const encoded = raw.slice(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX.length);
-  try {
-    const bytes = Buffer.from(encoded, "base64url");
-    if (bytes.toString("base64url") !== encoded) {
-      return false;
-    }
-    const decoded = JSON.parse(bytes.toString("utf8")) as {
-      v?: unknown;
-      threadId?: unknown;
-    };
-    return (
-      decoded.v === 1 &&
-      decoded.threadId === threadId &&
-      encodeMatrixThreadRelationsStartCursor(decoded.threadId) === raw
-    );
-  } catch {
-    return false;
-  }
 }
 
 async function fetchDisplayableThreadRootSummary(

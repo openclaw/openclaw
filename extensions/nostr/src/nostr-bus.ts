@@ -5,16 +5,11 @@ import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import {
-  createMetrics,
-  createNoopMetrics,
-  type NostrMetrics,
-  type MetricsSnapshot,
-  type MetricEvent,
-} from "./metrics.js";
+import { createMetrics, type NostrMetrics, type MetricEvent } from "./metrics.js";
 import { createNostrCursorStateWriter, createNostrDurableCursor } from "./nostr-cursor.js";
 import { NostrIngressPermanentError } from "./nostr-ingress-state.js";
 import {
@@ -79,19 +74,7 @@ type NostrDmSendOptions = Pick<
   "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
 >;
 
-export interface NostrBusHandle {
-  close: () => Promise<void>;
-  publicKey: string;
-  sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
-  getMetrics: () => MetricsSnapshot;
-  /** Publish a profile (kind:0) to all relays */
-  publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
-  getProfileState: () => Promise<{
-    lastPublishedAt: number | null;
-    lastPublishedEventId: string | null;
-    lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-  }>;
-}
+export type NostrBusHandle = Awaited<ReturnType<typeof startNostrBus>>;
 
 interface CircuitBreakerState {
   state: "closed" | "open" | "half_open";
@@ -154,8 +137,6 @@ interface RelayHealthStats {
   lastSuccess: number;
   lastFailure: number;
 }
-
-type RelayHealthTracker = ReturnType<typeof createRelayHealthTracker>;
 
 function createRelayHealthTracker() {
   const stats = new Map<string, RelayHealthStats>();
@@ -223,7 +204,7 @@ function createRelayHealthTracker() {
 }
 
 /** Subscribe to NIP-04 encrypted DMs. */
-export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
+export async function startNostrBus(options: NostrBusOptions) {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
@@ -242,7 +223,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
   const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
 
-  const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
+  const metrics = createMetrics(onMetric);
 
   const circuitBreakers = new Map<string, CircuitBreaker>();
   const healthTracker = createRelayHealthTracker();
@@ -334,18 +315,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
 
     const replyTo = async (text: string): Promise<void> => {
-      await sendEncryptedDm(
-        pool,
-        sk,
-        event.pubkey,
-        text,
-        relays,
-        metrics,
-        circuitBreakers,
-        healthTracker,
-        onError,
-        { replyToEventId: event.id },
-      );
+      await sendEncryptedDm(event.pubkey, text, { replyToEventId: event.id });
     };
 
     if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
@@ -608,102 +578,91 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     return closePromise;
   };
 
+  async function sendEncryptedDm(
+    toPubkey: string,
+    text: string,
+    sendOptions?: NostrDmSendOptions & { replyToEventId?: string },
+  ): Promise<string> {
+    const effect = captureEffectAuthority();
+    const ciphertext = encrypt(sk, toPubkey, text);
+    // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
+    const tags = [["p", toPubkey]];
+    if (sendOptions?.replyToEventId) {
+      tags.push(["e", sendOptions.replyToEventId]);
+    }
+    const reply = finalizeEvent(
+      {
+        kind: 4,
+        content: ciphertext,
+        tags,
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      sk,
+    );
+
+    const sortedRelays = healthTracker.getSortedRelays(relays);
+
+    let lastError: Error | undefined;
+    for (const relay of sortedRelays) {
+      sendOptions?.assertDirectAdapterHandoff?.();
+      const cb = circuitBreakers.get(relay);
+
+      if (cb && !cb.canAttempt()) {
+        continue;
+      }
+
+      const startTime = Date.now();
+      const recordFailure = (err: unknown) => {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const latency = Date.now() - startTime;
+        cb?.recordFailure();
+        healthTracker.recordFailure(relay);
+        metrics.emit("relay.error", 1, { relay, latency });
+        onError?.(lastError, `publish to ${relay}`);
+      };
+      // Keep connection preparation separate from the recipient-visible EVENT handoff.
+      const connection = await pool
+        .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
+        .catch((err: unknown) => {
+          recordFailure(new Error(`connection failure: ${String(err)}`));
+        });
+      if (!connection) {
+        continue;
+      }
+      sendOptions?.assertDirectAdapterHandoff?.();
+      if (sendOptions?.onPlatformSendDispatch) {
+        await sendOptions.onPlatformSendDispatch();
+        sendOptions.assertDirectAdapterHandoff?.();
+      }
+      let initiated = false;
+      try {
+        await effect.initiate(() => {
+          sendOptions?.assertDirectAdapterHandoff?.();
+          initiated = true;
+          return connection.publish(reply);
+        });
+        const latency = Date.now() - startTime;
+
+        cb?.recordSuccess();
+        healthTracker.recordSuccess(relay, latency);
+
+        return reply.id;
+      } catch (err) {
+        if (!initiated) {
+          throw err;
+        }
+        recordFailure(err);
+      }
+    }
+
+    throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
+  }
+
   return {
     close,
     publicKey: pk,
-    sendDm: (toPubkey, text, sendOptions) =>
-      sendEncryptedDm(
-        pool,
-        sk,
-        toPubkey,
-        text,
-        relays,
-        metrics,
-        circuitBreakers,
-        healthTracker,
-        onError,
-        sendOptions,
-      ),
-    getMetrics: () => metrics.getSnapshot(),
+    sendDm: sendEncryptedDm,
     publishProfile,
     getProfileState,
   };
-}
-
-async function sendEncryptedDm(
-  pool: SimplePool,
-  sk: Uint8Array,
-  toPubkey: string,
-  text: string,
-  relays: string[],
-  metrics: NostrMetrics,
-  circuitBreakers: Map<string, CircuitBreaker>,
-  healthTracker: RelayHealthTracker,
-  onError?: (error: Error, context: string) => void,
-  options?: NostrDmSendOptions & { replyToEventId?: string },
-): Promise<string> {
-  const ciphertext = encrypt(sk, toPubkey, text);
-  // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
-  const tags = [["p", toPubkey]];
-  if (options?.replyToEventId) {
-    tags.push(["e", options.replyToEventId]);
-  }
-  const reply = finalizeEvent(
-    {
-      kind: 4,
-      content: ciphertext,
-      tags,
-      created_at: Math.floor(Date.now() / 1000),
-    },
-    sk,
-  );
-
-  const sortedRelays = healthTracker.getSortedRelays(relays);
-
-  let lastError: Error | undefined;
-  for (const relay of sortedRelays) {
-    options?.assertDirectAdapterHandoff?.();
-    const cb = circuitBreakers.get(relay);
-
-    if (cb && !cb.canAttempt()) {
-      continue;
-    }
-
-    const startTime = Date.now();
-    const recordFailure = (err: unknown) => {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      const latency = Date.now() - startTime;
-      cb?.recordFailure();
-      healthTracker.recordFailure(relay);
-      metrics.emit("relay.error", 1, { relay, latency });
-      onError?.(lastError, `publish to ${relay}`);
-    };
-    // Keep connection preparation separate from the recipient-visible EVENT handoff.
-    const connection = await pool
-      .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
-      .catch((err: unknown) => {
-        recordFailure(new Error(`connection failure: ${String(err)}`));
-      });
-    if (!connection) {
-      continue;
-    }
-    options?.assertDirectAdapterHandoff?.();
-    if (options?.onPlatformSendDispatch) {
-      await options.onPlatformSendDispatch();
-      options.assertDirectAdapterHandoff?.();
-    }
-    try {
-      await connection.publish(reply);
-      const latency = Date.now() - startTime;
-
-      cb?.recordSuccess();
-      healthTracker.recordSuccess(relay, latency);
-
-      return reply.id;
-    } catch (err) {
-      recordFailure(err);
-    }
-  }
-
-  throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
 }

@@ -37,6 +37,10 @@ const mocks = vi.hoisted(() => ({
   emitGatewaySessionEndPluginHook: vi.fn(),
   emitGatewaySessionStartPluginHook: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
+  getLatestLiveSubagentRunByChildSessionKey:
+    vi.fn<
+      typeof import("../../agents/subagents/registry/subagent-registry-read.js").getLatestLiveSubagentRunByChildSessionKey
+    >(),
   replaceSubagentRunAfterSteer: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
   resolveAgentExplicitRecipientSession: vi.fn(async () => ({})),
@@ -67,7 +71,7 @@ export function getAgentTestMocks() {
 export function resolveAgentTestConfig(
   cfg: OpenClawConfig = mocks.loadConfigReturn,
 ): OpenClawConfig {
-  if (cfg.agents?.list) {
+  if (cfg.agents?.entries) {
     return cfg;
   }
   const agentIds = mocks.listAgentIds();
@@ -78,7 +82,7 @@ export function resolveAgentTestConfig(
     ...cfg,
     agents: {
       ...cfg.agents,
-      list: agentIds.map((id) => ({ id })),
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
     },
   };
   if (cfg === mocks.loadConfigReturn) {
@@ -126,6 +130,13 @@ vi.mock("../../config/sessions.js", async () => {
     }) => `agent:${agentId}:${cfg?.session?.mainKey ?? "main"}`,
   };
 });
+
+// mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
+vi.mock("../../config/sessions/lifecycle-read.js", () => ({
+  resolveSessionLifecycleTimestampsAsync: async (
+    params: Parameters<typeof mocks.resolveSessionLifecycleTimestamps>[0],
+  ) => mocks.resolveSessionLifecycleTimestamps(params),
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -177,21 +188,30 @@ vi.mock("../../commands/agent.js", () => {
   };
 });
 
-vi.mock("../../agents/prepared-model-runtime.js", () => ({
+vi.mock("../../agents/prepared-model-runtime.js", () => {
   // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
   // that production publishes before admitting agent RPCs.
-  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
-    [Symbol.asyncDispose]: vi.fn(async () => {}),
-    snapshot: {},
-  })),
-  loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
-    agentId,
-    agentDir: "/tmp/agent",
-    config: resolveAgentTestConfig(),
-    pluginGeneration: { pluginMetadataSnapshot: {} },
-    workspaceDir: "/tmp/workspace",
-  }),
-}));
+  const pluginGeneration = {
+    remoteCatalog: null,
+    pluginMetadataSnapshot: {},
+    configuredCatalogEntries: [],
+    inlineProviderModels: [],
+  };
+  return {
+    acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
+      snapshot: {},
+      pluginGeneration,
+    })),
+    loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+      agentId,
+      agentDir: "/tmp/agent",
+      config: resolveAgentTestConfig(),
+      pluginGeneration,
+      workspaceDir: "/tmp/workspace",
+    }),
+  };
+});
 
 vi.mock("../../acp/runtime/session-meta.js", async () => {
   const actual = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
@@ -239,10 +259,6 @@ vi.mock("../../agents/agent-scope.js", async () => {
   return {
     ...actual,
     listAgentIds: mocks.listAgentIds,
-    resolveDefaultAgentId: (cfg?: {
-      agents?: { list?: Array<{ id?: string; default?: boolean }> };
-    }) =>
-      cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
     resolveSessionAgentId: ({
       sessionKey,
       agentId,
@@ -269,18 +285,9 @@ vi.mock("../../agents/agent-scope.js", async () => {
         sessionAgentId: agentId ?? parsedAgentId ?? fallbackAgentId ?? "main",
       };
     },
-    resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-      cfg.agents?.list?.find((agent) => agent.id === agentId),
-    resolveAgentWorkspaceDir: (
-      cfg: {
-        agents?: {
-          defaults?: { workspace?: string };
-          list?: Array<{ id?: string; workspace?: string }>;
-        };
-      },
-      agentId?: string,
-    ) =>
-      cfg?.agents?.list?.find((agent) => agent.id === agentId)?.workspace ??
+    resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
+    resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId?: string) =>
+      (agentId ? cfg.agents?.entries?.[agentId]?.workspace : undefined) ??
       cfg?.agents?.defaults?.workspace ??
       "/tmp/workspace",
     resolveNativeModelPrimary: () => undefined,
@@ -317,18 +324,35 @@ vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
-// Only the lookup this harness asserts on is stubbed; the rest of the read
-// surface stays real so registry paths reached through the gateway (paused-run
-// adoption, descendant queries) observe the runs these tests seed.
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
-  >()),
-  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
-}));
+// Completed-follow-up fixtures may supply the matching live owner. Other cases
+// retain real paused-run adoption and descendant reads over their seeded rows.
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+    >();
+  return {
+    ...actual,
+    getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+    getLatestLiveSubagentRunByChildSessionKey: (
+      ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
+    ) => {
+      if (!mocks.getLatestLiveSubagentRunByChildSessionKey.getMockImplementation()) {
+        return actual.getLatestLiveSubagentRunByChildSessionKey(...args);
+      }
+      const run = mocks.getLatestLiveSubagentRunByChildSessionKey(...args);
+      return run && run.childSessionKey === args[0].trim() && (!args[1] || args[1](run))
+        ? run
+        : null;
+    },
+  };
+});
 
-vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
-  replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
+vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry.js")
+  >()),
+  replaceSubagentRunAfterSteerCore: mocks.replaceSubagentRunAfterSteer,
 }));
 
 vi.mock("../session-reset-service.js", () => ({

@@ -580,3 +580,24 @@ describe("bundle manifest parsing", () => {
     expect(detectBundleManifestFormat(rootDir)).toBeNull();
   });
 });
+
+describe("OpenAI packaged onboarding skill", () => {
+  it("retains only a skill inside the declared packaged skill roots", () => {
+    for (const onboardingSkill of [
+      "./skills/setup/SKILL.md",
+      "../outside/SKILL.md",
+      "./other/SKILL.md",
+    ]) {
+      const rootDir = makeTempDir();
+      writeBundleManifest(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH, {
+        name: "setup-demo",
+        skills: "./skills",
+        extensions: { "com.openai": { onboardingSkill } },
+      });
+      const manifest = expectLoadedManifest(rootDir, "codex");
+      expect(manifest.onboardingSkill).toBe(
+        onboardingSkill.startsWith("./skills/") ? "skills/setup/SKILL.md" : undefined,
+      );
+    }
+  });
+});

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { text as consumeText } from "node:stream/consumers";
 import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { parseVaultSecretId } from "./vault-secret-id.js";
 
@@ -9,18 +10,6 @@ const VAULT_ERROR_BODY_MAX_BYTES = 64 * 1024;
 
 class VaultProviderError extends Error {}
 class VaultForbiddenError extends Error {}
-
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      input += String(chunk);
-    });
-    process.stdin.on("error", reject);
-    process.stdin.on("end", () => resolve(input));
-  });
-}
 
 function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
@@ -286,10 +275,9 @@ async function resolveVaultClientToken(baseUrl) {
       return resolveVaultTokenFile();
     case "jwt":
       return await resolveVaultTokenFromJwt(baseUrl, "jwt");
-    case "kubernetes":
+    default:
       return await resolveVaultTokenFromJwt(baseUrl, "kubernetes");
   }
-  throw new Error("Unsupported Vault auth method.");
 }
 
 async function classifyVaultClientToken(baseUrl, vaultToken) {
@@ -417,7 +405,7 @@ async function resolveFromVault(ids) {
 }
 
 async function main() {
-  const input = await readStdin();
+  const input = await consumeText(process.stdin.setEncoding("utf8"));
   const request = parseRequest(input);
   writeResponse(await resolveFromVault(request.ids));
 }

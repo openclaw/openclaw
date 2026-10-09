@@ -1,7 +1,3 @@
-/* Activity page: live tool-activity feed. Filter chrome uses the settings
-   design language; only the stream (entries, previews) keeps bespoke styles
-   as the in-group escape hatch. */
-
 /* The route host must hand the bounded shell height to the fill-height
    workspace; otherwise a populated stream expands the main page and defeats
    its own scroll/auto-follow owner. */
@@ -92,14 +88,20 @@ a.activity-current-work__row:hover {
   min-width: 0;
 }
 
-.activity-current-work__title {
+.activity-current-work__title,
+.activity-feed__session-scope,
+.activity-feed__identity-copy h2,
+.activity-feed__identity-copy p {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .activity-current-work__agent,
-.activity-current-work__feedback {
+.activity-current-work__feedback,
+.activity-entry__text,
+.activity-entry__facts,
+.activity-entry__note {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -120,7 +122,8 @@ a.activity-current-work__row:hover {
   overflow: hidden;
 }
 
-.activity-feed__toolbar {
+.activity-feed__toolbar,
+.activity-live-toolbar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -216,7 +219,10 @@ a.activity-current-work__row:hover {
   box-shadow: var(--focus-ring);
 }
 
-.activity-feed__selected-person {
+.activity-feed__selected-person,
+.activity-feed__git-label,
+.activity-feed__session-headline,
+.activity-feed__session-owner {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -374,7 +380,9 @@ a.activity-current-work__row:hover {
   justify-content: space-between;
 }
 
-.activity-pulse__heading svg {
+.activity-pulse__heading svg,
+.activity-live-filter-trigger svg,
+.activity-run-inspector-back svg {
   width: 16px;
   height: 16px;
 }
@@ -410,23 +418,47 @@ a.activity-current-work__row:hover {
 .activity-pulse__bar {
   flex: 1;
   border-radius: 2px 2px 0 0;
-  background: var(--border);
 }
 
-.activity-pulse__bar[data-hour="past"] {
+.activity-pulse__bar[data-bucket="past"] {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.activity-pulse__bar[data-hour="current"] {
+.activity-pulse__bar[data-bucket="current"] {
   background: var(--accent);
 }
 
+/* One cell per bar keeps each label under the bucket it names. */
 .activity-pulse__axis {
   display: flex;
-  justify-content: space-between;
+  gap: 3px;
+  height: 16px;
   margin-top: var(--space-1);
   font-size: var(--control-ui-text-xs);
   line-height: 16px;
+}
+
+.activity-pulse__axis > span {
+  position: relative;
+  flex: 1;
+}
+
+.activity-pulse__axis > span > span {
+  position: absolute;
+  left: 50%;
+  translate: -50%;
+  white-space: nowrap;
+}
+
+.activity-pulse__axis > span:first-child > span {
+  left: 0;
+  translate: none;
+}
+
+.activity-pulse__axis > span:last-child > span {
+  right: 0;
+  left: auto;
+  translate: none;
 }
 
 .activity-feed__day + .activity-feed__day {
@@ -571,13 +603,6 @@ a.activity-current-work__row:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
   text-decoration: none;
-}
-
-.activity-feed__git-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .activity-feed__git-icon,
@@ -747,25 +772,11 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__session-scope {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__session-meta .agent-row-chip {
   font: inherit;
 }
 
 .activity-feed__session-source {
-  white-space: nowrap;
-}
-
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -822,13 +833,6 @@ a.activity-current-work__row:hover {
   min-width: 0;
 }
 
-.activity-feed__identity-copy h2,
-.activity-feed__identity-copy p {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__identity-copy h2 {
   font-size: var(--control-ui-text-lg);
 }
@@ -841,23 +845,35 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__devices {
+.activity-feed__connection-summary,
+.activity-feed__connections {
   display: grid;
-  gap: 2px;
-  margin-top: var(--space-4);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
 }
 
-.activity-feed__device {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: 5px 0;
+.activity-feed__connection-details {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__device-name {
+.activity-feed__connection-details summary {
+  padding-block: var(--space-3);
+  min-height: 44px;
+}
+
+.activity-feed__connection {
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+}
+
+.activity-feed__connection strong {
   color: var(--text);
   font-weight: 600;
 }
@@ -917,14 +933,6 @@ a.activity-current-work__row:hover {
   white-space: nowrap;
 }
 
-.activity-live-toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-}
-
 .activity-live-autofollow {
   display: inline-flex;
   align-items: center;
@@ -939,11 +947,6 @@ a.activity-current-work__row:hover {
   min-width: var(--settings-control-height);
   height: var(--settings-control-height);
   padding: 0;
-}
-
-.activity-live-filter-trigger svg {
-  width: 16px;
-  height: 16px;
 }
 
 .activity-live-filter-trigger.active {
@@ -993,8 +996,6 @@ a.activity-current-work__row:hover {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
-
-/* ── Stream (escape hatch inside the settings group) ── */
 
 .activity-stream {
   min-height: 260px;
@@ -1104,16 +1105,6 @@ a.activity-current-work__row:hover {
   color: var(--text);
 }
 
-.activity-run-inspector-back svg {
-  width: 16px;
-  height: 16px;
-}
-
-.activity-entry__text {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 .activity-entry__meta {
   justify-content: flex-end;
   color: var(--muted);
@@ -1125,11 +1116,6 @@ a.activity-current-work__row:hover {
   display: grid;
   gap: var(--space-2);
   padding: 0 var(--space-4) var(--space-4) 42px;
-}
-
-.activity-entry__facts {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .activity-entry__preview {
@@ -1148,30 +1134,18 @@ a.activity-current-work__row:hover {
   overflow-wrap: anywhere;
 }
 
-.activity-entry__note {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 @media (max-width: 768px) {
   .activity-feed {
     height: auto;
     overflow: visible;
   }
 
-  .activity-feed__toolbar {
-    flex-wrap: wrap;
-  }
-
-  .activity-feed__search {
-    flex-basis: 100%;
-    order: -1;
-  }
-
+  .activity-feed__toolbar,
   .activity-live-toolbar {
     flex-wrap: wrap;
   }
 
+  .activity-feed__search,
   .activity-live-search {
     flex-basis: 100%;
     order: -1;
@@ -1206,11 +1180,6 @@ a.activity-current-work__row:hover {
 
   .activity-entry__summary {
     grid-template-columns: 18px minmax(0, 1fr);
-    gap: var(--space-2);
-  }
-
-  .activity-entry__body {
-    padding-left: 42px;
   }
 
   .activity-stream {

@@ -23,4 +23,14 @@ export type AgentDatabaseDeletionSnapshot = {
   registeredAgentDatabases: OpenClawRegisteredAgentDatabase[];
 };
 
+export type AgentDatabaseDeletionWorkerSnapshot = AgentDatabaseDeletionSnapshot & {
+  deletedAgents: Array<{ agentId: string; status: "pending" | "complete" }>;
+};
+
 export type AgentDeletionJournalStatus = "absent" | "pending" | "complete";
+
+export type AgentDeletionJournalAuthority = Readonly<{
+  agentId: string;
+  operationId: string;
+  cleanupCompleted: boolean;
+}>;

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -24,9 +25,10 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -36,7 +38,11 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
-import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import {
+  getEmbeddedSessionPromptState,
+  type ToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -52,9 +58,7 @@ import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
-  createEmbeddedRunStageTracker,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
+  logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -78,7 +82,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
-  const prepStages = createEmbeddedRunStageTracker();
+  const prepStages = createStageTimingTracker(Date.now);
   const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
     label: "prep stages",
     log,
@@ -93,22 +97,13 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     if (summary.stages.length === 0) {
       return;
     }
-    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, {
-      totalThresholdMs: 5_000,
-      stageThresholdMs: 2_000,
-    });
-    if (!shouldWarn && !log.isEnabled("trace")) {
-      return;
-    }
-    const message = formatEmbeddedRunStageSummary(
-      `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+    logEmbeddedRunStageSummary(
       summary,
+      log,
+      () =>
+        `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      { totalThresholdMs: 5_000, stageThresholdMs: 2_000 },
     );
-    if (shouldWarn) {
-      log.warn(message);
-    } else {
-      log.trace(message);
-    }
   };
 
   const workspace = await resolveAttemptWorkspaceSandbox(params);
@@ -187,12 +182,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
   sandbox?: SandboxContext | null;
-}): {
-  getAfterTurnCheckpoint: () => number | null;
-  recordCacheTouch: (startedAt: number) => void;
-  remove: () => void;
-  takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
-} {
+}) {
   const { activeContextEngine, activeSession, attempt, settingsManager } = input;
   const contextTokenBudget = Math.max(
     1,
@@ -251,11 +241,10 @@ export function installEmbeddedAttemptContextGuards(input: {
     : null;
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
-      const transformed = previousCacheTtlTransform
+      const sourceMessages = previousCacheTtlTransform
         ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
         : messages;
-      const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-      const projected = pruneExpiredCacheTtlToolResults({
+      return pruneExpiredCacheTtlToolResults({
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
@@ -267,10 +256,10 @@ export function installEmbeddedAttemptContextGuards(input: {
         // replay so the prefix already sent for this session does not change.
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
+          declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
           lastCacheTouchAt = Date.now();
         },
       });
-      return projected;
     };
   }
 
@@ -296,6 +285,8 @@ export function installEmbeddedAttemptContextGuards(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       tokenBudget: attempt.contextTokenBudget,
+      reserveTokens: () => settingsManager.getCompactionReserveTokens(),
+      getSystemPrompt: input.getSystemPrompt,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
@@ -363,13 +354,22 @@ export function installEmbeddedAttemptContextGuards(input: {
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
     },
+    (pruned) => {
+      const promptState = getEmbeddedSessionPromptState(attempt.sessionId);
+      const keys = new Set(
+        [...pruned].map(([index, message]) => `${index}:${message.role}:${message.timestamp}`),
+      );
+      if ([...keys].some((key) => !promptState.prunedImageMessages?.has(key))) {
+        declarePromptHistoryRewrite({ ...attempt, reason: "imageCleanup" });
+      }
+      promptState.prunedImageMessages = keys;
+    },
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
-    const transformed = previousComputerFrameTransform
+    const modelContext = previousComputerFrameTransform
       ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
       : messages;
-    const modelContext = Array.isArray(transformed) ? transformed : messages;
     invalidateComputerFrameIfMissing({
       contextEpoch: input.computerContextEpoch,
       messages: modelContext,
@@ -380,7 +380,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   return {
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt) => {
+    recordCacheTouch: (startedAt: number) => {
       lastCacheTouchAt = startedAt;
     },
     remove: () => {
@@ -404,11 +404,7 @@ export type EmitDiagnosticRunCompleted = (
   extra?: { blockedBy?: string },
 ) => void;
 
-export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams): {
-  diagnosticTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  runTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  emitCompleted: EmitDiagnosticRunCompleted;
-} {
+export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
   const diagnosticTrace = freezeDiagnosticTraceContext(
     getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
   );
@@ -454,16 +450,6 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
   return { diagnosticTrace, runTrace, emitCompleted };
 }
 
-function isRelativePathInsideOrEqual(relativePath: string): boolean {
-  // `path.relative` returns "" for the workspace root; reject parent escapes and absolute paths.
-  return (
-    relativePath === "" ||
-    (relativePath !== ".." &&
-      !relativePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativePath))
-  );
-}
-
 /**
  * Rewrites injected context file paths when a bootstrap assembled in one
  * workspace is replayed in another. Files outside the source workspace keep
@@ -479,10 +465,7 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    // Only files that were inside the source workspace can be safely projected
-    // into the target workspace.
-    const canRemap = isRelativePathInsideOrEqual(relative);
-    return canRemap
+    return !isPathRelativeEscape(relative)
       ? {
           ...file,
           path:

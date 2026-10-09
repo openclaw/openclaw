@@ -8,6 +8,7 @@ import {
   onGatewaySuspendAdmissionChange,
   waitForGatewayRestartFenceSettlement,
 } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
 import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
 import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
@@ -227,12 +228,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             // A slot just freed; wake the pump so a waiting lane can use it.
             requestDrain();
           };
-          let resolveDeferredClaim = () => {};
-          const deferredClaim = options.deferredClaims
-            ? new Promise<void>((resolve) => {
-                resolveDeferredClaim = resolve;
-              })
-            : undefined;
+          const deferredClaim = options.deferredClaims ? createDeferredCore() : undefined;
           let deferredClaimSettled = false;
           const settleDeferredClaim = () => {
             if (!deferredClaim || deferredClaimSettled) {
@@ -240,8 +236,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             }
             deferredClaimSettled = true;
             lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
-            deferredClaims.delete(deferredClaim);
-            resolveDeferredClaim();
+            deferredClaims.delete(deferredClaim.promise);
+            deferredClaim.resolve();
           };
           if (options.deferredClaims === "settle-on-abort") {
             lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
@@ -251,12 +247,14 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           const trackDeferredClaim = () => {
             if (deferredClaim && !deferredClaimSettled) {
-              deferredClaims.add(deferredClaim);
+              deferredClaims.add(deferredClaim.promise);
             }
           };
-          const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
+          const settleLifecycle = async (settle: () => void | Promise<void>, deferred = true) => {
             handedOff = true;
-            deferredHandoff = true;
+            if (deferred) {
+              deferredHandoff = true;
+            }
             // Settlement can start before delivery returns its deferred handoff.
             trackDeferredClaim();
             try {
@@ -269,16 +267,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
             ...lifecycle,
             admission: "exclusive",
-            onAdopted: async () => {
-              handedOff = true;
-              trackDeferredClaim();
-              try {
-                await lifecycle.onAdopted();
-                requestDrain();
-              } finally {
-                settleDeferredClaim();
-              }
-            },
+            onAdopted: () => settleLifecycle(() => lifecycle.onAdopted(), false),
             onDeferred: () => {
               handedOff = true;
               deferredHandoff = true;
@@ -292,9 +281,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               trackDeferredClaim();
               lifecycle.onAdoptionFinalizing();
             },
-            onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
-            onCancelled: () => settleDeferredLifecycle(() => lifecycle.onCancelled?.()),
-            onAbandoned: () => settleDeferredLifecycle(() => lifecycle.onAbandoned()),
+            onFailed: (error) => settleLifecycle(() => lifecycle.onFailed?.(error)),
+            onCancelled: () => settleLifecycle(() => lifecycle.onCancelled?.()),
+            onAbandoned: () => settleLifecycle(() => lifecycle.onAbandoned()),
           };
 
           // Adoption can complete before delivery returns; track both lifetimes so stop
@@ -470,16 +459,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     if (restartFenceWake) {
       return;
     }
-    const localWake = new Promise<void>((resolve) => {
-      releaseRestartFenceWake = resolve;
+    const localWake = createDeferredCore();
+    releaseRestartFenceWake = localWake.resolve;
+    restartFenceWake = Promise.race([
+      waitForGatewayRestartFenceSettlement(),
+      localWake.promise,
+    ]).then(() => {
+      restartFenceWake = undefined;
+      releaseRestartFenceWake = () => {};
+      requestDrain();
     });
-    restartFenceWake = Promise.race([waitForGatewayRestartFenceSettlement(), localWake]).then(
-      () => {
-        restartFenceWake = undefined;
-        releaseRestartFenceWake = () => {};
-        requestDrain();
-      },
-    );
   };
   drainAbortSignal.addEventListener(
     "abort",

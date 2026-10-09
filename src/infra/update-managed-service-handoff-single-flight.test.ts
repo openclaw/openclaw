@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -427,9 +428,11 @@ describe("managed service update handoff single-flight", () => {
   });
 
   it("terminates the exact helper when its initial start identity is unavailable", async () => {
-    vi.mocked((await import("../shared/pid-alive.js")).getFileLockProcessStartTime)
-      .mockReturnValueOnce(17)
-      .mockReturnValueOnce(null);
+    const startIdentity = vi.mocked(
+      (await import("../shared/pid-alive.js")).getFileLockProcessStartTime,
+    );
+    const parentIdentity = startIdentity(process.pid);
+    startIdentity.mockImplementation((pid) => (pid === process.pid ? parentIdentity : null));
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
     const identity = {

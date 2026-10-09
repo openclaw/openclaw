@@ -33,7 +33,6 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-/** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
 class OpenClawBrowserPanel
   extends OpenClawLitElement
   implements BrowserPanelControllerHost, PanelHostedTabsElement
@@ -145,10 +144,8 @@ class OpenClawBrowserPanel
       } else if (
         this.refreshOnPresentation &&
         !followedPreferred &&
-        (contextChanged || presentationChanged || gatewayAvailabilityChanged)
+        (contextChanged || presentationChanged || gatewayAvailabilityChanged || sessionTabsChanged)
       ) {
-        void this.browserPanelController.refreshAll();
-      } else if (this.refreshOnPresentation && !followedPreferred && sessionTabsChanged) {
         void this.browserPanelController.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {

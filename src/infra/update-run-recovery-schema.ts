@@ -235,6 +235,7 @@ const recoveryInspectionRecordSchema = z
     primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
   })
   .superRefine((record, ctx) => {
+    const reportIssue = (message: string) => ctx.addIssue({ code: "custom", message });
     const aborted = record.preparationAborted;
     if (
       aborted &&
@@ -265,10 +266,7 @@ const recoveryInspectionRecordSchema = z
         !["previous", "both"].includes(record.package.observed.observation.launchers) ||
         record.package.observed.observation.successorLive)
     ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Preparation settlement cannot carry effects or serving authority",
-      });
+      reportIssue("Preparation settlement cannot carry effects or serving authority");
     }
     const verification = record.verification;
     if (verification) {
@@ -291,10 +289,7 @@ const recoveryInspectionRecordSchema = z
         restart.observedIdentity !== receipt.gateway.bootId ||
         (!record.terminal && restart !== record.effects.at(-1))
       ) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Verification evidence does not match recovery and restart",
-        });
+        reportIssue("Verification evidence does not match recovery and restart");
       }
     }
     if (
@@ -302,7 +297,7 @@ const recoveryInspectionRecordSchema = z
       record.terminal &&
       !isDeepStrictEqual(verification.receipt, record.terminal.receipt)
     ) {
-      ctx.addIssue({ code: "custom", message: "Terminal and verification receipts differ" });
+      reportIssue("Terminal and verification receipts differ");
     }
     const native = record.nativeManager;
     const nativeFinal = native ? currentUpdateRecoveryNativeFacts(native) : undefined;
@@ -359,10 +354,7 @@ const recoveryInspectionRecordSchema = z
             nativeFinal.loaded !== native.original.loaded ||
             nativeFinal.stopped !== native.original.stopped)))
     ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Native manager evidence must match admitted source and revision",
-      });
+      reportIssue("Native manager evidence must match admitted source and revision");
     }
     const early = record.preimages;
     if (
@@ -384,13 +376,10 @@ const recoveryInspectionRecordSchema = z
             record.checkpoint.ref.manifestSha256 === early.ref.manifestSha256)) ||
           (!early && record.checkpoint.preimageRef)))
     ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Early file preimages must remain distinct from the full checkpoint",
-      });
+      reportIssue("Early file preimages must remain distinct from the full checkpoint");
     }
     if (record.package && record.package.descriptor.transactionId !== record.transactionId) {
-      ctx.addIssue({ code: "custom", message: "Package transaction differs from recovery" });
+      reportIssue("Package transaction differs from recovery");
     }
     for (const effect of record.effects) {
       if (effect.state === "cancelled") {
@@ -417,10 +406,7 @@ const recoveryInspectionRecordSchema = z
           start.after.stopped ||
           !(cancelledBeforeStart || stoppedAfterStart)
         ) {
-          ctx.addIssue({
-            code: "custom",
-            message: "Cancelled restart requires resolved native quiescence",
-          });
+          reportIssue("Cancelled restart requires resolved native quiescence");
         }
       }
       if (
@@ -432,7 +418,7 @@ const recoveryInspectionRecordSchema = z
           (effect.package.observed &&
             effect.observedIdentity !== effect.package.observed.observedIdentity))
       ) {
-        ctx.addIssue({ code: "custom", message: "Invalid typed package effect" });
+        reportIssue("Invalid typed package effect");
       }
     }
     if (
@@ -441,51 +427,38 @@ const recoveryInspectionRecordSchema = z
         record.terminal.receipt.runId !== record.runId ||
         record.terminal.pairId !== (record.retainedPair?.pairId ?? null))
     ) {
-      ctx.addIssue({ code: "custom", message: "Terminal outcome and selected pair differ" });
+      reportIssue("Terminal outcome and selected pair differ");
     }
-    if (record.terminal && "kind" in record.terminal.receipt) {
+    if (record.terminal) {
       const receipt = record.terminal.receipt;
       const role = record.terminal.status === "succeeded" ? "candidate" : "previous";
       const identity = role === "candidate" ? record.to : record.from;
-      const restart = record.effects.find((effect) => effect.effectId === receipt.effectId);
-      if (
-        receipt.transactionId !== record.transactionId ||
-        receipt.runtime !== role ||
-        receipt.revision + 2 !== record.terminal.commitRevision ||
-        receipt.gateway.version !== identity.version ||
-        receipt.gateway.buildId !== identity.buildId ||
-        restart?.kind !== "service-restart" ||
-        restart.state !== "observed" ||
-        restart.runtime !== role ||
-        restart.observedIdentity !== receipt.gateway.bootId ||
-        (verification && !isDeepStrictEqual(verification.receipt, receipt))
-      ) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Terminal readiness does not match its recorded restart",
-        });
-      }
-    }
-    if (record.terminal && !("kind" in record.terminal.receipt)) {
       // Legacy receipts have no effect/claim fields. Validate against the stored
       // final restart, without manufacturing the missing readiness bindings.
-      const receipt = record.terminal.receipt;
-      const role = record.terminal.status === "succeeded" ? "candidate" : "previous";
-      const identity = role === "candidate" ? record.to : record.from;
-      const restart = record.effects.findLast((effect) => effect.kind === "service-restart");
+      const restart =
+        "kind" in receipt
+          ? record.effects.find((effect) => effect.effectId === receipt.effectId)
+          : record.effects.findLast((effect) => effect.kind === "service-restart");
       if (
-        (verification &&
-          (verification.runtime !== role || verification.effectId !== restart?.effectId)) ||
+        ("kind" in receipt
+          ? receipt.transactionId !== record.transactionId ||
+            receipt.runtime !== role ||
+            receipt.revision + 2 !== record.terminal.commitRevision ||
+            restart?.kind !== "service-restart" ||
+            (verification && !isDeepStrictEqual(verification.receipt, receipt))
+          : verification &&
+            (verification.runtime !== role || verification.effectId !== restart?.effectId)) ||
         receipt.gateway.version !== identity.version ||
         receipt.gateway.buildId !== identity.buildId ||
         restart?.state !== "observed" ||
         restart.runtime !== role ||
         restart.observedIdentity !== receipt.gateway.bootId
       ) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Legacy terminal evidence differs from its recorded restart",
-        });
+        reportIssue(
+          "kind" in receipt
+            ? "Terminal readiness does not match its recorded restart"
+            : "Legacy terminal evidence differs from its recorded restart",
+        );
       }
     }
     const pair = record.retainedPair;
@@ -502,10 +475,7 @@ const recoveryInspectionRecordSchema = z
       (record.terminal?.status === "succeeded" && !pair) ||
       (record.terminal?.status === "rolled-back" && (pair || retention?.state !== "unselected"))
     ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Recovery selection does not match committed package roles",
-      });
+      reportIssue("Recovery selection does not match committed package roles");
     }
     let cursor = 0;
     let revision = -1;
@@ -615,24 +585,24 @@ export function decodeUpdateRecovery(raw: string, runId: string): UpdateRecovery
   return record;
 }
 
-/** Only decoded records may be tested: an aborted preparation is historical,
- * and can never confer restart, cleanup, or future claim authority. */
-export function isUpdateRecoveryPending(record: {
-  terminal?: unknown;
-  preparationAborted?: unknown;
-  retainedPair?: { state: string };
-  effects: readonly { state: string; kind?: string; package?: { outcome?: string } }[];
-}): boolean {
+/** Only validated inspection/execution records qualify. Historical completion
+ * permits admission, never restart, cleanup, or another recovery claim. */
+export function isUpdateRecoveryPending(
+  record: Pick<
+    UpdateRecoveryInspection["record"],
+    "terminal" | "preparationAborted" | "restore" | "effects"
+  >,
+): boolean {
   return (
     !record.preparationAborted &&
     (!record.terminal ||
-      record.effects.some((effect) => effect.state === "intent") ||
-      (record.retainedPair?.state === "superseded" &&
-        !record.effects.some(
-          (effect) =>
-            effect.kind === "retirement" &&
-            effect.state === "observed" &&
-            effect.package?.outcome === "completed",
-        )))
+      (record.restore !== null && record.restore.phase !== "observed") ||
+      record.effects.some(
+        (effect) =>
+          effect.state === "intent" &&
+          // Only typed obsolete-package retirement is cleanup. A missing or
+          // contradictory action must not hide an unfinished live mutation.
+          !(effect.kind === "retirement" && effect.package?.intent.action === "retire"),
+      ))
   );
 }

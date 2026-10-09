@@ -5,7 +5,23 @@ import Observation
 @MainActor
 @Observable
 final class VoiceSessionCoordinator {
-    static let shared = VoiceSessionCoordinator()
+    static var shared: VoiceSessionCoordinator {
+        AppStateStore.shared.voiceRuntime.sessions
+    }
+
+    private let overlay: VoiceWakeOverlayController
+    private let forward: AppVoiceRuntime.Forward
+    private let didDismiss: @MainActor @Sendable (UUID) -> Void
+
+    init(
+        overlay: VoiceWakeOverlayController,
+        forward: @escaping AppVoiceRuntime.Forward,
+        didDismiss: @escaping @MainActor @Sendable (UUID) -> Void)
+    {
+        self.overlay = overlay
+        self.forward = forward
+        self.didDismiss = didDismiss
+    }
 
     enum Source: String { case wakeWord, pushToTalk }
 
@@ -30,13 +46,12 @@ final class VoiceSessionCoordinator {
     {
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
-        let session = Session(
+        self.session = Session(
             token: token,
             text: text,
             sendChime: .none,
             voiceWakeTrigger: voiceWakeTrigger)
-        self.session = session
-        VoiceWakeOverlayController.shared.startSession(
+        self.overlay.startSession(
             token: token,
             source: source,
             transcript: text,
@@ -49,7 +64,7 @@ final class VoiceSessionCoordinator {
     func updatePartial(token: UUID, text: String, attributed: NSAttributedString? = nil) {
         guard let session, session.token == token else { return }
         self.session?.text = text
-        VoiceWakeOverlayController.shared.updatePartial(token: token, transcript: text, attributed: attributed)
+        self.overlay.updatePartial(token: token, transcript: text, attributed: attributed)
     }
 
     func updateEditedText(token: UUID, text: String) {
@@ -74,7 +89,7 @@ final class VoiceSessionCoordinator {
             self.session?.voiceWakeTrigger = voiceWakeTrigger
         }
 
-        VoiceWakeOverlayController.shared.presentFinal(
+        self.overlay.presentFinal(
             token: token,
             transcript: text,
             autoSendAfter: autoSendAfter)
@@ -84,18 +99,15 @@ final class VoiceSessionCoordinator {
         guard let session, session.token == token else { return }
         let text = session.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let voiceWakeTrigger = session.voiceWakeTrigger
-        let sendChime = session.sendChime
         guard !text.isEmpty else {
             self.logger.info("coordinator sendNow \(reason) empty -> dismiss")
-            VoiceWakeOverlayController.shared.dismiss(token: token, reason: .empty, outcome: .empty)
+            self.overlay.dismiss(token: token, reason: .empty, outcome: .empty)
             self.session = nil
             return
         }
-        VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: sendChime)
-        Task.detached {
-            _ = await VoiceWakeForwarder.forwardToSelectedSession(
-                transcript: text,
-                voiceWakeTrigger: voiceWakeTrigger)
+        self.overlay.beginSendUI(token: token, sendChime: session.sendChime)
+        Task.detached { [forward] in
+            _ = await forward(text, voiceWakeTrigger)
         }
     }
 
@@ -105,17 +117,17 @@ final class VoiceSessionCoordinator {
         outcome: VoiceWakeOverlayController.SendOutcome)
     {
         guard let session, session.token == token else { return }
-        VoiceWakeOverlayController.shared.dismiss(token: token, reason: reason, outcome: outcome)
+        self.overlay.dismiss(token: token, reason: reason, outcome: outcome)
         self.session = nil
     }
 
     func updateLevel(token: UUID, _ level: Double) {
         guard let session, session.token == token else { return }
-        VoiceWakeOverlayController.shared.updateLevel(token: token, level)
+        self.overlay.updateLevel(token: token, level)
     }
 
     func snapshot() -> (token: UUID?, text: String, visible: Bool) {
-        (self.session?.token, self.session?.text ?? "", VoiceWakeOverlayController.shared.isVisible)
+        (self.session?.token, self.session?.text ?? "", self.overlay.isVisible)
     }
 
     /// Overlay dismiss completion callback (manual X, empty, auto-dismiss after send).
@@ -124,6 +136,6 @@ final class VoiceSessionCoordinator {
         if self.session?.token == token {
             self.session = nil
         }
-        Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
+        self.didDismiss(token)
     }
 }

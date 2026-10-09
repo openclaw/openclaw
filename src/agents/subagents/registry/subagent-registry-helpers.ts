@@ -1,20 +1,21 @@
-/**
- * Subagent registry persistence and recovery helpers.
- *
- * Handles frozen results, attachment cleanup, timing persistence, and announce retry logging.
- */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import {
+  isTerminalSessionStatus,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   recordGatewaySessionRunFailure,
@@ -22,7 +23,8 @@ import {
 } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -48,12 +50,8 @@ const ANNOUNCE_RETRY_BACKOFF = {
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
-/** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
-  if (!trimmed) {
-    return "";
-  }
   const totalBytes = Buffer.byteLength(trimmed, "utf8");
   if (totalBytes <= FROZEN_RESULT_TEXT_MAX_BYTES) {
     return trimmed;
@@ -67,7 +65,6 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
-/** Computes bounded exponential backoff for subagent announce retries. */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return computeBackoff(ANNOUNCE_RETRY_BACKOFF, Math.max(1, retryCount));
 }
@@ -79,12 +76,11 @@ function formatAnnounceGiveUpLogField(value: string): string {
   );
 }
 
-/** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(
   entry: SubagentRunRecord,
   reason: "expiry" | "permanent_failure",
 ) {
-  const retryCount = getDeliveryAttemptCount(entry);
+  const retryCount = entry.delivery?.attemptCount ?? 0;
   const endedAt = entry.execution.endedAt;
   const endedAgoMs = typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined;
   const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
@@ -97,7 +93,6 @@ export function logAnnounceGiveUp(
   );
 }
 
-/** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,
   options?: {
@@ -108,6 +103,13 @@ export async function persistSubagentSessionTiming(
     };
     isCurrentGeneration?: () => boolean;
     assertCommitAllowed?: () => void;
+    assertCurrentEntry?: (entry: SessionEntryCurrentFacts | undefined) => void;
+    sessionEntryCurrent?: SessionEntryCurrentCheck;
+    settledQueuedCancellation?: {
+      storePath: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+    };
   },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -116,9 +118,12 @@ export async function persistSubagentSessionTiming(
   }
 
   const cfg = getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const { agentId, storePath: configuredStorePath } = resolveSubagentChildSessionOwner(entry, cfg);
   const storePath =
-    options?.session?.storePath ?? resolveSessionStorePathCore(cfg.session?.store, { agentId });
+    options?.sessionEntryCurrent?.source.path ??
+    options?.session?.storePath ??
+    options?.settledQueuedCancellation?.storePath ??
+    configuredStorePath;
   const refused = new Error("Subagent timing owner changed before commit");
   const assertGenerationCurrent = () => {
     if (options?.isCurrentGeneration?.() === false) {
@@ -126,111 +131,138 @@ export async function persistSubagentSessionTiming(
     }
     options?.assertCommitAllowed?.();
   };
-  const persist = async (selected: SessionEntry | undefined, assertSessionCurrent: () => void) => {
-    assertGenerationCurrent();
-    assertSessionCurrent();
-    if (!selected) {
-      return;
-    }
-    const sessionId = selected.sessionId;
-    const lifecycleRevision = selected.lifecycleRevision;
-    const assertCommitAllowed = () => {
-      assertGenerationCurrent();
-      assertSessionCurrent();
-    };
-    const startedAt = getSubagentSessionStartedAt(entry);
-    const endedAt =
-      typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
-        ? entry.execution.endedAt
-        : undefined;
-    const runtimeMs =
-      endedAt !== undefined
-        ? getSubagentSessionRuntimeMs(entry, endedAt)
-        : getSubagentSessionRuntimeMs(entry);
-    const status = resolveSubagentSessionStatus(entry);
+  const startedAt = getSubagentSessionStartedAt(entry);
+  const endedAt = asFiniteNumber(entry.execution.endedAt);
+  const runtimeMs = getSubagentSessionRuntimeMs(entry, endedAt);
+  const projectedStatus = resolveSubagentSessionStatus(entry);
+  const status = isTerminalSessionStatus(projectedStatus) ? projectedStatus : undefined;
 
-    const lastRunError = status
-      ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
-      : undefined;
-    const update = (sessionEntry: SessionEntry) => {
-      // Recheck under the session-store write lock. A completion may have
-      // waited behind a steer/restart that transferred this session's ownership.
-      if (
-        sessionEntry.sessionId !== sessionId ||
-        sessionEntry.lifecycleRevision !== lifecycleRevision ||
-        options?.isCurrentGeneration?.() === false
-      ) {
-        return null;
+  const lastRunError =
+    status === "interrupted"
+      ? "Run interrupted by a Gateway restart."
+      : status
+        ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
+        : undefined;
+  const update = (sessionEntry: InternalSessionEntry) => {
+    const settled = options?.settledQueuedCancellation;
+    if (
+      settled &&
+      (entry.collect !== true ||
+        entry.execution.status !== "terminal" ||
+        entry.execution.startedAt !== undefined ||
+        sessionEntry.startedAt !== undefined ||
+        entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+        !entry.killReconciliation ||
+        storePath !== settled.storePath ||
+        sessionEntry.sessionId !== settled.sessionId ||
+        sessionEntry.lifecycleRevision !== settled.lifecycleRevision ||
+        sessionEntry.activeWriterRunId !== undefined ||
+        sessionEntry.lifecycleRunId !== undefined ||
+        (sessionEntry.lastRunId !== undefined &&
+          sessionEntry.lastRunId !== (entry.swarmRunId ?? entry.runId)))
+    ) {
+      return null;
+    }
+    if (status === "killed") {
+      const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
+        notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+      });
+      if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
+        // A provider result already reached durable session state. The kill
+        // marker is provisional and must not erase restart reconciliation evidence
+        // or leave the session looking aborted after that completion won.
+        if (sessionEntry.abortedLastRun !== true) {
+          return null;
+        }
+        const completedEntry = { ...sessionEntry };
+        delete completedEntry.abortedLastRun;
+        return completedEntry;
       }
-      if (status === "killed") {
-        const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
-          notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-        });
-        if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
-          // A provider result already reached durable session state. The kill
-          // marker is provisional and must not erase restart reconciliation evidence
-          // or leave the session looking aborted after that completion won.
-          if (sessionEntry.abortedLastRun !== true) {
-            return null;
+    }
+    const next = { ...sessionEntry };
+    if (settled) {
+      // Exact queued withdrawal and successful resource cleanup qualify identity,
+      // without fabricating an agent start or execution.
+      next.lastRunId = entry.swarmRunId ?? entry.runId;
+    }
+
+    for (const [key, value] of [
+      ["startedAt", startedAt],
+      ["endedAt", endedAt],
+      ["runtimeMs", runtimeMs],
+    ] as const) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        next[key] = value;
+      } else {
+        delete next[key];
+      }
+    }
+
+    next.status = status;
+    if (lastRunError) {
+      next.lastRunError = lastRunError;
+    } else if (status === "done") {
+      delete next.lastRunError;
+    }
+    if (status === "interrupted") {
+      next.abortedLastRun = true;
+    } else if (status && status !== "killed") {
+      delete next.abortedLastRun;
+    }
+    return next;
+  };
+  const persist = async (expected: SessionEntry | undefined, assertSessionCurrent?: () => void) => {
+    let selected: InternalSessionEntry | undefined;
+    let suppressed = false;
+    const assertCurrent = () => {
+      assertGenerationCurrent();
+      assertSessionCurrent?.();
+      if (selected) {
+        try {
+          if (options?.sessionEntryCurrent) {
+            options.sessionEntryCurrent.assertCurrent(selected);
+          } else {
+            options?.assertCurrentEntry?.(selected);
           }
-          const completedEntry = { ...sessionEntry };
-          delete completedEntry.abortedLastRun;
-          return completedEntry;
+        } catch (error) {
+          suppressed = true;
+          throw error;
         }
       }
-      const next = { ...sessionEntry };
-
-      if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-        next.startedAt = startedAt;
-      } else {
-        delete next.startedAt;
-      }
-
-      if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-        next.endedAt = endedAt;
-      } else {
-        delete next.endedAt;
-      }
-
-      if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-        next.runtimeMs = runtimeMs;
-      } else {
-        delete next.runtimeMs;
-      }
-
-      if (status) {
-        next.status = status;
-      } else {
-        delete next.status;
-      }
-      if (lastRunError) {
-        next.lastRunError = lastRunError;
-      } else if (status === "done" || status === "interrupted") {
-        delete next.lastRunError;
-      }
-      if (status && status !== "killed") {
-        delete next.abortedLastRun;
-      }
-      return next;
     };
-    const persisted = await applySessionEntryExactReplacements({
-      storePath,
+    const persisted = await applySessionEntryExactReplacements<InternalSessionEntry | undefined>({
       agentId,
+      storePath,
       sessionKeys: [childSessionKey],
       activeSessionKey: childSessionKey,
       requireWriteSuccess: true,
       skipMaintenance: true,
-      assertCommitAllowed,
-      update(entries) {
-        const current = entries.find(({ sessionKey }) => sessionKey === childSessionKey)?.entry;
-        const next = current ? update(current) : null;
+      assertCommitAllowed: assertCurrent,
+      update: ([row]) => {
+        if (
+          !row ||
+          options?.isCurrentGeneration?.() === false ||
+          (expected &&
+            (row.entry.sessionId !== expected.sessionId ||
+              row.entry.lifecycleRevision !== expected.lifecycleRevision))
+        ) {
+          return { result: undefined };
+        }
+        selected = row.entry;
+        assertCurrent();
+        const next = update(selected);
         return {
-          result: next,
-          replacements: next ? [{ sessionKey: childSessionKey, entry: next }] : [],
+          result: next ?? selected,
+          ...(next ? { replacements: [{ sessionKey: row.sessionKey, entry: next }] } : {}),
         };
       },
+    }).catch((error: unknown) => {
+      if (hasSqliteWorkerOutcomeUnknown(error) || !suppressed) {
+        throw error;
+      }
+      return undefined;
     });
-    if (persisted && lastRunError) {
+    if (persisted && lastRunError && status !== "interrupted") {
       await recordGatewaySessionRunFailure({
         target: {
           agentId,
@@ -241,13 +273,21 @@ export async function persistSubagentSessionTiming(
         },
         runId: entry.runId,
         error: entry.execution.outcome?.error,
-        assertCommitAllowed,
+        assertCommitAllowed: assertCurrent,
+        sessionEntryCurrent: options?.sessionEntryCurrent,
       });
     }
   };
   try {
     if (options?.session) {
-      await persist(options.session.entry, options.session.assertCurrent);
+      options.session.assertCurrent();
+      if (options.session.entry) {
+        await persist(options.session.entry, options.session.assertCurrent);
+      }
+      return;
+    }
+    if (options?.sessionEntryCurrent) {
+      await persist(undefined);
       return;
     }
     await withSessionEntryReadOnlyInWorker(
@@ -257,7 +297,9 @@ export async function persistSubagentSessionTiming(
         if (!read.ok) {
           throw read.error;
         }
-        await persist(read.value, owner.assertCurrent);
+        if (read.value) {
+          await persist(read.value, owner.assertCurrent);
+        }
       },
     );
   } catch (error) {
@@ -268,8 +310,18 @@ export async function persistSubagentSessionTiming(
   }
 }
 
-/** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
+/** Kept sessions may retain their attachments; every other cleanup removes them with the run. */
+export function shouldRemoveSubagentAttachments(
+  entry: SubagentRunRecord,
+  cleanup: SubagentRunRecord["cleanup"] = entry.cleanup,
+): boolean {
+  return cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
+export async function safeRemoveAttachmentsDir(
+  entry: SubagentRunRecord,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
   if (!entry.attachmentId) {
     // Legacy absolute/workspace paths are untrusted and intentionally retired without traversal.
     return true;
@@ -279,6 +331,7 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     await cleanupMaterializedSubagentAttachments({
       childSessionKey: entry.childSessionKey,
       attachmentId: entry.attachmentId,
+      isCurrent,
     });
     return true;
   } catch {
@@ -286,16 +339,12 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   }
 }
 
-/** Resolves the completed subagent archive delay from config. */
 function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
     DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-  if (!Number.isFinite(minutes) || minutes < 0) {
-    return undefined;
-  }
-  if (minutes === 0) {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
@@ -303,10 +352,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
 
 /** Arms retention only after the run or its waitable collector result has completed. */
 export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
-  const endedAt =
-    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
-      ? entry.execution.endedAt
-      : undefined;
+  const endedAt = asFiniteNumber(entry.execution.endedAt);
   const completedAt = entry.collect
     ? endedAt === undefined && !entry.collectorCompletion
       ? undefined

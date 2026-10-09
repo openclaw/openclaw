@@ -20,7 +20,12 @@ import {
 import { qaChannelMessageActions } from "./channel-actions.js";
 import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
-import { sendQaChannelMedia, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
+import {
+  collectQaMediaUrls,
+  sendQaChannelMedia,
+  sendQaChannelMediaBatch,
+  sendQaChannelText,
+} from "./outbound.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -55,13 +60,10 @@ function createQaChannelMessageReceipt(
 
 async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
   const text = ctx.payload.text ?? ctx.text;
-  const mediaUrls = Array.from(
-    new Set(
-      [ctx.mediaUrl, ctx.payload.mediaUrl, ...(ctx.payload.mediaUrls ?? [])].filter(
-        (mediaUrl): mediaUrl is string =>
-          typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
-      ),
-    ),
+  const mediaUrls = collectQaMediaUrls(
+    ctx.mediaUrl,
+    ctx.payload.mediaUrl,
+    ...(ctx.payload.mediaUrls ?? []),
   );
   const params = {
     cfg: ctx.cfg as CoreConfig,
@@ -231,9 +233,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     status: qaChannelStatus,
     gateway: {
-      startAccount: async (ctx) => {
-        await startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx);
-      },
+      startAccount: (ctx) => startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx),
     },
     threading: {
       resolveReplyTransport: ({
@@ -311,41 +311,15 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     attachedResults: {
       channel: QA_CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) =>
-        await sendQaChannelText({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          threadId,
-          replyToId,
-        }),
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        accountId,
-        threadId,
-        replyToId,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-      }) => {
-        if (!mediaUrl) {
+      sendText: async (ctx) => await sendQaChannelText({ ...ctx, cfg: ctx.cfg as CoreConfig }),
+      sendMedia: async (ctx) => {
+        if (!ctx.mediaUrl) {
           throw new Error("QA channel media send requires mediaUrl");
         }
         return await sendQaChannelMedia({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          mediaUrl,
-          threadId,
-          replyToId,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+          mediaUrl: ctx.mediaUrl,
         });
       },
     },

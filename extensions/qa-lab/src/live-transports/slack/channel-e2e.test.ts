@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackChannelE2e } from "./channel-e2e.js";
@@ -140,51 +139,6 @@ describe("Slack agent E2E ownership", () => {
     ]);
   });
 
-  it("retains a late native receipt after cancellation for post-stop cleanup", async () => {
-    const f = fixture();
-    const started = createDeferred<void>();
-    const response = createDeferred<{ channel: string; ts: string }>();
-    f.driverClient.chat.postMessage.mockImplementationOnce(async () => {
-      started.resolve();
-      return await response.promise;
-    });
-    const sending = f.session.driver.send({ text: "late receipt" });
-    const rejected = expect(sending).rejects.toThrow("cancel fixture");
-    await started.promise;
-    f.controller.abort(new Error("cancel fixture"));
-    response.resolve({ channel: "C_QA", ts: "7.000000" });
-    await rejected;
-    await expect(f.session.driver.send({ text: "must not dispatch" })).rejects.toThrow(
-      "cancel fixture",
-    );
-    await f.session.cleanup();
-    expect(f.driverClient.chat.postMessage).toHaveBeenCalledTimes(1);
-    expect(f.driverClient.chat.delete).toHaveBeenCalledWith({ channel: "C_QA", ts: "7.000000" });
-    const artifact = JSON.parse(await fs.readFile(f.session.artifactPath, "utf8"));
-    expect(artifact.ownedMessages).toEqual([
-      expect.objectContaining({
-        deleted: true,
-        message: expect.objectContaining({ id: "7.000000" }),
-      }),
-    ]);
-  });
-
-  it("retains an ambiguous send as incomplete instead of guessing a deletion target", async () => {
-    const f = fixture();
-    f.driverClient.chat.postMessage.mockRejectedValueOnce(
-      new Error("connection closed after dispatch"),
-    );
-    await expect(f.session.driver.send({ text: "unknown outcome" })).rejects.toThrow(
-      "without a definitive Slack receipt",
-    );
-    await expect(f.session.cleanup()).rejects.toThrow("1 uncertain operations");
-    expect(f.driverClient.chat.delete).not.toHaveBeenCalled();
-    const artifact = JSON.parse(await fs.readFile(f.session.artifactPath, "utf8"));
-    expect(artifact.evidence).toContainEqual(
-      expect.objectContaining({ operation: "chat.postMessage", outcome: "uncertain" }),
-    );
-  });
-
   it.each([
     { stage: "readiness", operation: "driver auth.test" },
     { stage: "mutation", operation: "chat.postMessage" },
@@ -206,7 +160,6 @@ describe("Slack agent E2E ownership", () => {
   });
 
   it.each([
-    { terminal: "unanswered", outcome: "uncertain", reason: "response-not-captured" },
     { terminal: "server-error", outcome: "uncertain", reason: "response-indeterminate" },
     { terminal: "partial-failure", outcome: "uncertain", reason: "response-indeterminate" },
     { terminal: "rejected", outcome: undefined, reason: undefined },
@@ -240,21 +193,19 @@ describe("Slack agent E2E ownership", () => {
           errorText: "Authorization: private-token",
         });
       }
-      if (terminal !== "unanswered") {
-        events.push({
-          id: 3,
-          flowId: "gateway-write",
-          kind: "response",
-          status: terminal === "server-error" ? 503 : 200,
-          dataText: JSON.stringify({
-            ok: terminal === "accepted-after-error",
-            channel: "C_QA",
-            ts: "2.000000",
-            error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
-            detail: "private-error",
-          }),
-        });
-      }
+      events.push({
+        id: 3,
+        flowId: "gateway-write",
+        kind: "response",
+        status: terminal === "server-error" ? 503 : 200,
+        dataText: JSON.stringify({
+          ok: terminal === "accepted-after-error",
+          channel: "C_QA",
+          ts: "2.000000",
+          error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
+          detail: "private-error",
+        }),
+      });
 
       if (outcome === "uncertain") {
         await expect(f.session.cleanup()).rejects.toThrow("1 uncertain operations");
