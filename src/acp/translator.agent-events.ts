@@ -59,6 +59,11 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
+    if (stream === "item" && data.kind === "preamble") {
+      await this.handleCommentaryEvent({ sessionKey, runId, data });
+      return;
+    }
+
     if (stream !== "tool") {
       return;
     }
@@ -124,6 +129,52 @@ export class AcpTranslatorAgentEvents {
       runId: pending.idempotencyKey,
       record: true,
       update,
+    });
+  }
+
+  private async handleCommentaryEvent(params: {
+    sessionKey: string;
+    runId?: string;
+    data: Record<string, unknown>;
+  }): Promise<void> {
+    const phase = params.data.phase;
+    const itemId = normalizeOptionalString(params.data.itemId);
+    const progressText = params.data.progressText;
+    if (
+      (phase !== "update" && phase !== "end") ||
+      !itemId ||
+      typeof progressText !== "string" ||
+      !progressText
+    ) {
+      return;
+    }
+
+    const pending = this.findPendingBySessionKey(params.sessionKey, params.runId);
+    if (!pending) {
+      return;
+    }
+    const snapshots = (pending.commentarySnapshots ??= new Map());
+    const previous = snapshots.get(itemId) ?? "";
+    if (progressText === previous) {
+      return;
+    }
+    snapshots.set(itemId, progressText);
+    const text = progressText.startsWith(previous)
+      ? progressText.slice(previous.length)
+      : progressText;
+    if (!text) {
+      return;
+    }
+    await this.sessionUpdates.emit({
+      sessionId: pending.sessionId,
+      sessionKey: pending.sessionKey,
+      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+      runId: pending.idempotencyKey,
+      record: true,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+      },
     });
   }
 

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  createToolEvent,
+  expectOversizedPromptRejected,
+} from "./translator.bridge-test-helpers.js";
 import {
   createChatEvent,
   createPendingPromptHarness,
@@ -41,6 +45,66 @@ describe("acp final chat snapshots", () => {
       { type: "text", text: "Hello" },
       { type: "text", text: " wide" },
       { type: "text", text: " world" },
+    ]);
+  });
+
+  it("streams commentary once before tools without consuming the final answer snapshot", async () => {
+    const { agent, sessionUpdate, promptPromise, runId } = await createPendingPromptHarness();
+    const commentary = (phase: "update" | "end", progressText: string): EventFrame =>
+      ({
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: DEFAULT_SESSION_KEY,
+          runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            phase,
+            progressText,
+          },
+        },
+      }) as EventFrame;
+
+    await agent.handleGatewayEvent(commentary("update", "Checking"));
+    await agent.handleGatewayEvent(commentary("update", "Checking files"));
+    await agent.handleGatewayEvent(commentary("end", "Checking files"));
+    await agent.handleGatewayEvent(commentary("end", "Checking files"));
+    await agent.handleGatewayEvent(
+      createToolEvent({
+        sessionKey: DEFAULT_SESSION_KEY,
+        phase: "start",
+        toolCallId: "tool-1",
+        name: "read",
+        args: { path: "notes.txt" },
+      }),
+    );
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        sessionKey: DEFAULT_SESSION_KEY,
+        runId,
+        state: "final",
+        message: { content: [{ type: "text", text: "Done" }] },
+      }),
+    );
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+
+    expect(
+      sessionUpdate.mock.calls.flatMap(([notification]) => {
+        const update = notification.update;
+        if (update.sessionUpdate === "agent_message_chunk") {
+          return [[update.sessionUpdate, update.content.text]];
+        }
+        return update.sessionUpdate === "tool_call"
+          ? [[update.sessionUpdate, update.toolCallId]]
+          : [];
+      }),
+    ).toEqual([
+      ["agent_message_chunk", "Checking"],
+      ["agent_message_chunk", " files"],
+      ["tool_call", "tool-1"],
+      ["agent_message_chunk", "Done"],
     ]);
   });
 });
