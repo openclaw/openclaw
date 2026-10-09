@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 import {
   SOURCE_FENCE_ACCEPTED,
   SQLITE_WORKER_SOURCE_FENCE,
   type SqliteSourceFence,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
-import { bindSqliteSourceFenceDatabase } from "./sqlite-source-fence.js";
 import type { SqliteWorkerPreparedBackend } from "./sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -38,12 +38,17 @@ export type FenceFixtureCommand = {
     | "reply"
     | "source-close"
     | "missing-receipt"
-    | "host-admission";
+    | "host-admission"
+    | "postcommit-revoke"
+    | "source-rollback";
   observeRetry?: boolean;
 };
 
 export type FenceFixtureOperations = {
-  persist: { input: FenceFixtureCommand; output: { id: string; revision: number } };
+  persist: {
+    input: FenceFixtureCommand;
+    output: { id: string; revision: number; notifiedRevision?: number };
+  };
 };
 
 type FixtureBackend = SqliteWorkerPreparedBackend<FenceFixtureOperations> & {
@@ -70,11 +75,12 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
     ? openNodeSqliteDatabase(resolveExistingSqliteFileUri(input.aliasPath))
     : undefined;
   const sources = [source, ...(alias ? [alias] : [])];
-  const destinationBinding = bindSqliteSourceFenceDatabase(destination, input.destination);
-  const sourceBinding = bindSqliteSourceFenceDatabase(source, input.source);
-  const aliasBinding = alias ? bindSqliteSourceFenceDatabase(alias, input.source) : undefined;
+  const destinationBinding = { database: destination, identity: input.destination };
+  const sourceBinding = { database: source, identity: input.source };
+  const aliasBinding = alias ? { database: alias, identity: input.source } : undefined;
   let current: FenceFixtureCommand | undefined;
   let sourceRevision = -1;
+  let validatedSource = source;
   let retryObserved = false;
   const signal = (stage: number) => {
     if (current?.barrier === undefined) {
@@ -96,6 +102,9 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
     db.exec("PRAGMA busy_timeout = 10000");
     const exec = db.exec.bind(db);
     db.exec = (sql: string) => {
+      if (sql === "ROLLBACK" && db !== destination && current?.fault === "source-rollback") {
+        throw new Error("Fixture source rollback failed");
+      }
       if (sql === "COMMIT" && db === destination && current) {
         const grant = takeSqliteWorkerOperationAdmissionAttachment();
         assert(isRecord(grant) && grant.decision instanceof SharedArrayBuffer);
@@ -135,6 +144,7 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
         sources: [selected, ...(current.alias && aliasBinding ? [aliasBinding] : [])],
         validate(resolve) {
           const db = resolve(selected);
+          validatedSource = db;
           const row = db.prepare("SELECT revision FROM authority WHERE id = 1").get();
           sourceRevision = Number(row?.revision);
           if (sourceRevision !== current?.expectedRevision) {
@@ -158,12 +168,23 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
         throw new Error("Fixture mutation failed between destination rows");
       }
       destination.prepare("INSERT INTO lifecycles (id) VALUES (?)").run(id);
-      const result = { id, revision: sourceRevision };
+      const result: FenceFixtureOperations["persist"]["output"] = { id, revision: sourceRevision };
       if (fault === "host-admission") {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: "fixture-reentrancy" });
       }
       if (fault !== "missing-receipt") {
         deferSqliteWorkerCommitReceipt(destination, result);
+      }
+      if (fault === "postcommit-revoke") {
+        assert(
+          deferSqlitePostCommitPublication(destination, () => {
+            validatedSource.prepare("UPDATE authority SET revision = 2 WHERE id = 1").run();
+            result.notifiedRevision = Number(
+              validatedSource.prepare("SELECT revision FROM authority WHERE id = 1").get()
+                ?.revision,
+            );
+          }),
+        );
       }
       if (fault === "reply") {
         return Object.assign(result, { unserializable: Symbol("lost ordinary reply") });

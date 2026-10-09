@@ -27,14 +27,18 @@ import {
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSourceFenceBindings"),
-  () => new WeakSet<SqliteSourceFenceDatabase>(),
+  () => new WeakMap<DatabaseSync, SqliteSourceFenceIdentity>(),
 );
 
-/** Bind at native open, after the physical/schema owner has admitted this handle. */
-export function bindSqliteSourceFenceDatabase(
-  database: DatabaseSync,
-  identity: SqliteSourceFenceIdentity,
-): SqliteSourceFenceDatabase {
+/** Bind once after native admission; later uses carry the captured physical facts. */
+function bindSqliteSourceFenceDatabase({ database, identity }: SqliteSourceFenceDatabase): void {
+  const previous = bindings.get(database);
+  if (previous) {
+    if (!sameIdentity(identity, previous)) {
+      throw new SqliteWorkerError("SQLite source fence handle changed incarnation", "closed");
+    }
+    return;
+  }
   const location = database.location();
   if (
     isMainThread ||
@@ -45,9 +49,7 @@ export function bindSqliteSourceFenceDatabase(
     throw new Error("SQLite source fences require admitted durable worker handles");
   }
   assertDatabasePathIdentity(location, identity.physical);
-  const binding = Object.freeze({ database, identity: structuredClone(identity) });
-  bindings.add(binding);
-  return binding;
+  bindings.set(database, structuredClone(identity));
 }
 
 function sameIdentity(
@@ -124,9 +126,7 @@ export async function runSqliteSourceFence<T>(
   // Prefer the destination handle when a source is an alias of the destination.
   const physical = new Map<string, SqliteSourceFenceDatabase>();
   for (const source of [fence.destination, ...fence.sources]) {
-    if (!bindings.has(source)) {
-      throw new SqliteWorkerError("SQLite source fence handle was not admitted", "closed");
-    }
+    bindSqliteSourceFenceDatabase(source);
     const previous = physical.get(source.identity.physical.key);
     if (previous && previous.identity.physical.birthtime !== source.identity.physical.birthtime) {
       throw new SqliteWorkerError("SQLite source fence aliases changed incarnation", "closed");
@@ -165,68 +165,90 @@ export async function runSqliteSourceFence<T>(
   for (;;) {
     let entered = false;
     try {
-      return inOperation(() =>
-        withSqliteWorkerSourceReservations(() => {
-          assertReady();
-          if ([...captured].some(({ database }) => database.isTransaction)) {
-            throw new SqliteWorkerError(
-              "SQLite source fence cannot join an outer transaction",
-              "closed",
+      return inOperation(() => {
+        let cleanupFailure: { error: unknown } | undefined;
+        let committedResult: T;
+        try {
+          // Publication follows source release, so reentrant observers own ordinary writes.
+          committedResult = withSqlitePostCommitPublications(fence.destination.database, () =>
+            withSqliteWorkerSourceReservations(() => {
+              assertReady();
+              if ([...captured].some(({ database }) => database.isTransaction)) {
+                throw new SqliteWorkerError(
+                  "SQLite source fence cannot join an outer transaction",
+                  "closed",
+                );
+              }
+              const reservations: SqliteSourceFenceDatabase[] = [];
+              try {
+                for (const source of ordered) {
+                  runWithSqliteBusyTimeout(source.database, 0, () => {
+                    source.database.exec("BEGIN IMMEDIATE");
+                    reservations.push(source);
+                  });
+                }
+                entered = true;
+                return runSqliteReservedTransactionSync(
+                  fence.destination.database,
+                  () => {
+                    assertReady();
+                    const validation: unknown = fence.validate(resolve);
+                    if (isPromiseLike(validation)) {
+                      throw new Error("SQLite source predicates must remain synchronous");
+                    }
+                    assertReady();
+                    const result = execute();
+                    assertSqliteWorkerCommitReceiptPending(fence.destination.database);
+                    return result;
+                  },
+                  {
+                    withCommit(commit) {
+                      assertReady();
+                      if (reservations.some(({ database }) => !database.isTransaction)) {
+                        throw new SqliteWorkerError("SQLite source reservation was lost", "closed");
+                      }
+                      if (
+                        Atomics.compareExchange(
+                          decision,
+                          0,
+                          SOURCE_FENCE_READY,
+                          SOURCE_FENCE_ACCEPTED,
+                        ) !== SOURCE_FENCE_READY
+                      ) {
+                        throw new SqliteWorkerError(
+                          "SQLite source fence commit was revoked",
+                          "closed",
+                        );
+                      }
+                      commit();
+                    },
+                  },
+                );
+              } finally {
+                try {
+                  rollbackReservations(reservations);
+                } catch (error) {
+                  // Destination COMMIT already owns its receipt even if source disposal fails.
+                  cleanupFailure = { error };
+                }
+              }
+            }),
+          );
+        } catch (error) {
+          if (cleanupFailure) {
+            throw new AggregateError(
+              [error, cleanupFailure.error],
+              "SQLite fence execution and cleanup failed",
+              { cause: error },
             );
           }
-          const reservations: SqliteSourceFenceDatabase[] = [];
-          try {
-            // The publication owner starts before destination BEGIN, even if it sorts first.
-            return withSqlitePostCommitPublications(fence.destination.database, () => {
-              for (const source of ordered) {
-                runWithSqliteBusyTimeout(source.database, 0, () => {
-                  source.database.exec("BEGIN IMMEDIATE");
-                  reservations.push(source);
-                });
-              }
-              entered = true;
-              return runSqliteReservedTransactionSync(
-                fence.destination.database,
-                () => {
-                  assertReady();
-                  const validation: unknown = fence.validate(resolve);
-                  if (isPromiseLike(validation)) {
-                    throw new Error("SQLite source predicates must remain synchronous");
-                  }
-                  assertReady();
-                  const result = execute();
-                  assertSqliteWorkerCommitReceiptPending(fence.destination.database);
-                  return result;
-                },
-                {
-                  withCommit(commit) {
-                    assertReady();
-                    if (reservations.some(({ database }) => !database.isTransaction)) {
-                      throw new SqliteWorkerError("SQLite source reservation was lost", "closed");
-                    }
-                    if (
-                      Atomics.compareExchange(
-                        decision,
-                        0,
-                        SOURCE_FENCE_READY,
-                        SOURCE_FENCE_ACCEPTED,
-                      ) !== SOURCE_FENCE_READY
-                    ) {
-                      throw new SqliteWorkerError(
-                        "SQLite source fence commit was revoked",
-                        "closed",
-                      );
-                    }
-                    commit();
-                  },
-                },
-              );
-            });
-          } finally {
-            rollbackReservations(reservations);
-          }
-        }),
-      );
+          throw error;
+        }
+        if (cleanupFailure) {
+          throw cleanupFailure.error;
+        }
+        return committedResult;
+      });
     } catch (error) {
       if (entered || !isSqliteLockError(error)) {
         throw error;

@@ -21,10 +21,8 @@ export type SqliteSourceFence = {
 
 export const SQLITE_WORKER_SOURCE_FENCE = Symbol.for("openclaw.sqliteWorkerSourceFence");
 
-export const SOURCE_FENCE_WAITING = 0;
 export const SOURCE_FENCE_READY = 1;
 export const SOURCE_FENCE_ACCEPTED = 2;
-export const SOURCE_FENCE_REVOKED = 3;
 
 export type SqliteSourceFenceGrant = {
   kind: "sqlite-source-fence";

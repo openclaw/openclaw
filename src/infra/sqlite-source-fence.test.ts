@@ -454,15 +454,45 @@ describe("durable source fence through the real SQLite broker", () => {
     await fixture.broker.close();
   });
 
-  it("preserves the committed receipt when ordinary reply encoding fails", async () => {
-    const operation = persist(forward, { id: "lost-reply", expectedRevision: 1, fault: "reply" });
-    await expect(operation.result).rejects.toThrow();
-    expect(operation.receipts).toEqual([{ id: "lost-reply", revision: 1 }]);
-    expect(rows(second, "lost-reply")).toEqual({
-      request: { revision: 1 },
-      lifecycle: { id: "lost-reply" },
+  it("preserves the committed receipt when ordinary reply encoding or source cleanup fails", async () => {
+    for (const [fixture, database, id, fault] of [
+      [forward, second, "lost-reply", "reply"],
+      [reverse, first, "cleanup-failure", "source-rollback"],
+    ] as const) {
+      const operation = persist(fixture, { id, expectedRevision: 1, fault });
+      await expect(operation.result).rejects.toThrow();
+      expect(operation.receipts).toEqual([{ id, revision: 1 }]);
+      expect(rows(database, id)).toEqual({
+        request: { revision: 1 },
+        lifecycle: { id },
+      });
+      expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
+    }
+  });
+
+  it("preserves a source revocation acknowledged by a destination postcommit observer", async () => {
+    const operation = persist(forward, {
+      id: "postcommit-revoke",
+      expectedRevision: 1,
+      fault: "postcommit-revoke",
     });
-    expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
+    try {
+      await expect(operation.result).resolves.toEqual({
+        id: "postcommit-revoke",
+        revision: 1,
+        notifiedRevision: 2,
+      });
+      expect(first.prepare("SELECT revision FROM authority WHERE id = 1").get()).toEqual({
+        revision: 2,
+      });
+      expect(rows(second, "postcommit-revoke")).toEqual({
+        request: { revision: 1 },
+        lifecycle: { id: "postcommit-revoke" },
+      });
+    } finally {
+      await operation.result.catch(() => {});
+      first.exec("UPDATE authority SET revision = 1 WHERE id = 1");
+    }
   });
 
   it.each(["before-commit-exit", "after-commit-exit"] as const)(

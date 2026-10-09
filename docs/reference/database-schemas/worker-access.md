@@ -126,7 +126,8 @@ Cancellation, owner closure, timeout, and ordinary reply loss cannot release sou
 reservations while that accepted write can still commit. No host admission request
 is allowed inside this interval, so a synchronous native source writer cannot
 prevent the worker from settling. Source reservations roll back after destination
-settlement; only the destination database mutates durably. This is authority
+settlement and before postcommit observers, whose reentrant writes must commit
+normally. Only the destination database mutates durably within the fence. This is authority
 exclusion, not a distributed transaction across independent SQLite databases.
 
 A destination commit receipt is mandatory and uses the existing postcommit and

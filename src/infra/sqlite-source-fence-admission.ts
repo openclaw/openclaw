@@ -1,8 +1,6 @@
 import {
   SOURCE_FENCE_ACCEPTED,
   SOURCE_FENCE_READY,
-  SOURCE_FENCE_REVOKED,
-  SOURCE_FENCE_WAITING,
   type SqliteSourceFenceGrant,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
@@ -12,6 +10,9 @@ import {
   type SqliteWorkerAdmissionFactory,
 } from "./sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "./sqlite-worker-operation-settlement.js";
+
+const SOURCE_FENCE_WAITING = 0;
+const SOURCE_FENCE_REVOKED = 3;
 
 export type SqliteSourceFenceOwner = {
   identity: SqliteSourceFenceIdentity;
