@@ -297,6 +297,55 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "loads each file once across relative, absolute, and literal spellings",
+    async () => {
+      // Glob matches, literals, and failures share one key space: the absolute
+      // path the loader reads. An absolute pattern makes fs.glob yield absolute
+      // paths, so without that key the same file loads twice and the
+      // self-looping link surfaces once per spelling.
+      const workspaceDir = await fs.realpath(await createWorkspaceDir("spelling-overlap"));
+      await fs.mkdir(path.join(workspaceDir, "good"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, "bad"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "good", "AGENTS.md"), "good agents", "utf-8");
+      await fs.symlink("AGENTS.md", path.join(workspaceDir, "bad", "AGENTS.md"));
+
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "*/AGENTS.md",
+        path.join(workspaceDir, "*", "AGENTS.md"),
+        path.join(workspaceDir, "good", "AGENTS.md"),
+        "./bad/AGENTS.md",
+      ]);
+
+      expect(files.map((file) => file.content)).toStrictEqual(["good agents"]);
+      expect(
+        diagnostics.map(({ path: diagnosticPath, reason }) => ({ diagnosticPath, reason })),
+      ).toStrictEqual([
+        { diagnosticPath: path.join(workspaceDir, "bad", "AGENTS.md"), reason: "io" },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a faulting non-bootstrap match a benign filename skip",
+    async () => {
+      // A broad glob can match files that never enter bootstrap context. A
+      // canonicalization fault on one of them is not an operator-visible io error.
+      const workspaceDir = await fs.realpath(await createWorkspaceDir("benign-fault"));
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents", "utf-8");
+      await fs.symlink("README.md", path.join(workspaceDir, "README.md"));
+
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "*.md",
+      ]);
+
+      expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md"]);
+      expect(diagnostics).toMatchObject([
+        { path: path.join(workspaceDir, "README.md"), reason: "invalid-bootstrap-filename" },
+      ]);
+    },
+  );
+
   it("resolves a missing workspace cwd to no matches without a diagnostic (ENOENT)", async () => {
     // F1 boundary: a missing cwd makes fs.glob throw ENOENT, which legitimately
     // means "no matches" rather than an error to surface — no files, no diagnostic.

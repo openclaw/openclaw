@@ -1122,6 +1122,15 @@ async function resolveExtraBootstrapPatternPaths(
   return { matches: matches.length > 0 ? matches : [pattern], failures: [] };
 }
 
+function invalidBootstrapFilenameDiagnostic(filePath: string): ExtraBootstrapLoadDiagnostic {
+  const baseName = path.basename(filePath);
+  return {
+    path: filePath,
+    reason: "invalid-bootstrap-filename",
+    detail: `unsupported bootstrap basename: ${baseName}`,
+  };
+}
+
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
@@ -1139,12 +1148,12 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   // discovery path enforces the rest.
   const access = getAgentWorkspaceAccess(resolvedDir);
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
+  // Every candidate — glob match, literal, or failed match — is keyed by the
+  // absolute path the loader reads, so relative, absolute, and literal spellings
+  // of one file load once and a file that faults under overlapping patterns
+  // surfaces a single diagnostic. That keeps the handler's "failed for N
+  // path(s)" a true distinct-path count.
   const resolvedPaths = new Set<string>();
-  // Failure paths already surfaced as an `io` diagnostic. Dedupe on the same
-  // workspace-relative key `resolvedPaths` uses for matches, so a file that faults
-  // under two overlapping patterns — or a fallback double-yield within one —
-  // surfaces a single diagnostic, keeping the handler's "failed for N path(s)" a
-  // true distinct-path count rather than a pattern/yield multiple.
   const failedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
     const walkRootContained = access
@@ -1162,24 +1171,26 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       if (hasGlobPattern(pattern)) {
         const { matches, failures } = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
         for (const match of matches) {
-          resolvedPaths.add(match);
+          resolvedPaths.add(path.resolve(resolvedDir, match));
         }
         // Per-match isolation: a readable match loads normally while each match
-        // that failed canonicalization surfaces as its own `io` diagnostic keyed
-        // to that path, instead of one failing match discarding the whole pattern.
+        // that failed canonicalization surfaces as its own diagnostic, instead of
+        // one failing match discarding the whole pattern. Only a fault on a file
+        // that could enter bootstrap context is an operator-visible `io`.
         for (const failure of failures) {
-          if (failedPaths.has(failure.path)) {
+          const filePath = path.resolve(resolvedDir, failure.path);
+          if (failedPaths.has(filePath)) {
             continue;
           }
-          failedPaths.add(failure.path);
-          diagnostics.push({
-            path: path.resolve(resolvedDir, failure.path),
-            reason: "io",
-            detail: failure.detail,
-          });
+          failedPaths.add(filePath);
+          diagnostics.push(
+            VALID_BOOTSTRAP_NAMES.has(path.basename(filePath))
+              ? { path: filePath, reason: "io", detail: failure.detail }
+              : invalidBootstrapFilenameDiagnostic(filePath),
+          );
         }
       } else {
-        resolvedPaths.add(pattern);
+        resolvedPaths.add(path.resolve(resolvedDir, pattern));
       }
     } catch (error) {
       diagnostics.push({
@@ -1191,15 +1202,13 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
 
   const files: WorkspaceBootstrapFile[] = [];
-  for (const relPath of resolvedPaths) {
-    const filePath = path.resolve(resolvedDir, relPath);
-    const baseName = path.basename(relPath);
+  for (const filePath of resolvedPaths) {
+    if (failedPaths.has(filePath)) {
+      continue;
+    }
+    const baseName = path.basename(filePath);
     if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
-      diagnostics.push({
-        path: filePath,
-        reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
-      });
+      diagnostics.push(invalidBootstrapFilenameDiagnostic(filePath));
       continue;
     }
     const loaded = await readWorkspaceFileWithGuards({

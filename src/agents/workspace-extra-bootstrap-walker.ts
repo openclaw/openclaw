@@ -305,9 +305,9 @@ async function* walkFallbackMatches(
 
 // A matched path the resolver could not canonicalize (a non-ENOENT realpath
 // fault: EACCES/ELOOP/…). Recorded per match instead of aborting the walk, so a
-// readable sibling still resolves; the loader surfaces each as its own `io`
-// diagnostic keyed to `path` (workspace-relative POSIX, matching the returned
-// match keys). `detail` carries the underlying fs error message. Module-local:
+// readable sibling still resolves; the loader surfaces each as its own
+// diagnostic keyed to `path` (the match as yielded, like the returned match
+// keys). `detail` carries the underlying fs error message. Module-local:
 // callers consume it structurally through the exported `ExtraBootstrapResolution`
 // return shape, so it needs no export of its own.
 type ExtraBootstrapMatchFailure = { path: string; detail: string };
