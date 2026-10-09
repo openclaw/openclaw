@@ -309,6 +309,62 @@ describe("session member picker identities", () => {
 });
 
 describe("session sharing authority", () => {
+  it("adds, lists, and removes session members without caller-thread SQL after collaboration admission", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:sharing-authority";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "sharing-authority",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        },
+      );
+      // Collaboration owns its cold admission; the worker-only entry seed does not admit it.
+      await sharingStore.removeSessionMember(
+        { agentId: "main", sessionKey },
+        "absent-admission-fixture-member",
+      );
+      const manager = preparedClient("owner");
+      const requestContext = context(vi.fn());
+      await initializeSessionReadContext(requestContext);
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      try {
+        expect(
+          (
+            await call(
+              "session.members.add",
+              { sessionKey, identityId: "owner" },
+              requestContext,
+              manager,
+            )
+          )[0]?.[0],
+        ).toBe(true);
+        expect(
+          (
+            await call("session.members.listEvidence", { sessionKey }, requestContext, manager)
+          )[0]?.[1],
+        ).toMatchObject({ role: "owner", members: [{ identityId: "owner", addedBy: "owner" }] });
+        expect(
+          (
+            await call(
+              "session.members.remove",
+              { sessionKey, identityId: "owner" },
+              requestContext,
+              manager,
+            )
+          )[0]?.[0],
+        ).toBe(true);
+        expect(prepare).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+        exec.mockRestore();
+      }
+    });
+  });
+
   it("refuses membership evidence after a published foreign ownership change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:sharing-snapshot-owner";

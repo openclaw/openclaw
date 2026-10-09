@@ -851,9 +851,23 @@ it("replaces a retired profile read when the same ID gains profile qualification
   );
 });
 
-it("explains limited permissions with diagnostics collapsed", async () => {
-  const scopes = ["operator.approvals"];
-  const summary = "This connection has a limited set of permissions.";
+it.each([
+  { scopes: ["operator.read"], summary: "You have permission to view server information." },
+  { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
+  {
+    scopes: ["operator.sessions.read"],
+    summary: "You have permission to view your own sessions.",
+  },
+  { scopes: ["operator.admin"], summary: "You have permission to manage this server." },
+  {
+    scopes: ["operator.approvals"],
+    summary: "This connection has a limited set of permissions.",
+  },
+  {
+    scopes: ["operator.read", "operator.sessions.write"],
+    summary: "You have permission to work in your own sessions.",
+  },
+])("explains $scopes with diagnostics collapsed", async ({ scopes, summary }) => {
   const request = vi.fn(async () => ({}));
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
   harness.emitHello(gatewayHelloForMethods([], scopes));
@@ -927,52 +941,65 @@ it("reconnects through the connection owner, retiring grants and preserving the 
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
 });
 
-it("loads co-author opt-out and saves consent without reloading the profile", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile };
+it.each([
+  { stored: false, enabled: false, updated: true },
+  { stored: "not-a-boolean", enabled: false, updated: undefined },
+  { stored: undefined, enabled: true, updated: false },
+])(
+  "loads co-author consent $stored and saves changes without reloading",
+  async ({ stored, enabled, updated }) => {
+    const profile: UserProfile = {
+      ...modelAccountProfile,
+      emails: [],
+      githubIdentity: {
+        login: "octocat",
+        profileUrl: "https://github.com/octocat",
+        avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+      },
+    };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "users.self") {
+        return { profile };
+      }
+      if (method === "users.listModelAccounts") {
+        return { profileId: "profile-1", accounts: [], links: [] };
+      }
+      if (method === "users.prefs.get") {
+        expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
+        return {
+          status: "ok",
+          entries: stored === undefined ? {} : { [GIT_COAUTHOR_PREFERENCE_KEY]: stored },
+        };
+      }
+      if (method === "users.prefs.set") {
+        expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: updated } });
+        return { status: "ok" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: profile.id,
+      name: profile.displayName ?? undefined,
+    });
+    const page = mountProfilePage(harness.context);
+    await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+    const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    await waitForFast(() => expect(toggle?.checked).toBe(enabled));
+    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
+      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+    );
+    expect(page.querySelector(".identity-github-form")).toBeNull();
+    if (updated === undefined) {
+      return;
     }
-    if (method === "users.listModelAccounts") {
-      return { profileId: "profile-1", accounts: [], links: [] };
-    }
-    if (method === "users.prefs.get") {
-      expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } };
-    }
-    if (method === "users.prefs.set") {
-      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } });
-      return { status: "ok" };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  await waitForFast(() => expect(toggle?.checked).toBe(false));
-  expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-    ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
-  );
-  expect(page.querySelector(".identity-github-form")).toBeNull();
-  toggle!.checked = true;
-  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
-  );
-  await waitForFast(() => expect(toggle?.checked).toBe(true));
-  expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-    ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
-  );
-});
+    toggle!.checked = updated;
+    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+    );
+    await waitForFast(() => expect(toggle?.checked).toBe(updated));
+    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
+      ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
+    );
+  },
+);

@@ -113,6 +113,20 @@ describe("pairing setup code", () => {
     }));
   }
 
+  function createDefaultRouteRunner(interfaceName: string) {
+    const stdout =
+      process.platform === "win32"
+        ? JSON.stringify({ InterfaceAlias: interfaceName })
+        : process.platform === "linux"
+          ? `default via 10.211.55.1 dev ${interfaceName} proto dhcp metric 100\n`
+          : `   route to: default\ninterface: ${interfaceName}\n`;
+    return vi.fn(async () => ({
+      code: 0,
+      stdout,
+      stderr: "",
+    }));
+  }
+
   function createIpv4NetworkInterfaces(
     address: string,
     name = "en0",
@@ -456,6 +470,34 @@ describe("pairing setup code", () => {
       });
     },
   );
+
+  it("advertises the routed LAN address ahead of a private bridge", async () => {
+    const route = createDefaultRouteRunner("en1");
+    const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
+      if (argv.includes("serve")) {
+        throw new Error("legacy Serve discovery must not run for a LAN bind");
+      }
+      return route();
+    });
+    await expectResolvedSetupSuccessCase({
+      config: gatewayConfig({ bind: "lan", auth: { mode: "password", password: "secret" } }),
+      options: {
+        networkInterfaces: () => ({
+          ...createIpv4NetworkInterfaces("10.37.129.4", "bridge100"),
+          ...createIpv4NetworkInterfaces("10.211.55.3", "en1"),
+        }),
+        runCommandWithTimeout,
+      },
+      expected: {
+        authLabel: "password",
+        url: "ws://10.211.55.3:18789",
+        urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 1,
+    });
+  });
 
   it.each([false, true])(
     "keeps local server pairing on its own endpoint and TLS pin (local=%s)",

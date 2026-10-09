@@ -326,6 +326,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/monitor.plugin-payload.test.ts",
   "extensions/imessage/src/monitor.watch-subscribe-retry.test.ts",
   "extensions/matrix/doctor-contract-api.account-state.test.ts",
+  "extensions/matrix/doctor-contract-api.archive-scan.test.ts",
   "extensions/matrix/doctor-contract-api.test.ts",
   "extensions/matrix/src/approval-config.storage.test.ts",
   "extensions/matrix/src/matrix/client/create-client.storage.test.ts",

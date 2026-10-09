@@ -224,101 +224,116 @@ describe("applyClawUpdatePlan", () => {
     expect(requirementRollback).not.toHaveBeenCalled();
   });
 
-  it("preserves prerequisites when the cron mutation outcome is uncertain", async () => {
-    const root = tempDirs.make("openclaw-claw-update-apply-");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const currentAddPlan: ClawAddPlan = {
-      ...addPlan,
-      claw: install.claw,
-      planIntegrity: install.planIntegrity,
-      agent: {
-        ...addPlan.agent,
-        config: { id: "worker", name: "Worker", workspace: addPlan.agent.workspace },
-      },
-    };
-    const currentRecord = persistClawInstallRecord(currentAddPlan, { env, nowMs: 1 });
-    const updatePlan = plan([
-      {
-        kind: "agent",
-        id: "worker",
-        action: "change",
-        target: 'agents.entries["worker"]',
-        blocked: false,
-        reason: "restore agent",
-      },
-      {
-        kind: "cronJob",
-        id: "heartbeat",
-        action: "add",
-        target: "cronJobs.heartbeat",
-        blocked: false,
-        reason: "target adds cron job",
-      },
-    ]);
-    let config: OpenClawConfig = { agents: { entries: {} } };
-    const workspaceRollback = vi.fn(async () => undefined);
-    const mcpRollback = vi.fn(async () => undefined);
-
-    const add = vi.fn(async () => {
-      throw new Error("cron transport closed");
-    });
-    const job: ClawManifest["cronJobs"][number] = {
-      id: "heartbeat",
-      schedule: { cron: "0 9 * * *", timezone: "UTC" },
-      session: "main",
-      message: "Heartbeat",
-    };
-    await expect(
-      applyClawUpdatePlan(
-        updatePlan,
-        { targetManifest: { ...manifest, cronJobs: [job] }, targetSource: source },
+  it.each(["readiness", "mutation"] as const)(
+    "rolls back known failures and preserves uncertain cron prerequisites: %s",
+    async (failure) => {
+      const root = tempDirs.make("openclaw-claw-update-apply-");
+      const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+      const currentAddPlan: ClawAddPlan = {
+        ...addPlan,
+        claw: install.claw,
+        planIntegrity: install.planIntegrity,
+        agent: {
+          ...addPlan.agent,
+          config: { id: "worker", name: "Worker", workspace: addPlan.agent.workspace },
+        },
+      };
+      const currentRecord = persistClawInstallRecord(currentAddPlan, { env, nowMs: 1 });
+      const updatePlan = plan([
         {
-          config,
-          env,
-          ...consent(updatePlan),
-          rebuildPlan: vi.fn(async () => updatePlan),
-          buildAddPlan: vi.fn(async () => addPlan),
-          applyWorkspace: vi.fn(async () => ({
-            appliedPaths: [],
-            rollback: workspaceRollback,
-          })),
-          applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: mcpRollback })),
-          commitConfig: async (transform) => {
-            config = transform(config);
-          },
-          cronGateway: {
-            add,
-            get: vi.fn(),
-            remove: vi.fn(),
-            waitUntilAgentAvailable: async () => {
-              expect(readClawCronRefs("worker", { env })).toEqual([]);
+          kind: "agent",
+          id: "worker",
+          action: "change",
+          target: 'agents.entries["worker"]',
+          blocked: false,
+          reason: "restore agent",
+        },
+        {
+          kind: "cronJob",
+          id: "heartbeat",
+          action: "add",
+          target: "cronJobs.heartbeat",
+          blocked: false,
+          reason: "target adds cron job",
+        },
+      ]);
+      let config: OpenClawConfig = { agents: { entries: {} } };
+      const workspaceRollback = vi.fn(async () => undefined);
+      const mcpRollback = vi.fn(async () => undefined);
+
+      const add = vi.fn(async () => {
+        throw new Error("cron transport closed");
+      });
+      const job: ClawManifest["cronJobs"][number] = {
+        id: "heartbeat",
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "main",
+        message: "Heartbeat",
+      };
+      await expect(
+        applyClawUpdatePlan(
+          updatePlan,
+          { targetManifest: { ...manifest, cronJobs: [job] }, targetSource: source },
+          {
+            config,
+            env,
+            ...consent(updatePlan),
+            rebuildPlan: vi.fn(async () => updatePlan),
+            buildAddPlan: vi.fn(async () => addPlan),
+            applyWorkspace: vi.fn(async () => ({
+              appliedPaths: [],
+              rollback: workspaceRollback,
+            })),
+            applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: mcpRollback })),
+            commitConfig: async (transform) => {
+              config = transform(config);
+            },
+            cronGateway: {
+              add,
+              get: vi.fn(),
+              remove: vi.fn(),
+              waitUntilAgentAvailable: async () => {
+                expect(readClawCronRefs("worker", { env })).toEqual([]);
+                if (failure === "readiness") {
+                  throw new Error("agent not ready");
+                }
+              },
             },
           },
-        },
-      ),
-    ).rejects.toMatchObject({
-      code: "update_partial",
-    });
+        ),
+      ).rejects.toMatchObject({
+        code: failure === "mutation" ? "update_partial" : "cron_update_failed",
+      });
 
-    expect(readClawCronRefs("worker", { env })).toMatchObject([
-      { status: "pending", manifestId: "heartbeat" },
-    ]);
-    expect(add).toHaveBeenCalledOnce();
+      if (failure === "readiness") {
+        expect(readClawCronRefs("worker", { env })).toEqual([]);
+        expect(add).not.toHaveBeenCalled();
+        expect(config.agents?.entries?.worker).toBeUndefined();
+        expect(readClawInstallRecord("worker", { env })).toEqual(currentRecord);
+        expect(mcpRollback).toHaveBeenCalledOnce();
+        expect(workspaceRollback).toHaveBeenCalledOnce();
+        return;
+      }
+      expect(readClawCronRefs("worker", { env })).toMatchObject([
+        { status: "pending", manifestId: "heartbeat" },
+      ]);
+      expect(add).toHaveBeenCalledOnce();
 
-    const partialRecord = readClawInstallRecord("worker", { env });
-    expect(config.agents?.entries?.worker).toEqual({
-      name: "Worker v2",
-      workspace: "/tmp/workspace-worker",
-    });
-    expect(partialRecord).toMatchObject({
-      claw: { version: "2.0.0", integrity: "sha256:target" },
-      planIntegrity: addPlan.planIntegrity,
-      status: "partial",
-    });
-    expect(partialRecord?.agentConfigDigest).not.toBe(currentRecord.agentConfigDigest);
-    expect(mcpRollback).not.toHaveBeenCalled();
-    expect(workspaceRollback).not.toHaveBeenCalled();
-  });
+      const partialRecord = readClawInstallRecord("worker", { env });
+      expect(config.agents?.entries?.worker).toEqual({
+        name: "Worker v2",
+        workspace: "/tmp/workspace-worker",
+      });
+      expect(partialRecord).toMatchObject({
+        claw: { version: "2.0.0", integrity: "sha256:target" },
+        planIntegrity: addPlan.planIntegrity,
+        status: "partial",
+      });
+      expect(partialRecord?.agentConfigDigest).not.toBe(currentRecord.agentConfigDigest);
+      expect(mcpRollback).not.toHaveBeenCalled();
+      expect(workspaceRollback).not.toHaveBeenCalled();
+    },
+  );
 
   it("validates and applies profile extension package updates", async () => {
     const packageRoot = tempDirs.make("openclaw-claw-extension-update-");
@@ -633,6 +648,40 @@ describe("applyClawUpdatePlan", () => {
       ),
     ).rejects.toMatchObject({ code: "agent_changed" });
     expect(config.agents?.entries?.worker).toBeUndefined();
+  });
+
+  it("rejects setup requirements that changed after consent", async () => {
+    const updatePlan = plan([]);
+    const changed = {
+      ...updatePlan,
+      readiness: {
+        ready: false,
+        requirements: [
+          {
+            kind: "plugin-setup" as const,
+            plugin: "market-data",
+            provider: "market-data",
+            envVars: ["MARKET_DATA_TOKEN"],
+            authMethods: ["token"],
+          },
+        ],
+      },
+    };
+
+    const readInstall = vi.fn(() => install);
+    await expect(
+      applyClawUpdatePlan(
+        updatePlan,
+        { targetManifest: manifest, targetSource: source },
+        {
+          config: {},
+          ...consent(updatePlan),
+          rebuildPlan: async () => changed,
+          readInstall,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "update_changed" });
+    expect(readInstall).not.toHaveBeenCalled();
   });
 
   it("rejects changed capability consent or a manually blocked plan", async () => {
