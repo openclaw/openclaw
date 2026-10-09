@@ -28,6 +28,7 @@ import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
 } from "./agent-runner-fallback-cycle.types.js";
+import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
@@ -69,7 +70,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
+  const runLane =
+    turn.isHeartbeat || turn.followupRun.run.internalEventExecution
+      ? CommandLane.CronNested
+      : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
     toolCallIds: new Set(),
@@ -119,18 +123,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,
-      selection: {
-        cfg: selection.cfg,
-        provider: selection.provider,
-        model: selection.model,
-        requestedRouteResolution: selection.requestedRouteResolution,
-        agentDir: selection.agentDir,
-        fallbacksOverride: selection.fallbacksOverride,
-        userLockedAuthProfileId:
-          turn.followupRun.run.authProfileIdSource === "user"
-            ? turn.followupRun.run.authProfileId
-            : undefined,
-      },
+      selection: buildRunEntrySelection(selection, turn.followupRun.run),
       identity: {
         runId: params.runId,
         agentId: turn.followupRun.run.agentId,

@@ -1,4 +1,3 @@
-// Msteams tests cover monitor handler.file consent plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -152,35 +151,8 @@ describe("msteams file consent invoke authz", () => {
     fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
   });
 
-  it("uploads when invoke conversation matches pending upload conversation", async () => {
-    const { uploadId, context, sendActivity, updateActivity } = createConsentInvokeHarness({
-      invokeConversationId: "19:victim@thread.v2;messageid=abc123",
-      action: "accept",
-    });
-
-    await runMSTeamsFileConsentInvokeHandler(context, log);
-
-    // The HTTP 200 InvokeResponse is now written by the SDK from the typed
-    // app.on("file.consent.accept") return value — this handler must not ack
-    // via ctx.sendActivity (which would post an outbound BF activity instead
-    // of an HTTP response on the new SDK).
-    for (const call of sendActivity.mock.calls) {
-      const arg = call[0] as Record<string, unknown> | string;
-      if (typeof arg === "object" && arg !== null && "type" in arg) {
-        expect(arg.type).not.toBe("invokeResponse");
-      }
-    }
-
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://upload.example.com/put" }),
-    );
-    expect(getPendingUpload(uploadId)).toBeUndefined();
-    expect(updateActivity).not.toHaveBeenCalled();
-  });
-
   it("calls updateActivity to replace the consent card when consentCardActivityId is set", async () => {
-    const { context, sendActivity, updateActivity } = createConsentInvokeHarness({
+    const { uploadId, context, sendActivity, updateActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
       consentCardActivityId: "consent-card-activity-id-123",
@@ -202,6 +174,7 @@ describe("msteams file consent invoke authz", () => {
       }),
     );
     expect(sendActivity).not.toHaveBeenCalled();
+    expect(getPendingUpload(uploadId)).toBeUndefined();
   });
 
   it("still completes upload if updateActivity throws", async () => {

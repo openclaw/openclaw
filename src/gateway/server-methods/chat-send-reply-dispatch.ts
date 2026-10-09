@@ -14,7 +14,6 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import {
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
@@ -81,27 +80,33 @@ import type { GatewayRequestContext } from "./types.js";
 
 /** Build delivery options and capture state for the core-owned webchat dispatcher. */
 export function createChatSendReplyDispatch(params: {
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   accountId: string | undefined;
   requesterContext?: WebchatReplyMediaRequesterContext;
   isAgentRunStarted: () => boolean;
   onCommandBlock?: (text: string) => void;
   isRunCurrent?: () => boolean;
   abortSignal?: AbortSignal;
+  assertWorkCurrent?: () => void;
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
   session: ChatReplySession;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "markBlocked" | "getAdmissionReceipt">;
 }) {
-  const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
+  const { accountId, getRuntimeConfig, isAgentRunStarted, logGateway, session, userTurnRecorder } =
+    params;
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  const { notePreparedSession, readCurrentSession, captureTranscriptStart } =
-    createChatReplySessionReader(session);
+  const {
+    notePreparedSession,
+    readCurrentSession,
+    captureTranscriptStart,
+    assertRetainedSourceCurrent,
+  } = createChatReplySessionReader(session, getRuntimeConfig, params.assertWorkCurrent);
   let assistantTranscriptRewriteState: ReturnType<typeof captureTranscriptStart>;
   let agentRunId = clientRunId;
-  let agentTranscriptLifecycleRevision: string | undefined;
   const captureAgentTranscriptStart = (
     runId = clientRunId,
     prepared?: PreparedReplyTranscriptStart | null,
@@ -109,7 +114,6 @@ export function createChatSendReplyDispatch(params: {
     agentRunId = runId;
     const transcriptStart = captureTranscriptStart(prepared);
     assistantTranscriptRewriteState = transcriptStart;
-    agentTranscriptLifecycleRevision = transcriptStart?.lifecycleRevision;
     return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -135,23 +139,27 @@ export function createChatSendReplyDispatch(params: {
     const admission = userTurnRecorder.getAdmissionReceipt();
     const transcriptStart = assistantTranscriptRewriteState;
     const runId = agentRunId;
-    const lifecycleRevision = agentTranscriptLifecycleRevision;
+    const lifecycleRevision = transcriptStart?.lifecycleRevision;
     const isRunCurrent = () => {
       const currentAdmission = userTurnRecorder.getAdmissionReceipt();
-      if (
-        !admission ||
-        admission.agentId !== session.agentId ||
-        admission.sessionKey !== session.sessionKey ||
-        !isAgentRunStarted() ||
-        params.isRunCurrent?.() !== true ||
-        params.abortSignal?.aborted ||
-        agentRunId !== runId ||
-        assistantTranscriptRewriteState !== transcriptStart ||
-        currentAdmission?.logicalTurnId !== admission.logicalTurnId ||
-        currentAdmission?.entryId !== admission.entryId
-      ) {
+      return Boolean(
+        admission &&
+        admission.agentId === session.agentId &&
+        admission.sessionKey === session.sessionKey &&
+        isAgentRunStarted() &&
+        params.isRunCurrent?.() === true &&
+        !params.abortSignal?.aborted &&
+        agentRunId === runId &&
+        assistantTranscriptRewriteState === transcriptStart &&
+        currentAdmission?.logicalTurnId === admission.logicalTurnId &&
+        currentAdmission?.entryId === admission.entryId,
+      );
+    };
+    const isInspectionCurrent = () => {
+      if (!isRunCurrent()) {
         return false;
       }
+      assertRetainedSourceCurrent?.();
       return true;
     };
     const isCurrent = async () => {
@@ -180,19 +188,21 @@ export function createChatSendReplyDispatch(params: {
       return "missing";
     }
     const scope = admission;
+    // Inspection exposes no result until the final anchor snapshot rechecks the stored session.
+    // Between reads, retain physical/run custody; each history operation keeps its own freshness.
     await waitForSessionTranscriptProjection(scope, params.abortSignal);
-    if (!(await isCurrent())) {
+    if (!(assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
     const watermark = await readSessionTranscriptWatermarkAsync(scope);
-    if (!(await isCurrent())) {
+    if (!(assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
     const initial = await readSessionTranscriptAnchorsAsync(scope, {
       entryIds: [admission.entryId],
       afterSeq: transcriptStart.afterSeq,
     });
-    if (!(await isCurrent())) {
+    if (!(assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
     const input = initial.anchors[0];
@@ -223,8 +233,11 @@ export function createChatSendReplyDispatch(params: {
         currentOnly: true,
         maxBytes: Number.MAX_SAFE_INTEGER,
       });
+      if (!isInspectionCurrent()) {
+        return "missing";
+      }
       const admitted = await readActiveTranscriptEntryAnchorAsync(admission);
-      if (!(await isCurrent()) || !admitted) {
+      if (!(assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent()) || !admitted) {
         return "missing";
       }
       if (!stored.found) {
@@ -248,7 +261,7 @@ export function createChatSendReplyDispatch(params: {
       ) {
         const currentWatermark = await readSessionTranscriptWatermarkAsync(scope);
         const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
-        if (!(await isCurrent())) {
+        if (!(assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
           return "missing";
         }
         // Consume final facts inside the existing writer FIFO; projection repair and
@@ -265,7 +278,7 @@ export function createChatSendReplyDispatch(params: {
           (facts) => {
             assertRoutingCurrent(getRuntimeConfig());
             if (
-              !isRunCurrent() ||
+              !isInspectionCurrent() ||
               facts.session?.sessionId !== admission.sessionId ||
               facts.session.lifecycleRevision !== lifecycleRevision
             ) {
@@ -285,7 +298,7 @@ export function createChatSendReplyDispatch(params: {
         );
         // Another worker lookup here could invalidate the completed anchor decision.
         assertRoutingCurrent(getRuntimeConfig());
-        if (!isRunCurrent()) {
+        if (!isInspectionCurrent()) {
           return "missing";
         }
         if (decision !== undefined) {

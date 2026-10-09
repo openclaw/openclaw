@@ -27,6 +27,7 @@ import { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexProviderRefusal, type CodexProviderRefusal } from "./event-projector-values.js";
 import type { CodexTurn, JsonValue } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
+import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
 
 export type CodexAppServerToolTelemetry = Partial<
@@ -291,7 +292,12 @@ export abstract class CodexTurnProjection {
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
       steeringMessages: options?.steeringMessages,
-      lastAssistant,
+      lastAssistant: lastAssistant
+        ? attachCodexAssistantItemIds(
+            lastAssistant,
+            this.assistantProjection.collectTerminalAssistantItemIds(),
+          )
+        : undefined,
       turnTainted,
     });
     const turnFailed = completedTurn?.status === "failed";

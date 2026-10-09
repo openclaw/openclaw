@@ -52,6 +52,10 @@ function* legacyOffsets(context: PluginDoctorStateMigrationContext) {
   }
 }
 
+async function loadTelegramIngressSpoolMigration() {
+  return (await import("./src/telegram-ingress-spool-migration.js")).telegramIngressSpoolMigration;
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "telegram-update-offsets",
@@ -89,20 +93,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "telegram-json-ingress-spool",
     label: "Telegram JSON ingress spool",
-    async collectBackupResources(params) {
-      const { telegramIngressSpoolMigration } =
-        await import("./src/telegram-ingress-spool-migration.js");
-      return telegramIngressSpoolMigration.collectBackupResources(params);
-    },
-    async detectLegacyState(params) {
-      const { telegramIngressSpoolMigration } =
-        await import("./src/telegram-ingress-spool-migration.js");
-      return telegramIngressSpoolMigration.detectLegacyState(params);
-    },
-    async migrateLegacyState(params) {
-      const { telegramIngressSpoolMigration } =
-        await import("./src/telegram-ingress-spool-migration.js");
-      return telegramIngressSpoolMigration.migrateLegacyState(params);
-    },
+    collectBackupResources: async (params) =>
+      (await loadTelegramIngressSpoolMigration()).collectBackupResources(params),
+    detectLegacyState: async (params) =>
+      (await loadTelegramIngressSpoolMigration()).detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (await loadTelegramIngressSpoolMigration()).migrateLegacyState(params),
   },
 ];

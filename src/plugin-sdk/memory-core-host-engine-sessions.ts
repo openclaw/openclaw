@@ -77,6 +77,40 @@ export function loadMemorySessionMetadata(params: {
   return instance ? projectSessionMetadata(instance) : undefined;
 }
 
+/** Final synchronous admission guard; raw SDK and foreign writers do not publish complete revocation. */
+export function loadMemorySessionMetadataBatch(params: {
+  agentId: string;
+  storePath?: string;
+  sessions: readonly { sessionId: string; sessionKey?: string }[];
+}): MemorySessionTarget[] {
+  const selectors = new Map<string, Set<string | undefined>>();
+  for (const { sessionId, sessionKey } of params.sessions) {
+    const keys = selectors.get(sessionId) ?? new Set<string | undefined>();
+    keys.add(sessionKey);
+    selectors.set(sessionId, keys);
+  }
+  const sessionIds = [...selectors.keys()];
+  const agentId = normalizeAgentId(params.agentId);
+  const metadata: MemorySessionTarget[] = [];
+  const batchSize = 128;
+  for (let start = 0; start < sessionIds.length; start += batchSize) {
+    const instances = listSessionTranscriptInstances(
+      { agentId, storePath: params.storePath, projection: "list" },
+      { includeAllWindows: true, sessionIds: sessionIds.slice(start, start + batchSize) },
+    );
+    for (const instance of instances) {
+      const keys = selectors.get(instance.sessionId);
+      if (
+        instance.agentId === agentId &&
+        (keys?.has(undefined) || keys?.has(instance.sessionKey))
+      ) {
+        metadata.push(projectSessionMetadata(instance));
+      }
+    }
+  }
+  return metadata;
+}
+
 /** @deprecated Use resolveMemorySessionTargetsAsync; removed at the next Plugin SDK major. */
 export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
   return readMemorySessionTargets(params);

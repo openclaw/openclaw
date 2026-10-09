@@ -61,6 +61,7 @@ it.each([
   "worker legacy reset",
   "lifecycle adapter",
   "observer adapter",
+  "transcript publication",
 ] as const)("carries complete accepted ACP facts across a yield: %s", async (change) => {
   const initial: SessionAcpMeta = {
     backend: "accepted-acp-backend",
@@ -85,6 +86,7 @@ it.each([
         change === "worker legacy reset" ||
         change === "lifecycle adapter" ||
         change === "observer adapter";
+      const retainsFacts = workerReceipt || change === "transcript publication";
       if (change === "ACP publication") {
         expected = { ...initial, backend: "current-acp-backend", lastActivityAt: 2 };
         // Only the shared ACP row changes; agent entry and lifecycle stay fixed.
@@ -96,6 +98,14 @@ it.each([
       } else if (change === "lifecycle reset") {
         replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "replacement" });
         expected = null;
+      } else if (change === "transcript publication") {
+        await persistSessionTranscriptTurn(
+          { ...scope, sessionId: entry.sessionId, storePath: suffix.storeTarget.storePath },
+          {
+            messages: [{ message: { role: "assistant", content: "New transcript content" } }],
+            touchSessionEntry: false,
+          },
+        );
       } else if (change === "lifecycle adapter") {
         await persistGatewaySessionLifecycleEvent({
           ...scope,
@@ -157,12 +167,12 @@ it.each([
       try {
         await resume();
         const row = projection.snapshot(query).row;
-        expect(reads).toHaveLength(workerReceipt ? 1 : 2);
+        expect(reads).toHaveLength(retainsFacts ? 1 : 2);
         expect(
           metadataReads.mock.calls.filter(
             ([, command]) => command.type === "sessionRows.sharedFacts",
           ),
-        ).toHaveLength(!workerReceipt || change === "worker legacy reset" ? 1 : 0);
+        ).toHaveLength(!retainsFacts || change === "worker legacy reset" ? 1 : 0);
         expect(row?.runtimeSelectionLocked).toBe(expected !== null);
         if (expected) {
           expect(row?.agentRuntime).toMatchObject({

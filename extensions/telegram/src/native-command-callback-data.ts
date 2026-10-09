@@ -6,11 +6,8 @@ export function buildTelegramNativeCommandCallbackData(commandText: string): str
 }
 
 export function parseTelegramNativeCommandCallbackData(data?: string | null): string | null {
-  if (!data) {
-    return null;
-  }
-  const trimmed = data.trim();
-  if (!trimmed.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
+  const trimmed = data?.trim();
+  if (!trimmed?.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
     return null;
   }
   const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();

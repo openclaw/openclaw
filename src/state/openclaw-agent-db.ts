@@ -647,7 +647,6 @@ export function borrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOption
   return { db, release: retainAgentDatabase(db) };
 }
 
-/** Return whether the exact cached agent database pathname is still open. */
 export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
   return cache.databases.get(path.resolve(pathname))?.db.isOpen === true;
 }

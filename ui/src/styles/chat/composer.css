@@ -2298,7 +2298,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border-radius: var(--radius-sm);
 }
 
-.chat-controls__provider-toggle .chat-controls__inline-select-chevron {
+.chat-controls__provider-toggle .chat-controls__inline-select-chevron,
+.chat-controls__model-more-toggle .chat-controls__inline-select-chevron {
   transform: rotate(0deg);
 }
 
@@ -2439,8 +2440,19 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 /* display: flex above beats the UA [hidden] style; without this, filtered-out
    rows keep rendering even though search marked them hidden. */
-.chat-controls__model-option[hidden] {
+.chat-controls__model-option[hidden],
+.chat-controls__model-more-toggle[hidden] {
   display: none;
+}
+
+/* "All models (N)" sits on the model-name stem, quieter than the rows it reveals. */
+.chat-controls__model-more-toggle {
+  justify-content: flex-start;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
 }
 
 .chat-controls__model-option[data-chat-model-highlighted] {

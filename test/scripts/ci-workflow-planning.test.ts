@@ -11177,9 +11177,13 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each([undefined, "changed-manual-inventory"])(
-    "packs flat manual Node rows without losing timing identity %s",
-    (timingKey) => {
+  it.each([
+    { timingKey: undefined, releaseGate: true },
+    { timingKey: "changed-manual-inventory", releaseGate: true },
+    { timingKey: "release-full-manual-inventory", releaseGate: false },
+  ])(
+    "packs flat manual Node rows without losing timing identity $timingKey (releaseGate=$releaseGate)",
+    ({ timingKey, releaseGate }) => {
       const configs = ["test/vitest/vitest.unit-fast.config.ts"];
       const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
       const includePatterns = Array.from(
@@ -11191,7 +11195,8 @@ describe("ci workflow guards", () => {
         bundledPlanner: true,
         eventName: "workflow_dispatch",
         historicalCompatibility: false,
-        releaseGate: true,
+        releaseGate,
+        runnerProfile: "github",
         changedPaths: ["src/infra/manual-inventory/owner.ts"],
         scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
         nodeTestShards: [
@@ -11219,9 +11224,23 @@ describe("ci workflow guards", () => {
         check_name: "checks-node-manual-inventory",
         env,
         runner: "ubuntu-24.04",
-        shard_name: "manual-inventory",
         timeout_minutes: 20,
       });
+      if (releaseGate) {
+        expect(row.shard_name).toBe("manual-inventory");
+      } else {
+        for (const field of ["shard_name", "git_commits", "requires_dist"]) {
+          expect(row).not.toHaveProperty(field);
+        }
+        for (const field of [
+          "requires_bun",
+          "requires_go",
+          "requires_ripgrep",
+          "requires_sandbox_image",
+        ]) {
+          expect(row[field]).not.toBe(false);
+        }
+      }
       for (const field of ["groups", "configs", "includePatterns"]) {
         expect(row).not.toHaveProperty(field);
       }
@@ -11241,6 +11260,53 @@ describe("ci workflow guards", () => {
           },
         },
       ]);
+    },
+  );
+
+  it.each([
+    { eventName: "pull_request", checkName: "checks-node-fixture", runAttempt: 1, expected: "1" },
+    { eventName: "pull_request", checkName: "checks-node-fixture", runAttempt: 2, expected: "0" },
+    {
+      eventName: "workflow_dispatch",
+      checkName: "checks-node-release-packed-1",
+      runAttempt: 1,
+      expected: "1",
+    },
+    {
+      eventName: "workflow_dispatch",
+      checkName: "checks-node-release-packed-1",
+      runAttempt: 2,
+      expected: "1",
+    },
+    {
+      eventName: "workflow_dispatch",
+      checkName: "checks-node-fixture",
+      runAttempt: 1,
+      expected: "0",
+    },
+    {
+      eventName: "schedule",
+      checkName: "checks-node-release-packed-1",
+      runAttempt: 1,
+      expected: "0",
+    },
+  ] as const)(
+    "retains sibling coverage for $eventName $checkName attempt $runAttempt",
+    (scenario) => {
+      const step = expectDefined(
+        readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+          (candidate: WorkflowStep) => candidate.name === "Run Node test shard",
+        ),
+        "Node shard execution",
+      );
+      expect(
+        evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE, {
+          eventName: scenario.eventName,
+          runAttempt: scenario.runAttempt,
+          repository: "openclaw/openclaw",
+          matrix: { check_name: scenario.checkName },
+        }),
+      ).toBe(scenario.expected);
     },
   );
 

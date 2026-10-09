@@ -395,6 +395,18 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   };
   const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
 
+  const commitChange = (target: HTMLInputElement, allowClear: boolean) => {
+    const state = resolveNumericInputState(target, params);
+    if (state.parsed !== undefined) {
+      state.parsed = normalizeNumericValue(state.parsed, schema);
+      state.message = numericConstraintMessage(state.parsed, schema);
+      target.value = formatConfigValueText(state.parsed);
+    }
+    if (setControlValidity(target, state.message) && (allowClear || state.parsed !== undefined)) {
+      commitScalarValue(target, state.parsed, true);
+    }
+  };
+
   // Touch devices and some browsers hide native number spinners; keep explicit
   // adjust buttons so schema-sized edits stay possible without typing.
   const step = (direction: -1 | 1) => {
@@ -474,36 +486,16 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         );
       }}
       @change=${(event: Event) => {
-        if (params.commitOnBlur) {
-          return;
-        }
-        const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, params);
-        if (state.parsed === undefined) {
-          setControlValidity(target, state.message);
-          return;
-        }
-        const normalized = normalizeNumericValue(state.parsed, schema);
-        target.value = formatConfigValueText(normalized);
-        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
-          commitScalarValue(target, normalized, true);
+        if (!params.commitOnBlur) {
+          commitChange(event.target as HTMLInputElement, false);
         }
       }}
       @blur=${(event: FocusEvent) => {
         // SAFETY: Lit binds this handler directly to the native number input.
         const target = event.target as HTMLInputElement;
-        if (!params.commitOnBlur || target.value === renderedValue) {
-          return;
+        if (params.commitOnBlur && target.value !== renderedValue) {
+          commitChange(target, true);
         }
-        const state = resolveNumericInputState(target, params);
-        if (state.parsed !== undefined) {
-          state.parsed = normalizeNumericValue(state.parsed, schema);
-          state.message = numericConstraintMessage(state.parsed, schema);
-          target.value = formatConfigValueText(state.parsed);
-        }
-        applyNumericInputState(target, state, (candidate) =>
-          commitScalarValue(target, candidate, true),
-        );
       }}
     />
     ${renderStepButton(1)}

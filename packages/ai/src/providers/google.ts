@@ -1,59 +1,22 @@
 import { GoogleGenAI, type HttpOptions } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
-import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import type { Model } from "../types.js";
 import { requireApiKey } from "../utils/required-api-key.js";
-import {
-  buildGoogleGenerateContentParams,
-  buildGoogleSimpleThinking,
-  type GoogleProviderOptions,
-  runGoogleGenerateContentLifecycle,
-} from "./google-shared.js";
-import { buildBaseOptions } from "./simple-options.js";
+import { createGoogleGenerateContentStreams } from "./google-provider-stream.js";
 
-let toolCallCounter = 0;
-
-export const streamGoogle: StreamFunction<"google-generative-ai", GoogleProviderOptions> = (
-  model,
-  context,
-  options,
-) => {
-  const stream = new AssistantMessageEventStream();
-  const output = createAssistantOutput(model, "google-generative-ai");
-
-  void runGoogleGenerateContentLifecycle({
-    stream,
-    model,
-    output,
-    options,
-    createClient: () => {
+export const { stream: streamGoogle, streamSimple: streamSimpleGoogle } =
+  createGoogleGenerateContentStreams(
+    "google-generative-ai",
+    (model, options) => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       return createClient(model, apiKey, resolveOpencodeSessionHeaders(model, options));
     },
-    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
-    nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
-  });
-
-  return stream;
-};
-
-export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleStreamOptions> = (
-  model,
-  context,
-  options,
-) => {
-  const apiKey = requireApiKey(model.provider, options?.apiKey);
-  const base = buildBaseOptions(model, options, apiKey);
-  return streamGoogle(model, context, {
-    ...base,
-    thinking: buildGoogleSimpleThinking(model, options),
-  } satisfies GoogleProviderOptions);
-};
+    (model, options) => requireApiKey(model.provider, options?.apiKey),
+  );
 
 function createClient(
   model: Model<"google-generative-ai">,

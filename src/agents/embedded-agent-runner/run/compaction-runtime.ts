@@ -1,3 +1,4 @@
+import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -466,6 +467,10 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (!accepted.previousSessionId) {
       recordAccepted(accepted);
     }
+    if (params.replyOperation && accepted.admissionTransition) {
+      assertAdmittedActive();
+      await acknowledgeReplySessionTransition(params.replyOperation, accepted.admissionTransition);
+    }
     assertRecoveryActive();
     sessionPromptState.notifyCompactionSessionAdopted(accepted.previousSessionId);
     assertRecoveryActive();
@@ -491,51 +496,43 @@ export function createEmbeddedRunCompactionRuntime(input: {
     });
     assertRecoveryActive();
   };
-  const runOwnsCompactionBeforeHook = async (reason: string) => {
-    assertRecoveryActive();
-    if (contextEngine.info.ownsCompaction !== true || !hookRunner?.hasHooks("before_compaction")) {
-      return;
-    }
-    try {
-      await hookRunner.runBeforeCompaction(
-        { messageCount: -1, sessionFile: sessionPromptState.sessionFile },
-        resolveActiveHookContext(),
-      );
-    } catch (error) {
-      assertRecoveryActive();
-      log.warn(`before_compaction hook failed during ${reason}: ${String(error)}`);
-    }
-    assertRecoveryActive();
-  };
-  const runOwnsCompactionAfterHook = async (
+  const runOwnsCompactionHook = async (
     reason: string,
-    compactResult: CompactionResult,
+    compactResult?: CompactionResult,
     previousSessionId?: string,
   ) => {
     assertRecoveryActive();
+    const hook = compactResult ? "after_compaction" : "before_compaction";
     if (
       contextEngine.info.ownsCompaction !== true ||
-      !compactResult.ok ||
-      !hookRunner?.hasHooks("after_compaction")
+      (compactResult && !compactResult.ok) ||
+      !hookRunner?.hasHooks(hook)
     ) {
       return;
     }
     try {
-      await hookRunner.runAfterCompaction(
-        {
-          messageCount: -1,
-          compactedCount: compactResult.compacted ? -1 : 0,
-          tokenCount: compactResult.result?.tokensAfter,
-          sessionFile:
-            resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-            sessionPromptState.sessionFile,
-          ...(previousSessionId ? { previousSessionId } : {}),
-        },
-        resolveActiveHookContext(),
-      );
+      if (compactResult) {
+        await hookRunner.runAfterCompaction(
+          {
+            messageCount: -1,
+            compactedCount: compactResult.compacted ? -1 : 0,
+            tokenCount: compactResult.result?.tokensAfter,
+            sessionFile:
+              resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+              sessionPromptState.sessionFile,
+            ...(previousSessionId ? { previousSessionId } : {}),
+          },
+          resolveActiveHookContext(),
+        );
+      } else {
+        await hookRunner.runBeforeCompaction(
+          { messageCount: -1, sessionFile: sessionPromptState.sessionFile },
+          resolveActiveHookContext(),
+        );
+      }
     } catch (error) {
       assertRecoveryActive();
-      log.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);
+      log.warn(`${hook} hook failed during ${reason}: ${String(error)}`);
     }
     assertRecoveryActive();
   };
@@ -546,7 +543,11 @@ export function createEmbeddedRunCompactionRuntime(input: {
     prepareRecoverySession,
     adoptCompactionTranscript,
     onCompactionHookMessages,
-    runOwnsCompactionBeforeHook,
-    runOwnsCompactionAfterHook,
+    runOwnsCompactionBeforeHook: (reason: string) => runOwnsCompactionHook(reason),
+    runOwnsCompactionAfterHook: (
+      reason: string,
+      compactResult: CompactionResult,
+      previousSessionId?: string,
+    ) => runOwnsCompactionHook(reason, compactResult, previousSessionId),
   };
 }

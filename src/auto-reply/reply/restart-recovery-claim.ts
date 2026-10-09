@@ -12,14 +12,12 @@ import {
 } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import {
-  buildRestartRecoveryExpectedState,
-  sessionMatchesExpectedTranscriptTurn,
-} from "../../config/sessions/session-transcript-turn-state.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry as SessionEntry,
@@ -175,6 +173,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       ? entry.restartRecoveryDeliveryRunId === recoveryRunId &&
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === recoverySourceRunId
       : entry.restartRecoveryRuns?.some(isExecutionFence) === true);
+  const recordAdmittedClaim = (entry: SessionEntry, exactRunId?: string) => {
+    params.setEntry(entry);
+    recoveryRunId = exactRunId ?? recoveryRunId;
+    recoverySourceRunId = normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId);
+    trackedSessionId = entry.sessionId;
+    tracked = exactRunId !== undefined || isTrackedClaim(entry);
+  };
   const assertReadCurrent = () => {
     if (params.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
@@ -205,24 +210,21 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (!result?.sessionEntry) {
         throw new Error("session changed before durable user-turn admission");
       }
-      return result.sessionEntry as SessionEntry;
+      return result.sessionEntry;
     }
     let didCommit = false;
-    const persisted = await patchSessionEntryTarget(
+    const persisted = await applySessionEntryTargetOperation(
       preparedTarget(),
-      (current) => {
-        if (
-          !sessionMatchesExpectedTranscriptTurn(
-            { entry: current },
-            { expectedSessionId: options.sessionId, expectedSessionState },
-          )
-        ) {
-          return null;
-        }
-        didCommit = true;
-        return options.patch;
+      {
+        kind: "restart-admission",
+        sessionId: options.sessionId,
+        expectedSessionState,
+        patch: options.patch,
       },
       {
+        onCommitted: () => {
+          didCommit = true;
+        },
         workerGuard: {
           source: params.operatorAuthority?.assertCurrent,
           assertCurrent: () => {
@@ -347,11 +349,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
-      params.setEntry(adopted);
-      recoveryRunId = admissionRunId;
-      recoverySourceRunId = normalizeOptionalString(adopted.restartRecoveryDeliverySourceRunId);
-      trackedSessionId = adopted.sessionId;
-      tracked = true;
+      recordAdmittedClaim(adopted, admissionRunId);
       return "admitted";
     }
 
@@ -472,10 +470,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
-    params.setEntry(persisted);
-    recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
-    trackedSessionId = persisted.sessionId;
-    tracked = isTrackedClaim(persisted);
+    recordAdmittedClaim(persisted);
     return "admitted";
   };
 

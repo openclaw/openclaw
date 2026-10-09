@@ -8,8 +8,7 @@ import type {
 } from "../process/command-process-custody.types.js";
 import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
 import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
+  prepareManagedHandoffLeaseDatabaseIdentity,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import type {
@@ -17,7 +16,7 @@ import type {
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
 import {
-  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
 
@@ -28,7 +27,7 @@ export type ManagedCommandProcessAuthority = {
 };
 
 /** Adapt command-process settlement to the existing durable update lease owner. */
-export function createManagedCommandProcessCustody(options: {
+export async function createManagedCommandProcessCustody(options: {
   roots: readonly string[];
   runId: string;
   databasePath?: string;
@@ -36,7 +35,7 @@ export function createManagedCommandProcessCustody(options: {
   parents?: readonly ManagedHandoffParent[];
   anchorOwner?: string;
   assertCurrent?: () => void;
-}): {
+}): Promise<{
   custody: CommandProcessCustody;
   databasePath: string;
   databaseIdentity: ManagedUpdateLeaseDatabaseIdentity;
@@ -45,7 +44,7 @@ export function createManagedCommandProcessCustody(options: {
     helperPid: number,
     identities: readonly CommandProcessIdentity[],
   ) => { retire: () => void; diagnostics: string[] };
-} {
+}> {
   const roots = [...new Set(options.roots)];
   if (!roots.length || roots.some((root) => !root || root.endsWith("/"))) {
     throw new Error("Managed command custody requires installation roots");
@@ -54,20 +53,20 @@ export function createManagedCommandProcessCustody(options: {
     options.databasePath ??
     options.databaseIdentity?.databasePath ??
     resolveManagedUpdateLeaseDatabasePath();
+  options.assertCurrent?.();
   const databaseIdentity =
     options.databaseIdentity ??
-    createManagedHandoffLeaseDatabase(requestedPath)(true, () =>
-      captureManagedUpdateLeaseDatabaseIdentity(requestedPath),
-    );
+    (await prepareManagedHandoffLeaseDatabaseIdentity(requestedPath, options.assertCurrent));
   const databasePath = databaseIdentity.databasePath;
   if (options.databasePath && options.databaseIdentity && options.databasePath !== databasePath) {
     throw new Error("Managed command custody database path changed");
   }
-  const store = createManagedHandoffLeaseStore({
+  const store = await prepareManagedHandoffLeaseStore({
     databasePath,
     existingIdentity: databaseIdentity,
     serviceManagerEnv: resolveServiceManagerEnv(),
   });
+  options.assertCurrent?.();
   const anchorOwner = options.anchorOwner ?? `doctor:${randomUUID()}`;
   const parents = new Map(options.parents?.map((parent) => [parent.key, parent]));
   const anchors = new Map<string, ManagedHandoffLease>();

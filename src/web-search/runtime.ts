@@ -97,7 +97,6 @@ function hasImplicitProviderSelectionSignal(
   return hasEntryCredential(provider, config, agentDir, authStore, resolveAuthProfileStoreSource);
 }
 
-/** Reports whether a web_search provider has usable configured credentials. */
 export function isWebSearchProviderConfigured(params: {
   provider: Pick<
     PluginWebSearchProviderEntry,
@@ -138,7 +137,6 @@ export function listConfiguredWebSearchProviders(params?: {
   });
 }
 
-/** Resolves configured or auto-detected web_search provider id. */
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
@@ -458,6 +456,7 @@ export function hasConfiguredWebSearchProvider(
 /** Prepare agent-scoped source facts without synchronous store discovery in tool assembly. */
 export async function prepareWebSearchConfiguration(
   options: WebSearchConfigurationParams = {},
+  prepareAuthSource: (agentDir: string) => Promise<boolean> = hasAnyAuthProfileStoreSourceAsync,
 ): Promise<boolean> {
   if (options.authStore || options.resolveAuthProfileStoreSource) {
     return hasConfiguredWebSearchProvider(options);
@@ -482,7 +481,7 @@ export async function prepareWebSearchConfiguration(
   if (configured || !needsAuthSource) {
     return configured;
   }
-  const hasSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
+  const hasSource = await prepareAuthSource(agentDir);
   return hasConfiguredWebSearchProvider({
     ...options,
     resolveAuthProfileStoreSource: () => hasSource,

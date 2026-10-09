@@ -31,6 +31,8 @@ import {
   type SessionTranscriptAnchorFacts,
   type SessionTranscriptAnchorSelection,
 } from "./session-transcript-anchor-read.kernel.js";
+import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
+import type { SessionTranscriptWorkerReadSource } from "./session-transcript-read-source.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -130,61 +132,97 @@ export async function readSessionTranscriptAnchorsAsync(
       onRead?.(empty);
       return empty;
     }
-    return withSessionHistoryWorkerDatabase(
-      { ...options, requestedPaths: [storePath] },
-      async (owner) => {
-        const read = async () => {
-          const native = onRead ? getOpenClawAgentDatabaseIfOpen(options) : undefined;
-          if (native?.db.isTransaction) {
-            return { anchors: [] };
-          }
-          const revision = native && readSqliteNativeMutationRevision(native.db);
-          const facts = await owner.readAnchors(
-            {
-              resolved: { ...resolved, sessionKey: resolved.sessionKey ?? captured.sessionKey },
-              selection: request,
-              expectedIdentity: identity,
-            },
-            signal,
-          );
-          assertCurrent();
-          owner.assertCurrent();
-          // Legacy synchronous writers cannot await the FIFO. Its existing native
-          // mutation witness also catches unpublished writes through that handle.
-          if (
-            onRead &&
-            getOpenClawAgentDatabaseIfOpen(options) === native &&
-            (!native ||
-              (!native.db.isTransaction &&
-                revision !== undefined &&
-                readSqliteNativeMutationRevision(native.db) === revision))
-          ) {
-            onRead(facts);
-          }
-          return facts;
-        };
-        try {
-          return onRead
-            ? await runOpenClawAgentWriteAdmission(
-                options,
-                async (_identity, assertSource) => {
-                  assertCurrent();
-                  const facts = await read();
-                  assertSource();
-                  return facts;
-                },
-                true,
-                undefined,
-                signal,
-              )
-            : await read();
-        } finally {
-          assertCurrent();
-          owner.assertCurrent();
-        }
-      },
+    return withSessionHistoryWorkerDatabase({ ...options, requestedPaths: [storePath] }, (owner) =>
+      readSessionTranscriptAnchorsFromSource(
+        {
+          scope: { ...captured, storePath: databasePath },
+          resolved,
+          owner,
+          expectedIdentity: identity,
+          assertCurrent,
+        },
+        request,
+        signal,
+        onRead,
+      ),
     );
   });
+}
+
+/** Reuse a retained physical reader; final consumption keeps its writer FIFO and native witness. */
+export async function readSessionTranscriptAnchorsFromSource(
+  source: SessionTranscriptWorkerReadSource & { scope: AnchorScope },
+  selection: SessionTranscriptAnchorSelection,
+  signal?: AbortSignal,
+  onRead?: (facts: SessionTranscriptAnchorFacts) => void,
+): Promise<SessionTranscriptAnchorFacts> {
+  const { resolved, owner, expectedIdentity } = source;
+  const reader = source.preparedReads ?? owner;
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    source.assertCurrent();
+    owner.assertCurrent();
+  };
+  assertCurrent();
+  if (!expectedIdentity) {
+    const facts = { anchors: [] };
+    onRead?.(facts);
+    return facts;
+  }
+  const options = toDatabaseOptions(resolved);
+  const read = async () => {
+    const native = onRead ? getOpenClawAgentDatabaseIfOpen(options) : undefined;
+    if (native?.db.isTransaction) {
+      return { anchors: [] };
+    }
+    const revision = native && readSqliteNativeMutationRevision(native.db);
+    const facts = await reader.readAnchors(
+      {
+        resolved: { ...resolved, sessionKey: resolved.sessionKey ?? source.scope.sessionKey },
+        selection,
+        expectedIdentity,
+      },
+      signal,
+    );
+    assertCurrent();
+    // Legacy synchronous writers cannot await the FIFO. Its existing native
+    // mutation witness also catches unpublished writes through that handle.
+    if (
+      onRead &&
+      getOpenClawAgentDatabaseIfOpen(options) === native &&
+      (!native ||
+        (!native.db.isTransaction &&
+          revision !== undefined &&
+          readSqliteNativeMutationRevision(native.db) === revision))
+    ) {
+      onRead(facts);
+    }
+    return facts;
+  };
+  try {
+    if (onRead) {
+      const locked = runLockedSessionTranscriptRead(options, read, signal);
+      if (locked) {
+        return await locked;
+      }
+    }
+    return onRead
+      ? await runOpenClawAgentWriteAdmission(
+          options,
+          async (_identity, assertSource) => {
+            assertCurrent();
+            const facts = await read();
+            assertSource();
+            return facts;
+          },
+          true,
+          undefined,
+          signal,
+        )
+      : await read();
+  } finally {
+    assertCurrent();
+  }
 }
 
 export async function readActiveTranscriptEntryAnchorAsync(

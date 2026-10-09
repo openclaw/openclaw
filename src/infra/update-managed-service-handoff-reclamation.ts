@@ -24,6 +24,7 @@ import type {
   ManagedHandoffRepair,
   ManagedHandoffLeaseTransition,
 } from "./update-managed-service-handoff-lease-types.js";
+import { hasOriginalUpdateExecutorCustody } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
@@ -31,8 +32,61 @@ import {
   parseManagedHandoffLeasePayload,
   type ManagedHandoffLeaseAction,
 } from "./update-managed-service-handoff-schema.js";
+import type { createManagedHandoffScopeReader } from "./update-managed-service-handoff-scope.js";
 
 type Rows = ReturnType<typeof createManagedHandoffLeaseRows>;
+
+export function createManagedHandoffReclaimability({
+  bootIdentity,
+  processState,
+  nativeClosed,
+  hasUnsettledChildren,
+  withDatabase,
+  transact,
+}: {
+  bootIdentity: ReturnType<typeof createManagedHandoffBootIdentityReader>;
+  processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
+  nativeClosed: ReturnType<typeof createManagedHandoffScopeReader>["nativeClosed"];
+  hasUnsettledChildren: (lease: ManagedHandoffLease, db?: DatabaseSync) => boolean;
+  withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
+  transact: <T>(db: DatabaseSync, operation: () => T) => T;
+}) {
+  return function reclaimable(lease: ManagedHandoffLease, db?: DatabaseSync) {
+    // No process/boot liveness observation is a join receipt.
+    if (lease.version === 3 || lease.version === 4 || hasOriginalUpdateExecutorCustody(lease)) {
+      return false;
+    }
+    const action = lease.action;
+    if (managedCommandCustody(lease)) {
+      return !managedCommandUnsettled(lease) && !hasUnsettledChildren(lease, db);
+    }
+    if (action.kind === "triage" && action.lifetime.kind === "foreground") {
+      const boot = bootIdentity();
+      if (
+        boot.platform === action.lifetime.boot.platform &&
+        boot.identity !== action.lifetime.boot.identity
+      ) {
+        const repair = (connection: DatabaseSync) =>
+          readManagedHandoffRepairMetadata(connection, lease, (operation) =>
+            transact(connection, operation),
+          );
+        return action.phase === "closed" || !(db ? repair(db) : withDatabase(true, repair));
+      }
+      if (!["reserved", "closed"].includes(action.phase)) {
+        return false;
+      }
+    }
+    if (processState(lease.helper) !== "dead" || processState(lease.executor) !== "dead") {
+      return false;
+    }
+    return (
+      !hasUnsettledChildren(lease, db) &&
+      (action.kind !== "triage" ||
+        action.lifetime.kind !== "native" ||
+        nativeClosed(action.lifetime))
+    );
+  };
+}
 
 /** Retire dead command claims and original mirrors with the replacing admission.
  * A shipped parent cannot settle candidate custody after Doctor dies. Retained

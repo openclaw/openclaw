@@ -233,12 +233,15 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-The complete CLI and embedded-agent-run leaf configs also support Bun. Their
-existing pools, exclusions, and worker limits remain in effect. CLI-process and
-other agent owners keep their separate qualification policies. Dual validation
-runs each complete selected owner on Node before Bun in the same worker slot.
+The complete agents-support, CLI, embedded-agent-run, and gateway-methods leaf
+configs also support Bun. Their existing pools, exclusions, and worker limits
+remain in effect. CLI-process and other agent and Gateway owners keep their
+separate qualification policies. Agents-support and gateway-methods include
+overrides use Bun only for canonical owner patterns or literal files proven to
+belong to that owner; broad or uncertain patterns keep the complete Node
+selection. Dual validation runs each complete selected owner on Node before Bun
+in the same worker slot.
 
-Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
 plugin SDK alias boundaries (`src/plugins/sdk-alias.test.ts`),
@@ -337,14 +340,14 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `fc53bf8c0fccd0dcbcccfcf75e2c306ab8953cae` with WebKit
+The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
 `cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261007-fc53bf8c0f-webkit-cb8d6f202b`.
-WebKit advances from `f1e1ca1156` in the previous `667c4ab22c` pin. This build
-fixes worker heap-cap termination, detached `import.meta.resolve` origins,
-external-URL package validation, and unlimited-child `bun test` deadlines.
-It includes GC cadence improvements and wakeups for idle worker event loops
-and passive collectors. The release publishes the four Darwin/Linux targets;
+`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
+WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
+`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
+byte sizes, and releases inspector snapshot metadata when sessions close.
+It retains the previous worker heap-cap, module-resolution, test-deadline,
+GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module

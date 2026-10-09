@@ -183,11 +183,14 @@ function shouldNotifySubscriberForRequest(
 async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
   const subscriberStore = openNotifySubscriberStore(params.api);
   const seenRequestStore = openNotifySeenRequestStore(params.api);
-  const [subscriberEntries, seenRequestEntries, pairing] = await Promise.all([
+  const [subscriberEntries, seenRequestEntries] = await Promise.all([
     subscriberStore.entries(),
     seenRequestStore.entries(),
-    listDevicePairing(),
   ]);
+  if (subscriberEntries.length === 0 && seenRequestEntries.length === 0) {
+    return;
+  }
+  const pairing = await listDevicePairing();
   const subscribers = subscriberEntries.toSorted((a, b) => a.value.addedAtMs - b.value.addedAtMs);
   const pending: PendingPairingRequest[] = pairing.pending;
   const now = Date.now();

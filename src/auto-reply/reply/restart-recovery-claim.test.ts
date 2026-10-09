@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -18,7 +17,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
-import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
@@ -28,7 +26,10 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import {
+  isAgentRunStaleLifecycleError,
+  isRestartRecoveryClaimChangedError,
+} from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -618,64 +619,75 @@ describe("createReplyRestartRecoveryClaimController", () => {
     ]);
   });
 
-  it("preserves a foreign source claim that changes after acknowledged-input adoption preparation", async () => {
-    const fixture = await createAcknowledgedClaim();
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
-      agentId: fixture.scope.agentId,
-    }).path;
-    const foreign = new DatabaseSync(databasePath);
-    const patch = entryPatch.patchSessionEntryInWorker;
-    const intervened = vi.fn();
-    const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
-      if (
-        params.selection.kind !== "target" ||
-        params.selection.target.canonicalKey !== fixture.scope.sessionKey
-      ) {
-        return patch(params);
-      }
-      return patch({
-        ...params,
-        async prepare(snapshot) {
-          const prepared = await params.prepare(snapshot);
-          assert(prepared);
-          foreign
-            .prepare(
-              `UPDATE session_nodes SET entry_json =
-               json_set(entry_json, '$.restartRecoveryDeliverySourceRunId', 'foreign-source')
-               WHERE session_key = ?`,
-            )
-            .run(fixture.scope.sessionKey);
-          intervened();
-          return prepared;
-        },
-      });
-    });
-    try {
-      await expect(fixture.controller.admitUserTurn(fixture.recorder)).rejects.toBeInstanceOf(
-        SqliteSessionMutationConflictError,
-      );
-      expect(intervened).toHaveBeenCalledOnce();
-      expect(
+  it.each(["metadata", "source-claim"] as const)(
+    "checks foreign %s changes in the admission writer without another preparation",
+    async (change) => {
+      const fixture = await createAcknowledgedClaim();
+      const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
+        agentId: fixture.scope.agentId,
+      }).path;
+      const foreign = new DatabaseSync(databasePath);
+      const patch = entryPatch.patchSessionEntryInWorker;
+      const prepare = vi.fn();
+      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+        if (
+          params.selection.kind !== "target" ||
+          params.selection.target.canonicalKey !== fixture.scope.sessionKey
+        ) {
+          return patch(params);
+        }
         foreign
           .prepare(
-            `SELECT status,
+            `UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?)
+           WHERE session_key = ?`,
+          )
+          .run(
+            change === "metadata" ? "$.model" : "$.restartRecoveryDeliverySourceRunId",
+            change === "metadata" ? "foreign-model" : "foreign-source",
+            fixture.scope.sessionKey,
+          );
+        return patch({
+          ...params,
+          prepare: (...args) => {
+            prepare();
+            return params.prepare(...args);
+          },
+        });
+      });
+      try {
+        const outcome = await fixture.controller
+          .admitUserTurn(fixture.recorder)
+          .catch((error: unknown) => error);
+        if (change === "metadata") {
+          expect(outcome).toBe("admitted");
+          expect(fixture.current().model).toBe("foreign-model");
+        } else {
+          expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        }
+        expect(spy).toHaveBeenCalledOnce();
+        expect(prepare).not.toHaveBeenCalled();
+        expect(
+          foreign
+            .prepare(
+              `SELECT status,
               json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
               json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId,
               json_extract(entry_json, '$.restartRecoveryDeliveryRequestFingerprint') AS fingerprint
              FROM session_nodes WHERE session_key = ?`,
-          )
-          .get(fixture.scope.sessionKey),
-      ).toEqual({
-        status: null,
-        runId: "recovery-run",
-        sourceRunId: "foreign-source",
-        fingerprint: "acknowledged-fingerprint",
-      });
-    } finally {
-      spy.mockRestore();
-      foreign.close();
-    }
-  });
+            )
+            .get(fixture.scope.sessionKey),
+        ).toEqual({
+          status: null,
+          runId: "recovery-run",
+          sourceRunId: change === "metadata" ? fixture.sourceTurnId : "foreign-source",
+          fingerprint: change === "metadata" ? null : "acknowledged-fingerprint",
+        });
+      } finally {
+        spy.mockRestore();
+        foreign.close();
+      }
+    },
+  );
 
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const storePath = path.join(tempDirs.make("openclaw-reply-admission-"), "sessions.json");

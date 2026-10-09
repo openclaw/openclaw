@@ -26,7 +26,7 @@ import {
   hasForwardedSource,
   isInterSessionMessage,
 } from "./chat-turn-boundary.ts";
-import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
   return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
@@ -501,44 +501,27 @@ export function collapseCompletedTurnWork(
     turns.push(currentTurn);
   }
 
-  const { continuationTurnIndexes, precedingContinuationTurnIndexes } = indexTurnContinuations(
-    turns,
-    turnUserMessages,
-  );
-  const terminalReplies = turns.map((turn, turnIndex) =>
-    continuationTurnIndexes.has(turnIndex) ? undefined : turn.findLast(isFinalReplyGroup),
-  );
-  const finalReplyIndexes = turns.map((turn, index) => {
-    const reply = terminalReplies[index];
-    return reply ? turn.lastIndexOf(reply) : -1;
-  });
-  for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
-    const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
-    if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {
-      terminalReplies[turnIndex] = terminalReplies[continuationTurnIndex];
-    }
-  }
-  const liveTurnIndexes = new Set<number>();
-  if (opts.runWorking) {
-    let liveTurnIndex = turns.length - 1;
-    liveTurnIndexes.add(liveTurnIndex);
-    for (;;) {
-      const precedingTurnIndex = precedingContinuationTurnIndexes.get(liveTurnIndex);
-      if (precedingTurnIndex === undefined) {
-        break;
-      }
-      liveTurnIndex = precedingTurnIndex;
-      liveTurnIndexes.add(liveTurnIndex);
-    }
-  }
+  const steerTarget = opts.runWorking
+    ? turnUserMessages(turns.at(-1) ?? [])
+        .map(persistedSteerTargetRunId)
+        .findLast((runId) => runId !== null)
+    : undefined;
+  const targetTurnIndex = steerTarget
+    ? turns.findIndex((turn) =>
+        turnUserMessages(turn).some((message) => userTurnRunId(message) === steerTarget),
+      )
+    : -1;
+  const liveTurnIndex = opts.runWorking
+    ? targetTurnIndex >= 0
+      ? targetTurnIndex
+      : turns.length - 1
+    : -1;
 
   const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
   for (const [turnIndex, turn] of turns.entries()) {
-    // In-flight content (stream runs, streaming groups) marks the turn live.
-    // While the run works, the trailing turn also stays expanded so activity
-    // is watchable until the terminal rebuild collapses it.
+    // A trailing steer names the still-working turn above it; it does not own that work.
     const isLive =
-      liveTurnIndexes.has(turnIndex) ||
+      turnIndex === liveTurnIndex ||
       turn.some(
         (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
       );
@@ -546,17 +529,17 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const finalReplyIndex = finalReplyIndexes[turnIndex] ?? -1;
-    const terminalReply = terminalReplies[turnIndex];
+    const terminalReply = turn.findLast(isFinalReplyGroup);
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
     if (!terminalReply) {
       result.push(...turn);
       continue;
     }
+    const finalReplyIndex = turn.lastIndexOf(terminalReply);
     // Partition the answer's output segment, including work after the last answer.
     // Never move activity across a user, forwarded input, or structural marker.
-    let segmentStart = finalReplyIndex >= 0 ? finalReplyIndex : turn.length - 1;
+    let segmentStart = finalReplyIndex;
     let segmentEnd = segmentStart;
     while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
       segmentStart -= 1;
@@ -609,7 +592,7 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
-        (finalReplyIndex < 0 || index < finalReplyIndex || !groupHasFailedResult(item))
+        (index < finalReplyIndex || !groupHasFailedResult(item))
       ) {
         groups.push(item);
         if (precedingAnswerKey) {
@@ -642,11 +625,9 @@ export function collapseCompletedTurnWork(
       runtimeMs >= 0
         ? runtimeMs
         : null;
-    const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     // A completed rollup may span automatic resumptions. Its reply owns the
-    // display only when reaching it crosses neither another answer’s run nor a steer.
+    // display only when earlier answers belong to that same run.
     const replyRunId =
-      finalReplyIndex >= 0 &&
       !hasForwardedSource(terminalReply) &&
       !groups.some(hasForwardedSource) &&
       answers
@@ -663,9 +644,7 @@ export function collapseCompletedTurnWork(
     result.push({
       kind: "work-group",
       // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${
-        finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
-      }`,
+      key: `work:${terminalReply.key}`,
       groups,
       ...(replyRunId ? { replyRunId } : {}),
       ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),

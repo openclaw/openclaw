@@ -7,6 +7,7 @@ import type {
   LivePreviewDeliveryResult,
   OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -189,13 +190,6 @@ async function flushBufferedFinalAnswer(turn: Turn, currentPayloadVisible = fals
     }
     throw currentPayloadVisible ? toTelegramVisiblePartialDeliveryError(error) : error;
   }
-}
-
-async function stopTelegramReplyLanesAndFlushBufferedFinal(turn: Turn): Promise<void> {
-  await turn.answerLane.stream?.stop();
-  await turn.reasoningLane.stream?.stop();
-  // Both lanes must stop before the buffered flush, keeping the final answer the last visible send.
-  await flushBufferedFinalAnswer(turn);
 }
 
 async function settleTerminalNoVisibleDelivery(
@@ -567,7 +561,10 @@ async function deliverReplyWithNormalization(
   }
 
   if (info.kind === "final") {
-    await stopTelegramReplyLanesAndFlushBufferedFinal(turn);
+    await turn.answerLane.stream?.stop();
+    await turn.reasoningLane.stream?.stop();
+    // Stop both lanes before flushing so the final answer remains the last visible send.
+    await flushBufferedFinalAnswer(turn);
   }
   if (split.suppressedReasoningOnly && !reply.hasMedia) {
     return toTelegramReplyDeliveryResult(turn, false, undefined, { visibleReplySent: false });
@@ -627,6 +624,9 @@ export function handleReplyError(
   info: Parameters<ErrorCallback>[1],
 ): void {
   if (info.kind === "final") {
+    if (err instanceof PlatformMessageNotDispatchedError) {
+      turn.finalDeliveryNotDispatched = true;
+    }
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );

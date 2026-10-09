@@ -157,6 +157,9 @@ export function registerAgentRunContext(
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
+  if (context.sessionEventDelivery === false) {
+    existing.sessionEventDelivery = false;
+  }
   for (const key of [
     "isControlUiVisible",
     "projectSessionActive",

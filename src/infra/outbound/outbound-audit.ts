@@ -53,18 +53,6 @@ function outboundQueueAuditSourceId(
   return lifecycle ? `${terminalId}:${lifecycle}` : terminalId;
 }
 
-function outcomesByPayload(
-  outcomes: readonly OutboundPayloadDeliveryOutcome[],
-): Map<number, OutboundPayloadDeliveryOutcome[]> {
-  const indexed = new Map<number, OutboundPayloadDeliveryOutcome[]>();
-  for (const outcome of outcomes) {
-    const history = indexed.get(outcome.index) ?? [];
-    history.push(outcome);
-    indexed.set(outcome.index, history);
-  }
-  return indexed;
-}
-
 function projectRecordedOutboundAuditTerminal(
   history: readonly OutboundPayloadDeliveryOutcome[],
 ): OutboundAuditTerminal | undefined {
@@ -106,7 +94,12 @@ function projectOutboundAuditTerminals(
   params: OutboundAuditBatch,
   fallback: (history: readonly OutboundPayloadDeliveryOutcome[]) => OutboundAuditTerminal,
 ): IndexedOutboundAuditTerminal[] {
-  const indexed = outcomesByPayload(params.payloadOutcomes);
+  const indexed = new Map<number, OutboundPayloadDeliveryOutcome[]>();
+  for (const outcome of params.payloadOutcomes) {
+    const history = indexed.get(outcome.index) ?? [];
+    history.push(outcome);
+    indexed.set(outcome.index, history);
+  }
   return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
     return {
@@ -134,7 +127,8 @@ export function failedOutboundAuditTerminals(
 ): IndexedOutboundAuditTerminal[] {
   return projectOutboundAuditTerminals(params, (history) => {
     const latest = history.at(-1);
-    const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
+    const failed = latest?.status === "failed" ? latest : undefined;
+    const failedResults = failed?.results ?? [];
     const payloadResults =
       failedResults.length > 0
         ? failedResults
@@ -143,13 +137,10 @@ export function failedOutboundAuditTerminals(
     const results = payloadResults.length > 0 ? payloadResults : fallbackResults;
     return {
       outcome: "failed",
-      failureStage: latest?.status === "failed" ? latest.stage : params.failureStage,
+      failureStage: failed ? failed.stage : params.failureStage,
       results,
-      sentBeforeError:
-        results.length > 0 || (latest?.status === "failed" && latest.sentBeforeError),
-      ...(latest?.status === "failed" && latest.deliveryKind
-        ? { deliveryKind: latest.deliveryKind }
-        : {}),
+      sentBeforeError: results.length > 0 || (failed !== undefined && failed.sentBeforeError),
+      ...(failed?.deliveryKind ? { deliveryKind: failed.deliveryKind } : {}),
     };
   });
 }
@@ -194,7 +185,12 @@ function resolveOutboundTargetFacts(context: OutboundAuditDeliveryContext): {
       : [context.channel];
   const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
   const kindPrefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
-  const allowedRouteKinds = kindPrefix ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix] : undefined;
+  // kindPrefix is destination-controlled. An inherited key such as "constructor"
+  // must not read through to Object.prototype (Function), or .includes throws.
+  const allowedRouteKinds =
+    kindPrefix && Object.hasOwn(TARGET_KIND_TO_ROUTE_KINDS, kindPrefix)
+      ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix]
+      : undefined;
   const conversationId = stripOutboundTargetKindPrefix(
     withoutProvider,
     Object.keys(TARGET_KIND_TO_ROUTE_KINDS),

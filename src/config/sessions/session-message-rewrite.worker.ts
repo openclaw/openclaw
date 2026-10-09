@@ -71,6 +71,10 @@ import {
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  compactManualTranscript,
+  type ManualCompactInput,
+} from "./session-manual-compact.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
@@ -122,6 +126,10 @@ export type SessionMessageRewriteOperations = {
   "session.transcript.lock.commit": {
     input: LockedTranscriptMutation;
     output: ReturnType<typeof commitLockedTranscript>;
+  };
+  "session.transcript.manualCompact": {
+    input: ManualCompactInput;
+    output: ReturnType<typeof compactManualTranscript>;
   };
   "session.transcript.event.append": {
     input: { scope: ResolvedTranscriptScope; eventJson: string };
@@ -205,6 +213,8 @@ export function bindSqliteWorkerBackend(
           return readTranscriptMirrorFacts(database, command.input.scope, command.input);
         case "session.transcript.lock.commit":
           return commitLockedTranscript(command.input, context);
+        case "session.transcript.manualCompact":
+          return compactManualTranscript(command.input, context);
         case "session.transcript.event.append":
           return commitSessionTranscriptEvent(command.input, context);
         case "session.transcript.correct":
@@ -390,7 +400,7 @@ function commitLockedTranscript(
           },
           preparedMessage,
           projection,
-        );
+        )?.result;
         if (result && input.sequenced) {
           rememberCommittedTranscriptMessageSequencesInTransaction(
             database,
