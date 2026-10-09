@@ -201,7 +201,11 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
       : undefined;
   const hints = hint ? [hint] : [];
   if (!nextAction) {
-    hints.push("Run openclaw triage to diagnose and repair the failed update.");
+    hints.push(
+      run.reason === "repair-failed"
+        ? "Run openclaw triage to diagnose this repair failure."
+        : "Run openclaw triage to diagnose and repair the failed update.",
+    );
   }
   return hints;
 }
@@ -260,7 +264,7 @@ export function renderUpdateRunReport(
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
           : runtimeCheckFailed
             ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-            : `⚠️ OpenClaw update failed: ${reason}.`;
+            : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -268,7 +272,9 @@ export function renderUpdateRunReport(
           ? `ℹ️ OpenClaw${after ? ` ${after}` : ""} installed; Gateway still starting; readiness unverified; recovery backups retained.`
           : run.reason === "gateway-readiness-unverified"
             ? `ℹ️ OpenClaw${after ? ` ${after}` : ""} installed; Gateway readiness unverified; recovery backups retained.`
-            : `ℹ️ OpenClaw update skipped: ${reason}.`;
+            : run.reason === "doctor-maintenance-pending"
+              ? "ℹ️ OpenClaw repair pending: Doctor maintenance remains unfinished."
+              : `ℹ️ OpenClaw update skipped: ${reason}.`;
       break;
     case "rolled-back":
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
@@ -461,7 +467,7 @@ export function renderUpdateRunReport(
             ),
           ];
   const next = hints.at(-1);
-  if (runtimeCheckFailed) {
+  if (runtimeCheckFailed || run.reason === "doctor-maintenance-pending") {
     // Keep the owner's selected action ahead of the diagnostic dump, including
     // historical-advice qualifications. Neither this layout nor truncation selects recovery.
     const details = [
