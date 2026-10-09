@@ -62,9 +62,7 @@ function buildSessionHookContext(params: SessionHookContext): SessionHookContext
 }
 
 export function buildSessionStartHookPayload(
-  params: SessionHookContext & {
-    resumedFrom?: string;
-  },
+  params: SessionHookContext & PluginHookSessionStartEvent,
 ): {
   event: PluginHookSessionStartEvent;
   context: SessionHookContext;
@@ -92,16 +90,10 @@ export function emitReplySessionStartHook(
 }
 
 export function buildSessionEndHookPayload(
-  params: SessionHookContext & {
-    messageCount?: number;
-    durationMs?: number;
-    reason?: PluginHookSessionEndReason;
-    sessionFile?: string;
-    transcriptArchived?: boolean;
-    nextSessionId?: string;
-    nextSessionKey?: string;
-    endedTranscript?: SessionEndTranscriptSource;
-  },
+  params: SessionHookContext &
+    Partial<PluginHookSessionEndEvent> & {
+      endedTranscript?: SessionEndTranscriptSource;
+    },
 ): {
   event: PluginHookSessionEndEvent;
   context: SessionHookContext;

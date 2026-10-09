@@ -4,7 +4,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import {
+  prepareModelRunCapabilities,
+  type PreparedModelThinkingCapability,
+} from "../../agents/model-catalog-lookup.js";
+import {
+  needsThinkHydration,
+  normalizeThinkingCatalogProviders,
+  resolveCandidateThinkingLevel,
+} from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -30,10 +38,15 @@ import {
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import {
+  buildReplyRunStateParams,
+  resolveModelFallbackOptions,
+  resolveRunModelHasVision,
+} from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
@@ -402,13 +415,81 @@ export async function buildEmbeddedRunExecutionParams(params: {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
   const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
-  const runBaseParams = await buildEmbeddedRunBaseParams({
-    ...params,
-    authProfile,
-  });
+  // Retain the base-input snapshot across thinking and vision discovery.
+  params = { ...params };
+  const config = params.run.config;
+  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
+    resolveModelFallbackOptions(params.run);
+  let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
+  if (params.agentRuntime) {
+    let thinkingCatalog = params.run.thinkingCatalog;
+    if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
+      const { loadProviderScopedThinkingCatalog } =
+        await import("../../agents/model-catalog.runtime.js");
+      thinkingCatalog = normalizeThinkingCatalogProviders(
+        await loadProviderScopedThinkingCatalog({
+          config,
+          provider: params.provider,
+          model: params.model,
+          agentRuntime: params.agentRuntime,
+          agentId: params.run.agentId,
+          agentDir: params.run.agentDir,
+          workspaceDir: params.run.workspaceDir,
+        }),
+      );
+    }
+    modelThinkingCapability = prepareModelRunCapabilities(
+      [thinkingCatalog, []],
+      [params.provider, params.model, params.agentRuntime],
+    ).modelThinkingCapability;
+  }
+  const enforceFinalTag =
+    !params.run.skipProviderRuntimeHints &&
+    (params.run.enforceFinalTag ||
+      isReasoningTagProvider(params.provider, {
+        config,
+        workspaceDir: params.run.workspaceDir,
+        modelId: params.model,
+      }));
+  // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
-    embeddedContext,
-    senderContext,
-    runBaseParams,
+    ...embeddedContext,
+    ...senderContext,
+    ...buildReplyRunStateParams(params.run),
+    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
+    permissionMode: params.run.permissionMode,
+    sessionRoot: params.run.sessionRoot,
+    agentDir: params.run.agentDir,
+    config,
+    trustedInternalHandoff: params.run.trustedInternalHandoff,
+    scheduledToolPolicy: params.run.scheduledToolPolicy,
+    runtimePluginToolGrant: params.run.runtimePluginToolGrant,
+    enforceFinalTag,
+    silentExpected: params.run.silentExpected,
+    silentReplyPromptMode: params.run.silentReplyPromptMode,
+    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    toolBindings: params.run.toolBindings,
+    skillLibraryAuthoring: params.run.skillLibraryAuthoring,
+    provider: params.provider,
+    model: params.model,
+    modelHasVision: await resolveRunModelHasVision(params),
+    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
+    requestedRouteResolution: "resolved" as const,
+    modelSelectionLocked: params.run.modelSelectionLocked,
+    modelFallbackAvailability,
+    modelFallbacksOverride,
+    ...authProfile,
+    thinkLevel: params.run.thinkLevel,
+    fastMode: params.run.fastMode,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
+    verboseLevel: params.run.verboseLevel,
+    reasoningLevel: params.run.reasoningLevel,
+    execOverrides: params.run.execOverrides,
+    bashElevated: params.run.bashElevated,
+    timeoutMs: params.run.timeoutMs,
+    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
+    runId: params.runId,
+    promptCacheKey: params.promptCacheKey,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
 }

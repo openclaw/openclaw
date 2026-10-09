@@ -451,14 +451,14 @@ export async function applyInlineDirectiveOverrides(params: {
       });
     }
     typing.cleanup();
-    if (statusReply?.text && directiveReply?.text) {
-      return {
-        kind: "reply",
-        reply: { text: `${directiveReply.text}\n${statusReply.text}` },
-        preRunRejection,
-      };
-    }
-    return { kind: "reply", reply: statusReply ?? directiveReply, preRunRejection };
+    return {
+      kind: "reply",
+      reply:
+        statusReply?.text && directiveReply?.text
+          ? { text: `${directiveReply.text}\n${statusReply.text}` }
+          : (statusReply ?? directiveReply),
+      preRunRejection,
+    };
   }
 
   if (hasAnyDirective && command.isAuthorizedSender) {

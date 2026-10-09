@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
@@ -7,6 +8,7 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -51,13 +53,13 @@ import {
   resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
-import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import type { ThinkLevel } from "./directives.js";
 import {
   findSelectedCatalogEntry,
   prepareModelSelectionRuntime,
 } from "./model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const LEVEL_QUERY_OPTIONS = {
   Verbose: ["off, on, full", "on, full, off"],
@@ -129,8 +131,15 @@ export async function handleDirectiveOnly(
       "hasTraceDirective",
     );
   }
-  const { activeAgentId, agentDir, runtimePolicySessionKey, runtimeIsSandboxed } =
-    resolveDirectiveRuntimeContext(params);
+  const activeAgentId = params.agentId;
+  const agentDir = resolveAgentDir(params.cfg, activeAgentId);
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey(params);
+  const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    agentId: activeAgentId,
+    sessionKey,
+    classificationSessionKey: runtimePolicySessionKey,
+  }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   let thinkingCatalog = params.thinkingCatalog?.length
     ? params.thinkingCatalog

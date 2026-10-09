@@ -5,23 +5,12 @@ import {
 } from "../../agents/agent-scope.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import {
-  findModelInCatalog,
-  modelSupportsInput,
-  prepareModelRunCapabilities,
-  type PreparedModelThinkingCapability,
-} from "../../agents/model-catalog-lookup.js";
+import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
-import {
-  needsThinkHydration,
-  normalizeThinkingCatalogProviders,
-} from "../../agents/thinking-runtime.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
@@ -105,91 +94,6 @@ export async function resolveRunModelHasVision(params: {
     requiredInputRoute: route,
   });
   return modelSupportsInput(findModelInCatalog(catalog, provider, model), "image");
-}
-
-export async function buildEmbeddedRunBaseParams(params: {
-  run: FollowupRun["run"];
-  provider: string;
-  model: string;
-  agentRuntime?: string;
-  runId: string;
-  promptCacheKey?: string;
-  authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
-  allowTransientCooldownProbe?: boolean;
-}) {
-  const config = params.run.config;
-  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
-    resolveModelFallbackOptions(params.run);
-  let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
-  if (params.agentRuntime) {
-    let thinkingCatalog = params.run.thinkingCatalog;
-    if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
-      const { loadProviderScopedThinkingCatalog } =
-        await import("../../agents/model-catalog.runtime.js");
-      thinkingCatalog = normalizeThinkingCatalogProviders(
-        await loadProviderScopedThinkingCatalog({
-          config,
-          provider: params.provider,
-          model: params.model,
-          agentRuntime: params.agentRuntime,
-          agentId: params.run.agentId,
-          agentDir: params.run.agentDir,
-          workspaceDir: params.run.workspaceDir,
-        }),
-      );
-    }
-    modelThinkingCapability = prepareModelRunCapabilities(
-      [thinkingCatalog, []],
-      [params.provider, params.model, params.agentRuntime],
-    ).modelThinkingCapability;
-  }
-  const enforceFinalTag =
-    !params.run.skipProviderRuntimeHints &&
-    (params.run.enforceFinalTag ||
-      isReasoningTagProvider(params.provider, {
-        config,
-        workspaceDir: params.run.workspaceDir,
-        modelId: params.model,
-      }));
-  // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  return {
-    ...buildReplyRunStateParams(params.run),
-    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
-    permissionMode: params.run.permissionMode,
-    sessionRoot: params.run.sessionRoot,
-    agentDir: params.run.agentDir,
-    config,
-    trustedInternalHandoff: params.run.trustedInternalHandoff,
-    scheduledToolPolicy: params.run.scheduledToolPolicy,
-    runtimePluginToolGrant: params.run.runtimePluginToolGrant,
-    enforceFinalTag,
-    silentExpected: params.run.silentExpected,
-    silentReplyPromptMode: params.run.silentReplyPromptMode,
-    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    toolBindings: params.run.toolBindings,
-    skillLibraryAuthoring: params.run.skillLibraryAuthoring,
-    provider: params.provider,
-    model: params.model,
-    modelHasVision: await resolveRunModelHasVision(params),
-    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
-    requestedRouteResolution: "resolved" as const,
-    modelSelectionLocked: params.run.modelSelectionLocked,
-    modelFallbackAvailability,
-    modelFallbacksOverride,
-    ...params.authProfile,
-    thinkLevel: params.run.thinkLevel,
-    fastMode: params.run.fastMode,
-    fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
-    verboseLevel: params.run.verboseLevel,
-    reasoningLevel: params.run.reasoningLevel,
-    execOverrides: params.run.execOverrides,
-    bashElevated: params.run.bashElevated,
-    timeoutMs: params.run.timeoutMs,
-    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
-    runId: params.runId,
-    promptCacheKey: params.promptCacheKey,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-  };
 }
 
 /** Project prepared turn facts shared by the CLI and embedded runtime adapters. */

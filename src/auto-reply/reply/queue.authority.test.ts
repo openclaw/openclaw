@@ -18,7 +18,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
@@ -96,12 +96,13 @@ describe("followup queue authority", () => {
       expect(q.calls).toHaveLength(2);
       const observed = [];
       for (const queued of q.calls) {
-        const params = await buildEmbeddedRunBaseParams({
+        const params = await buildEmbeddedRunExecutionParams({
           run: queued.run,
           provider: "openai",
           model: "gpt-test",
           runId: `queued-${observed.length}`,
-          authProfile: {},
+          sessionCtx: {},
+          hasRepliedRef: undefined,
         });
         const policy = resolveRequesterToolPolicies({
           config: params.config,
