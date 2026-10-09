@@ -2744,7 +2744,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/sessions-search.test.ts",
   "src/gateway/server-methods/sessions-sharing-profile-display.test.ts",
   "src/gateway/server-methods/sessions-sharing.identities.test.ts",
-  "src/gateway/server-methods/sessions-sharing.profile-enumeration.test.ts",
   "src/gateway/server-methods/sessions-sharing.test.ts",
   "src/gateway/server-methods/sessions-suggestions.visibility.test.ts",
   "src/gateway/server-methods/sessions-title.test.ts",
