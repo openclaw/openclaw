@@ -258,7 +258,8 @@ describe("native service command inspection", () => {
                 code: "ERR_OUT_OF_RANGE",
               });
             }
-            expect(args).toContain("-EncodedCommand");
+            expect(args).toContain("-Command");
+            expect(args).not.toContain("-EncodedCommand");
             schedulerAllowances.push({ timeout, remaining: 1_000 - now });
             now += 100.25;
             return condition === "absent"
