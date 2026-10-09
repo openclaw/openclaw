@@ -6,6 +6,7 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
+  createTelegramSpooledReplayParticipant,
   runWithTelegramUpdateProcessingFrame,
   runWithTelegramSpooledReplayUpdate,
   type TelegramMessageProcessingResult,
@@ -254,6 +255,84 @@ describe("telegram bot message processor", () => {
     expect(onDispatchStart).not.toHaveBeenCalled();
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { owner: "explicit", skipped: false, cooperative: true },
+    { owner: "participant", skipped: true, cooperative: true },
+    { owner: "drain", skipped: false, cooperative: true },
+    { owner: "frame participant", skipped: true, cooperative: false },
+  ] as const)(
+    "cancels held message context through its $owner owner before dispatch",
+    async ({ owner, skipped, cooperative }) => {
+      const contextStarted = createDeferred<AbortSignal | undefined>();
+      const releaseContext = createDeferred<void>();
+      const controller = new AbortController();
+      const cancellationReason = skipped ? "skipped" : new Error("ingress-superseded");
+      const onDispatchStart = vi.fn();
+      const onAdopted = vi.fn();
+      const sendTyping = vi.fn().mockResolvedValue(undefined);
+      buildTelegramMessageContext.mockImplementationOnce(
+        async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          contextStarted.resolve(abortSignal);
+          await releaseContext.promise;
+          if (cooperative) {
+            abortSignal?.throwIfAborted();
+          }
+          return createMessageContext({ sendTyping });
+        },
+      );
+      dispatchTelegramMessage.mockResolvedValue({ kind: "completed" });
+      const processMessage = createTelegramMessageProcessor(baseDeps);
+      const update = { update_id: 123457 };
+      let ownerSignal = controller.signal;
+      let cancel = () => controller.abort(cancellationReason);
+      const processing = runWithTelegramSpooledReplayUpdate(
+        update,
+        async () => {
+          const turnContext: Partial<TelegramMessageProcessorTurnContext> = { onDispatchStart };
+          if (owner === "explicit") {
+            turnContext.spooledReplayAbortSignal = controller.signal;
+          } else if (owner === "participant" || owner === "frame participant") {
+            const participant =
+              owner === "participant"
+                ? createTelegramSpooledReplayParticipant("held-context")
+                : expectDefined(
+                    createTelegramSpooledReplayDeferredParticipant("held-context"),
+                    "frame participant",
+                  );
+            ownerSignal = participant.abortSignal;
+            cancel = () => participant.settle({ kind: "skipped" });
+            if (owner === "participant") {
+              turnContext.spooledReplayParticipant = participant;
+            }
+          }
+          return await processSampleMessage(processMessage, turnContext, { update });
+        },
+        owner === "drain"
+          ? {
+              abortSignal: controller.signal,
+              onAdopted,
+              onDeferred: vi.fn(),
+              onAbandoned: vi.fn(),
+            }
+          : undefined,
+      );
+      const contextSignal = await contextStarted.promise;
+      cancel();
+      releaseContext.resolve();
+      const replay = await processing;
+
+      expect(contextSignal).toBe(ownerSignal);
+      expect(contextSignal?.aborted).toBe(true);
+      expect(replay.value).toEqual(
+        skipped ? { kind: "skipped" } : { kind: "failed-retryable", error: cancellationReason },
+      );
+      expect(sendTyping).not.toHaveBeenCalled();
+      expect(onDispatchStart).not.toHaveBeenCalled();
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("logs media summaries without message content through the message processor", async () => {
     buildTelegramMessageContext.mockResolvedValue(
