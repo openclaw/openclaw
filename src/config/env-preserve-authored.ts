@@ -6,20 +6,42 @@ import {
   type EnvTemplateToken,
 } from "./env-substitution.js";
 
-function containsAuthoredEnvTemplate(value: unknown, matches: (value: string) => boolean): boolean {
-  if (typeof value === "string") {
-    return matches(value);
+// Walks the value tree on an explicit work stack so a schema-valid deep
+// document cannot overflow the call stack while callers probe for templates.
+function containsDeepAuthoredEnvTemplate(
+  value: unknown,
+  isTemplate: (text: string) => boolean,
+): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (isTemplate(current)) {
+        return true;
+      }
+      continue;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        pending.push(item);
+      }
+      continue;
+    }
+    if (isPlainObject(current)) {
+      for (const item of Object.values(current)) {
+        pending.push(item);
+      }
+    }
   }
-  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : [];
-  return children.some((item) => containsAuthoredEnvTemplate(item, matches));
+  return false;
 }
 
 export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
-  return containsAuthoredEnvTemplate(value, containsEnvVarReference);
+  return containsDeepAuthoredEnvTemplate(value, containsEnvVarReference);
 }
 
 export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
-  return containsAuthoredEnvTemplate(value, (text) =>
+  return containsDeepAuthoredEnvTemplate(value, (text) =>
     scanEnvTemplateTokens(text).some((ref) => ref.kind === "escaped"),
   );
 }
