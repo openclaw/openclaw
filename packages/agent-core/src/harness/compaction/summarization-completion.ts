@@ -124,7 +124,8 @@ export async function runSummarizationCompletion(
   );
   const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
   // A history that fits is sent unchanged; only a sample needs the minimum room.
-  if (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS) {
+  // A negative budget means the instructions alone overflow the window.
+  if (conversationBudget < 0 || (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS)) {
     return err(
       new SummaryOutputBudgetError(
         `${params.errorLabel} needs more room than ${model.provider}/${model.id} has: its ${model.contextWindow}-token window cannot hold the conversation next to the instructions, previous summary and ${completionTokens}-token output. Set agents.defaults.compaction.model to a model with a larger context window.`,

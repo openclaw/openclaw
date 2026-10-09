@@ -227,10 +227,16 @@ describe("summary request input budget", () => {
     expect(prompt).toContain("entries omitted ...]");
   });
 
-  it("fails without a model call when the window cannot hold the request", async () => {
+  it.each([
+    { name: "a long history", messages: createLongSession(5) },
+    {
+      name: "a short history",
+      messages: [{ role: "user", content: "hello", timestamp: 1 }] satisfies AgentMessage[],
+    },
+  ])("fails without a model call when the window cannot hold $name", async ({ messages }) => {
     const { streamFn, prompts } = createCapturingStream();
     const result = await generateSummary(
-      createLongSession(5),
+      messages,
       createModel(4_096, 4_096),
       3_000,
       undefined,
@@ -247,6 +253,16 @@ describe("summary request input budget", () => {
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(SummaryOutputBudgetError);
       expect(result.error.message).toContain("agents.defaults.compaction.model");
+    }
+  });
+
+  it("never exceeds a budget too small for one gap marker", () => {
+    const messages: AgentMessage[] = [{ role: "user", content: "hello world", timestamp: 1 }];
+
+    for (const budget of [0, 10, 18]) {
+      const bounded = serializeConversationWithinBudget(convertToLlm(messages), budget);
+      expect(bounded.text).not.toContain("hello");
+      expect(bounded.omittedEntries).toBe(1);
     }
   });
 

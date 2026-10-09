@@ -507,6 +507,12 @@ export function serializeConversationWithinBudget(
       }
       text = trimmed;
       chars = estimateStringChars(trimmed) + separatorChars;
+    }
+    // Shares only order the passes; the whole input never exceeds maxChars.
+    if (usedChars + chars + markerCost > maxChars) {
+      return false;
+    }
+    if (text !== entry) {
       trimmedEntries += 1;
     }
     selected.set(index, text);
