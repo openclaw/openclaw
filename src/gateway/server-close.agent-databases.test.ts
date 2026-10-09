@@ -36,7 +36,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -59,6 +62,7 @@ import {
   withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
+import { useIncognitoActorProbe } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
@@ -70,6 +74,8 @@ import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
+const probe = useIncognitoActorProbe();
+
 it("settles an accepted incognito outbox write after the close prelude and before actor retirement", async ({
   signal,
 }) => {
@@ -79,7 +85,7 @@ it("settles an accepted incognito outbox write after the close prelude and befor
   const accepted = createDeferredCore();
   const joining = createDeferredCore();
   let actor: IncognitoAgentDatabaseExecution | undefined;
-  let holding: Promise<void> | undefined;
+  let holding: Promise<unknown> | undefined;
   let writing: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let persisted: unknown;
@@ -119,7 +125,7 @@ it("settles an accepted incognito outbox write after the close prelude and befor
       path: actor.path,
       incognito: { actor, authority, ...target },
     });
-    holding = actor.run(authority, async () => {
+    holding = probe.read(actor, authority, async () => {
       entered.resolve();
       await release.promise;
     });
@@ -697,6 +703,7 @@ it.skipIf(process.platform !== "linux")(
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       vi.spyOn(performance, "now").mockImplementation(() => Date.now());
       stop("SIGTERM");
+      await withinTest(waitForAbortSignal(getGatewayRestartDrainSignal()), signal);
       await vi.advanceTimersByTimeAsync(29_999);
       expect(operation.abortSignal.aborted).toBe(false);
       expect(close).not.toHaveBeenCalled();

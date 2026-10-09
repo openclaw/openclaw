@@ -55,7 +55,7 @@ function hasUniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }
 
-export function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): boolean {
+function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): boolean {
   if (!isStringWithin(block.title, SLACK_CHART_TITLE_MAX)) {
     return false;
   }
@@ -138,13 +138,10 @@ function readSlackChartDatum(value: unknown): SlackChartDatum | undefined {
     : undefined;
 }
 
-function parseSlackDataVisualizationBlock(
-  value: unknown,
-): MessagePresentationChartBlock | undefined {
-  const block = asOptionalRecord(value);
-  const title = block?.title;
-  const chart = asOptionalRecord(block?.chart);
-  if (block?.type !== "data_visualization" || typeof title !== "string" || !chart) {
+function parseSlackDataVisualizationBlock(block: Record<string, unknown>) {
+  const title = block.title;
+  const chart = asOptionalRecord(block.chart);
+  if (typeof title !== "string" || !chart) {
     return undefined;
   }
   if (chart.type === "pie") {
@@ -155,11 +152,7 @@ function parseSlackDataVisualizationBlock(
     if (segments.some((segment) => !segment)) {
       return undefined;
     }
-    const normalized = normalizeMessagePresentation({
-      blocks: [{ type: "chart", chartType: "pie", title, segments }],
-    });
-    const normalizedBlock = normalized?.blocks[0];
-    return normalizedBlock?.type === "chart" ? normalizedBlock : undefined;
+    return { type: "chart", chartType: "pie", title, segments };
   }
   if (chart.type !== "bar" && chart.type !== "area" && chart.type !== "line") {
     return undefined;
@@ -196,21 +189,15 @@ function parseSlackDataVisualizationBlock(
   if (series.some((entry) => !entry)) {
     return undefined;
   }
-  const normalized = normalizeMessagePresentation({
-    blocks: [
-      {
-        type: "chart",
-        chartType: chart.type,
-        title,
-        categories,
-        series,
-        xLabel: axisConfig?.x_label,
-        yLabel: axisConfig?.y_label,
-      },
-    ],
-  });
-  const normalizedBlock = normalized?.blocks[0];
-  return normalizedBlock?.type === "chart" ? normalizedBlock : undefined;
+  return {
+    type: "chart",
+    chartType: chart.type,
+    title,
+    categories,
+    series,
+    xLabel: axisConfig?.x_label,
+    yLabel: axisConfig?.y_label,
+  };
 }
 
 /** Extract an accessible summary, escaping mrkdwn control tokens when requested. */
@@ -222,8 +209,10 @@ export function renderSlackDataVisualizationFallbackText(
   if (block?.type !== "data_visualization") {
     return undefined;
   }
-  const parsed = parseSlackDataVisualizationBlock(block);
-  if (parsed) {
+  const parsed = normalizeMessagePresentation({
+    blocks: [parseSlackDataVisualizationBlock(block)],
+  })?.blocks[0];
+  if (parsed?.type === "chart") {
     return mrkdwnSafe
       ? renderSlackMessagePresentationChartFallbackText(parsed)
       : renderMessagePresentationChartFallbackText(parsed);

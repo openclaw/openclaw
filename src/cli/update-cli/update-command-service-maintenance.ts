@@ -37,6 +37,7 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedGatewayServiceObservation,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -75,7 +76,7 @@ export type UpdateCommandRecoveryState = {
 
 export function createWindowsTaskAutoStartGuard(params: {
   root: string;
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
+  before: ManagedGatewayServiceObservation;
   timeoutMs?: number;
 }): () => Promise<void> {
   const before = params.before;
@@ -161,10 +162,7 @@ type ManagedServiceStopParams = {
   /** Package/helper root can differ from the inspected service during a rebind. */
   handoffRoot?: string;
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
-  expectedService?: Pick<
-    PreManagedServiceStop,
-    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-  > &
+  expectedService?: ManagedGatewayServiceObservation &
     Partial<Pick<PreManagedServiceStop, "stopped">>;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;

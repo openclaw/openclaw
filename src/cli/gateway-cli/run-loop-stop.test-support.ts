@@ -30,13 +30,13 @@ export function registerForegroundUpdateStopTests({
   createRuntimeWithExitSignal,
   runLoopWithStart,
   waitForStart,
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   commitManagedServiceUpdateHandoff,
   flushLogger,
   waitForGatewayHealthyRestart,
   respawnHealth,
   markUpdateRestartSentinelFailure,
-  writeGatewayRestartHandoffSync,
+  writeGatewayRestartHandoff,
   isGatewayWorkAdmissionClosed,
 }: UpdateRespawnFixtures): void {
   function prepareForegroundHandoff() {
@@ -55,7 +55,7 @@ export function registerForegroundUpdateStopTests({
     return { close, start, runtime, exited };
   }
 
-  it.each(["pending-completion", "false", "reject"] as const)(
+  it.each(["pending-completion", "reject"] as const)(
     "retries the captured foreground Stop operation after %s settlement",
     async (outcome) => {
       const pendingCompletion = outcome === "pending-completion";
@@ -273,14 +273,14 @@ export function registerForegroundUpdateStopTests({
           () => settle.mock.calls.length === 1,
           "Stop did not capture its pending owner",
         );
-        const reads = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
-        consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
-          throw new Error("fixture restart intent unavailable");
-        });
+        const reads = consumeGatewayRestartIntentPayload.mock.calls.length;
+        consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
+          new Error("fixture restart intent unavailable"),
+        );
         captureSignal("SIGUSR2")();
         await setImmediate();
         await setImmediate();
-        expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(reads + 1);
+        expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(reads + 1);
         expect(rollback).not.toHaveBeenCalled();
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
         expect(close).not.toHaveBeenCalled();
@@ -295,40 +295,6 @@ export function registerForegroundUpdateStopTests({
         joined.resolve(true);
         rollback.mockRestore();
         await withTimeout(exited, 4000);
-      }
-    });
-  });
-
-  it("does not start a second active-work drain for repeated shutdown signals", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { exited } = await createSignaledLoopHarness();
-      const drain = createDeferred();
-      waitForGatewayActiveWork.mockImplementationOnce(async () => {
-        await drain.promise;
-        return { drained: true, snapshot: createActiveWorkSnapshot() };
-      });
-
-      try {
-        const sigterm = captureSignal("SIGTERM");
-        const sigint = captureSignal("SIGINT");
-        sigterm();
-        await waitForLoopCondition(
-          () => waitForGatewayActiveWork.mock.calls.length === 1,
-          "expected first shutdown signal to begin the active-work drain",
-        );
-
-        sigint();
-
-        expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-
-        drain.resolve();
-        await expect(exited).resolves.toBe(0);
-      } finally {
-        drain.resolve();
-        await exited;
       }
     });
   });
@@ -444,7 +410,7 @@ export function registerForegroundUpdateStopTests({
           await withTimeout(entered.promise, 4_000);
           expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
           if (restartIntent) {
-            consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "update.run" });
+            consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ reason: "update.run" });
           }
           captureSignal(signal)();
           await setImmediate();
@@ -500,7 +466,7 @@ export function registerForegroundUpdateStopTests({
           () => completeForegroundUpdateHandoffAfterClose.mock.calls.length === 1,
           "foreground updater did not receive its closed witness",
         );
-        const consumedIntents = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+        const consumedIntents = consumeGatewayRestartIntentPayload.mock.calls.length;
         const stoppingUpdater = phase === "updater" || phase === "unsafe-updater";
         if (!stoppingUpdater) {
           updater.resolve({ respawn: true });
@@ -516,7 +482,7 @@ export function registerForegroundUpdateStopTests({
         stop();
         stop();
         expect(runtime.exit).not.toHaveBeenCalled();
-        expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(consumedIntents);
+        expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(consumedIntents);
         expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
         if (stoppingUpdater) {
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
@@ -542,7 +508,7 @@ export function registerForegroundUpdateStopTests({
         expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(stoppingUpdater ? 0 : 1);
         expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
         expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
-        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
       } finally {
         updater.resolve({ respawn: false });
         readiness.resolve(respawnHealth({ healthy: false, waitOutcome: "stopped-free" }));

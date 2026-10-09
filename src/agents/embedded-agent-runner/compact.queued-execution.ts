@@ -264,6 +264,12 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Fire before_compaction / after_compaction hooks here so plugin subscribers
       // are notified regardless of which engine is active.
       const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+      if (engineOwnsCompaction || contextEngine.info.id !== "legacy") {
+        // Plugin compaction and hooks can use the released synchronous transcript reader.
+        const { restoreSessionColdTranscript } =
+          await import("../../config/sessions/session-cold-storage.js");
+        await restoreSessionColdTranscript(runtimeTarget, assertCallerActive);
+      }
       await assertActive();
       const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
       const hookSessionKey = runtimeTarget.sessionKey;

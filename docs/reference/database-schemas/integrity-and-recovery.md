@@ -374,6 +374,15 @@ It does not discard committed WAL pages, repair the source, or change plan ident
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
+Update validation reuses the prepared rehearsal databases for read-only checks.
+The complete updater isolation markers and physical containment of the database
+and its sidecars are required; external paths still use artifact-preserving
+copies. Inspection write guards remain active, and the next check sees changes
+made by the candidate's preceding migration step. Snapshot capacity errors report
+the estimated bytes needed, currently available bytes, and whether the source
+has live WAL sidecars. Free space or move the cache before retrying; a temporary
+snapshot capacity failure does not require schema repair on the serving install.
+
 Synchronous CLI snapshots also pause between source-change retries, so a brief
 write burst does not exhaust all ten attempts immediately. These retries only
 repeat private snapshot preparation; they do not resend Gateway commands.
@@ -591,6 +600,12 @@ Startup errors containing `state lease heartbeat did not become ready` include `
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
+Lease expiry timers cap each wait at Node's maximum timer delay and recheck the
+deadline before expiring ownership. A backward clock adjustment cannot turn a
+long remaining lease into an immediate timeout during an update or Doctor run.
+Renewal and durable ownership checks still use the recorded expiry; this changes
+no stored data, schema, or backup and rollback behavior.
+
 ## btrfs and NOCOW
 
 SQLite repeatedly rewrites database pages. On btrfs, copy-on-write can fragment
@@ -771,6 +786,36 @@ If the warning persists, capture `openclaw status --deep` output and restart the
 Gateway gracefully with `openclaw gateway restart`. Report the captured output
 if the warning returns. Do not delete the WAL: it can contain committed data
 that has not reached the main database file.
+
+### Doctor reports orphan session windows
+
+If `foreign_key_check` names `session_windows` referencing missing `session_nodes`,
+stop the Gateway, run `openclaw doctor --fix`, then restart after repair. Only if
+Doctor still cannot repair the offline database, preserve the database and WAL
+and restore a verified backup. Doctor uses its existing exclusive maintenance
+ownership; a managed Gateway may be stopped and restored, and an independently
+running Gateway must release the state before repair can proceed.
+
+For a current-schema agent database, Doctor first preserves a complete WAL-aware
+copy in a private `openclaw-session-window-recovery-*` directory beside the database.
+It then removes only windows whose referenced node is absent, with their dependent
+transcript records and search entries. Windows belonging to existing nodes remain
+unchanged. The report includes the backup path and removed-window count.
+
+If an upgrade also needs a schema migration, Doctor runs this repair when an
+orphan blocks its pre-migration backup, then retries the complete backup and its
+integrity checks before allowing the migration to proceed.
+
+The repair refuses unrelated foreign-key violations, checks integrity before
+commit, and rolls back deletion if repair fails. Keep the backup private: it
+contains the original orphan windows and any history they owned. No schema change
+is required, and this repair does not identify the writer that created the orphans.
+
+Fresh agent database admission re-verifies a cached integrity refusal in the
+native verifier process. A clean result clears the old process-local refusal so a repaired database
+does not remain blocked. Healthy admissions do not run this recovery check. This does
+not clear startup ownership refusals or newer-schema errors, and Doctor retains
+its exclusive maintenance requirements.
 
 ### Doctor reports orphan task delivery rows
 

@@ -123,9 +123,11 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
   const query = input.value.trim().toLocaleLowerCase();
   menu.toggleAttribute("data-chat-model-filtering", Boolean(query));
   // Search reaches every model, so the "All models" disclosure only applies while browsing.
+  // Expanding it is one-way: the row disappears and its models continue the group.
   menu.querySelectorAll<HTMLElement>("[data-chat-model-more-toggle]").forEach((toggle) => {
     toggle.hidden =
       Boolean(query) ||
+      toggle.getAttribute("aria-expanded") === "true" ||
       isDisclosureCollapsed(toggle.closest("section"), "[data-chat-model-group-toggle]");
   });
   const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
@@ -182,10 +184,21 @@ export function toggleModelProviderGroup(event: MouseEvent): void {
   event.stopPropagation();
   // SAFETY: Bound only to provider group and "All models" disclosure buttons.
   const toggle = event.currentTarget as HTMLButtonElement;
+  const hadFocus = toggle.ownerDocument.activeElement === toggle;
   toggle.setAttribute("aria-expanded", String(toggle.getAttribute("aria-expanded") !== "true"));
   const input = pickerMenu(toggle)?.querySelector<HTMLInputElement>("[data-chat-model-search]");
   if (input) {
     updateModelSearch(input, true);
+  }
+  // An expanded "All models" row hides itself; keep keyboard focus inside the revealed models.
+  if (hadFocus && toggle.hidden) {
+    (
+      toggle
+        .closest("section")
+        ?.querySelector<HTMLElement>(
+          "[data-chat-model-more] [data-chat-model-option]:not([hidden]):not(:disabled)",
+        ) ?? input
+    )?.focus({ preventScroll: true });
   }
 }
 

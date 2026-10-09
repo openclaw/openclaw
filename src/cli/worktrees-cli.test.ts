@@ -238,8 +238,7 @@ describe("worktrees cli", () => {
         signal: expect.any(AbortSignal),
         commitGuard: expect.any(Function),
         retryDeferred: partial,
-        shouldProtectOwner: expect.any(Function),
-        shouldRemoveOwner: expect.any(Function),
+        readOwnerState: expect.any(Function),
       }),
     );
   });

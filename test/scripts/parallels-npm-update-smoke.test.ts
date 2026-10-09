@@ -604,7 +604,7 @@ ${script}`,
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const updateBlock = script.slice(
       script.indexOf("  private spawnUpdate"),
-      script.indexOf("  private async runMacosUpdate"),
+      script.indexOf("  private updateScript"),
     );
 
     expect(updateBlock).toContain("appendFileSync(logPath, text");

@@ -83,6 +83,14 @@ Every `api.runtime` namespace and the page that documents it.
 
 ## Storing runtime references
 
+Synchronous storage compatibility calls retain their synchronous return contract.
+Managed commits install their available facts before public change notifications;
+a notification failure does not roll back the stored change. The private
+[receipt/completeness contract](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+adds no public capability or deprecation. Plugins must still use the owning
+runtime operation and its live authority checks: a prior receipt or cached row
+does not certify raw-handle writers, foreign changes, or a later effect.
+
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
 <Steps>

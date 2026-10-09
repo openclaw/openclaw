@@ -93,11 +93,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
-    const pending = pendingTerminalLifecycleErrors.get(runId);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending);
+    clearTimeout(pendingTerminalLifecycleErrors.get(runId));
     pendingTerminalLifecycleErrors.delete(runId);
   };
 

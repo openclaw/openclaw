@@ -79,11 +79,24 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
+async function getSessionEntryAsync(
+  params: RuntimeSessionStoreReadParams,
+): Promise<SessionEntry | undefined> {
+  const { readSessionEntryReadOnlyInWorker } =
+    await import("../../config/sessions/session-entry-read-runtime.js");
+  return await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
+}
+
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return listEntries({
+    ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
+    ...(params.includeParticipants !== undefined
+      ? { includeParticipants: params.includeParticipants }
+      : {}),
+    ...(params.captureSource ? { captureSource: params.captureSource } : {}),
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -685,6 +698,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
+    getSessionEntryAsync,
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,

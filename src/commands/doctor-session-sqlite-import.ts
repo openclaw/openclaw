@@ -94,7 +94,7 @@ export async function importLegacySessionRecords(
         .slice(offset, offset + SESSION_IMPORT_BATCH_SIZE)
         .flatMap((record) => {
           // Unreadable history cannot authorize replay of a current node's metadata or generation.
-          record.preserveCurrentSession =
+          record.preserveCurrentSession ||=
             recoveryHistoryUnverified || Boolean(assertRestoredIndexCurrent);
           try {
             const prepared = prepareLegacySessionImport(
@@ -266,7 +266,7 @@ function prepareLegacySessionImport(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
   importedTranscriptSources: Set<string>,
-  existingSnapshot: ReadOnlySqliteValidationSnapshot | undefined,
+  existingSnapshot: ReadOnlySqliteValidationSnapshot,
   env: NodeJS.ProcessEnv,
   recoveryHistoryUnverified: boolean,
 ) {
@@ -297,7 +297,7 @@ function prepareLegacySessionImport(
       : undefined;
   record.sourceFingerprint = transcriptFingerprint;
   const result = countTranscriptEventsForPath(record.transcriptPath);
-  const currentOwner = existingSnapshot?.sessionKeysBySessionId.get(record.entry.sessionId);
+  const currentOwner = existingSnapshot.sessionKeysBySessionId.get(record.entry.sessionId);
   if (record.preserveCurrentSession && currentOwner && currentOwner !== record.sessionKey) {
     throw new Error(
       `Historical transcript ${record.entry.sessionId} already belongs to ${currentOwner}`,
@@ -306,7 +306,7 @@ function prepareLegacySessionImport(
   if (
     recoveryHistoryUnverified &&
     result.status === "malformed" &&
-    (existingSnapshot?.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0) > 0
+    (existingSnapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0) > 0
   ) {
     throw new Error(result.message);
   }
@@ -337,9 +337,7 @@ function prepareLegacySessionImport(
   };
   let recovery: LegacySessionRecord["recovery"];
   if (result.status === "missing") {
-    if (
-      existingSnapshot?.sessionIdsBySessionKey.get(record.sessionKey) === record.entry.sessionId
-    ) {
+    if (existingSnapshot.sessionIdsBySessionKey.get(record.sessionKey) === record.entry.sessionId) {
       report.validatedEntries += 1;
       report.validatedTranscriptEvents +=
         existingSnapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
@@ -359,7 +357,7 @@ function prepareLegacySessionImport(
     result.status === "ok" &&
     transcriptFingerprint &&
     record.transcriptPath &&
-    (existingSnapshot?.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0) > 0
+    (existingSnapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0) > 0
   ) {
     try {
       const verified = verifyCanonicalSessionTranscriptSources({

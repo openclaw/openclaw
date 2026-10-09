@@ -33,6 +33,7 @@ export function readHotSessionTranscriptSnapshot<T>(
     | "events"
     | "raw rows"
     | "storage rows"
+    | "presence"
     | "match",
   read: () => T,
 ): T {

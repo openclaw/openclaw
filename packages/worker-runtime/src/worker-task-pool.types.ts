@@ -22,6 +22,8 @@ export type WorkerTaskPoolOptions<Output> = {
   maxPendingTasks?: number;
   maxPendingBytes?: number;
   idleTimeoutMs?: number;
+  /** Retire workers beyond the first usable slot sooner, without extending its warm window. */
+  burstIdleTimeoutMs?: number;
   restartOnError?: boolean;
   validateResult?: (value: Output) => void;
   /** Reports failed stops synchronously; returned rejections never delay retirement. */
@@ -60,8 +62,10 @@ type WorkerTaskExecutionSettlement = {
 export type WorkerTaskOptions<Input> = {
   /** Known retained input bytes, including inputs captured by a factory. No serialization pass. */
   inputBytes?: number;
-  /** When supplied, queueing and asynchronous preparation consume the execution deadline. */
+  /** Queueing, preparation, execution, and host callbacks consume this deadline. */
   timeoutMs?: number;
+  /** Only callbacks with their own deadline may replace the pool clock during host waits. */
+  hostTimeout?: "owner";
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;

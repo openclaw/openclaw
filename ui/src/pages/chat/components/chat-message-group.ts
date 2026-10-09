@@ -26,7 +26,7 @@ import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
-import { hasForwardedSource, isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -60,7 +60,7 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
-import { renderInterSessionActivity } from "./chat-session-activity.ts";
+import { renderSessionActivity } from "./chat-session-activity.ts";
 import {
   renderBrowserTabPreviews,
   renderToolCard,
@@ -389,8 +389,8 @@ export function renderMessageGroupContent(group: MessageGroup, options: RenderMe
 export function renderMessageGroup(group: MessageGroup, options: RenderMessageGroupOptions) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isInterSessionGroup(group)) {
-    return renderInterSessionActivity(group, opts, (item, index) => {
+  if (isSessionActivityGroup(group)) {
+    return renderSessionActivity(group, opts, (item, index) => {
       const prepared = prepareGroupMessage(group, item, opts);
       return {
         content: renderPreparedGroupMessage(

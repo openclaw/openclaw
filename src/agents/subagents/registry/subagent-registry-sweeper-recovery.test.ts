@@ -14,6 +14,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -915,28 +916,16 @@ describe("superseded subagent retirement", () => {
           { runs },
         );
         const clearPendingLifecycleError = vi.fn();
-        const execute = stateWorker.runOpenClawStateWorkerOperation;
-        const worker = vi
-          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-          .mockImplementation((owner, operation, options) =>
-            execute(
-              owner,
-              (scope) =>
-                operation({
-                  execute: async (command, executeOptions) => {
-                    if (
-                      refused &&
-                      command.type === "subagents.persistChanges" &&
-                      (command.input as SubagentRegistryWrite).deleteRunIds.includes(entry.runId)
-                    ) {
-                      throw new Error("registry deletion failed");
-                    }
-                    return scope.execute(command, executeOptions);
-                  },
-                }),
-              options,
-            ),
-          );
+        const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+          if (
+            refused &&
+            command.type === "subagents.persistChanges" &&
+            (command.input as SubagentRegistryWrite).deleteRunIds.includes(entry.runId)
+          ) {
+            throw new Error("registry deletion failed");
+          }
+          return scope.execute(command, executeOptions);
+        });
         try {
           const deletion = retireSupersededSubagentRun({
             runId: entry.runId,

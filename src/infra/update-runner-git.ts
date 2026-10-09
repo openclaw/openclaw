@@ -95,6 +95,18 @@ export async function updateGitCheckout(params: {
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
   const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
+  const failureStep = (
+    name: string,
+    command: string,
+    stderrTail: UpdateStepResult["stderrTail"],
+  ): UpdateStepResult => ({
+    name,
+    command,
+    cwd: gitRoot,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail,
+  });
   // Work and probes share ordering, including commands in the private inspection clone.
   let stepIndex = 0;
   const forRunner =
@@ -215,14 +227,7 @@ export async function updateGitCheckout(params: {
     } catch (error) {
       assertCurrent();
       runtimeRestored = false;
-      steps.push({
-        name: "git-runtime-rollback",
-        command: "restore previous runtime",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: String(error),
-      });
+      steps.push(failureStep("git-runtime-rollback", "restore previous runtime", String(error)));
     }
     // Immediate activation recovery reconstructs tracked output after runtime restoration.
     if (!source) {
@@ -542,14 +547,9 @@ export async function updateGitCheckout(params: {
     try {
       await runtimePromotion.activate();
     } catch (error) {
-      steps.push({
-        name: "git-runtime-activation",
-        command: "activate validated runtime",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: String(error),
-      });
+      steps.push(
+        failureStep("git-runtime-activation", "activate validated runtime", String(error)),
+      );
       return await rollbackError("runtime-verification-failed");
     }
 
@@ -619,14 +619,12 @@ export async function updateGitCheckout(params: {
         throw error;
       }
       steps.push(
-        doctorStep ?? {
-          name: "openclaw doctor",
-          command: "run activation doctor",
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: "Required activation Doctor did not produce a result.",
-        },
+        doctorStep ??
+          failureStep(
+            "openclaw doctor",
+            "run activation doctor",
+            "Required activation Doctor did not produce a result.",
+          ),
       );
       if (!doctorStep) {
         // The CLI returns null before any state writes when its entrypoint is missing.
@@ -641,14 +639,13 @@ export async function updateGitCheckout(params: {
     }
 
     if ((await resolveControlUiAssetHealth({ root: gitRoot })).kind !== "ready") {
-      steps.push({
-        name: "ui-assets-verify",
-        command: "verify startup assets",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: "Control UI startup assets are missing or incomplete after Doctor",
-      });
+      steps.push(
+        failureStep(
+          "ui-assets-verify",
+          "verify startup assets",
+          "Control UI startup assets are missing or incomplete after Doctor",
+        ),
+      );
       return await rollbackError("ui-assets-missing");
     }
     const afterBuildId = await readBuiltGatewayBuildId(gitRoot);
@@ -685,12 +682,7 @@ export async function updateGitCheckout(params: {
     }
     const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
     steps.push({
-      name: "git-update",
-      command: "update checkout",
-      cwd: gitRoot,
-      durationMs: 0,
-      exitCode: 1,
-      stderrTail: fact.message,
+      ...failureStep("git-update", "update checkout", fact.message),
       failureFacts: [fact],
     });
     return await rollbackError(

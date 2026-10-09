@@ -221,11 +221,9 @@ export function canonicalizeLegacyAuthOrder(
       aliases.set(canonical, group);
     }
   }
+  const aliasedProviders = new Set([...aliases.values()].flat());
   for (const [provider, entries] of Object.entries(order)) {
-    if (
-      Array.isArray(entries) &&
-      ![...aliases.values()].some((group) => group.includes(provider))
-    ) {
+    if (Array.isArray(entries) && !aliasedProviders.has(provider)) {
       order[provider] = entries.map(rewrite);
     }
   }
@@ -262,23 +260,6 @@ export function canonicalizeLegacyAuthOrder(
     }
   }
   return !isDeepStrictEqual(before, order);
-}
-
-function renameMappedProfileIdKeys(
-  record: Record<string, unknown>,
-  profileIdMap: Map<string, string>,
-): boolean {
-  let changed = false;
-  for (const [key, value] of Object.entries({ ...record })) {
-    const nextKey = profileIdMap.get(key);
-    if (!nextKey || nextKey === key) {
-      continue;
-    }
-    delete record[key];
-    record[nextKey] = value;
-    changed = true;
-  }
-  return changed;
 }
 
 function canonicalizeLegacyAuthLastGood(
@@ -336,9 +317,18 @@ function canonicalizeLegacyAuthRotationState(
   // unresolved instead of associating them with a canonical credential that shares the suffix.
   const options = { preserveUnmappedLegacyIds: true };
   const orderChanged = canonicalizeLegacyAuthOrder(auth, profileIdMap, options);
-  const usageChanged = isRecord(auth.usageStats)
-    ? renameMappedProfileIdKeys(auth.usageStats, profileIdMap)
-    : false;
+  let usageChanged = false;
+  if (isRecord(auth.usageStats)) {
+    const usage = auth.usageStats;
+    for (const [key, value] of Object.entries({ ...usage })) {
+      const nextKey = profileIdMap.get(key);
+      if (nextKey && nextKey !== key) {
+        delete usage[key];
+        usage[nextKey] = value;
+        usageChanged = true;
+      }
+    }
+  }
   const lastGoodChanged = isRecord(auth.lastGood)
     ? canonicalizeLegacyAuthLastGood(auth.lastGood, profileIdMap, options)
     : false;

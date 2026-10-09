@@ -690,6 +690,12 @@ a long recovered turn does not hold a separate startup slot. Deferred database
 admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
 
+Recovery follows retained transcript-window ownership when a session moves to a
+new key or rotates its session ID. Claim validation and cleanup read only those
+candidate sessions, so stale recovery claims do not load unrelated saved prompts
+while interactive session changes wait. Claim authority, retry budgets, stored
+data, and upgrade behavior are unchanged.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the

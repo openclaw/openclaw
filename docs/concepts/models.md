@@ -116,7 +116,9 @@ and native apps. Chat and session metadata read published rows without starting
 provider discovery. Ordinary `models.list` requests reuse the published catalog;
 provider response-cache expiry alone does not rebuild it. Startup, changed
 configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own catalog acquisition. A provider whose discovery fails keeps its
+**Refresh** own catalog acquisition. Startup discovers the same full catalog as
+**Refresh**, in the background; a later configuration or credential change
+rediscovers only the affected providers. A provider whose discovery fails keeps its
 saved or built-in rows and retries in the background after 30 seconds, backing off
 to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
@@ -465,8 +467,12 @@ provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
 preparation; a failed or superseded preparation leaves it in place. A provider
 whose discovery fails publishes with the new generation's built-in rows.
-Admitted runs retain their captured generation, and each usage-estimation
-operation uses one pricing context.
+Reply, scheduled-run, and agent RPC preparation retain their captured model
+generation through admission. Publishing a newer catalog does not interrupt
+those turns before their first model request. Native model lookups can finish
+for an admitted turn without replacing the newer shared catalog. Nested model
+calls keep the admitted config, and each usage-estimation operation uses one
+pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a
 background refresh fails, the Gateway records the error and keeps serving its

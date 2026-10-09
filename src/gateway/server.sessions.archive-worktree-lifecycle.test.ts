@@ -33,6 +33,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -642,26 +643,21 @@ test("sessions.patchMany preserves the checkout when the archive commit is refus
   const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
   await fs.writeFile(path.join(worktree.path, "README.md"), "uncommitted edit\n");
   await fs.writeFile(path.join(worktree.path, "draft.txt"), "untracked draft\n");
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   let rejectedCommit = false;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind === "session-entry-replacements" &&
-          Array.isArray(request.facts.publication.changedKeys) &&
-          request.facts.publication.changedKeys.includes(key)
-        ) {
-          rejectedCommit = true;
-          throw new Error("injected archive commit failure");
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      isRecord(request.facts.publication) &&
+      request.facts.publication.kind === "session-entry-replacements" &&
+      Array.isArray(request.facts.publication.changedKeys) &&
+      request.facts.publication.changedKeys.includes(key)
+    ) {
+      rejectedCommit = true;
+      throw new Error("injected archive commit failure");
+    }
+    admit(request, grant);
+  });
   try {
     const outcome = (
       await directSessionReq<SessionsPatchManyResult>("sessions.patchMany", {

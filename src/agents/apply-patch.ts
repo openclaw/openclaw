@@ -418,19 +418,12 @@ function parsePatchText(input: string): Hunk[] {
     throw new Error("Invalid patch: input is empty.");
   }
 
-  const lines = trimmed.split(/\r?\n/);
-  const validated = checkPatchBoundaries(lines);
+  const lines = checkPatchBoundaries(trimmed.split(/\r?\n/)).slice(1, -1);
   const hunks: Hunk[] = [];
-
-  const lastLineIndex = validated.length - 1;
-  let remaining = validated.slice(1, lastLineIndex);
-  let lineNumber = 2;
-
-  while (remaining.length > 0) {
-    const { hunk, consumed } = parseOneHunk(remaining, lineNumber);
+  for (let offset = 0; offset < lines.length;) {
+    const { hunk, consumed } = parseOneHunk(lines.slice(offset), offset + 2);
     hunks.push(hunk);
-    lineNumber += consumed;
-    remaining = remaining.slice(consumed);
+    offset += consumed;
   }
 
   return hunks;
@@ -456,13 +449,7 @@ function checkPatchBoundaries(inputLines: string[]): string[] {
 }
 
 function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consumed: number } {
-  if (lines.length === 0) {
-    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
-  }
-  const firstLine = lines.at(0)?.trim();
-  if (firstLine === undefined) {
-    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
-  }
+  const firstLine = lines[0]!.trim();
   if (firstLine.startsWith(ADD_FILE_MARKER)) {
     const targetPath = firstLine.slice(ADD_FILE_MARKER.length);
     let contents = "";
@@ -491,25 +478,19 @@ function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consum
 
   if (firstLine.startsWith(UPDATE_FILE_MARKER)) {
     const targetPath = firstLine.slice(UPDATE_FILE_MARKER.length);
-    let remaining = lines.slice(1);
     let consumed = 1;
     let movePath: string | undefined;
 
-    const moveCandidate = remaining[0]?.trim();
+    const moveCandidate = lines[consumed]?.trim();
     if (moveCandidate?.startsWith(MOVE_TO_MARKER)) {
       movePath = moveCandidate.slice(MOVE_TO_MARKER.length);
-      remaining = remaining.slice(1);
       consumed += 1;
     }
 
     const chunks: UpdateFileChunk[] = [];
-    while (remaining.length > 0) {
-      const firstRemaining = remaining.at(0);
-      if (firstRemaining === undefined) {
-        break;
-      }
+    while (consumed < lines.length) {
+      const firstRemaining = lines[consumed]!;
       if (firstRemaining.trim() === "") {
-        remaining = remaining.slice(1);
         consumed += 1;
         continue;
       }
@@ -517,12 +498,11 @@ function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consum
         break;
       }
       const { chunk, consumed: chunkLines } = parseUpdateFileChunk(
-        remaining,
+        lines.slice(consumed),
         lineNumber + consumed,
         chunks.length === 0,
       );
       chunks.push(chunk);
-      remaining = remaining.slice(chunkLines);
       consumed += chunkLines;
     }
 
@@ -553,12 +533,6 @@ function parseUpdateFileChunk(
   lineNumber: number,
   allowMissingContext: boolean,
 ): { chunk: UpdateFileChunk; consumed: number } {
-  if (lines.length === 0) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber}: Update hunk does not contain any lines`,
-    );
-  }
-
   let changeContext: string | undefined;
   let startIndex = 0;
   const firstLine = lines.at(0);
@@ -601,22 +575,15 @@ function parseUpdateFileChunk(
     }
 
     const marker = line[0];
-    if (!marker || marker === " ") {
+    if (!marker || marker === " " || marker === "+" || marker === "-") {
       const content = line.slice(1);
-      chunk.contextOldIndexes.push(chunk.oldLines.length);
-      chunk.oldLines.push(content);
-      chunk.newLines.push(content);
-      parsedLines += 1;
-      continue;
-    }
-    if (marker === "+") {
-      chunk.contextOldIndexes.push(undefined);
-      chunk.newLines.push(line.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-    if (marker === "-") {
-      chunk.oldLines.push(line.slice(1));
+      if (marker !== "-") {
+        chunk.contextOldIndexes.push(marker === "+" ? undefined : chunk.oldLines.length);
+        chunk.newLines.push(content);
+      }
+      if (marker !== "+") {
+        chunk.oldLines.push(content);
+      }
       parsedLines += 1;
       continue;
     }

@@ -95,7 +95,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     replyToMode: prepared.replyToMode,
   });
   const forcedReplyThreadTs = prepared.forcedReplyThreadTs;
-  const slackMessageMetadata = prepared.slackMessageMetadata;
   const statusThreadTs = forcedReplyThreadTs ?? threadContext.messageThreadId;
   const isThreadReply = threadContext.isThreadReply;
   const replyDeliveryMode = forcedReplyThreadTs ? "off" : prepared.replyToMode;
@@ -115,11 +114,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     isGroup: prepared.isRoomish,
     groupId: prepared.isRoomish ? message.channel : undefined,
   };
-  const messageSentDeliveryHookContext = {
-    ...messageSentHookContext,
-    messageSentHookTarget,
-  };
-
   const reactionMessageTs = prepared.ackReactionMessageTs;
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
@@ -313,18 +307,12 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
 
   return {
     prepared,
-    ctx,
-    account,
-    message,
-    route,
     slackClient,
     slackClientOptions,
     slackStreamFallbackTeamId,
     cfg,
     runtime,
     slackIdentity,
-    forcedReplyThreadTs,
-    slackMessageMetadata,
     statusThreadTs,
     isThreadReply,
     replyDeliveryMode,
@@ -332,7 +320,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     suppressRoomEventTyping,
     messageSentHookTarget,
     messageSentHookContext,
-    messageSentDeliveryHookContext,
     statusReactionsEnabled,
     statusReactions,
     hasRepliedRef,

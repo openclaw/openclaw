@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { availableParallelism } from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
@@ -22,6 +21,7 @@ import {
   type WorkerTaskCompletion,
 } from "./worker-task-pool-completion.js";
 import {
+  armWorkerTaskTimeout,
   closeOwnedWorkerTask,
   dispatchOwnedWorkerRequest,
   joinOwnedWorkerTask,
@@ -251,7 +251,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.pendingBytes += inputBytes;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
     if (options.timeoutMs !== undefined) {
-      this.armTimeout(task, options.timeoutMs);
+      armWorkerTaskTimeout(task, options.timeoutMs, () =>
+        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
+      );
     }
     options.signal?.addEventListener("abort", task.abort, { once: true });
     this.queue.push(task);
@@ -505,16 +507,6 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.finish(task, undefined, reply.value, retainInput);
   }
 
-  private armTimeout(task: Task<Input, Output>, timeoutMs: number): void {
-    clearTimeout(task.timer);
-    const timeout = resolveTimerTimeoutMs(timeoutMs, 60_000);
-    task.deadline = performance.now() + timeout;
-    task.timer = setTimeout(
-      () => this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-      timeout,
-    );
-  }
-
   private receiveExchange(
     slot: Slot<Input, Output>,
     task: Task<Input, Output>,
@@ -552,9 +544,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.fail(slot, new WorkerTaskError("invalid worker exchange", "unavailable"));
       return;
     }
-    // The owner, not a second pool clock, budgets host waits and pauses approvals.
-    clearTimeout(task.timer);
-    task.deadline = undefined;
+    if (task.options.hostTimeout === "owner") {
+      // Approval-aware owners pause their own budget while waiting for a decision.
+      clearTimeout(task.timer);
+      task.deadline = undefined;
+    }
     const exchange: Task<Input, Output>["exchange"] = {
       id: ++task.exchangeSequence,
       pressure: new AbortController(),
@@ -566,6 +560,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.dispatch();
     this.computeCapacity?.requestCheckpoints();
     const accept = (response: WorkerTaskResponse) => {
+      if (!task.done && task.deadline !== undefined && performance.now() >= task.deadline) {
+        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout"));
+      }
       if (task.done || slot.task !== task || slot.retiring) {
         // A slow host handler may settle after cancellation. Never feed a successor.
         const release = () => {
@@ -585,7 +582,9 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      this.armTimeout(task, response.timeoutMs);
+      armWorkerTaskTimeout(task, response.timeoutMs, () =>
+        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
+      );
       try {
         slot.worker!.postMessage(
           {

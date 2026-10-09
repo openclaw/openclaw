@@ -74,7 +74,7 @@ export function buildDiscordCommandOptions(params: {
   if (!args || args.length === 0) {
     return undefined;
   }
-  return args.map((arg) => {
+  return args.map((arg): CommandOptions[number] => {
     const base = {
       name: arg.name,
       description: truncateDiscordCommandDescription({
@@ -84,12 +84,9 @@ export function buildDiscordCommandOptions(params: {
       required: arg.required ?? false,
     };
     if (arg.type === "number" || arg.type === "boolean") {
-      return Object.assign(base, {
-        type:
-          arg.type === "number"
-            ? ApplicationCommandOptionType.Number
-            : ApplicationCommandOptionType.Boolean,
-      });
+      return arg.type === "number"
+        ? Object.assign(base, { type: ApplicationCommandOptionType.Number as const })
+        : Object.assign(base, { type: ApplicationCommandOptionType.Boolean as const });
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
@@ -143,14 +140,15 @@ export function buildDiscordCommandOptions(params: {
           await interaction.respond(buildDiscordChoiceOptions(filtered));
         }
       : undefined;
-    const choices =
-      resolvedChoices.length > 0 && !autocomplete
-        ? buildDiscordChoiceOptions(resolvedChoices)
-        : undefined;
-    return Object.assign(base, {
-      type: ApplicationCommandOptionType.String,
-      choices,
-      autocomplete,
-    });
+    return autocomplete
+      ? Object.assign(base, {
+          type: ApplicationCommandOptionType.String as const,
+          autocomplete,
+        })
+      : Object.assign(base, {
+          type: ApplicationCommandOptionType.String as const,
+          choices:
+            resolvedChoices.length > 0 ? buildDiscordChoiceOptions(resolvedChoices) : undefined,
+        });
   }) satisfies CommandOptions;
 }

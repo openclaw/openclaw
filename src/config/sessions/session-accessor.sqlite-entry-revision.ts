@@ -98,8 +98,9 @@ export function readSessionNodesGeneration(database: DatabaseSync): number {
 
 export function readSessionEntryCacheValidityToken(
   database: DatabaseSync,
-  mode: "fresh" | "cached" = "fresh",
+  mode: "fresh" | "cached" = database.isTransaction ? "cached" : "fresh",
 ): SqliteSessionEntryRevision {
+  // Managed transactions already probe after BEGIN; local writes still advance the generation.
   return {
     dataVersion: readSqliteCacheDataVersion(database, mode),
     sessionNodesGeneration: readSessionNodesGeneration(database),
