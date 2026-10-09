@@ -177,17 +177,26 @@ export function createEmbeddedModelState(
       }
       publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
-        case "turn_end":
+        case "turn_end": {
           // message_end may describe an async tool fragment, not a completed provider response.
           if (
-            !successfulModelResponse &&
-            (message.stopReason === "stop" || message.stopReason === "toolUse") &&
-            !isProviderRefusalAssistantError(message)
+            (message.stopReason !== "stop" && message.stopReason !== "toolUse") ||
+            isProviderRefusalAssistantError(message)
           ) {
+            return;
+          }
+          const usage = normalizeUsage(message.usage);
+          if (!successfulModelResponse) {
             successfulModelResponse = true;
             recordContextAccounting(message, true);
           }
+          runBestEffortCallback({
+            label: "model call settled",
+            log,
+            callback: () => params.onModelCallSettled?.(usage),
+          });
           return;
+        }
         case "message_start":
           pending = undefined;
           return;

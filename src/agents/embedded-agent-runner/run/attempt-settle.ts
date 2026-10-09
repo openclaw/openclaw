@@ -129,6 +129,7 @@ export async function runEmbeddedAttemptSettledPhase(
   } = preparedStreamRuntime;
   const {
     subscription,
+    contextTotalTokensWriter,
     queueHandle,
     getBeforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId,
@@ -281,6 +282,9 @@ export async function runEmbeddedAttemptSettledPhase(
     messagesSnapshot = settledStream.messagesSnapshot;
     sessionIdUsed = settledStream.sessionIdUsed;
     sessionRuntimeState.promptCache = settledStream.promptCache;
+    // The run's usage accounting after this attempt is authoritative; flush the
+    // per-call context total first so no per-call write can land after it.
+    await contextTotalTokensWriter.close();
 
     await completeEmbeddedAttemptAfterTurn(input, settledStream, {
       yieldAborted: promptState.yieldAborted,
@@ -376,15 +380,22 @@ export async function runEmbeddedAttemptSettledPhase(
       }
     }
   } finally {
-    cleanupError = cleanupEmbeddedAttemptStreamExecution({
-      attempt,
-      clearAttemptTimeoutTimers,
-      isProbeSession,
-      queueHandle,
-      state,
-      unsubscribe,
-      deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
-    });
+    try {
+      cleanupError = cleanupEmbeddedAttemptStreamExecution({
+        attempt,
+        clearAttemptTimeoutTimers,
+        isProbeSession,
+        queueHandle,
+        state,
+        unsubscribe,
+        deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
+      });
+    } finally {
+      // Attempts that throw before after-turn work skip the flush above. Once
+      // timers and the subscription are released, drop the pending offer and
+      // wait out the write in flight; after a flush this is a no-op.
+      await contextTotalTokensWriter.abandon();
+    }
   }
 
   if (cleanupError !== undefined) {
