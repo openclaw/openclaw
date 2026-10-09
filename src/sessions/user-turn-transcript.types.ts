@@ -16,6 +16,7 @@ import type {
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
@@ -120,7 +121,7 @@ export type UserTurnTranscriptTarget = {
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: unknown;
+  config?: OpenClawConfig;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 

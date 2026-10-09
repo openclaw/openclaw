@@ -39,8 +39,23 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   return {
     ...actual,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.pending-inputs.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.pending-inputs.js")
+  >("../../config/sessions/session-accessor.pending-inputs.js");
+  return { ...actual, stageSessionPendingInput: mocks.stageSessionPendingInput };
+});
+
+vi.mock("../../config/sessions/session-accessor.transcript-target.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.transcript-target.js")
+  >("../../config/sessions/session-accessor.transcript-target.js");
+  return {
+    ...actual,
     resolveSessionTranscriptRuntimeTarget: mocks.resolveSessionTranscriptRuntimeTarget,
-    stageSessionPendingInput: mocks.stageSessionPendingInput,
   };
 });
 
@@ -114,6 +129,7 @@ describe("prepareAgentRunUserTurn", () => {
 
     await expect(
       prepareAgentRunUserTurn({
+        onMediaRetained: vi.fn(),
         assertCurrent: () => {},
         request: {
           message: "must not reach the stale session",
@@ -159,6 +175,7 @@ describe("prepareAgentRunUserTurn", () => {
 
     await expect(
       prepareAgentRunUserTurn({
+        onMediaRetained: vi.fn(),
         request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
         cfg: {},
         sessionEntry,
@@ -198,11 +215,12 @@ describe("prepareAgentRunUserTurn", () => {
     let authorityActive = true;
     mocks.persistInboundImagesForTranscript.mockImplementationOnce(async () => {
       authorityActive = false;
-      return { entries: [{ id: "revoked-media", fact: {} }] };
+      return { entries: [{ id: "revoked-media", imageKind: "inline", fact: {} }] };
     });
 
     await expect(
       prepareAgentRunUserTurn({
+        onMediaRetained: vi.fn(),
         request: { message: "private image", idempotencyKey: "revoked-media-run" },
         cfg: {},
         sessionEntry,

@@ -62,6 +62,7 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
 export type PrepareAgentRunDispatchParams = Omit<
   Parameters<typeof prepareAgentRunUserTurn>[0],
   | "assertCurrent"
+  | "onMediaRetained"
   | "assertCompletionCurrent"
   | "abortSignal"
   | "getAbortStopReason"
@@ -89,7 +90,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   pendingChatRun?: { sessionKey: string; agentId?: string };
   isOneShotModelRun: boolean;
   isRestartRecoveryResumeRun: boolean;
-  onUserTurnMediaPersisted: () => void;
+  onUserTurnMediaRetained: () => void;
   agentDedupeKeys: readonly string[];
   getOwnedAgentDedupeKeys: () => readonly string[];
   io: AgentTurnIo;

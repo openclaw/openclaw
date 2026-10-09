@@ -494,7 +494,7 @@ export function createAgentTurnService(
         message,
         effectiveTranscriptInputText,
         offloadedRefs,
-        onUserTurnMediaPersisted: () => {
+        onUserTurnMediaRetained: () => {
           preparedOffloadedRefs = [];
         },
         privateCompletion,

@@ -301,6 +301,7 @@ describe("worker transcript commit application", () => {
 
   it("admits an overlapping agent input without invalidating the active worker transcript", async () => {
     setRuntimeConfigSnapshot(cfg);
+    const onMediaRetained = vi.fn();
     const admit = (runId: string, text: string) =>
       prepareAgentRunUserTurn({
         assertCurrent: () => {},
@@ -316,12 +317,14 @@ describe("worker transcript commit application", () => {
         effectiveTranscriptInputText: text,
         images: [],
         offloadedRefs: [],
+        onMediaRetained,
         runId,
         client: null,
         context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
       });
 
     const first = await admit(IDENTITY.runId!, "First input");
+    expect(onMediaRetained).toHaveBeenCalledTimes(1);
     const firstUser = await (first.recorder?.withPendingInput
       ? first.recorder.withPendingInput(() => first.recorder!.persistApproved())
       : first.recorder?.persistApproved());
@@ -332,6 +335,7 @@ describe("worker transcript commit application", () => {
     // Admission happens before the next turn can take the session lane. It must
     // not move the active worker's base while that worker is still producing output.
     const second = await admit("next-worker-run", "Second input");
+    expect(onMediaRetained).toHaveBeenCalledTimes(2);
     const completed = await committer.commit({
       ...ADMITTED_OWNER,
       request: createRequest({
