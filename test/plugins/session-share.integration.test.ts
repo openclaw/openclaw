@@ -218,7 +218,7 @@ describe("session-share node commands", () => {
       expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
       const reads = trackSqliteStatementExecutions(db, ["inventory"], (sql) =>
-        /from "session_nodes" order by "session_key"/.test(sql) && /"entry_json"/.test(sql)
+        sql.includes('from "session_nodes" order by "session_key"') && sql.includes('"entry_json"')
           ? "inventory"
           : null,
       );
