@@ -54,7 +54,6 @@
 ["extensions/beam/src/http-authority.test.ts","openclaw/plugin-sdk/plugin-runtime","5e2a72d28c9e52be13f5d475c2efc5792a11063d5b412359a690f47e77c0d3b5",1]
 ["extensions/bonjour/index.test.ts","./src/advertiser.js","ae92d2fa3774e37fb30abf7136b29dc371bdad957056cff15375cc4eb2ed4cc2",1]
 ["extensions/bonjour/index.test.ts","openclaw/plugin-sdk/runtime","0b172855957e9b4202322d83e6cefa33daa949552016bd9fcf8ffabb5ddedb2c",1]
-["extensions/brave/src/brave-web-search-provider.merge.test.ts","./brave-web-search-provider.runtime.js","a8b61c133ad7e78a70e251127cfc58c48a94f0532f8bec6fb6257ac558389af3",1]
 ["extensions/brave/src/brave-web-search-provider.test.ts","openclaw/plugin-sdk/runtime-env","37f6d3c5698058885b132573f420bed9ace0a2bffe13610711f7dffa463027a8",1]
 ["extensions/browser/browser-maintenance.cold.test.ts","./src/browser-control-state.js","1f5d7545a5ccc7c85c8c82a392e5e36e10fff0c990dd485c133de551840266e8",1]
 ["extensions/browser/browser-maintenance.cold.test.ts","./src/browser/cdp.helpers.js","20a35871a8537ac51f8209de94f0e0ba3e989233b69632866dd890632cec2de3",1]
