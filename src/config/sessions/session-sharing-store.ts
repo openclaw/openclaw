@@ -9,7 +9,10 @@ import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import {
   hasSessionMemberInDatabase,
   listSessionMembersInDatabase,
@@ -40,10 +43,14 @@ export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
 export async function readSessionMembersInWorker(
   input: SessionCollaborationScope,
 ): Promise<SessionMembersSnapshot> {
-  const env = { ...(input.env ?? process.env) };
+  const source = input.incognito ? undefined : captureIncognitoSessionSource(input);
+  if (source && "kind" in source) {
+    return { entry: undefined, members: [] };
+  }
+  const resolved = resolveSqliteScope(input);
+  const env = { ...(resolved.env ?? process.env) };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const resolved = resolveSqliteScope({ ...input, env });
-  const options = toDatabaseOptions(resolved);
+  const options = toDatabaseOptions({ ...resolved, env });
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   const incognito = input.incognito ?? captureIncognitoSessionOperation(input);
   if (incognito) {
@@ -51,10 +58,11 @@ export async function readSessionMembersInWorker(
     if (actor.agentId !== resolved.agentId || actor.path !== databasePath) {
       throw new Error("Membership target differs from its captured incognito actor");
     }
-    const members = await actor.sessions.sideData(authority, {
-      type: "session.members.read",
-      input: { sessionKey: resolved.sessionKey },
-    });
+    const members = await actor.sessions.sideData(
+      authority,
+      { type: "session.members.read", input: { sessionKey: resolved.sessionKey } },
+      source?.admissionSignal,
+    );
     authority.assertCurrent();
     actor.assertReadable();
     return members;

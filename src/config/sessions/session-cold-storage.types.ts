@@ -30,3 +30,22 @@ export type SessionColdMutationResult = {
   refusedSource?: NonNullable<SessionSourceValidation["refusedSource"]>;
   writerRefusal?: TranscriptAppendRefusal;
 };
+
+export type SessionColdMaintenanceResult = {
+  archivedTranscripts: number;
+  externalizedTranscripts: number;
+};
+
+export type SessionColdBatchOptions = {
+  databaseOptions: OpenClawAgentDatabaseOptions;
+  ownerStorePath: string;
+  beforeMs: number;
+  maxTranscripts: number;
+  maxBytes: number;
+  assertCurrent?: () => void;
+};
+
+export type SessionColdBatchResult = SessionColdMaintenanceResult & {
+  envelopeBytes: number;
+  attemptedTranscripts: number;
+};

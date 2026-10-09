@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
@@ -32,6 +33,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { reclaimIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -48,11 +50,38 @@ export async function cleanupSessionLifecycleArtifactsCore(
       archivedTranscriptArtifacts: result.archivedTranscripts.length,
     };
   }
+  const incognitoSource = captureIncognitoSessionSource(params);
+  if (incognitoSource && "kind" in incognitoSource) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
   const transcriptContentMarker = params.transcriptContentMarker;
   const pluginOwnerId = params.pluginOwnerId?.trim();
   if (!sessionKeySegmentPrefix || !transcriptContentMarker) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
+  if (incognitoSource) {
+    return cleanupSessionLifecycleArtifactsCore({
+      kind: "incognito",
+      actor: incognitoSource.actor,
+      authority: {
+        assertCurrent() {
+          incognitoSource.actor.assertCurrent();
+        },
+      },
+      admissionSignal: incognitoSource.admissionSignal,
+      env: params.env ?? {
+        OPENCLAW_STATE_DIR: path.resolve(incognitoSource.actor.path, "../../../.."),
+      },
+      ownerStorePath: params.storePath,
+      input: {
+        sessionKeySegmentPrefix,
+        transcriptContentMarker,
+        pluginOwnerId,
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+        nowMs: params.nowMs ?? Date.now(),
+      },
+    });
   }
 
   const requested = captureLifecycleDatabaseScope(

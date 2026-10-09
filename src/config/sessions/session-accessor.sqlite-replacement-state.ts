@@ -185,6 +185,7 @@ export function commitSessionEntryReplacementsInDatabase(
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -281,7 +282,7 @@ export function commitSessionEntryReplacementsInDatabase(
           database,
           maintenance,
           () => preservation,
-          undefined,
+          onArchived,
           refreshCandidates,
         )
       : emptySessionEntryMaintenancePlan();

@@ -358,6 +358,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-turn-claims.worker.test.ts",
   "src/gateway/worker-environments/placement-worker-gate.test.ts",
   "src/gateway/worker-environments/placement-workspace-journal.test.ts",
+  "src/gateway/worker-environments/placement-workspace-reservation.test.ts",
   "src/gateway/worker-environments/portal-node-carrier.test.ts",
   "src/gateway/worker-environments/prepared-environment-store.test.ts",
   "src/gateway/worker-environments/prepared-pool-build.test.ts",
