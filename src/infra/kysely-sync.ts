@@ -81,8 +81,18 @@ function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): voi
   }
 }
 
-function throwSqliteIteratorCleanupError(error: unknown): never {
-  throw toErrorObject(error, "SQLite iterator cleanup failed");
+function releaseSqliteIterator(
+  iterator: Iterator<unknown>,
+  reader: ReturnType<typeof retainSqliteReader>,
+): unknown {
+  let cleanupError: unknown;
+  try {
+    iterator.return?.();
+  } catch (error) {
+    cleanupError = error;
+  }
+  reader.release();
+  return cleanupError;
 }
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
@@ -114,7 +124,6 @@ function executeCompiledSqliteQuerySync<Row>(
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
         const reader = retainSqliteReader(db, "kysely eager query");
-        let cleanupError: unknown;
         let failed = false;
         let failure: unknown;
         const rows: Row[] = [];
@@ -127,12 +136,7 @@ function executeCompiledSqliteQuerySync<Row>(
           failed = true;
           failure = error;
         }
-        try {
-          iterator.return?.();
-        } catch (error) {
-          cleanupError = error;
-        }
-        reader.release();
+        const cleanupError = releaseSqliteIterator(iterator, reader);
         if (failed) {
           throw toErrorObject(failure, "SQLite query failed");
         }
@@ -270,7 +274,6 @@ export function iterateSqliteQuerySync<Row>(
       const parameters = compiledQuery.parameters as SQLInputValue[];
       const iterator = statement.iterate(...parameters);
       const reader = retainSqliteReader(db, "kysely iterator", owner);
-      let cleanupError: unknown;
       let failed = false;
       try {
         for (const row of iterator) {
@@ -281,14 +284,9 @@ export function iterateSqliteQuerySync<Row>(
         failed = true;
         throw toErrorObject(error, "SQLite iterator failed");
       } finally {
-        try {
-          iterator.return?.();
-        } catch (error) {
-          cleanupError = error;
-        }
-        reader.release();
+        const cleanupError = releaseSqliteIterator(iterator, reader);
         if (!failed && cleanupError !== undefined) {
-          throwSqliteIteratorCleanupError(cleanupError);
+          throw toErrorObject(cleanupError, "SQLite iterator cleanup failed");
         }
       }
     } catch (error) {

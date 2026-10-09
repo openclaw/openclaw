@@ -20,6 +20,17 @@ export type SqliteCommittedPublication = {
   notify: () => void;
 };
 
+function committedPublicationState(
+  publication: SqliteCommittedPublication,
+): PendingTransactionState {
+  return {
+    commit: publication.installFacts,
+    prepareObservers: publication.installProjection,
+    invalidate: publication.invalidate,
+    rollback: () => {},
+  };
+}
+
 /**
  * Installation is synchronous, including failure fencing. Observers cannot turn a
  * committed write into a failed transaction or prevent another owner's receipt.
@@ -89,17 +100,7 @@ function installCommittedState(
 
 /** Use the same phase ordering for an already committed worker receipt. */
 export function publishSqliteCommittedState(publication: SqliteCommittedPublication): void {
-  installCommittedState(
-    [
-      {
-        commit: publication.installFacts,
-        prepareObservers: publication.installProjection,
-        invalidate: publication.invalidate,
-        rollback: () => {},
-      },
-    ],
-    [publication.notify],
-  );
+  installCommittedState([committedPublicationState(publication)], [publication.notify]);
 }
 
 /** Stage a complete owner publication; native savepoints share the outer commit. */
@@ -110,10 +111,7 @@ export function stageSqliteCommittedPublication(
   if (
     !stageSqliteTransactionState(db, {
       stage: () => {},
-      commit: publication.installFacts,
-      prepareObservers: publication.installProjection,
-      invalidate: publication.invalidate,
-      rollback: () => {},
+      ...committedPublicationState(publication),
     })
   ) {
     return false;
