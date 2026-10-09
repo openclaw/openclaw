@@ -131,7 +131,9 @@ function validateRequiredChecks(requiredChecks) {
 
 export function validateCrabboxMergeBypass({
   actor,
+  baseComparison,
   checkRuns,
+  expectedBaseSha,
   expectedLeaseId,
   expectedRunId,
   finalMainComparison,
@@ -142,6 +144,7 @@ export function validateCrabboxMergeBypass({
   mainComparison,
   mainRef,
   membership,
+  pullMainComparison,
   pullRequest,
   publisherRun,
   requiredChecks,
@@ -178,13 +181,13 @@ export function validateCrabboxMergeBypass({
     binding.runId !== expectedRunId ||
     binding.leaseId !== expectedLeaseId ||
     binding.headSha !== headSha ||
+    binding.baseSha !== expectedBaseSha ||
     pull.number < 1 ||
     pull.state !== "open" ||
     pull.draft !== false ||
     record(pull.head, "pull request head").sha !== headSha ||
     record(record(pull.head, "pull request head").repo, "pull request head repo").full_name !==
       "openclaw/openclaw" ||
-    record(pull.base, "pull request base").sha !== binding.baseSha ||
     record(record(pull.base, "pull request base").repo, "pull request base repo").full_name !==
       "openclaw/openclaw" ||
     record(pull.base, "pull request base").ref !== "main"
@@ -208,6 +211,28 @@ export function validateCrabboxMergeBypass({
   const mainSha = record(mainRefRecord.object, "protected main ref.object").sha;
   if (mainRefRecord.ref !== "refs/heads/main") {
     throw new Error("protected main ref is malformed");
+  }
+  // The tested base is immutable; GitHub's live pull base follows main.
+  const pullBaseSha = record(pull.base, "pull request base").sha;
+  if (pullBaseSha !== binding.baseSha) {
+    if (strictDrift) {
+      throw new Error("protected main moved from the tested Crabbox base");
+    }
+    validateForwardAncestry(
+      baseComparison,
+      { baseSha: binding.baseSha, headSha: pullBaseSha },
+      "pull request base",
+    );
+  }
+  if (mainSha !== pullBaseSha) {
+    if (strictDrift) {
+      throw new Error("protected main moved during Crabbox merge validation");
+    }
+    validateForwardAncestry(
+      pullMainComparison,
+      { baseSha: pullBaseSha, headSha: mainSha },
+      "protected main after pull request read",
+    );
   }
   validateForwardAncestry(
     mainComparison,
@@ -364,7 +389,12 @@ function main() {
   const jobs = readJson(args.jobs, "CI jobs");
   const proof = validateCrabboxMergeBypass({
     actor: readJson(args.actor, "authenticated actor"),
+    baseComparison:
+      args["base-comparison"] === undefined
+        ? undefined
+        : readJson(args["base-comparison"], "pull request base comparison"),
     checkRuns: readJson(args["check-runs"], "check runs"),
+    expectedBaseSha: requiredString(args.base, "tested base SHA"),
     expectedLeaseId: requiredString(args["lease-id"], "lease id"),
     expectedRunId: requiredString(args["run-id"], "run id"),
     headSha: requiredString(args.head, "head SHA"),
@@ -381,6 +411,10 @@ function main() {
     mainComparison: readJson(args["main-comparison"], "protected main comparison"),
     mainRef: readJson(args["main-ref"], "protected main ref"),
     membership: readJson(args.membership, "organization membership"),
+    pullMainComparison:
+      args["pull-main-comparison"] === undefined
+        ? undefined
+        : readJson(args["pull-main-comparison"], "protected main after pull request comparison"),
     pullRequest: readJson(args["pull-request"], "pull request"),
     publisherRun: readJson(args["publisher-run"], "Crabbox publisher workflow run"),
     requiredChecks: readJson(args["required-checks"], "required checks"),

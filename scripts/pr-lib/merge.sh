@@ -999,18 +999,8 @@ merge_run() {
   if [ "$route" != immediate ] || [ "$merge_method" != squash ]; then
     merge_outcome_stable "$pr" || return 1
   fi
-  if [ "$route" = admin ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" != true ]; then
-    verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
-    local crabbox_main_sha
-    crabbox_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
-    crabbox_final_main_sha=$(jq -er '.finalMainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
-    verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$crabbox_main_sha" || return 1
-    verify_merge_main_advance "$crabbox_main_sha" "$crabbox_final_main_sha" || return 1
-    crabbox_verified_main="$crabbox_final_main_sha"
-    crabbox_final_main_sha="$observed_main"
-  fi
   fetch_clawsweeper_review_comments "$pr" "$MERGE_REPO_NAME" "$MERGE_REPO_HOST" || return 1
-  if ! merge_outcome_stable "$pr" false "" "$crabbox_verified_main"; then
+  if ! merge_outcome_stable "$pr"; then
     unset CLAWSWEEPER_REVIEW_COMMENTS
     return 1
   fi
@@ -1058,9 +1048,32 @@ merge_run() {
     [ "$correction_gates_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
-  if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF"
+  if [ "$route" = admin ]; then
+    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF" crabbox_main_sha
     for authority_round in 1 2 3; do
+      if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
+        # Materialization and projection settlement invalidate live authority.
+        # Reuse the bounded qualification loop and finish with the full verifier.
+        rm -f .local/merge-crabbox-bypass.json || return 1
+        merge_outcome_stable "$pr" false "" "$crabbox_verified_main" || return 1
+        verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
+        crabbox_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+        crabbox_final_main_sha=$(jq -er '.finalMainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+        if [ "$crabbox_main_sha" = "$MERGE_OBSERVED_MAIN" ] && [ "$crabbox_final_main_sha" = "$MERGE_OBSERVED_MAIN" ]; then
+          break
+        fi
+        # Discard this decision before any fetch or candidate-tree work.
+        rm -f .local/merge-crabbox-bypass.json || return 1
+        if [ "$authority_round" -eq 3 ]; then
+          merge_outcome_stop "Crabbox main kept advancing after 3 authority rounds; stopped before intent/dispatch"
+          return 1
+        fi
+        verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$crabbox_main_sha" || return 1
+        verify_merge_main_advance "$crabbox_main_sha" "$crabbox_final_main_sha" || return 1
+        crabbox_verified_main="$crabbox_final_main_sha"
+        echo "Requalifying Crabbox admission after main $crabbox_verified_main (round $((authority_round + 1))/3)."
+        continue
+      fi
       # Retain only the equality fingerprint, never a prior live authority decision.
       MERGE_PRIOR_CI_PROOF=""
       merge_outcome_stable "$pr" false requalify-prior-ci || return 1
@@ -1088,9 +1101,11 @@ merge_run() {
       fi
       break
     done
-    # No awaited operation may replace the operator's bytes after validation.
-    node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
-      "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+      # No awaited operation may replace the operator's bytes after validation.
+      node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
+        "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
+    fi
     crabbox_final_main_sha="$observed_main"
   fi
   if [ -n "$provider_rejection" ] &&
