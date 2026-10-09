@@ -12,10 +12,8 @@ import {
 import {
   readPluginSourceDirectory,
   pluginSourceInputIdentity,
-  type PluginSourceInput,
+  type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
-
-export type PluginCapturedSourceFact = { source: string; input: PluginSourceInput };
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();

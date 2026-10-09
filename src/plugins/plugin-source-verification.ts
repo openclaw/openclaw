@@ -46,6 +46,8 @@ export type PluginSourceInput = {
   native?: boolean;
 };
 
+export type PluginCapturedSourceFact = { source: string; input: PluginSourceInput };
+
 export function verifyPluginSourceInputs(
   inputs: ReadonlyMap<string, PluginSourceInput>,
   sources: Iterable<string>,

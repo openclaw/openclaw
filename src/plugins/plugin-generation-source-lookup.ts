@@ -8,7 +8,6 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { createJiti } from "./jiti-factory.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
-import type { PluginCapturedSourceFact } from "./plugin-generation-file-capture.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
@@ -30,6 +29,7 @@ import {
   pluginSourceFileProbe,
   readPluginSourceDirectory,
   verifyPluginSourceInputs,
+  type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
 
 type DependencyLookup = {
