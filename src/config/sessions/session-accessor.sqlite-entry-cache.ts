@@ -27,6 +27,7 @@ import {
 import { recordCommittedSessionMetadataPublication } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   emitPreparedSessionSharingChange,
+  invalidateSessionEntryPublication,
   publishSessionSharingEntryChange,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -424,27 +425,36 @@ export function publishSessionEntryCacheCategoryUpdate(
   rows: ReadonlyArray<{ sessionKey: string; sessionId: string }>,
   category: string | undefined,
 ): void {
-  publishTrackedCacheUpdate(database, () => {
-    const cached = sessionEntryCaches.get(database.db);
-    for (const { sessionKey, sessionId } of rows) {
-      recordCommittedSessionMetadataPublication(database, sessionKey, {
-        kind: "category",
-        sessionId,
-        category: category ?? null,
-      });
-      const current = cached?.entries.get(sessionKey);
-      if (!current || current.sessionId !== sessionId) {
-        continue;
+  publishTrackedCacheUpdate(
+    database,
+    () => {
+      const cached = sessionEntryCaches.get(database.db);
+      for (const { sessionKey, sessionId } of rows) {
+        recordCommittedSessionMetadataPublication(database, sessionKey, {
+          kind: "category",
+          sessionId,
+          category: category ?? null,
+        });
+        const current = cached?.entries.get(sessionKey);
+        if (!current || current.sessionId !== sessionId) {
+          continue;
+        }
+        const next = { ...current };
+        if (category === undefined) {
+          delete next.category;
+        } else {
+          next.category = category;
+        }
+        cached?.entries.set(sessionKey, freezeJsonSnapshot(next));
       }
-      const next = { ...current };
-      if (category === undefined) {
-        delete next.category;
-      } else {
-        next.category = category;
+    },
+    undefined,
+    () => {
+      for (const { sessionKey } of rows) {
+        invalidateSessionEntryPublication(database, sessionKey);
       }
-      cached?.entries.set(sessionKey, freezeJsonSnapshot(next));
-    }
-  });
+    },
+  );
 }
 
 /** Refresh participant projections without reloading unchanged session-entry JSON. */

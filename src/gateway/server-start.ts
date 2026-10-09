@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
@@ -19,8 +20,11 @@ export async function startGatewayServerCore(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  // Join startup through its returned promise without giving resident listeners the boot scope.
   const start = (signal?: AbortSignal) =>
-    startGatewayServerWithSdkHost(port, opts, sdkResourceHost, signal);
+    runOutsideAsyncWorkScope(() =>
+      startGatewayServerWithSdkHost(port, opts, sdkResourceHost, signal),
+    );
   return await sdkResourceHost.run(() =>
     opts.startupOperation ? opts.startupOperation(start) : start(),
   );

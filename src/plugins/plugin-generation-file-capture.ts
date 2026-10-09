@@ -6,6 +6,7 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
+import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
 import {
@@ -15,6 +16,7 @@ import {
 import {
   readPluginSourceDirectory,
   pluginSourceInputIdentity,
+  type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
 
 export function createPluginSourceLinkCapture() {
@@ -48,6 +50,8 @@ export function createPluginGenerationFileCapture({
   deferExternalLinks,
   nativeAdmission,
   receipt,
+  retained,
+  sourceFacts,
   onPackageMetadata,
 }: {
   boundary: string;
@@ -65,6 +69,8 @@ export function createPluginGenerationFileCapture({
   deferExternalLinks: boolean;
   nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
+  retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
+  sourceFacts?: Map<string, PluginCapturedSourceFact>;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
   const { inputs, pendingInputs, additions } = sourceCapture;
@@ -96,6 +102,21 @@ export function createPluginGenerationFileCapture({
       identity = pluginSourceInputIdentity(stat),
       admittedBoundary = inputBoundary,
     ) => {
+      if (sourceFacts) {
+        const original = fs.realpathSync(source);
+        sourceFacts.set(path.relative(directory, target), {
+          source: path.resolve(source),
+          input: {
+            identity: pluginSourceInputIdentity(fs.statSync(original, { bigint: true })),
+            contentHash: stat.isDirectory()
+              ? readPluginSourceDirectory(original).contentHash
+              : contentHash,
+            sizeBytes,
+            directory: stat.isDirectory(),
+            boundary: isPathInside(boundary, original) ? boundary : path.dirname(original),
+          },
+        });
+      }
       if (!captured) {
         // Filesystem ticks can hide edits; aliases retain their first captured content facts.
         inputs.set(real, {
@@ -148,10 +169,27 @@ export function createPluginGenerationFileCapture({
       // Register before copying or admission can fail: known aliases must remain
       // rejected by the acquisition owner even when the first attempt is incomplete.
       additions.add(target);
+      const retainedFile = retained?.files.get(path.relative(directory, target));
+      if (retainedFile && retainedFile.source !== path.resolve(source)) {
+        throw new Error("Plugin retained source layout changed during admission");
+      }
+      const retainedReference = retained?.source.native?.references.has(target);
+      if (retainedReference) {
+        // The fork owns this validated reference; the new lease must admit its own native owner.
+        fs.unlinkSync(target);
+      }
       const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
       let copiedContent: ReturnType<typeof copyPluginSourceFile>;
       if (native) {
         nativeAdmission.reconcileSourceInputs(inputs);
+      } else if (retainedFile && !retainedReference) {
+        const retainedInput = retainedFile.input;
+        // The receipt verifies the private copy against these retained content facts.
+        copiedContent = {
+          contentHash: retainedInput.contentHash,
+          sizeBytes: retainedInput.sizeBytes,
+          sourceIdentity: pluginSourceInputIdentity(stat),
+        };
       } else if (captured) {
         // A second filename for a prefetched entry retains its first bytes and source identity.
         copiedContent = copyPluginSourceFile(captured, directory, target, {
