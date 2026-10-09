@@ -1080,7 +1080,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-runner/run.prepared-harness-source-delivery.integration.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
-  "src/agents/embedded-agent-runner/run.terminal-timeout-delivery.integration.test.ts",
   "src/agents/embedded-agent-runner/run/assistant-failure.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-context-advancement.test.ts",
