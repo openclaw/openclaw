@@ -323,6 +323,15 @@ export class SessionOrganizerController {
     );
   }
 
+  private canUnpinSession(session: SidebarRecentSession): boolean {
+    return this.host.readSessionMutationAccess({
+      method: "sessions.patch",
+      params: { key: session.key, pinned: false },
+      sessionScope: true,
+      session,
+    }).allowed;
+  }
+
   handleSessionListDragOver(event: DragEvent) {
     // Default plugin links remain visible. Do not promise an unpin that the
     // catalog would immediately undo; these entries can still move in Pages.
@@ -333,6 +342,9 @@ export class SessionOrganizerController {
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
     if (!routeDrag && !session?.pinned) {
+      return;
+    }
+    if (session?.pinned && !this.canUnpinSession(session)) {
       return;
     }
     event.preventDefault();
@@ -364,7 +376,7 @@ export class SessionOrganizerController {
     }
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (session?.pinned) {
+    if (session?.pinned && this.canUnpinSession(session)) {
       event.preventDefault();
       // patchSession prunes the persisted zone entry once the unpin lands.
       void this.patchSession(session, { pinned: false }, { sessionScope: true });

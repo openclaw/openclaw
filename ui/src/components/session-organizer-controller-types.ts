@@ -3,6 +3,10 @@ import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionMethodAccess,
+  SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
   SidebarRecentSession,
@@ -35,6 +39,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
+  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   reconciledSidebarZone(): {
     sidebarEntries: readonly string[];
     defaultPluginNavigationKeys: ReadonlySet<string>;
