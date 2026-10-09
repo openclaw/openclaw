@@ -479,9 +479,9 @@ type EnvRefRestoreFrame =
     }
   | {
       readonly kind: "escape-check";
-      readonly incoming: readonly unknown[];
-      readonly parsed: readonly unknown[];
-      readonly resolved: readonly unknown[];
+      readonly incoming: unknown[];
+      readonly parsed: unknown[];
+      readonly resolved: unknown[];
       readonly explicitSetPaths: ExplicitSetPaths;
       readonly next: unknown[];
       readonly matches: ReadonlyMap<number, number>;
