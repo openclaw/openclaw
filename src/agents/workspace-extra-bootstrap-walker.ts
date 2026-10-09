@@ -22,6 +22,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { braceExpand, Minimatch } from "minimatch";
 import { isPathInside } from "../infra/path-guards.js";
+import { hasGlobPattern, normalizeWorkspacePatternPath } from "./workspace-bootstrap-policy.js";
 
 // Minimatch options for the fallback matcher and its brace expansion, kept in one
 // place so the matcher, the brace expansion, and the per-segment magic check all
@@ -35,15 +36,6 @@ const EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS = {
   windowsPathsNoEscape: true,
 } as const;
 
-// Normalize a configured pattern to POSIX-relative form: fs.glob expects
-// "/"-separated patterns and a leading "./" carries no meaning.
-function normalizeWorkspacePatternPath(value: string): string {
-  return value
-    .replaceAll(path.sep, "/")
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
-}
-
 // Fold ONLY the platform separator in an fs.glob match, never backslashes: a
 // backslash is a legal POSIX filename byte, so rewriting it (as the pattern-side
 // normalization does) would point the loader at a different, missing path and
@@ -54,61 +46,32 @@ export function toPortableMatchPath(match: string, separator: string = path.sep)
   return match.replaceAll(separator, "/");
 }
 
-// Module-local: the loader routes glob-vs-literal through the policy owner's
-// `hasGlobPattern`; this copy only drives the walker's own literal-prefix grammar.
-function hasGlobPattern(pattern: string): boolean {
-  // Keep square brackets literal here; workspace paths commonly contain them.
-  // Only `? * { }` route a pattern to fs.glob, so an existing config path like
-  // `pkg[ab]/AGENTS.md` still loads only the literal file rather than fanning
-  // out to a bracket-class expansion after upgrade (a `main` compatibility
-  // contract). A pattern that mixes brackets with real magic (`pkg[ab]/*/…`)
-  // does route to fs.glob, where `[ab]` is a character class — the same
-  // asymmetry `main` has.
-  return /[?*{}]/u.test(pattern);
-}
-
-// Leading literal directory prefix of a pattern: the path segments before the
-// first glob-magic segment. Only the security pre-gate uses it, to decide
-// whether a pattern rooted at a literal directory symlink escapes the workspace
-// before fs.glob reads there. A magic-first pattern (`{a,b}/…`) collapses to "."
-// (the workspace root), matching fs.glob which would root that walk at the
-// workspace.
+// Leading literal directory prefix of a glob-routed pattern: the path segments
+// before the first glob-magic segment. The security pre-gate realpaths it to
+// decide whether a pattern rooted at a literal directory symlink escapes the
+// workspace before fs.glob reads there, and the fs.glob-absent fallback roots its
+// walk there. A magic-first pattern (`{a,b}/…`) collapses to "." (the workspace
+// root), matching fs.glob which would root that walk at the workspace.
 //
-// The prefix grammar must match how the pattern is actually resolved, or the
-// pre-gate realpaths the wrong directory. `hasGlobPattern` keeps `[ ]` literal
-// for routing (so `pkg[ab]/AGENTS.md` opens its real bracket-named file), but a
-// pattern that ALSO contains `? * { }` is routed to fs.glob, where `[ab]` is a
-// character class. For that routed case the literal prefix must stop before a
-// bracket segment too: `pkg[ab]/*/AGENTS.md` collapses to the workspace root,
-// exactly where fs.glob roots its walk over `pkga`/`pkgb`. Realpathing the
-// literal `pkg[ab]` directory instead would falsely reject the whole pattern if
-// a stray `pkg[ab]` symlink escaped the workspace. A fully-literal pattern
-// (routedToGlob false) keeps `[ ]` literal and its whole path — the `main`
-// bracket-path compatibility contract. The routed grammar also treats an extglob
-// open (`@(`, `+(`, `!(`, plus `?(` and `*(`) as magic, matching where fs.glob
-// roots its walk over the alternatives rather than at a literally-named segment.
-function literalPatternPrefix(pattern: string, routedToGlob: boolean): string {
-  const magicSegment = routedToGlob ? /[?*{}[\]]|[!*+?@]\(/u : /[?*{}]/u;
+// The grammar must match how fs.glob resolves the pattern, or the pre-gate
+// realpaths the wrong directory. A glob-routed pattern treats `[ab]` as a
+// character class, so the prefix stops before a bracket segment too:
+// `pkg[ab]/*/AGENTS.md` collapses to the workspace root, exactly where fs.glob
+// roots its walk over `pkga`/`pkgb`. Realpathing the literal `pkg[ab]` directory
+// instead would falsely reject the whole pattern if a stray `pkg[ab]` symlink
+// escaped the workspace. An extglob open (`@(`, `+(`, `!(`, plus `?(` and `*(`)
+// is magic for the same reason. Fully-literal patterns never come here: the
+// pre-gate checks their exact path.
+function literalPatternPrefix(pattern: string): string {
   const segments = normalizeWorkspacePatternPath(pattern).split("/");
   const literal: string[] = [];
   for (const segment of segments) {
-    if (magicSegment.test(segment)) {
+    if (/[?*{}[\]]|[!*+?@]\(/u.test(segment)) {
       break;
     }
     literal.push(segment);
   }
   return literal.join("/") || ".";
-}
-
-// Walk root for the fs.glob-absent fallback: the literal directory prefix before
-// the first glob-magic segment, so the local scan starts where fs.glob would root
-// its walk instead of always re-reading from the workspace root. Delegates to the
-// shared literal-prefix grammar with routedToGlob=true — the fallback matcher
-// unconditionally treats `[ab]` as a character class, and only glob-routed
-// patterns ever reach this walk, so the root must stop before a bracket segment
-// exactly as the security pre-gate does (`packages/[ab]/*` roots at `packages`).
-function resolveFallbackWalkRoot(normalizedPattern: string): string {
-  return literalPatternPrefix(normalizedPattern, true);
 }
 
 // Whether a brace-free pattern segment is a wildcard the fallback matcher treats
@@ -254,7 +217,9 @@ async function* walkFallbackMatches(
     normalizedPattern,
     EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS,
   ).map((expansion) => expansion.split("/"));
-  const walkRoot = resolveFallbackWalkRoot(normalizedPattern);
+  // Root the local scan where fs.glob would root its walk (`packages/[ab]/*`
+  // roots at `packages`) instead of always re-reading from the workspace root.
+  const walkRoot = literalPatternPrefix(normalizedPattern);
   const stack: FallbackWalkFrame[] = [
     { relativeDir: walkRoot === "." ? "" : walkRoot, symlinkDepths: new Set() },
   ];
@@ -421,21 +386,24 @@ export async function resolveExtraBootstrapPatternPaths(
   return { matches: [...matches], failures };
 }
 
-// Loader security pre-gate: reject a pattern whose leading literal directory
-// prefix escapes the workspace so the loader surfaces a `security` diagnostic
-// instead of a silent empty resolve. Lexical containment first (a literal
-// `../outside` prefix), then realpath containment: a literal-prefix directory
-// symlink can point outside the workspace while staying lexically inside
-// (`linked/**` where `linked` -> /external), and fs.glob would resolve that
-// external target (P1-B). A prefix that does not exist yet has no realpath —
-// fall through to the lexical result, since the glob simply finds nothing there.
+// Loader security pre-gate: reject a pattern whose walk root escapes the
+// workspace so the loader surfaces a `security` diagnostic instead of a silent
+// empty resolve. A glob-routed pattern is checked at its leading literal prefix;
+// a fully-literal pattern at the exact path the loader reads, so a POSIX
+// filename holding a backslash is not checked under a different `/`-split path.
+// Lexical containment first (a literal `../outside` prefix), then realpath
+// containment: a literal-prefix directory symlink can point outside the
+// workspace while staying lexically inside (`linked/**` where `linked` ->
+// /external), and fs.glob would resolve that external target. A root that does
+// not exist yet has no realpath — fall through to the lexical result, since the
+// glob simply finds nothing there.
 export async function patternWalkRootStaysInWorkspace(
   workspaceDir: string,
   pattern: string,
 ): Promise<boolean> {
   const walkRoot = path.resolve(
     workspaceDir,
-    literalPatternPrefix(pattern, hasGlobPattern(pattern)),
+    hasGlobPattern(pattern) ? literalPatternPrefix(pattern) : pattern,
   );
   if (!isPathInside(workspaceDir, walkRoot)) {
     return false;

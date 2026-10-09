@@ -951,6 +951,36 @@ describe("resolveExtraBootstrapPatternPaths literal-backslash match paths", () =
       expect(diagnostics).toHaveLength(0);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "checks a literal backslash pattern at the exact path the loader reads",
+    async () => {
+      // The containment pre-gate must realpath the same path the loader opens. A
+      // contained `back\slash-dir/AGENTS.md` sits beside an unrelated
+      // `back/slash-dir` symlink that escapes; folding the backslash would check
+      // the escaping path and reject the valid literal as `security`.
+      const rootDir = await createWorkspaceDir("backslash-literal");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(path.join(workspaceDir, "back\\slash-dir"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "back\\slash-dir", "AGENTS.md"),
+        "contained agents",
+        "utf-8",
+      );
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside agents", "utf-8");
+      await fs.mkdir(path.join(workspaceDir, "back"), { recursive: true });
+      await fs.symlink(outsideDir, path.join(workspaceDir, "back", "slash-dir"));
+
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "back\\slash-dir/AGENTS.md",
+      ]);
+
+      expect(diagnostics).toStrictEqual([]);
+      expect(files.map((file) => file.content)).toStrictEqual(["contained agents"]);
+    },
+  );
 });
 
 describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
