@@ -34,13 +34,11 @@ summarization reports a failure instead of claiming there was no content.
 
 AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
-### Chunk boundaries and tool pairing
+### Summary input and tool pairing
 
-When splitting a long transcript into compaction chunks, OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries:
+The compaction cut point keeps assistant tool calls paired with their matching `toolResult` entries: if the cut would land between a call and its result, OpenClaw moves it so the pair stays together in the retained tail.
 
-- If the token-share split would land between a tool call and its result, OpenClaw shifts the boundary to the assistant tool-call message instead of separating the pair.
-- If a trailing tool-result block would otherwise push the chunk over target, OpenClaw preserves that pending tool block and keeps the unsummarized tail intact.
-- Aborted/error tool-call blocks do not hold a pending split open.
+The older history before the cut is summarized in one request whose conversation input is bounded (see [Compaction](/concepts/compaction#how-it-works)). When that history is larger than the bound, the summarizer receives a sample: the newest messages verbatim, older user messages, the oldest messages and evenly spaced runs of the rest, with each gap marked by its size. A sampled tool result may be shown without its call, so it names the call that produced it, for example `[Tool result of exec(cmd="npm test")]`. Results are matched to calls of the same assistant turn by occurrence, so a repeated call ID never borrows a label from an earlier, unanswered call.
 
 ## When auto-compaction happens
 
