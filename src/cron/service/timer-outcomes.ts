@@ -398,6 +398,12 @@ export function applyJobResult(
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
       });
+      // Within the quick-retry budget the next run is at most minutes away, whether it is the
+      // retry itself or an earlier natural slot, so a provider outage holds notifications.
+      const holdsForRetry =
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined &&
+        holdsFailureNotificationForRetry(job, result, retryDecision.retryCategory);
       let normalNext: number | undefined;
       let normalNextComputed = false;
       const computeNormalNext = () => {
@@ -418,11 +424,7 @@ export function applyJobResult(
             return finish();
           }
           if (retryNextRunAtMs < normalNext) {
-            pendingTransientRetry = holdsFailureNotificationForRetry(
-              job,
-              result,
-              retryDecision.retryCategory,
-            );
+            pendingTransientRetry = holdsForRetry;
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -466,6 +468,7 @@ export function applyJobResult(
           : normalNext !== undefined
             ? Math.max(normalNext, backoffNext)
             : backoffNext;
+      pendingTransientRetry = holdsForRetry && job.state.nextRunAtMs !== undefined;
       state.deps.log.info(
         {
           jobId: job.id,

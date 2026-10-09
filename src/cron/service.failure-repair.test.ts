@@ -159,16 +159,19 @@ describe("CronService failure repair", () => {
     };
 
     it.each([
-      { name: "owned", overrides: owned, repairs: 1, alerts: 0 },
+      { name: "owned hourly", overrides: owned, everyMs: 3_600_000, repairs: 1, alerts: 0 },
       {
-        name: "unowned",
+        name: "unowned hourly",
         overrides: { ...owned, owner: undefined },
+        everyMs: 3_600_000,
         repairs: 0,
         alerts: 1,
       },
+      // The 60s retry is not sooner than the next natural slot, so ordinary backoff schedules it.
+      { name: "owned every-minute", overrides: owned, everyMs: 60_000, repairs: 1, alerts: 0 },
     ])(
       "holds the $name notification until the quick retries are exhausted",
-      async ({ overrides, repairs, alerts }) => {
+      async ({ overrides, everyMs, repairs, alerts }) => {
         await withRepair(
           async ({
             cron,
@@ -181,7 +184,10 @@ describe("CronService failure repair", () => {
               status: "error",
               error: "fetch failed: getaddrinfo EAI_AGAIN api.example.com",
             });
-            const job = await addJob("outage sync", { ...overrides, ...hourly });
+            const job = await addJob("outage sync", {
+              ...overrides,
+              schedule: { kind: "every", everyMs },
+            });
             for (let attempt = 1; attempt <= 3; attempt += 1) {
               await runDue(cron, job.id);
             }
