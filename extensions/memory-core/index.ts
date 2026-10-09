@@ -1,4 +1,4 @@
-import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
@@ -7,6 +7,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type AnyAgentTool,
@@ -212,6 +213,30 @@ export default definePluginEntry({
     } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
+    api.lifecycle.onDispose?.(async () => {
+      const result = await prepareMemoryManagerReload({
+        retireRuntime: true,
+        retiringEmbeddingProviders: [],
+      }).drain();
+      if (result?.errors.length) {
+        throw new AggregateError(result.errors, "Memory manager disposal failed");
+      }
+    });
+    if (normalizePluginsConfig(api.config.plugins).slots.memory === api.id) {
+      api.registerService({
+        id: "memory-core-index",
+        reload: { configPrefixes: ["memory.search", "agents"] },
+        async start({ config, logger }) {
+          for (const agentId of listAgentIds(config)) {
+            const { error } = await memoryRuntime.getMemorySearchManager({ cfg: config, agentId });
+            if (error) {
+              logger.warn(`memory-core: index startup failed for ${agentId}: ${error}`);
+            }
+          }
+        },
+        stop: () => memoryRuntime.closeAllMemorySearchManagers?.(),
+      });
+    }
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({

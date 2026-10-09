@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  OpenClawPluginService,
+  OpenClawPluginServiceV2,
+} from "openclaw/plugin-sdk/core";
 import type {
   AnyAgentTool,
   MemoryPluginRuntime,
@@ -13,7 +18,7 @@ import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
-const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => ({ manager: null })));
 const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
@@ -397,7 +402,7 @@ describe("memory-core plugin runtime registration", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps memory manager initialization demand-driven", () => {
+  it("keeps memory manager initialization out of registration", () => {
     plugin.register(
       createTestPluginApi({
         runtime: hostRuntime,
@@ -407,6 +412,39 @@ describe("memory-core plugin runtime registration", () => {
     expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
+
+  it.each(["memory-core", "honcho", "none"])(
+    "starts configured indexes only for the selected memory slot: %s",
+    async (owner) => {
+      const config: OpenClawConfig = {
+        plugins: { slots: { memory: owner } },
+        agents: { entries: { main: {}, research: {} } },
+      };
+      const services: Array<OpenClawPluginService | OpenClawPluginServiceV2> = [];
+      const api = createTestPluginApi({
+        id: "memory-core",
+        config,
+        runtime: hostRuntime,
+        registerService: (service) => {
+          if (service.id === "memory-core-index") {
+            services.push(service);
+          }
+        },
+      });
+      plugin.register(api);
+      for (const service of services) {
+        if (service.apiVersion === 2) {
+          throw new Error("Unexpected scheduled service");
+        }
+        await service.start({ config, stateDir: "unused", logger: api.logger });
+      }
+      expect(getMemorySearchManagerMock.mock.calls).toEqual(
+        owner === "memory-core"
+          ? [[{ cfg: config, agentId: "main" }], [{ cfg: config, agentId: "research" }]]
+          : [],
+      );
+    },
+  );
 
   it("wires scoped memory search cleanup through the lazy runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
