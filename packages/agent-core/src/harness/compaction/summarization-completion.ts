@@ -1,4 +1,4 @@
-import { adjustMaxTokensForThinking } from "@openclaw/ai/providers";
+import { resolveCompletionTokenReservation } from "@openclaw/ai/transports";
 import {
   resolveClaudeFable5ModelIdentity,
   type Model,
@@ -112,15 +112,7 @@ export async function runSummarizationCompletion(
   if ((model.reasoning || fableReasoning) && thinkingLevel) {
     options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
-  // Budget-based thinking transports add the thinking allowance on top of maxTokens.
-  const completionTokens =
-    options.reasoning && options.reasoning !== "off"
-      ? adjustMaxTokensForThinking(
-          maxTokens,
-          model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-          options.reasoning,
-        ).maxTokens
-      : maxTokens;
+  const completionTokens = resolveCompletionTokenReservation(model, maxTokens, options.reasoning);
   const conversationBudget = resolveSummaryInputChars(
     model,
     completionTokens,

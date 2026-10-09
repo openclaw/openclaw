@@ -152,3 +152,29 @@ export function applyAnthropicThinkingOptions(
   resolved.thinkingBudgetTokens = thinkingEnabled ? adjusted.thinkingBudget : undefined;
   return reasoning;
 }
+
+/**
+ * Largest completion a request may ask for once transport thinking options
+ * apply, for callers that size the prompt before dispatch. Budget-based
+ * Anthropic Messages thinking adds its budget to `maxTokens`; other transports
+ * keep `maxTokens` as the total output limit.
+ */
+export function resolveCompletionTokenReservation(
+  model: Model,
+  maxTokens: number,
+  reasoning: SimpleStreamOptions["reasoning"],
+): number {
+  if (model.api !== "anthropic-messages") {
+    return maxTokens;
+  }
+  const resolved: AnthropicOptions & { maxTokens: number } = { maxTokens };
+  // The managed profile expands at least as far as the standalone provider does.
+  // SAFETY: the api check above selects the anthropic-messages model shape.
+  applyAnthropicThinkingOptions(
+    model as Model<"anthropic-messages">,
+    resolved,
+    { reasoning },
+    "transport",
+  );
+  return Math.max(maxTokens, resolved.maxTokens);
+}

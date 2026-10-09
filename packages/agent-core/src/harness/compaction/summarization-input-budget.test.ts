@@ -409,9 +409,15 @@ describe("summary request input budget", () => {
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
   });
 
-  it("reserves the thinking allowance a budget-based transport adds to the output", async () => {
+  it("reserves the thinking budget Anthropic Messages adds to the output limit", async () => {
     const { streamFn, prompts } = createCapturingStream();
-    const model = { ...createModel(32_768, 64_000), reasoning: true };
+    const model: Model = {
+      ...createModel(32_768, 64_000),
+      id: "claude-legacy-thinking",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      reasoning: true,
+    };
     const result = await generateSummary(
       createLongSession(40),
       model,
@@ -430,6 +436,31 @@ describe("summary request input budget", () => {
     const completionTokens = Math.floor(0.8 * 8_192) + 16_384;
     const promptTokens = estimateStringChars(prompts[0] ?? "") / CHARS_PER_TOKEN_ESTIMATE;
     expect(promptTokens + completionTokens).toBeLessThan(32_768);
+  });
+
+  it("does not reserve a thinking budget when maxTokens is the total output limit", async () => {
+    const { streamFn, prompts } = createCapturingStream();
+    const model: Model = {
+      ...createModel(16_384, 16_384),
+      api: "openai-completions",
+      provider: "openai",
+      reasoning: true,
+    };
+    const result = await generateSummary(
+      [{ role: "user", content: "Rename the queue.", timestamp: 1 }],
+      model,
+      4_096,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
   });
 
   it("names each result by the call occurrence it answers when call IDs repeat", () => {
