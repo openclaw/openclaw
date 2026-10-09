@@ -1250,7 +1250,8 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("security");
   });
 
-  it.runIf(process.platform !== "win32")(
+  // Root bypasses directory permissions, so chmod cannot deny the read.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "skips an unreadable glob branch and still loads readable matches",
     async () => {
       // Node fs.glob walks past a subtree it cannot read (EACCES) rather than
@@ -1312,7 +1313,8 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  // Root bypasses directory permissions, so chmod cannot deny the read.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "loads readable siblings through the fs.glob-absent fallback walk",
     async () => {
       // The fs.glob-absent fallback must skip a subtree it cannot read (EACCES)
