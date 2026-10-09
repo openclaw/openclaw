@@ -22,6 +22,7 @@ import {
   historyLane,
   maintenanceLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prepareSessionEntryPresenceRead,
@@ -117,7 +118,7 @@ afterEach(async () => {
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane].map(async (lane) => {
+    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
       historyClearTimeout(lane.idleTimer);
       await rotateDatabaseWorkers(lane);
     }),
@@ -315,6 +316,7 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
 it("settles cancelled message reads before reuse and closes their database handles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const fixture = await seed(state, "main", "cancel-message-read");
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
     let dispatched = false;
@@ -364,8 +366,8 @@ it("rejects a completed native message reply after primary file replacement", as
     const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
     const nativeReply = createDeferredCore<unknown>();
     const releaseReply = createDeferredCore();
-    const run = historyLane.pool.run;
-    const read = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const read = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await run(...args);
       if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
         nativeReply.resolve(reply.value);
@@ -389,7 +391,7 @@ it("rejects a completed native message reply after primary file replacement", as
         result: { found: true, message: { role: "user", content: sessionId } },
       });
       // Release the settled native reader for Windows replacement without revoking host custody.
-      await historyLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
+      await targetDiscoveryLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
       fs.renameSync(fixture.path, `${fixture.path}.previous`);
       fs.renameSync(`${fixture.path}.replacement`, fixture.path);
       expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);

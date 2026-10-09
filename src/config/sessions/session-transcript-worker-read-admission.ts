@@ -102,6 +102,7 @@ export async function withSessionHistoryReadAdmission<T>(
       // Cold reads and first creation share admission, so no reader opens a
       // half-created schema. Release the reservation before consumer effects.
       const reply = await (cold ? dispatchCold() : start(request.signal));
+      request.assertCurrent();
       prepared?.assertCurrent();
       return reply;
     };
