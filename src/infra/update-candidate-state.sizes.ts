@@ -21,7 +21,15 @@ const inventorySource = `
   process.stdin.on("data", chunk => { input += chunk; });
   process.stdin.on("end", () => {
     const result = [];
-    const progress = path => fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} + JSON.stringify({ phase: "metadata inventory", path }) + "\\n");
+    const progress = path => {
+      try {
+        fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} + JSON.stringify({ phase: "metadata inventory", path }) + "\\n");
+      } catch (error) {
+        // Advisory progress must not abort inventory when its nonblocking pipe is full.
+        // Drop this write without queueing bytes or delaying the metadata reads.
+        if (error.code !== "EAGAIN" && error.code !== "EWOULDBLOCK") throw error;
+      }
+    };
     for (const file of JSON.parse(input).files) {
       let size;
       progress(file);
