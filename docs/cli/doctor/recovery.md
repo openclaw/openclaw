@@ -69,10 +69,11 @@ current update admission.
 
 After restoration, Doctor verifies the Gateway with the shared health probe used
 by `openclaw gateway start`. A running process or owned listener alone does not
-mean it is ready. If the readiness budget expires while the service is running,
-Doctor leaves it running and warns that readiness was not verified, including
-the observed startup phase when available. Run `openclaw gateway status --deep`
-or `openclaw gateway diagnostics export` to investigate; repair still completes.
+mean it is ready. If the shared probe reports that the Gateway is still starting,
+Doctor leaves it running and completes with a warning that readiness was not
+verified. Other non-ready outcomes fail restoration, even if the process is
+running. Both outcomes include startup diagnostics and the next commands:
+`openclaw gateway status --deep` or `openclaw gateway diagnostics export`.
 
 When an exited container leaves a Gateway lock in a bind-mounted state directory,
 Doctor uses Gateway startup's namespace and heartbeat policy. It waits up to

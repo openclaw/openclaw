@@ -245,12 +245,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             : {}),
         }),
       );
-      if (
-        health.outcome === "starting" ||
-        (health.outcome !== "ready" && health.runtime.status === "running")
-      ) {
+      if (health.outcome === "starting") {
         warn(
-          `Warning: Doctor repair complete; Gateway started but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
+          `Warning: Doctor repair complete; Gateway is still starting and readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         );
         return;
       }
@@ -259,7 +256,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           env,
           phase: "gateway-restoration",
           code: "doctor-gateway-rpc-verification-failed",
-          detail: `Doctor repaired state, but the managed Gateway did not become ready: ${renderRestartDiagnostics(health).join(" ")}.`,
+          detail: `Doctor repaired state, but the managed Gateway did not become ready: ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         });
       }
     } catch (error) {

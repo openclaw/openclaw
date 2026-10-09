@@ -20,7 +20,7 @@ it.each([
     outcome: "failed",
     phase: "waiting for Gateway health and identity",
     elapsedMs: 60_000,
-    code: 0,
+    code: 1,
   },
   { outcome: "starting", phase: "initializing plugins", elapsedMs: 60_000, code: 0 },
   { outcome: "failed", phase: "waiting for managed service", elapsedMs: 60_000, code: 1 },
@@ -30,12 +30,16 @@ it.each([
     healthy: false,
     staleGatewayPids: [],
     runtime:
-      code === 0
-        ? { status: "running", pid: 4242 }
-        : { status: "stopped", state: "failed", lastExitStatus: 1 },
+      phase === "waiting for managed service"
+        ? { status: "stopped", state: "failed", lastExitStatus: 1 }
+        : { status: "running", pid: 4242 },
     portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
     waitOutcome:
-      outcome === "starting" ? "still-starting" : code === 0 ? "timeout" : "stopped-free",
+      outcome === "starting"
+        ? "still-starting"
+        : phase === "waiting for managed service"
+          ? "stopped-free"
+          : "timeout",
     elapsedMs,
     startupPhase: phase,
   });
@@ -54,7 +58,7 @@ it.each([
 
   if (code === 0) {
     const warning = maintenance!.warnings.join("\n");
-    expect(warning).toContain("Gateway started but readiness was not verified");
+    expect(warning).toContain("Gateway is still starting and readiness was not verified");
     expect(warning).toContain(phase);
     expect(warning).toContain("openclaw gateway status --deep");
     expect(warning).toContain("openclaw gateway diagnostics export");
@@ -65,6 +69,13 @@ it.each([
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Doctor gateway-restoration failed"),
     );
+    for (const diagnostic of [
+      phase === "waiting for managed service" ? "status=stopped" : phase,
+      "openclaw gateway status --deep",
+      "openclaw gateway diagnostics export",
+    ]) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
+    }
     expect(maintenance!.warnings).toEqual([]);
   }
   expect(boundary.log).not.toHaveBeenCalledWith(
