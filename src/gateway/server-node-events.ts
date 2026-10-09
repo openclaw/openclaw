@@ -890,11 +890,11 @@ async function handlePreparedNodeEvent(
         return undefined;
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
+      const cfg = getRuntimeConfig();
       const { canonicalKey: sessionKey, agentId } = resolveSessionStoreIdentity({
-        cfg: getRuntimeConfig(),
+        cfg,
         sessionKey: sessionKeyRaw,
       });
-      const cfg = getRuntimeConfig();
       const runId = normalizeOptionalString(obj.runId) ?? "";
       const auth = ctx.authorizeNodeSystemRunEvent({
         nodeId,
