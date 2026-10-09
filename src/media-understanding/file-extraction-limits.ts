@@ -1,4 +1,3 @@
-// Resolves inbound attachment text-extraction limits for media-understanding.
 import { asPositiveFiniteNumber as positiveExtractionLimit } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -24,7 +23,6 @@ export type FileExtractionLimits = InputFileLimits & {
   allowedMimesConfigured: boolean;
 };
 
-/** Builds inbound attachment extraction limits, sized to the agent's media/PDF config. */
 export function resolveFileExtractionLimits(cfg: OpenClawConfig): FileExtractionLimits {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);

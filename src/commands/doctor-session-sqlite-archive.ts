@@ -55,13 +55,11 @@ export function planImportedTranscriptArtifactsToArchive(
     moves.push(move);
   };
   addMove(transcriptPath, "transcript");
-  const trajectoryPath = resolveTrajectoryPath(transcriptPath);
-  if (trajectoryPath && fs.existsSync(trajectoryPath)) {
-    addMove(trajectoryPath, "trajectory");
-  }
-  const trajectoryPointerPath = resolveTrajectoryPointerPath(transcriptPath);
-  if (trajectoryPointerPath && fs.existsSync(trajectoryPointerPath)) {
-    addMove(trajectoryPointerPath, "trajectory");
+  for (const resolvePath of [resolveTrajectoryPath, resolveTrajectoryPointerPath]) {
+    const artifactPath = resolvePath(transcriptPath);
+    if (artifactPath && fs.existsSync(artifactPath)) {
+      addMove(artifactPath, "trajectory");
+    }
   }
   return moves;
 }

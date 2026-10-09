@@ -244,24 +244,22 @@ export function buildDeviceInventory(params: {
       }
     }
   }
-  const entries: DeviceInventoryEntry[] = [];
-  const seen = new Set<string>();
+  const entries = new Map<string, DeviceInventoryEntry>();
   for (const device of params.paired) {
     const id = normalizeOptionalString(device.deviceId);
-    if (!id || seen.has(id)) {
+    if (!id || entries.has(id)) {
       continue;
     }
-    seen.add(id);
-    entries.push(buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
+    entries.set(id, buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
   }
   for (const [id, node] of nodesById) {
-    if (!seen.has(id)) {
-      entries.push(buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
+    if (!entries.has(id)) {
+      entries.set(id, buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
     }
   }
 
-  const groupsByKey = new Map<string, DeviceInventoryEntry[]>();
-  for (const entry of entries) {
+  const groupsByKey = new Map<string, [DeviceInventoryEntry, ...DeviceInventoryEntry[]]>();
+  for (const entry of entries.values()) {
     const key = groupKey(entry);
     const bucket = groupsByKey.get(key);
     if (bucket) {
@@ -271,20 +269,10 @@ export function buildDeviceInventory(params: {
     }
   }
 
-  const groups: DeviceInventoryGroup[] = [];
-  for (const [key, bucket] of groupsByKey) {
-    const sorted = bucket.toSorted(compareEntries);
-    const primary = sorted[0];
-    if (!primary) {
-      continue;
-    }
-    groups.push({
-      key,
-      name: primary.name,
-      primary,
-      duplicates: sorted.slice(1),
-    });
-  }
+  const groups = [...groupsByKey].flatMap(([key, bucket]) => {
+    const [primary, ...duplicates] = bucket.toSorted(compareEntries);
+    return primary ? [{ key, name: primary.name, primary, duplicates }] : [];
+  });
   return groups.toSorted((left, right) => {
     const order = compareEntries(left.primary, right.primary);
     return order !== 0 ? order : left.name.localeCompare(right.name);

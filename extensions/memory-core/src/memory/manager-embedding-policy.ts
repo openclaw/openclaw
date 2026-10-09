@@ -83,22 +83,17 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
-function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
-}
-
-function readMemoryEmbeddingRetryAfterMs(error: unknown): number | undefined {
-  const value = asOptionalRecord(error)?.retryAfterMs;
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
-
 function resolveMemoryEmbeddingRetryBudget(
   profile: (typeof MEMORY_EMBEDDING_RETRY_PROFILES)[MemoryEmbeddingRetryProfileName],
   error: unknown,
 ): MemoryEmbeddingRetryBudget | undefined {
   const fields = asOptionalRecord(error);
   const message = formatErrorMessage(error);
-  const retryAfterMs = readMemoryEmbeddingRetryAfterMs(error);
+  const cooldown = fields?.retryAfterMs;
+  const retryAfterMs =
+    typeof cooldown === "number" && Number.isSafeInteger(cooldown) && cooldown >= 0
+      ? cooldown
+      : undefined;
   const status = [fields?.status, fields?.statusCode].find(
     (value): value is number => typeof value === "number" && Number.isInteger(value),
   );
@@ -118,7 +113,7 @@ function resolveMemoryEmbeddingRetryBudget(
   if (RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message)) {
     return profile.transient;
   }
-  if (isSplittableMemoryEmbeddingBatchError(message)) {
+  if (SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)) {
     return undefined;
   }
   if (RATE_LIMITED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
@@ -182,7 +177,7 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
     });
   } catch (err) {
     const message = formatErrorMessage(err);
-    if (params.items.length <= 1 || !isSplittableMemoryEmbeddingBatchError(message)) {
+    if (params.items.length <= 1 || !SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)) {
       throw err;
     }
 

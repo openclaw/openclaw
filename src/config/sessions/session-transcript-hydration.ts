@@ -1,8 +1,10 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   readLatestSessionTranscriptMessageEvent,
@@ -17,6 +19,7 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
@@ -30,6 +33,7 @@ import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -43,6 +47,10 @@ type SessionTranscriptHydrationReader = {
   target: ReturnType<typeof captureSessionTranscriptTargetBinding>;
   assertCurrent: () => void;
   read: () => Promise<PreparedSessionTranscriptHydration>;
+  readCohort?: (
+    selection: NonNullable<SessionEntryCohortRequest["transcript"]>,
+    consume: (prepared: PreparedSessionTranscriptHydration) => void,
+  ) => Promise<void>;
   readCurrentTurnEntry: (
     request: SessionTranscriptCurrentTurnEntryRequest,
   ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
@@ -190,6 +198,61 @@ export function prepareSessionTranscriptHydration(
       (owner, resolvedScope) =>
         owner.readTranscript({ target, resolvedScope, limits: contextLimits, admission }, signal),
     );
+  const readCohort: SessionTranscriptHydrationReader["readCohort"] =
+    contextLimits && !incognitoOptions
+      ? (selection, consume) => {
+          const capturedSelection = structuredClone(selection);
+          return withSessionTranscriptReadSource(
+            target,
+            () => {
+              throw new Error("Bounded transcript cohorts require their durable history owner");
+            },
+            async ({ scope, resolved, owner, expectedIdentity, assertCurrent: assertSource }) => {
+              const { captureSessionEntryNativeMutationWitness } =
+                await import("./session-entry-read-ordered.js");
+              assertSource();
+              const database = {
+                agentId: resolved.databaseAgentId ?? resolved.agentId,
+                path: scope.storePath,
+                env: scope.env,
+              };
+              await runOpenClawAgentWriteAdmission(
+                database,
+                async (_identity, assertOwner) => {
+                  assertSource();
+                  const assertNative = captureSessionEntryNativeMutationWitness([database]);
+                  const prepared = await owner.readTranscript(
+                    {
+                      target: scope,
+                      resolvedScope: resolved,
+                      expectedIdentity,
+                      limits: contextLimits,
+                      admission,
+                      transcript: capturedSelection,
+                    },
+                    signal,
+                  );
+                  signal?.throwIfAborted();
+                  assertOwner();
+                  assertSource();
+                  assertNative();
+                  const consumed = consume(prepared);
+                  if (isPromiseLike(consumed)) {
+                    void Promise.resolve(consumed).catch(() => {});
+                    throw new Error("Transcript cohort consumers must remain synchronous");
+                  }
+                  assertSource();
+                  assertNative();
+                },
+                true,
+                undefined,
+                signal,
+              );
+            },
+            signal,
+          );
+        }
+      : undefined;
   const readCurrentTurnEntry = (
     input: SessionTranscriptCurrentTurnEntryRequest,
   ): Promise<SessionTranscriptCurrentTurnEntryRead> => {
@@ -233,6 +296,7 @@ export function prepareSessionTranscriptHydration(
   return {
     target,
     read,
+    readCohort,
     readCurrentTurnEntry,
     readMaintenance,
     readRecentActiveEvents,

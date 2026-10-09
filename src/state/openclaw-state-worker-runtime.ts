@@ -45,7 +45,6 @@ import {
   deletePersonalGitHubSessionReceiptsInDatabase,
   readSessionReceiptDeletionIdentitiesInDatabase,
 } from "./github-personal-publication-lifecycle.js";
-import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import type { ExistingOpenClawStateWriter } from "./openclaw-state-db-existing-write.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
@@ -124,19 +123,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "tui.lastSession.clear") {
     return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
-  }
-  if (command.type === "sessionUpstream.read") {
-    const read = () => ({
-      value: executeSessionUpstreamCommand(command, { database: open(), ...stateOptions() }),
-    });
-    // Keep native-owner checks and the row in one admitted read; lazy actors still open normally.
-    return (
-      openClawStateDatabaseCache.withCachedOpenClawStateDatabase(
-        context.databasePath,
-        undefined,
-        read,
-      ) ?? read()
-    ).value;
   }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {

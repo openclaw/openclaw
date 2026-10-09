@@ -237,6 +237,13 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
   /** Completed native attempt results excluded by the original admission read fence. */
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /** Host-owned same-turn recovery context; never a new user turn or execution authority. */
+  continuation?: {
+    /** Original current request, retained outside bounded historical projections. */
+    prompt: string;
+    /** Settled attempt snapshots, in order, including completed tool calls and results. */
+    messages: AgentMessage[];
+  };
   /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
   permissionChange?: {
     readonly owner: object;

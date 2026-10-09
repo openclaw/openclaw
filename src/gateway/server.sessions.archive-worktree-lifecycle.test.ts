@@ -263,6 +263,15 @@ test("sessions.patchMany leaves a failed restore's label available to a later ta
       ok: true,
       payload: { outcomes: [{ ok: false, error: { code: "UNAVAILABLE" } }, { ok: true }] },
     });
+    expect(result.payload?.outcomes[0]).toMatchObject({
+      error: {
+        retryable: true,
+        message: expect.stringContaining("Free disk space"),
+      },
+    });
+    expect(result.payload?.outcomes[0]).not.toMatchObject({
+      error: { message: expect.stringMatching(/worktree slot/i) },
+    });
     expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toEqual(
       expect.any(Number),
     );
@@ -935,7 +944,7 @@ test("automatic archive preserves a checkout rearchived while cleanup awaited", 
   }
 });
 
-test.each(["checkout-failed", "expired", "source-missing"] as const)(
+test.each(["expired", "source-missing"] as const)(
   "sessions.patch keeps an archived conversation when its worktree cannot be restored (%s)",
   async (failure) => {
     const fixture = await createArchiveWorktreeFixture();
@@ -955,40 +964,26 @@ test.each(["checkout-failed", "expired", "source-missing"] as const)(
     } else if (failure === "source-missing") {
       await fs.rename(workspace, `${workspace}-offline`);
     }
-    const restore =
-      failure === "checkout-failed"
-        ? vi
-            .spyOn(ManagedWorktreeService.prototype, "restore")
-            .mockRejectedValueOnce(new Error("checkout unavailable"))
-        : undefined;
-    try {
-      const restored = await directSessionReq("sessions.patch", {
-        key,
-        expectedSessionId: sessionId,
-        archived: false,
-      });
-      expect(restored).toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE", retryable: true },
-      });
-      expect(restored.error?.message).toContain("worktree");
-      expect(restored.error?.message).not.toMatch(/worktree slot/i);
-      expect(restored.error?.message).toContain(
-        failure === "checkout-failed" ? "Free disk space" : "new worktree task",
-      );
-      if (failure === "expired") {
-        expect(restored.error?.message).toContain("expired");
-      }
-      if (failure === "source-missing") {
-        expect(restored.error?.message).toContain("source repository is missing");
-      }
-      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
-        transcript,
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
-      await expect(fs.access(worktree.path)).rejects.toThrow();
-    } finally {
-      restore?.mockRestore();
+    const restored = await directSessionReq("sessions.patch", {
+      key,
+      expectedSessionId: sessionId,
+      archived: false,
+    });
+    expect(restored).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(restored.error?.message).toContain("worktree");
+    expect(restored.error?.message).not.toMatch(/worktree slot/i);
+    expect(restored.error?.message).toContain("new worktree task");
+    if (failure === "expired") {
+      expect(restored.error?.message).toContain("expired");
     }
+    if (failure === "source-missing") {
+      expect(restored.error?.message).toContain("source repository is missing");
+    }
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+    await expect(fs.access(worktree.path)).rejects.toThrow();
   },
 );

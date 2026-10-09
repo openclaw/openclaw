@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { stopProcessGroup } from "../stop-process-group.mjs";
 
 assert(process.argv[2], "usage: scenario.mjs <installed-openclaw-dir> [new-artifact-dir]");
 const startedAt = Date.now();
@@ -393,22 +394,6 @@ try {
     client.stop();
   }
   for (const child of children.toReversed()) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      continue;
-    }
-    const exited = once(child, "exit");
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {}
-    const force = setTimeout(() => {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {}
-    }, 5000);
-    try {
-      await exited;
-    } finally {
-      clearTimeout(force);
-    }
+    await stopProcessGroup(child, { graceMs: 5_000, ignoreSignalErrors: true });
   }
 }

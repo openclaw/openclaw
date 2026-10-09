@@ -138,7 +138,7 @@ export async function resolveHeartbeatPreflight(params: {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
   const wakeFlags = resolveHeartbeatWakePayloadFlags(params);
-  const queue = resolveHeartbeatSession(
+  const queue = await resolveHeartbeatSession(
     params.cfg,
     params.agentId,
     params.heartbeat,

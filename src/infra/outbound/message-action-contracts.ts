@@ -126,6 +126,17 @@ export type MessageActionInput = Pick<
   inboundAudio?: boolean;
 };
 
+export function messageActionRequesterMediaContext(input: MessageActionInput) {
+  return {
+    workspaceMediaAccess: input.workspaceMediaAccess,
+    sessionKey: input.sessionKey,
+    requesterSenderId: input.requesterSenderId,
+    requesterSenderName: input.requesterSenderName,
+    requesterSenderUsername: input.requesterSenderUsername,
+    requesterSenderE164: input.requesterSenderE164,
+  };
+}
+
 export type MessageActionNormalization = {
   locationOmitted: true;
   notice: string;

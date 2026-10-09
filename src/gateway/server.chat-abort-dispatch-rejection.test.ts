@@ -6,10 +6,13 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
@@ -414,108 +417,111 @@ describe("gateway WebSocket chat abort ownership", () => {
     }
   });
 
-  test("keeps a real signal-only lifecycle terminal as the only chat terminal", async () => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
-    const storePath = path.join(sessionDirectory, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeMainSession("sess-main", { startedAt: 900 });
+  test.for([false, true])(
+    "keeps a signal-only lifecycle terminal as the only chat terminal (restart=%s)",
+    async (restart, { signal }) => {
+      const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
+      const storePath = path.join(sessionDirectory, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeMainSession("sess-main", { startedAt: 900 });
 
-    const socket = await gateway.openWs();
-    const dispatchRelease = createDeferred();
-    const runId = "real-websocket-signal-only-lifecycle-terminal";
-    const terminalStates = trackChatTerminalStates(socket, runId);
-    let capturedAbortSignal: AbortSignal | undefined;
-    let dispatchRejected = false;
-    let interruption: Promise<boolean> | undefined;
+      const socket = await gateway.openWs();
+      const dispatchEntered = createDeferred<AbortSignal>();
+      const dispatchRelease = createDeferred();
+      const dispatchRejected = createDeferred();
+      const reason = restart
+        ? createAgentRunRestartAbortError()
+        : new Error("Session work admission interrupted");
+      const runId = `real-websocket-signal-only-lifecycle-terminal-${restart}`;
+      const terminalStates = trackChatTerminalStates(socket, runId);
+      let interruption: Promise<boolean> | undefined;
 
-    try {
-      await connectOk(socket);
-      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.abortSignal;
-        await new Promise<void>((resolve) => {
-          if (capturedAbortSignal?.aborted) {
-            resolve();
-            return;
+      try {
+        await connectOk(socket);
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          const capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
+            ?.abortSignal;
+          if (!capturedAbortSignal) {
+            throw new Error("Admitted chat dispatch must receive its cancellation signal");
           }
-          capturedAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          dispatchEntered.resolve(capturedAbortSignal);
+          await new Promise<void>((resolve) => {
+            if (capturedAbortSignal.aborted) {
+              resolve();
+              return;
+            }
+            capturedAbortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          await dispatchRelease.promise;
+          dispatchRejected.resolve();
+          throw capturedAbortSignal.reason instanceof Error
+            ? capturedAbortSignal.reason
+            : new Error("lifecycle interrupted dispatch");
         });
-        await dispatchRelease.promise;
-        dispatchRejected = true;
-        throw capturedAbortSignal?.reason instanceof Error
-          ? capturedAbortSignal.reason
-          : new Error("lifecycle interrupted dispatch");
-      });
 
-      const started = await rpcReq(socket, "chat.send", {
-        sessionKey: "main",
-        message: "preserve the signal-only lifecycle terminal",
-        idempotencyKey: runId,
-      });
-      expect(started.ok).toBe(true);
-      expect(started.payload).toMatchObject({ runId, status: "started" });
-      await vi.waitFor(() => expect(capturedAbortSignal).toBeDefined(), {
-        interval: 10,
-        timeout: 2_000,
-      });
+        const started = await rpcReq(socket, "chat.send", {
+          sessionKey: "main",
+          message: "preserve the signal-only lifecycle terminal",
+          idempotencyKey: runId,
+        });
+        expect(started.ok).toBe(true);
+        expect(started.payload).toMatchObject({ runId, status: "started" });
+        const capturedAbortSignal = await withinTest(dispatchEntered.promise, signal);
 
-      interruption = interruptSessionWorkAdmissions({
-        scope: storePath,
-        identities: ["main", "agent:main:main", "sess-main"],
-        timeoutMs: 1_000,
-      });
-      await vi.waitFor(() => expect(capturedAbortSignal?.aborted).toBe(true), {
-        interval: 10,
-        timeout: 2_000,
-      });
+        interruption = interruptSessionWorkAdmissions({
+          scope: storePath,
+          identities: ["main", "agent:main:main", "sess-main"],
+          reason,
+          timeoutMs: 1_000,
+        });
+        expect(capturedAbortSignal.aborted).toBe(true);
+        expect(capturedAbortSignal.reason).toBe(reason);
 
-      const abortedFrame = onceMessage(
-        socket,
-        (frame) =>
-          frame.type === "event" &&
-          frame.event === "chat" &&
-          frame.payload?.runId === runId &&
-          frame.payload?.state === "aborted",
-        2_000,
-      );
-      expect(
-        emitAgentEventIfCurrent({
-          runId,
-          stream: "lifecycle",
-          sessionKey: "agent:main:main",
-          sessionId: "sess-main",
-          agentId: "main",
-          data: {
-            phase: "end",
-            startedAt: 900,
-            endedAt: Date.now(),
-            aborted: true,
-            stopReason: "restart",
-          },
-        }),
-      ).toBe(true);
-      await expect(abortedFrame).resolves.toMatchObject({
-        payload: { runId, state: "aborted" },
-      });
+        const abortedFrame = onceMessage(
+          socket,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "chat" &&
+            frame.payload?.runId === runId &&
+            frame.payload?.state === "aborted",
+          2_000,
+        );
+        expect(
+          emitAgentEventIfCurrent({
+            runId,
+            stream: "lifecycle",
+            sessionKey: "agent:main:main",
+            sessionId: "sess-main",
+            agentId: "main",
+            data: {
+              phase: "end",
+              startedAt: 900,
+              endedAt: Date.now(),
+              aborted: true,
+              stopReason: restart ? "restart" : "aborted",
+            },
+          }),
+        ).toBe(true);
+        await expect(abortedFrame).resolves.toMatchObject({
+          payload: { runId, state: "aborted" },
+        });
 
-      dispatchRelease.resolve();
-      await vi.waitFor(() => expect(dispatchRejected).toBe(true), {
-        interval: 10,
-        timeout: 2_000,
-      });
-      await expect(interruption).resolves.toBe(true);
+        dispatchRelease.resolve();
+        await withinTest(dispatchRejected.promise, signal);
+        await expect(interruption).resolves.toBe(true);
 
-      // The history RPC response follows every previously emitted chat
-      // event on this socket, so it exposes any contradictory late terminal.
-      const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
-      expect(barrier.ok).toBe(true);
-      expect(terminalStates).toEqual(["aborted"]);
-    } finally {
-      dispatchRelease.resolve();
-      await interruption?.catch(() => undefined);
-      socket.close();
-    }
-  });
+        // The history RPC response follows every previously emitted chat
+        // event on this socket, so it exposes any contradictory late terminal.
+        const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
+        expect(barrier.ok).toBe(true);
+        expect(terminalStates).toEqual(["aborted"]);
+      } finally {
+        dispatchRelease.resolve();
+        await interruption?.catch(() => undefined);
+        socket.close();
+      }
+    },
+  );
 
   test("returns pre-ACK attachment cancellation only after inbound cleanup", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-attachment-abort-");

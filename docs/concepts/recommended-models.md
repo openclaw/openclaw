@@ -24,7 +24,9 @@ disabled, and replaced rows never match. Catalog v2 lists the
 matches as that provider's `recommendedModels`, in list order and under the
 provider's own ids. When a provider serves several listed models of one family,
 only the newest appears. Providers without matching catalog rows get no list,
-and catalog v1 carries none. Pickers do not use the field yet.
+and catalog v1 carries none. Model pickers list a provider's recommended models
+first and collapse its other models under **All models**; see
+[Models](/concepts/models#selection-source-and-fallback-strictness).
 
 ## Entry format
 

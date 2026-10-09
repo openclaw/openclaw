@@ -390,11 +390,10 @@ describe("gateway chat metadata lifecycle composition", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
-      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
-        entries: [nativeModel],
-        routeVariants: [nativeModel],
-        authoritative,
-      });
+      const catalog = { entries: [nativeModel], routeVariants: [nativeModel], authoritative };
+      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue(catalog);
+      // Startup discovery builds the same catalog in the worker.
+      mocks.runPreparedModelCatalogWorker.mockImplementation(async () => structuredClone(catalog));
       const nativeContext = createCatalogContext(() => currentConfig);
       const loader = nativeContext.loadGatewayModelCatalogSnapshot;
       try {

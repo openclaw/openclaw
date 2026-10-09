@@ -304,9 +304,8 @@ describe("gateway chat metadata native session ownership", () => {
   });
 
   test.each([
-    { change: "same-id lineage mutation", currentBinding: false, expectedNative: true },
-    { change: "physical session replacement", currentBinding: false, expectedNative: false },
-    { change: "current binding hit", currentBinding: true, expectedNative: true },
+    { change: "same-id lineage mutation", expectedNative: true },
+    { change: "physical session replacement", expectedNative: false },
   ])("resolves $change after metadata preparation", async (scenario) => {
     await withOpenClawTestState({ label: "metadata-native-lineage" }, async (state) => {
       const config = {
@@ -356,7 +355,7 @@ describe("gateway chat metadata native session ownership", () => {
             throw new Error("metadata must not start a model turn");
           },
           resolveSessionRuntimeOwnership: ({ readPreviousSessionId }) =>
-            scenario.currentBinding || readPreviousSessionId?.() === "new-predecessor"
+            readPreviousSessionId?.() === "new-predecessor"
               ? { model: "native", auth: "native" }
               : undefined,
         },
@@ -395,14 +394,12 @@ describe("gateway chat metadata native session ownership", () => {
             ? [{ id: "gpt-5.6-sol", name: "Sol", provider: "openai" }]
             : hostModels,
         );
-        expect(readSpy).toHaveBeenCalledTimes(scenario.currentBinding ? 0 : 1);
-        if (!scenario.currentBinding) {
-          expect(readSpy).toHaveBeenCalledWith({
-            ...target,
-            hydrateSkillPromptRefs: false,
-            readConsistency: "latest",
-          });
-        }
+        expect(readSpy).toHaveBeenCalledOnce();
+        expect(readSpy).toHaveBeenCalledWith({
+          ...target,
+          hydrateSkillPromptRefs: false,
+          readConsistency: "latest",
+        });
         expect(entry.sessionId).toBe("metadata-current");
         expect(entry.previousSessionId).toBe(initialPredecessor);
       } finally {

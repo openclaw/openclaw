@@ -11,7 +11,12 @@ import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import * as memoryCapture from "../../hooks/bundled/session-memory/capture.js";
 import saveSessionMemory, {
   flushSessionMemoryWritesForTest,
 } from "../../hooks/bundled/session-memory/handler.js";
@@ -24,6 +29,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { emitResetCommandHooks } from "./commands-reset-hooks.js";
 import { finalizeInboundContext } from "./inbound-context.js";
@@ -255,11 +261,22 @@ describe("session hook context wiring", () => {
         saveSessionMemory,
       );
       if (projectionRepair) {
-        vi.spyOn(sessionAccessor, "readSessionTranscriptBoundedMessageTailPage").mockImplementation(
-          () => {
-            throw new sessionAccessor.SessionTranscriptProjectionUnavailableError(sessionId);
-          },
+        await sessionAccessor.waitForSessionTranscriptProjection({
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath,
+        });
+        const database = openOpenClawAgentDatabase(
+          toDatabaseOptions(
+            resolveSqliteTranscriptReadScope({ agentId: "main", sessionId, sessionKey, storePath }),
+          ),
         );
+        database.db
+          .prepare(
+            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+          )
+          .run(sessionId);
       }
       hookRunnerMocks.hasHooks.mockImplementation(
         (hookName) => !automatic && hookName === "before_reset",
@@ -315,7 +332,7 @@ describe("session hook context wiring", () => {
       ]);
       const onReset = vi.fn();
       registerInternalHook("session:auto-reset", onReset);
-      const read = vi.spyOn(sessionAccessor, "readSessionTranscriptBoundedMessageTailPage");
+      const read = vi.spyOn(memoryCapture, "captureSessionMemoryTranscript");
       const commit = sessionAccessor.commitReplySessionInitialization;
       vi.spyOn(sessionAccessor, "commitReplySessionInitialization").mockImplementationOnce(
         (params) =>

@@ -112,8 +112,7 @@ export function resolveRunInsertionBounds(
   }
   const runBounds = findRunBounds(runId);
   if (runId === currentRunId) {
-    // Active runs can span steers: the original prompt is a floor, not a ceiling.
-    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
+    return runBounds ?? currentTurnBounds;
   }
   if (runBounds || currentRunId == null) {
     return runBounds;

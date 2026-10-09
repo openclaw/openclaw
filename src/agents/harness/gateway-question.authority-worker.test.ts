@@ -16,6 +16,8 @@ import { createDirectChatContext } from "../../gateway/server-chat.agent-events.
 import { createQuestionHandlers } from "../../gateway/server-methods/question.js";
 import { createSecretStoreWriteService } from "../../gateway/server-methods/secrets.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -90,6 +92,13 @@ it.each([
         sandboxMode: "off",
       },
     );
+    // Seed writes schedule maintenance; drain it before racing the foreign policy writer.
+    for (const agentId of ["main", "policy"]) {
+      await closeOpenClawAgentDatabaseByPathAsync(
+        resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
+        agentId,
+      );
+    }
     Object.assign(run.run, {
       sessionKey,
       runtimePolicySessionKey: policyKey,

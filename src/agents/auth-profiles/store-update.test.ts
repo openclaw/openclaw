@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { MessagePort } from "node:worker_threads";
@@ -8,8 +8,10 @@ import { JSON_FIELD_TRANSFER_BYTES } from "../../infra/json-field-transfer.js";
 import * as sqliteReplies from "../../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import * as executions from "../../state/openclaw-agent-execution.js";
 import * as workerPublications from "../../state/openclaw-agent-worker-store.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   connectUserModelAccount,
   readUserModelAuthProfile,
@@ -17,6 +19,7 @@ import {
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { withEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { mergeLocalAuthProfileStoreWithInheritedStore } from "./runtime-snapshot-owner.js";
 import {
@@ -28,7 +31,11 @@ import {
 } from "./runtime-snapshots.js";
 import * as sqliteJson from "./sqlite-json.js";
 import * as sqliteRead from "./sqlite-read.js";
-import { runAuthProfileWriteTransaction } from "./sqlite.js";
+import {
+  runAuthProfileWriteTransaction,
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStoreRaw,
+} from "./sqlite.js";
 import {
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
@@ -37,6 +44,7 @@ import {
 import * as publication from "./store-update-publication.js";
 import { withEnvOnlyAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
@@ -138,6 +146,53 @@ it("rejects a native auth owner before initializing its state directory", async 
     },
   );
 });
+
+it.for(["local", "legacy-shared"] as const)(
+  "retains the %s physical store before waiting for auth FIFO preparation",
+  async (kind) => {
+    await withOpenClawTestState(
+      { label: "auth-queued-file-identity", scenario: "minimal" },
+      async (state) => {
+        const agentDir = state.agentDir(kind === "local" ? "child" : "main");
+        noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
+        runAuthProfileWriteTransaction(
+          agentDir,
+          (database) => {
+            writePersistedAuthProfileStoreRaw(
+              { version: 1, profiles: { selected: credential("synthetic-before") } },
+              agentDir,
+              database,
+            );
+          },
+          { env: state.env },
+        );
+        await closeOpenClawAgentDatabasesAsync();
+        const databasePath = resolveAuthProfileDatabasePath(agentDir);
+        const reservation = reserveAuthProfileUsagePreparation([
+          resolveOpenClawStateSqlitePath(state.env),
+        ]);
+        const updater = vi.fn(() => false);
+        const updating = updateAuthProfileStoreWithLock({
+          agentDir: kind === "local" ? agentDir : undefined,
+          saveOptions,
+          updater,
+        });
+        void updating.catch(() => {});
+        try {
+          const original = `${databasePath}.original`;
+          renameSync(databasePath, original);
+          copyFileSync(original, databasePath);
+          reservation.release();
+          await expect(updating).rejects.toThrow(/identity|physical|observed target/i);
+          expect(updater).not.toHaveBeenCalled();
+        } finally {
+          reservation.release();
+          await Promise.allSettled([updating]);
+        }
+      },
+    );
+  },
+);
 
 it.each(["stale", "newer-write", "rebound-owner"])(
   "invalidates an unacknowledged commit after release with a %s view",

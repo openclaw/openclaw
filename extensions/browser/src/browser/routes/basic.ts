@@ -255,7 +255,7 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         id: "live-snapshot",
         label: "Live snapshot",
         status: "warn" as const,
-        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
+        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot check",
       };
     }
     const snap = await snapshotAria({
@@ -346,58 +346,42 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }));
   });
 
-  app.get("/", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
-    try {
-      const status = await runProfileRouteOperation({
-        profileCtx,
-        signal: req.signal,
-        assertCurrent: req.assertCurrent,
-        run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
-      });
-      res.json(status);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
-  });
-
-  app.get("/doctor", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
-    try {
-      const report = await runProfileRouteOperation({
-        profileCtx,
-        signal: req.signal,
-        assertCurrent: req.assertCurrent,
-        run: async (signal) => {
-          const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
-          const identity =
-            relay?.ownership === "borrowed"
-              ? (await relay.client.status()).identity
-              : relay?.bridge.identity;
-          const doctorReport = buildBrowserDoctorReport({
-            status,
-            extensionVersion:
-              status.transport === "extension" ? identity?.extensionVersion : undefined,
-          });
-          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-            doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
-            doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
-          }
-          return doctorReport;
-        },
-      });
-      res.json(report);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
-  });
+  for (const route of ["/", "/doctor"]) {
+    app.get(route, async (req, res) => {
+      const profileCtx = resolveProfileContext(req, res, ctx);
+      if (!profileCtx) {
+        return;
+      }
+      await sendBasicJsonResponse(res, () =>
+        runProfileRouteOperation({
+          profileCtx,
+          signal: req.signal,
+          assertCurrent: req.assertCurrent,
+          run: async (signal) => {
+            const status = await buildBrowserStatus(ctx, profileCtx, signal);
+            if (route === "/") {
+              return status;
+            }
+            const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
+            const identity =
+              relay?.ownership === "borrowed"
+                ? (await relay.client.status()).identity
+                : relay?.bridge.identity;
+            const report = buildBrowserDoctorReport({
+              status,
+              extensionVersion:
+                status.transport === "extension" ? identity?.extensionVersion : undefined,
+            });
+            if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+              report.checks.push(await runBrowserLiveProbe(profileCtx, signal));
+              report.ok = report.checks.every((check) => check.status !== "fail");
+            }
+            return report;
+          },
+        }),
+      );
+    });
+  }
 
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
     const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });

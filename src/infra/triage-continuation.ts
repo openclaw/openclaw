@@ -25,6 +25,7 @@ import {
 } from "./update-control-plane-sentinel.js";
 import {
   createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   triageFailureSchema as failureSchema,
   type ManagedHandoffLease,
 } from "./update-managed-service-handoff-lease.js";
@@ -191,7 +192,8 @@ export async function continueTriageInFreshProcess(params: {
   if (failure.installationRoot !== root) {
     throw new Error("automatic triage installation root mismatch");
   }
-  const store = createManagedHandoffLeaseStore();
+  const store = await prepareManagedHandoffLeaseStore();
+  params.signal.throwIfAborted();
   const acquired = store.acquire(root, randomUUID(), {
     kind: "triage",
     phase: "reserved",
@@ -430,7 +432,7 @@ export async function acceptTriageContinuation(): Promise<
       "automatic triage requires its original connected owner; run openclaw triage manually",
     );
   }
-  const store = createManagedHandoffLeaseStore();
+  const store = await prepareManagedHandoffLeaseStore();
   const controller = new AbortController();
   const parent = store.processIdentity(process.ppid);
   let lease: ManagedHandoffLease | undefined;

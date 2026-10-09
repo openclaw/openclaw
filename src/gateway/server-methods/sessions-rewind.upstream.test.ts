@@ -1,354 +1,407 @@
 import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+  getSessionKysely,
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.transcript.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { sessionRewindHandlers } from "./sessions-rewind.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+  captureSessionUpstreamLinkReadSource,
+  readCurrentSessionUpstreamLink,
+} from "../../sessions/session-upstream-links-runtime.js";
+import * as upstreamReads from "../../sessions/session-upstream-links-runtime.js";
+import { deleteSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { upsertSessionUpstreamLinkInDatabase } from "../../sessions/session-upstream-links.kernel.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  cfg,
+  invokeMessageCut,
+  readMutationStorage,
+  seedMessageCutSource,
+  useMessageCutStorageFixture,
+  type SourceScope,
+} from "./sessions-rewind.storage.test-support.js";
 
-const mocks = { upstreamFork: vi.fn() };
-const sessionKey = "agent:main:rewind-handler";
-const sourceSessionId = "rewind-handler-source";
-let state: OpenClawTestState;
+useMessageCutStorageFixture();
 
-beforeEach(async () => {
-  mocks.upstreamFork.mockReset();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  state = await createOpenClawTestState({ label: "rewind-upstream", layout: "state-only" });
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    { sessionId: sourceSessionId, updatedAt: Date.now() },
-  );
-});
-
-afterEach(async () => {
-  await state.cleanup();
-  resetPluginRuntimeStateForTest();
-});
-
-async function invoke(
-  method:
-    | "sessions.branches.list"
-    | "sessions.branches.switch"
-    | "sessions.fork"
-    | "sessions.rewind",
-  entryId?: string,
-  client: GatewayClient | null = null,
-  runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    sessionRewindHandlers[method],
-    `${method} handler`,
-  )({
-    req: { id: `${method}-request` } as never,
-    params: {
-      sessionKey,
-      ...(method === "sessions.branches.switch"
-        ? { leafEntryId: entryId }
-        : method === "sessions.branches.list"
-          ? {}
-          : { entryId }),
-    },
-    respond,
-    context: {
-      broadcastToConnIds: vi.fn(),
-      chatAbortControllers: new Map(),
-      getRuntimeConfig: runtimeConfig ?? (() => ({ agents: { entries: { main: {} } } })),
-      getSessionEventSubscriberConnIds: () => new Set(),
-    } as unknown as GatewayRequestContext,
-    client,
-    isWebchatConnect: () => false,
-  });
-  return respond;
-}
-
-function linkToUpstreamConversation(): void {
-  expect(
-    upsertSessionUpstreamLink({
-      agentId: "main",
-      catalogId: "codex",
+function adoptUpstreamSource(
+  database: DatabaseSync,
+  scope: SourceScope,
+  threadId = "late-upstream-thread",
+): boolean {
+  return upsertSessionUpstreamLinkInDatabase(
+    database,
+    {
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+      catalogId: "fixture",
       hostId: "gateway:local",
-      marker: { turnId: "turn-2", userMessageCount: 1 },
-      sessionKey,
-      threadId: "thread-source",
+      threadId,
       upstreamKind: "codex-app-server",
-      upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
-    }),
-  ).toBe(true);
+      upstreamRef: { threadId },
+      marker: null,
+    },
+    1,
+  );
 }
 
-function installUpstreamForkHarness(
-  executionEnvironment?: "host-only",
-  contract: "dual" | "legacy" | "v2" = "v2",
-): void {
-  const sessionFork = {
-    upstreamKinds: ["codex-app-server" as const],
-    fork: mocks.upstreamFork,
-  };
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "test-harness",
-    source: "runtime",
-    harness: {
-      id: "test-harness",
-      label: "Test harness",
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      ...(contract !== "v2"
-        ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
-        : {}),
-      ...(contract !== "legacy"
-        ? {
-            sessionForkV2: {
-              ...(executionEnvironment ? { executionEnvironment } : {}),
-              ...sessionFork,
-            },
-          }
-        : {}),
-      supports: () => ({ supported: false }),
-    },
-  });
-  setActivePluginRegistry(registry);
-}
-
-describe("upstream session message-cut methods", () => {
-  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
-    linkToUpstreamConversation();
-    const respond = await invoke("sessions.branches.switch", "off-path-entry");
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("external agent harness"),
-      }),
-    );
-    // Listing is read-only: "no local branches" is the truthful steady state,
-    // not an error to latch into the UI.
-    const listed = await invoke("sessions.branches.list");
-    expect(listed).toHaveBeenCalledWith(true, { branches: [] }, undefined);
-  });
-
-  it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
-    "rejects %s for upstream-linked sessions even with a fork-capable harness",
-    async (method) => {
-      linkToUpstreamConversation();
-      installUpstreamForkHarness();
-      const respond = await invoke(method, "user-entry");
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
-      expect(mocks.upstreamFork).not.toHaveBeenCalled();
-    },
-  );
-
-  it("delegates complete upstream fork materialization to the harness", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness(undefined, "dual");
-    mocks.upstreamFork.mockResolvedValue({
-      status: "created",
-      key: "agent:main:dashboard:forked",
-      editorText: "edit me",
-    });
-
-    const respond = await invoke("sessions.fork", "user-entry");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" },
-      undefined,
-    );
-    expect(mocks.upstreamFork).toHaveBeenCalledWith(
-      expect.objectContaining({
-        assertCurrent: expect.any(Function),
-        source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
-        targetKey: expect.stringMatching(/^agent:main:dashboard:/),
-        upstream: expect.objectContaining({
-          catalogId: "codex",
-          hostId: "gateway:local",
-          kind: "codex-app-server",
-          threadId: "thread-source",
-        }),
-      }),
-    );
-  });
-
-  it.each(["created", "failed"] as const)(
-    "expires native-write authority when the upstream fork settles %s",
-    async (outcome) => {
-      linkToUpstreamConversation();
-      installUpstreamForkHarness();
-      let retainedAssertCurrent: (() => void) | undefined;
-      mocks.upstreamFork.mockImplementation(
-        async ({ assertCurrent }: { assertCurrent: () => void }) => {
-          assertCurrent();
-          retainedAssertCurrent = assertCurrent;
-          return outcome === "created"
-            ? { status: "created", key: "agent:main:dashboard:forked" }
-            : {
-                status: "failed",
-                code: "upstream-unavailable",
-                message: "Codex is offline. Try again.",
-              };
-        },
-      );
-
-      await invoke("sessions.fork", "user-entry");
-
-      const nativeWrites = vi.fn();
-      expect(() => {
-        expectDefined(retainedAssertCurrent, "retained native-write authority")();
-        nativeWrites();
-      }).toThrow("Session initialization source is closed");
-      expect(nativeWrites).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects a foreign upstream source change before deferred native fork I/O", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    const nativeWrite = vi.fn();
-    mocks.upstreamFork.mockImplementation(
-      async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        await Promise.resolve();
-        const foreign = new DatabaseSync(openOpenClawStateDatabase().path);
-        try {
-          foreign
-            .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
-            .run("replacement-thread", sessionKey);
-        } finally {
-          foreign.close();
-        }
-        assertCurrent();
-        nativeWrite();
-        return { status: "created", key: "agent:main:dashboard:forked" };
-      },
-    );
-
-    await expect(invoke("sessions.fork", "user-entry")).rejects.toThrow(
-      "changed during fork initialization",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(sourceSessionId);
-  });
-
-  it.each(["dual", "legacy", "v2"] as const)(
-    "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
-    async (contract) => {
-      const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
-      setUserProfileRole(profile.id, "guest");
-      const client = {
-        connect: { scopes: ["operator.write"] },
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        },
-      } as GatewayClient;
-      const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-        agents: { entries: { main: {} } },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["main"],
-                scopes: ["operator.read", "operator.write"],
-                sandbox: "required",
-              },
-            },
+it.each(
+  (["sessions.fork", "sessions.rewind"] as const).flatMap((method) =>
+    (["transaction", "commit"] as const).map((boundary) => ({ method, boundary })),
+  ),
+)(
+  "refuses $method when an upstream link appears at the $boundary boundary",
+  async ({ method, boundary }) => {
+    await withOpenClawTestState({ label: "message-cut-upstream-commit" }, async (testState) => {
+      await testState.writeConfig(cfg);
+      const scope = await seedMessageCutSource();
+      await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
+      const before = await readMutationStorage(scope);
+      const shared = openOpenClawStateDatabase();
+      await closeOpenClawStateDatabaseAsync();
+      const foreign = new DatabaseSync(shared.path);
+      try {
+        const create = workerAdmission.createSqliteWorkerOperationAdmission;
+        let linked = false;
+        let stage: workerAdmission.SqliteWorkerAdmissionRequest["stage"] | "outside" = "outside";
+        const guardCalls = { outside: 0, open: 0, prepare: 0, transaction: 0, commit: 0 };
+        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (callback, attachment) =>
+            create((request, grant) => {
+              if (
+                !linked &&
+                request.stage === boundary &&
+                isRecord(request.facts) &&
+                (boundary === "transaction"
+                  ? request.facts.publication === undefined
+                  : isRecord(request.facts.publication) &&
+                    request.facts.publication.kind === "session-entry-patch-committed")
+              ) {
+                linked = adoptUpstreamSource(foreign, scope);
+              }
+              const previousStage = stage;
+              stage = request.stage;
+              try {
+                callback(request, grant);
+              } finally {
+                stage = previousStage;
+              }
+            }, attachment),
+        );
+        const mutation = invokeMessageCut(method, scope, {
+          sessionMutationCommitGuard: () => {
+            guardCalls[stage] += 1;
           },
-        },
-      });
-      linkToUpstreamConversation();
-      installUpstreamForkHarness("host-only", contract);
-      const fork = await withPluginRuntimeGatewayRequestScope(
-        { client, isWebchatConnect: () => false },
-        () => invoke("sessions.fork", "user-entry", client, runtimeConfig),
-      );
-      expect(fork).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: expect.objectContaining({
-            code: "AGENT_RUNTIME_RESTRICTED",
-            reason: "sandbox-required",
-          }),
-        }),
-      );
-      expect(mocks.upstreamFork).not.toHaveBeenCalled();
-      expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
-    },
-  );
+        });
+        await mutation.error;
 
-  it("does not mutate the local session when the upstream fork fails", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    mocks.upstreamFork.mockResolvedValue({
-      status: "failed",
-      code: "upstream-unavailable",
-      message: "Codex is offline. Try again.",
+        expect(linked).toBe(true);
+        const diagnostic = JSON.stringify({ method, guardCalls });
+        expect.soft(await readMutationStorage(scope), diagnostic).toEqual(before);
+        expect(mutation.respond, diagnostic).not.toHaveBeenCalledWith(
+          true,
+          expect.anything(),
+          undefined,
+        );
+      } finally {
+        foreign.close();
+      }
     });
+  },
+);
 
-    const entryCount = listSessionEntriesCore({ agentId: "main" }).length;
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
+it("refuses a local cut when the final upstream reader fails", async () => {
+  await withOpenClawTestState({ label: "message-cut-upstream-unavailable" }, async (state) => {
+    await state.writeConfig(cfg);
+    const scope = await seedMessageCutSource();
+    const before = await readMutationStorage(scope);
+    vi.spyOn(upstreamReads, "readCurrentSessionUpstreamLink").mockImplementationOnce(() => {
+      throw new Error("fixture upstream read unavailable");
+    });
+    const mutation = invokeMessageCut("sessions.rewind", scope);
+    expect(await mutation.error).toBeUndefined();
+    expect(await readMutationStorage(scope)).toEqual(before);
+    expect(mutation.respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
         code: ErrorCodes.UNAVAILABLE,
-        details: { reason: "upstream-unavailable" },
-      }),
-    );
-    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
-  });
-
-  it("passes through an invalid fork boundary failure", async () => {
-    const reason = "drift-mismatch";
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    mocks.upstreamFork.mockResolvedValue({
-      status: "failed",
-      code: reason,
-      message: `boundary failed: ${reason}`,
-    });
-
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        details: { reason },
-        message: `boundary failed: ${reason}`,
       }),
     );
   });
 });
+
+it.each(["preparation", "commit"] as const)(
+  "fences incognito native context effects after upstream revocation during %s",
+  async (phase) => {
+    await withOpenClawTestState({ label: "message-cut-native-upstream" }, async (state) => {
+      await state.writeConfig(cfg);
+      const scope = await seedMessageCutSource(true);
+      const before = await readMutationStorage(scope);
+      const shared = openOpenClawStateDatabase();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let bindingPresent = true;
+      let linked = false;
+      const effect = vi.fn();
+      const rollback = vi.fn();
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "native-upstream-fixture" });
+      registry.plugins.push(record);
+      registry.agentHarnesses.push({
+        pluginId: record.id,
+        source: "runtime",
+        harness: {
+          id: "native-upstream-fixture",
+          label: "Native source fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("not used");
+          },
+          withSessionContextReset: async (params, run) => {
+            if (phase === "preparation") {
+              entered.resolve();
+              await release.promise;
+              params.assertCurrent();
+              effect();
+            }
+            return run({
+              commit() {
+                params.assertCurrent();
+                bindingPresent = false;
+                effect();
+              },
+              rollback() {
+                params.assertCurrent();
+                bindingPresent = true;
+                rollback();
+              },
+            });
+          },
+        },
+      });
+      setActivePluginRegistry(registry);
+      if (phase === "commit") {
+        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+        database.db.function("fixture_adopt_upstream", () => {
+          linked = adoptUpstreamSource(shared.db, scope);
+          return Number(linked);
+        });
+        database.db.exec(
+          "CREATE TEMP TRIGGER fixture_adopt_upstream AFTER UPDATE OF current_session_id ON session_nodes WHEN NEW.current_session_id != OLD.current_session_id BEGIN SELECT fixture_adopt_upstream(); END",
+        );
+      }
+      const mutation = invokeMessageCut("sessions.rewind", scope);
+      if (phase === "preparation") {
+        try {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            mutation.error,
+            "native reset preparation",
+          );
+          linked = adoptUpstreamSource(shared.db, scope);
+        } finally {
+          release.resolve();
+        }
+      }
+      expect(await mutation.error).toBeUndefined();
+      expect(linked).toBe(true);
+      expect(
+        readCurrentSessionUpstreamLink(
+          captureSessionUpstreamLinkReadSource(),
+          scope.sessionKey,
+          scope.agentId,
+        ),
+      ).toMatchObject({ threadId: "late-upstream-thread" });
+      expect(await readMutationStorage(scope)).toEqual(before);
+      expect(bindingPresent).toBe(true);
+      expect(effect).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+      expect(rollback).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+      expect(mutation.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("external agent harness"),
+        }),
+      );
+    });
+  },
+);
+it("refuses a shared-state owner retired while rewind waits for the lifecycle lock", async () => {
+  await withOpenClawTestState({ label: "message-cut-upstream-retirement" }, async (state) => {
+    await state.writeConfig(cfg);
+    const scope = await seedMessageCutSource();
+    const before = await readMutationStorage(scope);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const holding = runExclusiveSessionLifecycleMutation("archive", {
+      scope: resolveSessionStorePathCore(undefined, { agentId: scope.agentId }),
+      identities: [scope.sessionId],
+      run: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    await entered.promise;
+    const mutation = invokeMessageCut("sessions.rewind", scope);
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      release.resolve();
+      await holding;
+    }
+    expect(await mutation.error).toEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/state database read admission (?:changed|is closed)/),
+      }),
+    );
+    expect(await readMutationStorage(scope)).toEqual(before);
+    expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+  });
+});
+
+it.each(["replace", "delete"] as const)(
+  "refuses a native fork effect after the synchronous owner %ss its source link",
+  async (change) => {
+    await withOpenClawTestState({ label: "message-cut-upstream-replacement" }, async (state) => {
+      await state.writeConfig(cfg);
+      const scope = await seedMessageCutSource();
+      const shared = openOpenClawStateDatabase();
+      expect(adoptUpstreamSource(shared.db, scope)).toBe(true);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const nativeEffect = vi.fn();
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "fixture",
+        source: "runtime",
+        harness: {
+          id: "upstream-fixture",
+          label: "Upstream source fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("not used");
+          },
+          sessionForkV2: {
+            upstreamKinds: ["codex-app-server"],
+            fork: async ({ assertCurrent }) => {
+              entered.resolve();
+              await release.promise;
+              assertCurrent();
+              nativeEffect();
+              return { status: "created", key: "agent:main:dashboard:forked" };
+            },
+          },
+        },
+      });
+      setActivePluginRegistry(registry);
+      const mutation = invokeMessageCut("sessions.fork", scope);
+      try {
+        await awaitGateBeforeSettlement(entered.promise, mutation.error, "upstream fork dispatch");
+        if (change === "replace") {
+          expect(adoptUpstreamSource(shared.db, scope, "replacement-thread")).toBe(true);
+        } else {
+          expect(deleteSessionUpstreamLink(scope.sessionKey, scope.agentId)).toBe("deleted");
+        }
+      } finally {
+        release.resolve();
+      }
+      expect(await mutation.error).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining("changed during fork"),
+        }),
+      );
+      expect(nativeEffect).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it.each(["preparation", "commit"] as const)(
+  "refuses incognito fork when a missing upstream database appears during %s",
+  async (phase) => {
+    await withOpenClawTestState({ label: "message-cut-upstream-appearance" }, async (state) => {
+      await state.writeConfig(cfg);
+      const scope = await seedMessageCutSource(true);
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+      const sessionKeys = () =>
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_nodes")
+            .select("session_key")
+            .orderBy("session_key"),
+        ).rows;
+      const before = {
+        entry: loadSessionEntry(scope),
+        history: await loadTranscriptEvents(scope),
+        sessionKeys: sessionKeys(),
+      };
+      const source = captureSessionUpstreamLinkReadSource();
+      expect(source.present).toBe(false);
+      let appeared = false;
+      const createUpstream = () => {
+        const shared = openOpenClawStateDatabase();
+        expect(shared.path).toBe(source.context.admission.databasePath);
+        appeared = adoptUpstreamSource(shared.db, scope);
+        return Number(appeared);
+      };
+      if (phase === "preparation") {
+        const prepare = upstreamReads.prepareSessionUpstreamLink;
+        vi.spyOn(upstreamReads, "prepareSessionUpstreamLink").mockImplementationOnce(
+          async (...args) => {
+            const prepared = await prepare(...args);
+            expect(prepared).toBeUndefined();
+            createUpstream();
+            return prepared;
+          },
+        );
+      } else {
+        database.db.function("fixture_create_upstream_database", createUpstream);
+        database.db.exec(
+          "CREATE TEMP TRIGGER fixture_create_upstream_database AFTER INSERT ON session_nodes WHEN NEW.session_key != 'agent:main:dashboard:incognito-source' BEGIN SELECT fixture_create_upstream_database(); END",
+        );
+      }
+      const mutation = invokeMessageCut("sessions.fork", scope);
+      const failure = await mutation.error;
+      expect(appeared).toBe(true);
+      expect(() => source.assertCurrent()).toThrow("database path identity changed");
+      if (phase === "preparation") {
+        expect(failure).toEqual(
+          expect.objectContaining({
+            message: expect.stringContaining("database path identity changed"),
+          }),
+        );
+      } else {
+        expect(failure).toBeUndefined();
+        expect(mutation.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+        );
+      }
+      expect(loadSessionEntry(scope)).toEqual(before.entry);
+      expect(await loadTranscriptEvents(scope)).toEqual(before.history);
+      expect(sessionKeys()).toEqual(before.sessionKeys);
+      expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+    });
+  },
+);

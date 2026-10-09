@@ -91,19 +91,13 @@ function renderTelegramHtml(ir: MarkdownIR): string {
   });
 }
 
-function leadingWhitespaceLength(line: string): number {
-  let length = 0;
-  while (line[length] === " " || line[length] === "\t") {
-    length++;
-  }
-  return length;
-}
-
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
+  const previousIndent = /^([ \t]*)[•*+-][ \t]+\S/.exec(previous)?.[1];
+  const nextIndent = /^([ \t]*)(?:\d+\.|#{1,6})[ \t]+\S/.exec(next)?.[1];
   return (
-    /^[ \t]*[•*+-][ \t]+\S/.test(previous) &&
-    /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(next) &&
-    leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous)
+    previousIndent !== undefined &&
+    nextIndent !== undefined &&
+    nextIndent.length <= previousIndent.length
   );
 }
 
@@ -395,30 +389,22 @@ function renderTelegramRichHtmlRawTableFallback(
 
 type TelegramHtmlTag = {
   name: string;
-  openTag: string;
-  closeTag: string;
+  raw: string;
 };
 
 function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
-  return tags.map((tag) => tag.openTag).join("");
+  return tags.map((tag) => tag.raw).join("");
 }
 
 function buildTelegramHtmlCloseSuffix(tags: TelegramHtmlTag[]): string {
   return tags
     .toReversed()
-    .map((tag) => tag.closeTag)
+    .map((tag) => `</${tag.name}>`)
     .join("");
 }
 
 function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
-  return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
-}
-
-function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
-  const index = tags.findLastIndex((tag) => tag.name === name);
-  if (index >= 0) {
-    tags.splice(index, 1);
-  }
+  return tags.reduce((total, tag) => total + tag.name.length + 3, 0);
 }
 
 function splitTelegramHtmlChunksRaw(html: string, normalizedLimit: number): string[] {
@@ -514,23 +500,21 @@ function splitTelegramHtmlChunksRaw(html: string, normalizedLimit: number): stri
       }
     }
 
-    const closesOpenTag = isClosing && openTags.some((openTag) => openTag.name === tagName);
+    const closingTagIndex = isClosing
+      ? openTags.findLastIndex((openTag) => openTag.name === tagName)
+      : -1;
     const closesSuppressedTag =
-      isClosing && !closesOpenTag && popLastTagName(suppressedTagNames, tagName);
+      isClosing && closingTagIndex < 0 && popLastTagName(suppressedTagNames, tagName);
     if (!closesSuppressedTag) {
       current += rawTag;
     }
     if (isSelfClosing) {
       chunkHasPayload = true;
     }
-    if (isClosing) {
-      popTelegramHtmlTag(openTags, tagName);
-    } else if (!isSelfClosing) {
-      openTags.push({
-        name: tagName,
-        openTag: rawTag,
-        closeTag: `</${tagName}>`,
-      });
+    if (closingTagIndex >= 0) {
+      openTags.splice(closingTagIndex, 1);
+    } else if (!isClosing && !isSelfClosing) {
+      openTags.push(tag);
     }
     lastIndex = tagEnd;
   }
@@ -561,10 +545,6 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
   );
 }
 
-function renderTelegramChunkHtml(ir: MarkdownIR): string {
-  return wrapFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(ir)));
-}
-
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,
@@ -574,7 +554,8 @@ export function markdownToTelegramChunks(
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
-    renderChunk: renderTelegramChunkHtml,
+    renderChunk: (chunk) =>
+      wrapFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(chunk))),
     measureRendered: (html) => html.length,
   }).map(({ source, rendered }) => ({
     html: rendered,

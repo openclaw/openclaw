@@ -446,7 +446,7 @@ export class DraftPlaceState {
         kind: "remote",
         project: { identity: params.repository.url, cloneUrl: params.repository.url },
       });
-      this.repositoryState.setBaseRef(params.repository.ref ?? "", false);
+      this.repositoryState.setDetail("baseRef", params.repository.ref ?? "", false);
       this.repositoryState.load();
     }
     this.callbacks.requestUpdate();
@@ -587,7 +587,7 @@ export class DraftPlaceState {
       freshWorkspace: false,
     });
     if (selection.kind === "remote" && selection.project.defaultBranch) {
-      this.repositoryState.setBaseRef(selection.project.defaultBranch, false);
+      this.repositoryState.setDetail("baseRef", selection.project.defaultBranch, false);
     }
     this.repositoryState.load();
     this.browser.close();
@@ -669,11 +669,11 @@ export class DraftPlaceState {
   }
 
   setBaseRef(baseRef: string) {
-    this.repositoryState.setBaseRef(baseRef, this.read().submitting);
+    this.repositoryState.setDetail("baseRef", baseRef, this.read().submitting);
   }
 
   setWorktreeName(worktreeName: string) {
-    this.repositoryState.setWorktreeName(worktreeName, this.read().submitting);
+    this.repositoryState.setDetail("worktreeName", worktreeName, this.read().submitting);
   }
 
   captureSubmittedWorktreeName(

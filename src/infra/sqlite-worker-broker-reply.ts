@@ -11,6 +11,7 @@ import {
   assertStateDatabaseAccessAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
+import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { prepareSqliteWorkerActorContext } from "./sqlite-worker-broker-admission.js";
 import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
@@ -369,6 +370,10 @@ export function receiveSqliteWorkerReply(
       failure === undefined ? { value } : { error: failure },
     );
     return;
+  }
+  if (reply.nativeRuntimeAdmission !== undefined) {
+    // Completion can create a sibling immediately; publish only after the full reply settles.
+    installSqliteNativeRuntimeAdmission(reply.nativeRuntimeAdmission);
   }
   slot.current = undefined;
   if (job.request.type === "close") {

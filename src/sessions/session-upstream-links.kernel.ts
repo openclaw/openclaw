@@ -14,8 +14,12 @@ import {
   getSqliteReadOperationRevision,
   type SqliteReadOperationRevision,
 } from "../infra/sqlite-schema-facts.js";
-import type { SessionUpstreamJsonValue, SessionUpstreamKind } from "../plugins/session-catalog.js";
+import type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "../plugins/session-catalog-upstream.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
@@ -59,6 +63,13 @@ export function rowToSessionUpstreamLink(row: SessionUpstreamLinkRow): SessionUp
     updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
   };
 }
+
+export const sessionUpstreamReadOperations = {
+  "sessionUpstream.read": (input: { sessionKey: string; agentId: string }, db) => ({
+    type: "sessionUpstream.read" as const,
+    link: readSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId),
+  }),
+} satisfies WorkerOperationHandlers<DatabaseSync>;
 
 export function listWatchedSessionUpstreamLinksInDatabase(db: DatabaseSync): SessionUpstreamLink[] {
   // Watch cursors own demand. Their key-only lookup relies on one owning agent per

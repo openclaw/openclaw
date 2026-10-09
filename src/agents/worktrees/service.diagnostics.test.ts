@@ -109,37 +109,8 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     return script;
   }
 
-  it("reports actual mixed setup output without losing diagnostics or cleanup", async () => {
-    const script = await writeFailingSetup();
-    await fs.writeFile(
-      script,
-      [
-        "#!/bin/sh",
-        'printf "%s\\n" "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"',
-        "printf '%s\\n' 'fatal: create local-fixture-input.txt and retry'",
-        "printf '%s\\n' 'warning: optional fixture hint is unset' >&2",
-        "exit 23",
-        "",
-      ].join("\n"),
-    );
-    const message = await failureMessage(
-      service.create({ repoRoot: repo, name: "actual-failed-setup", baseRef: "HEAD" }),
-    );
-    const allocated = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
-    await expect(fs.stat(allocated)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("actual-failed-setup");
-    expect(await git(repo, "branch", "--list", "openclaw/actual-failed-setup")).toBe("");
-    expect(await service.listRegistryRecords()).toEqual([]);
-    expect(message).toContain("worktree setup failed (exit code 23)");
-    expect(message).toContain("create local-fixture-input.txt and retry");
-    expect(message).toContain("optional fixture hint is unset");
-    expect(message.length).toBeLessThanOrEqual(2_300);
-  });
-
   it.each([
     { phase: "create", failedOperation: "branch" },
-    { phase: "create", failedOperation: "both" },
-    { phase: "restore", failedOperation: "branch" },
     { phase: "restore", failedOperation: "both" },
   ] as const)(
     "reports the failed $failedOperation operation during $phase cleanup",
@@ -313,7 +284,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
   it.each([
     { name: "long evidence inside the existing window", oldEvidenceVisible: true },
     { name: "evidence outside the existing newline window", oldEvidenceVisible: false },
-  ])("preserves retry authority for $name", async ({ oldEvidenceVisible }) => {
+  ])("preserves failed checkout evidence for $name", async ({ oldEvidenceVisible }) => {
     await git(path.join(root, "remote.git"), "symbolic-ref", "HEAD", "refs/heads/main");
     await git(repo, "remote", "set-head", "origin", "-a");
     const name = "retry-evidence";
@@ -338,17 +309,9 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       return result;
     });
 
-    if (oldEvidenceVisible) {
-      const created = await service.create({ repoRoot: repo, name });
-      expect(checkoutFailed).toBe(true);
-      expect(created.baseRef).toBe("HEAD");
-      expect(await git(created.path, "branch", "--show-current")).toBe(branch);
-      expect(await service.listRegistryRecords()).toEqual([created]);
-    } else {
-      await expect(service.create({ repoRoot: repo, name })).rejects.toThrow("checkout failed");
-      expect(checkoutFailed).toBe(true);
-      expect(await service.listRegistryRecords()).toEqual([]);
-    }
+    await expect(service.create({ repoRoot: repo, name })).rejects.toThrow("checkout failed");
+    expect(checkoutFailed).toBe(true);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect(allocatedPath).toBeDefined();
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(allocatedPath);
     expect(await git(allocatedPath!, "branch", "--show-current")).toBe(branch);

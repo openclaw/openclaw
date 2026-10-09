@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  cancelExecRequestOwners,
+  captureExecRequestOwners,
+  withExecRequestTurn,
+} from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { captureExecRequestCancellation } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
+  deleteSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   markBackgrounded,
@@ -18,14 +25,21 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
-
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
+const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: requestHeartbeatMock,
+// mock-isolation: Control completion receipts while testing process cancellation and cleanup.
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: sessionKey,
+    generation: "test",
+  }),
+  enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
-vi.mock("../infra/system-events.js", () => ({
+vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 vi.mock("../process/supervisor/index.js", () => ({
@@ -34,7 +48,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 
 beforeEach(() => {
   resetProcessRegistryForTests();
-  requestHeartbeatMock.mockReset();
+  enqueueSessionEventMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
@@ -59,12 +73,45 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
 }
 
 it.each([
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },
-  { reason: "overall-timeout" as const, cleanupFails: true, duringFinalize: false },
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: true },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: false,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "overall-timeout" as const,
+    cleanupFails: true,
+    duringFinalize: false,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "direct" as const,
+  },
 ])(
-  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize)",
-  async ({ reason, cleanupFails, duringFinalize }) => {
+  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop, cleanupFails=$cleanupFails)",
+  async ({ reason, cleanupFails, duringFinalize, requestStop }) => {
     const termination = createDeferred();
     const artifactFinalization = createDeferred();
     const artifactsEntered = createDeferred();
@@ -124,6 +171,20 @@ it.each([
         wait: () => otherExit.promise,
       }));
     const originalSource = new AbortController();
+    const requestIdentity = {
+      runId: "sandbox-request-stop",
+      sessionKey: "agent:main:targeted-cleanup",
+    };
+    const request =
+      requestStop !== "none"
+        ? await withExecRequestTurn({ identity: requestIdentity }, async () => {
+            const owner = captureExecRequestOwners(requestIdentity)?.[0];
+            if (!owner) {
+              throw new Error("Expected the sandbox command's request owner");
+            }
+            return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
+          })
+        : undefined;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
@@ -133,7 +194,12 @@ it.each([
     });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
-      () => runTestExecProcess({ scopeKey: "targeted-cleanup:guest", sandbox }),
+      () =>
+        runTestExecProcess({
+          scopeKey: "targeted-cleanup:guest",
+          sandbox,
+          requestOwners: request ? [request.owner] : undefined,
+        }),
     );
     const other = await runTestExecProcess({ sandbox: otherSandbox });
     markBackgrounded(guest.session);
@@ -147,7 +213,19 @@ it.each([
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
-        originalSource.abort(new Error("original invitation revoked during artifact finalization"));
+        if (request) {
+          if (requestStop === "capture") {
+            expect(request.cancellation.cancel()).toBe(true);
+          } else {
+            cancelExecRequestOwners([request.owner]);
+          }
+          expect(originalSource.signal.aborted).toBe(false);
+          expect(guest.session.requestCancelled).toBe(true);
+        } else {
+          originalSource.abort(
+            new Error("original invitation revoked during artifact finalization"),
+          );
+        }
       } else if (reason === "manual-cancel") {
         guest.kill();
       } else {
@@ -180,13 +258,25 @@ it.each([
       }
       termination.resolve();
       const outcome = await joined;
-      expect(outcome.status).toBe(duringFinalize ? "completed" : "failed");
+      expect(outcome.status).toBe(duringFinalize && !cleanupFails ? "completed" : "failed");
       expect(sandbox.terminate).toHaveBeenCalledOnce();
       expect(sandbox.finalizeExec).toHaveBeenCalledOnce();
       expect(releaseSource).toHaveBeenCalledOnce();
       if (cleanupFails) {
         expect(guest.session.finalizationFailed).toBe(true);
         expect(outcome.aggregated).toContain(cleanupError.message);
+      }
+      if (request) {
+        // The command registered after capture; output eviction cannot erase its cleanup verdict.
+        deleteSession(guest.session.id);
+        expect(getFinishedSession(guest.session.id)).toBeUndefined();
+        if (cleanupFails) {
+          await expect(request.cancellation.settle()).rejects.toThrow(
+            "command cleanup could not be confirmed",
+          );
+        } else {
+          await expect(request.cancellation.settle()).resolves.toBeUndefined();
+        }
       }
       expect(other.session.exited).toBe(duringFinalize);
       otherExit.resolve(createRunExit());
@@ -278,7 +368,7 @@ it.each([
 
 describe("terminal execution-context release", () => {
   it.each([
-    { path: "notify", trace: ["task", "enqueue", "wake"] },
+    { path: "notify", trace: ["task", "enqueue"] },
     { path: "quiet", trace: ["task"] },
     { path: "unrouted", trace: ["task"] },
     { path: "observed", trace: ["task"] },
@@ -289,13 +379,18 @@ describe("terminal execution-context release", () => {
       const observed: string[] = [];
       const removal = vi.fn(() => true);
       const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
+      enqueueSessionEventMock.mockImplementation((_text, options) => {
         observed.push("enqueue");
         expect(options.deliveryContext).toEqual(deliveryContext);
-        return removal;
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
+        return {
+          id: "exec-event",
+          cancel: removal,
+          settled: Promise.resolve({
+            status: "completed",
+            executionStarted: true,
+            delivered: false,
+          }),
+        };
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
@@ -329,13 +424,14 @@ describe("terminal execution-context release", () => {
         "agentId",
         "eventRouting",
         "notifyDeliveryContext",
+        "notifySessionTarget",
         "notifyOnExit",
         "notifyOnExitEmptySuccess",
         "stdin",
       ] as const) {
         expect(retained?.[field], field).toBeUndefined();
       }
-      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
+      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
       expect(removal).not.toHaveBeenCalled();
     },
   );
@@ -343,7 +439,6 @@ describe("terminal execution-context release", () => {
 
 describe("exec settlement recovery", () => {
   it.each([
-    { boundary: "wake", asynchronous: false },
     { boundary: "task", asynchronous: true },
     { boundary: "persistent task", asynchronous: true },
     { boundary: "stdin", asynchronous: true },
@@ -359,18 +454,20 @@ describe("exec settlement recovery", () => {
       const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
       const scopeKey = `settlement-recovery:${boundary}:${asynchronous}`;
       const failure = new Error("process settlement failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation(() => {
+      enqueueSessionEventMock.mockImplementation(() => {
         observed.push("enqueue");
         if (boundary === "enqueue") {
           throw failure;
         }
-        return vi.fn(() => true);
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
-        if (boundary === "wake") {
-          throw failure;
-        }
+        return {
+          id: "exec-event",
+          cancel: vi.fn(() => true),
+          settled: Promise.resolve({
+            status: "completed",
+            executionStarted: true,
+            delivered: false,
+          }),
+        };
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, "process output\n"),
@@ -449,18 +546,18 @@ describe("exec settlement recovery", () => {
         if (boundary === "persistent task") {
           await expect(run.promise).rejects.toBe(failure);
         } else {
-          await expect(run.promise).resolves.toMatchObject({ status: "failed" });
+          await expect(run.promise).resolves.toMatchObject({
+            status: boundary === "enqueue" ? "completed" : "failed",
+          });
         }
         await joined;
         expect(observed).toEqual([
           "task:completed",
           ...(boundary === "stdin" ? ["stdin"] : []),
-          ...(boundary === "enqueue" || boundary === "wake" ? ["enqueue"] : []),
-          ...(boundary === "wake" ? ["wake"] : []),
-          "task:failed",
+          ...(boundary === "enqueue" ? ["enqueue"] : ["task:failed"]),
           "scope-released",
         ]);
-        expect(identities).toEqual([undefined, undefined]);
+        expect(identities).toEqual(boundary === "enqueue" ? [undefined] : [undefined, undefined]);
         expect(getActiveBackgroundExecSessionCount()).toBe(0);
         expect(run.session.finalizing).toBe(false);
         expect(run.session.terminalStatus).toBe("completed");
@@ -475,6 +572,7 @@ describe("exec settlement recovery", () => {
           "agentId",
           "eventRouting",
           "notifyDeliveryContext",
+          "notifySessionTarget",
           "notifyOnExit",
           "notifyOnExitEmptySuccess",
         ] as const) {

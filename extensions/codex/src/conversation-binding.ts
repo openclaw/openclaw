@@ -75,10 +75,6 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
-type BoundTurnResult = {
-  reply: ReplyPayload;
-};
-
 async function runBoundTurn(params: {
   bindingStore: CodexAppServerBindingStore;
   data: CodexAppServerConversationBindingData;
@@ -89,7 +85,7 @@ async function runBoundTurn(params: {
   sessionKey?: string;
   incognito: boolean;
   timeoutMs?: number;
-}): Promise<BoundTurnResult> {
+}): Promise<ReplyPayload> {
   const agentLookup = buildCodexConversationAgentLookup({
     agentDir: params.data.agentDir,
     config: params.config,
@@ -368,11 +364,7 @@ async function runBoundTurn(params: {
         });
         const replyText = completion.replyText.trim();
         turnSucceeded = true;
-        return {
-          reply: {
-            text: replyText || "Codex completed without a text reply.",
-          },
-        };
+        return { text: replyText || "Codex completed without a text reply." };
       } catch (error) {
         if (isCodexAppServerOverloadError(error) && error.method === "thread/resume") {
           throw error;
@@ -487,7 +479,7 @@ async function runBoundTurn(params: {
 
 export async function runBoundTurnWithMissingThreadRecovery(
   params: Parameters<typeof runBoundTurn>[0],
-): Promise<BoundTurnResult> {
+): Promise<ReplyPayload> {
   await prepareCodexConversationBinding(params);
   try {
     return await runBoundTurn(params);

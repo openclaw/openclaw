@@ -131,9 +131,14 @@ Reads a value from the redacted config snapshot (secrets never print). `--json` 
 Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
 are rejected; they do not suppress validation of later options.
 
-A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
-`openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
-on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
+A schema-valid but unset authorable path explains that the runtime default applies and suggests
+`openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
+`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+instead explains that OpenClaw manages the values on config writes. Reading their unset parent
+paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
+An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
+the standard [CLI JSON failure envelope](/cli#json-failures) on stdout and exit with status 1.
+Without `--json`, diagnostics remain on stderr.
 
 Nested paths inside open-ended parameter bags, such as `agents.defaults.params.custom.nested`,
 are schema-valid even before they are set. This does not confirm that a provider supports the parameter.

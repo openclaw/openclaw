@@ -75,26 +75,14 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         label: `Keep current (${channelInfo.channel})`,
         hint: channelInfo.label,
       },
-      {
-        value: "stable",
-        label: "Stable",
-        hint: "Tagged releases (npm latest)",
-      },
-      {
-        value: "extended-stable",
-        label: "Extended Stable",
-        hint: "Monthly supported release (npm extended-stable)",
-      },
-      {
-        value: "beta",
-        label: "Beta",
-        hint: "Prereleases (npm beta)",
-      },
-      {
-        value: "dev",
-        label: "Dev",
-        hint: "Git main",
-      },
+      ...(
+        [
+          ["stable", "Stable", "Tagged releases (npm latest)"],
+          ["extended-stable", "Extended Stable", "Monthly supported release (npm extended-stable)"],
+          ["beta", "Beta", "Prereleases (npm beta)"],
+          ["dev", "Dev", "Git main"],
+        ] as const
+      ).map(([value, label, hint]) => ({ value, label, hint })),
     ],
     initialValue: "keep",
   });

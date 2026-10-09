@@ -1,4 +1,3 @@
-import { availableParallelism } from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -56,6 +55,7 @@ import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-adm
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
+import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 import { trackWorkerRequest, type WorkerRequestObservation } from "./worker-request-diagnostics.js";
 
 const MAX_STORES = 64;
@@ -66,7 +66,7 @@ const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
 export class SqliteWorkerBroker {
   private readonly explicitSqliteCloseReleasesNativeResources = captureSqliteWorkerClosePolicy();
   // WAL readers on independent actors can progress on separate threads without blocking writers.
-  private readonly maxWorkers = Math.min(8, Math.max(2, Math.floor(availableParallelism() / 8)));
+  private readonly maxWorkers = resolveSqliteBrokerWorkerCount();
   private readonly waiters = new Map<Slot, Set<(error?: unknown) => void>>();
   private readonly resuming = new Set<Slot>();
   private readonly warnAdmission = createSqliteWorkerAdmissionWarning();

@@ -4,11 +4,17 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
+  assertSessionEntryCreationCurrent,
+  readSessionEntryCreationIdentity,
   projectSessionSharingEntry,
+  type CreatedSessionEntryReceipt,
   type CreationRecord,
   type PendingSessionEntryPublication,
+  type PreparedSessionEntryChanges,
+  type PlaceholderReceipt,
   type SessionEntryCacheDatabase,
   type SessionEntryCreationOperation,
+  type SessionEntryPlaceholder,
   type SessionEntryPublicationRecord,
   type SessionEntryReplacementPublication,
   type SessionSharingEntry,
@@ -140,6 +146,61 @@ export function readCurrentSessionEntryProjection(
     : undefined;
 }
 
+export function isSessionEntryReplacementIdentityCurrent(
+  owner: PendingSessionEntryPublication,
+  replacement: SessionEntryReplacementPublication | undefined,
+  sessionKey: string,
+): boolean {
+  if (!owner.superseded.has(sessionKey)) {
+    return true;
+  }
+  const native = owner.superseded.get(sessionKey);
+  const committed = replacement?.current.get(sessionKey);
+  // A later metadata write supersedes sharing facts, but retains this lifecycle transition.
+  return (
+    native !== undefined &&
+    committed !== undefined &&
+    native.sessionId === committed.sessionId &&
+    native.lifecycleRevision === committed.lifecycleRevision
+  );
+}
+
+export function prepareSessionEntryReplacementChanges(
+  owner: PendingSessionEntryPublication,
+  replacement: SessionEntryReplacementPublication,
+  databaseIdentity: string,
+  transcriptUnchanged: boolean,
+): PreparedSessionEntryChanges | undefined {
+  if (replacement.source?.identity !== databaseIdentity) {
+    return undefined;
+  }
+  const current = (key: string) => !owner.superseded.has(key);
+  return {
+    source: replacement.source,
+    entries: new Map(
+      [...replacement.current]
+        .filter(([key]) => current(key) && !owner.metadataSuperseded.has(key))
+        .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
+    ),
+    sharing: new Map(
+      [...replacement.current]
+        .filter(([key]) => current(key))
+        .map(([key, entry]) => [key, projectSessionSharingEntry(entry)]),
+    ),
+    projection:
+      replacement.projection &&
+      new Map(
+        [...replacement.projection]
+          .filter(
+            ([key, facts]) =>
+              readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
+              (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
+          )
+          .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
+      ),
+  };
+}
+
 export function applyPendingSessionEntryOwnerChanges(
   replacement: SessionEntryReplacementPublication | undefined,
   ownerChanges: PendingSessionEntryPublication["ownerChanges"],
@@ -250,6 +311,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       read.acquisition = undefined;
     },
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
+    readGenerationSettings: () => (active && !pending(true) ? read.generation?.current : undefined),
     readCurrent: () => (pending(true) ? undefined : read.facts),
     release: () => {
       if (!active) {
@@ -317,13 +379,25 @@ export function retainPreparedSessionGenerationFacts(params: {
   sessionKey: string;
   entry: SessionSharingEntry | undefined;
 }) {
+  const generation: NonNullable<PreparedSessionSharingRead["generation"]> = {
+    current: params.entry ?? null,
+    initiallyAbsent: params.entry ? undefined : true,
+  };
   const retained = retainPreparedSessionSharingFacts({
     ...params,
     membership: new Set(),
-    generation: { current: params.entry ?? null, initiallyAbsent: params.entry ? undefined : true },
+    generation,
   });
   return {
+    adoptCreatedEntry: (entry: SessionSharingEntry) => {
+      if (!generation.initiallyAbsent || retained.readGeneration() !== entry) {
+        return false;
+      }
+      generation.initiallyAbsent = undefined;
+      return true;
+    },
     readCurrent: retained.readGeneration,
+    readSessionSettings: retained.readGenerationSettings,
     prepareRead: retained.prepareRead,
     release: retained.release,
   };
@@ -354,6 +428,51 @@ export const preparedSharingChanges: PreparedSharingChangeRegistry = resolveGlob
     current: new AsyncLocalStorage<CreationRecord>(),
   }),
 );
+
+function readSessionEntryCreationReceipt(
+  change: SessionRowChange,
+  operation: SessionEntryCreationOperation,
+): PlaceholderReceipt | CreatedSessionEntryReceipt | undefined {
+  const record = preparedSharingChanges.changes.get(change);
+  const receipt =
+    record?.kind === "placeholder"
+      ? record.receipt
+      : record?.kind === "metadata"
+        ? record.creation
+        : undefined;
+  const creation = preparedSharingChanges.operations.get(operation);
+  if (!creation) {
+    return undefined;
+  }
+  try {
+    assertSessionEntryCreationCurrent(creation);
+  } catch {
+    return undefined;
+  }
+  return receipt?.committed &&
+    receipt.creation === creation &&
+    receipt.databaseIdentity === readSessionEntryCreationIdentity(creation) &&
+    receipt.sessionKey === creation.sessionKey
+    ? receipt
+    : undefined;
+}
+
+export function readSessionEntryCreationTransition(
+  change: SessionRowChange,
+  operation: SessionEntryCreationOperation,
+): SessionEntryPlaceholder | undefined {
+  const receipt = readSessionEntryCreationReceipt(change, operation);
+  return receipt?.kind === "placeholder" ? receipt.placeholder : undefined;
+}
+
+/** Full-row creation is authoritative only from the bound writer's settled COMMIT receipt. */
+export function readSessionEntryCreatedEntry(
+  change: SessionRowChange,
+  operation: SessionEntryCreationOperation,
+) {
+  const receipt = readSessionEntryCreationReceipt(change, operation);
+  return receipt?.kind === "entry" ? receipt.entry : undefined;
+}
 
 /** Private owner metadata follows the original event object without changing its public fields. */
 export function isPreparedSessionSharingChange(change: SessionRowChange): boolean {

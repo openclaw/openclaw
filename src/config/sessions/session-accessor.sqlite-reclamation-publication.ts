@@ -83,7 +83,6 @@ export function collectReclamationChangedSessionKeys(
       ];
     case "deletion-plan":
     case "lifecycle-projection-plan":
-    case "lifecycle-projection-count":
       return [];
     case "maintenance-plan":
       return result.value.archivedEntries.map(({ sessionKey }) => sessionKey);

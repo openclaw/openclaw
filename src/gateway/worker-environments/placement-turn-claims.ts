@@ -13,7 +13,14 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
-import { ensureLocal, find, fromRow, getRequired, query } from "./placement-row-codec.js";
+import {
+  ensureLocal,
+  find,
+  fromRow,
+  getRequired,
+  query,
+  turnClaimValues,
+} from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
@@ -55,14 +62,12 @@ export class ActiveTurnClaimError extends Error {
 }
 
 function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
-  return query(db).updateTable("worker_session_placements").set({
-    turn_claim_owner: null,
-    turn_claim_id: null,
-    turn_claim_run_id: null,
-    turn_claim_generation: null,
-    turn_claim_owner_epoch: null,
-    updated_at_ms: nowMs,
-  });
+  return query(db)
+    .updateTable("worker_session_placements")
+    .set({
+      ...turnClaimValues(null),
+      updated_at_ms: nowMs,
+    });
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
@@ -471,30 +476,17 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             .where("transition_generation", "=", current.generation)
             .where("environment_id", "=", environmentId)
             .where("active_owner_epoch", "=", ownerEpoch)
-            .where(
-              "turn_claim_owner",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim?.owner ?? null,
-            )
-            .where(
-              "turn_claim_id",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? claimId : null,
-            )
-            .where(
-              "turn_claim_run_id",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? runId : null,
-            )
-            .where(
-              "turn_claim_generation",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? placementGeneration : null,
-            )
-            .where(
-              "turn_claim_owner_epoch",
-              current.turnClaim?.owner === "worker" ? "=" : "is",
-              current.turnClaim?.ownerEpoch ?? null,
+            .where((eb) =>
+              eb.and(
+                turnClaimValues(
+                  current.turnClaim && {
+                    ...current.turnClaim,
+                    claimId,
+                    runId,
+                    generation: placementGeneration,
+                  },
+                ),
+              ),
             ),
         );
         if (result.numAffectedRows !== 1n) {

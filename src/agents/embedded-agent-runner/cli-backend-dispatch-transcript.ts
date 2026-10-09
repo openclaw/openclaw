@@ -161,12 +161,10 @@ export function createCliDispatchTranscriptRecorder(params: {
       appendAssistantSnapshot(lastAssistantText.trim(), "aborted");
     },
     finalize: async (finalText?: string) => {
-      if (finalized) {
-        await tail;
-        return;
+      if (!finalized) {
+        finalized = true;
+        appendAssistantSnapshot(finalText?.trim() || lastAssistantText.trim(), "stop");
       }
-      finalized = true;
-      appendAssistantSnapshot(finalText?.trim() || lastAssistantText.trim(), "stop");
       await tail;
     },
   };
@@ -182,24 +180,21 @@ function normalizeToolResultContent(result: unknown): ToolResultMessage["content
   if (!Array.isArray(content)) {
     return [];
   }
-  const blocks: ToolResultMessage["content"] = [];
-  for (const block of content) {
+  return content.flatMap<ToolResultMessage["content"][number]>((block) => {
     if (typeof block === "string") {
-      blocks.push({ type: "text", text: block });
-      continue;
+      return [{ type: "text", text: block }];
     }
     const record = asOptionalObjectRecord(block);
     if (!record) {
-      continue;
+      return [];
     }
     const { type, text, data, mimeType } = record;
     if (type === "text" && typeof text === "string") {
-      blocks.push({ type: "text", text });
-      continue;
+      return [{ type: "text", text }];
     }
     if (type === "image" && typeof data === "string" && typeof mimeType === "string") {
-      blocks.push({ type: "image", data, mimeType });
+      return [{ type: "image", data, mimeType }];
     }
-  }
-  return blocks;
+    return [];
+  });
 }

@@ -500,28 +500,25 @@ export function detectToolCallLoop(
   // A wait only resumes existing work; ten unchanged outcomes already prove a stuck poll.
   const pollCriticalThreshold =
     toolName === "wait" ? TOOL_LOOP_WARNING_THRESHOLD : CRITICAL_THRESHOLD;
-  if (knownPollTool && noProgressStreak >= pollCriticalThreshold) {
-    log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
-    return {
-      stuck: true,
-      level: "critical",
-      detector: "known_poll_no_progress",
-      count: noProgressStreak,
-      message: `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`,
-      warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
-    };
-  }
-
   if (knownPollTool && noProgressStreak >= TOOL_LOOP_WARNING_THRESHOLD) {
-    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    const critical = noProgressStreak >= pollCriticalThreshold;
+    if (critical) {
+      log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    } else {
+      log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    }
     return {
       stuck: true,
-      level: "warning",
+      level: critical ? "critical" : "warning",
       detector: "known_poll_no_progress",
       count: noProgressStreak,
-      message: `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
+      message: critical
+        ? `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`
+        : `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
       warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
-      ...(argumentChurnLivenessSignal ? { livenessSignal: argumentChurnLivenessSignal } : {}),
+      ...(!critical && argumentChurnLivenessSignal
+        ? { livenessSignal: argumentChurnLivenessSignal }
+        : {}),
     };
   }
 
@@ -529,34 +526,30 @@ export function detectToolCallLoop(
     ? `pingpong:${canonicalPairKey(currentHash, pingPong.pairedSignature)}`
     : `pingpong:${toolName}:${currentHash}`;
 
-  if (pingPong.count >= CRITICAL_THRESHOLD && pingPong.noProgressEvidence) {
-    log.error(
-      `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-    );
-    return {
-      stuck: true,
-      level: "critical",
-      detector: "ping_pong",
-      count: pingPong.count,
-      message: `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls) with no progress. This appears to be a stuck ping-pong loop. Session execution blocked to prevent resource waste.`,
-      pairedToolName: pingPong.pairedToolName,
-      warningKey: pingPongWarningKey,
-    };
-  }
-
   if (pingPong.count >= TOOL_LOOP_WARNING_THRESHOLD) {
-    log.warn(
-      `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-    );
+    const critical = pingPong.count >= CRITICAL_THRESHOLD && pingPong.noProgressEvidence;
+    if (critical) {
+      log.error(
+        `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      );
+    } else {
+      log.warn(
+        `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      );
+    }
     return {
       stuck: true,
-      level: "warning",
+      level: critical ? "critical" : "warning",
       detector: "ping_pong",
       count: pingPong.count,
-      message: `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
+      message: critical
+        ? `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls) with no progress. This appears to be a stuck ping-pong loop. Session execution blocked to prevent resource waste.`
+        : `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
       pairedToolName: pingPong.pairedToolName,
       warningKey: pingPongWarningKey,
-      ...(argumentChurnLivenessSignal ? { livenessSignal: argumentChurnLivenessSignal } : {}),
+      ...(!critical && argumentChurnLivenessSignal
+        ? { livenessSignal: argumentChurnLivenessSignal }
+        : {}),
     };
   }
 

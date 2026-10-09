@@ -2,7 +2,6 @@
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
@@ -12,7 +11,6 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
-  readSessionUpstreamLinkInDatabase,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -50,21 +48,6 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** Native fork callbacks need a current source check immediately before synchronous I/O. */
-export function readSessionUpstreamLink(
-  sessionKey: string,
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): SessionUpstreamLink | undefined {
-  try {
-    const { db } = openOpenClawStateDatabase(options);
-    return readSessionUpstreamLinkInDatabase(db, sessionKey, agentId);
-  } catch (error) {
-    log.warn(`failed to read session upstream link: ${String(error)}`);
-    return undefined;
-  }
-}
-
 /** @deprecated Use deleteSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
@@ -97,18 +80,6 @@ type UpstreamWriteOptions = Pick<
   OpenClawStateDatabaseOptions,
   "env" | "path" | "initializationAgentPaths"
 >;
-
-export async function readSessionUpstreamLinkAsync(
-  sessionKey: string,
-  agentId: string,
-  options: UpstreamWriteOptions = {},
-): Promise<SessionUpstreamLink | undefined> {
-  const context = captureOpenClawStateWorkerContext(options);
-  return executeOpenClawStateWorker(context, {
-    type: "sessionUpstream.read",
-    input: { sessionKey, agentId },
-  });
-}
 
 export async function upsertSessionUpstreamLinkAsync(
   input: Parameters<typeof upsertSessionUpstreamLink>[0],

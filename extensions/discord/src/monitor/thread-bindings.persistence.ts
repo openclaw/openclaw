@@ -5,10 +5,9 @@ import {
   BINDINGS_BY_THREAD_ID,
   PERSIST_BY_ACCOUNT_ID,
   THREAD_BINDINGS_STATE,
-  THREAD_BINDINGS_NAMESPACE,
-  THREAD_BINDINGS_MAX_ENTRIES,
   normalizePersistedBinding,
   openThreadBindingsStore,
+  openThreadBindingsStoreAsync,
   removeBindingRecord,
   setBindingRecord,
   type ThreadBindingPersistence,
@@ -91,7 +90,6 @@ export async function commitBindingRecord(params: {
   const revision = THREAD_BINDINGS_STATE.revision;
   let authorityRefused = false;
   let targetCommitted = false;
-  let committedWrites = 0;
   const assertCurrent = () => {
     try {
       params.assertCurrent?.();
@@ -132,10 +130,7 @@ export async function commitBindingRecord(params: {
     };
     THREAD_BINDINGS_STATE.activePersistence = active;
     try {
-      const store = getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
-        namespace: THREAD_BINDINGS_NAMESPACE,
-        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-      });
+      const store = openThreadBindingsStoreAsync();
       // Preserve the namespace's registration order and bounded eviction recency.
       for (const [key, record] of records) {
         assertCurrent();
@@ -147,7 +142,6 @@ export async function commitBindingRecord(params: {
         await store.register(key, persisted, { assertCurrent });
         active.writingKey = undefined;
         active.committedKeys.add(key);
-        committedWrites += 1;
         targetCommitted ||= key === params.bindingKey;
       }
       assertCurrent();
@@ -159,7 +153,6 @@ export async function commitBindingRecord(params: {
           await store.delete(entry.key, { assertCurrent });
           active.writingKey = undefined;
           active.committedKeys.add(entry.key);
-          committedWrites += 1;
           targetCommitted ||= entry.key === params.bindingKey;
         }
       }
@@ -170,6 +163,7 @@ export async function commitBindingRecord(params: {
       THREAD_BINDINGS_STATE.loadedPersistentBindings = records.size > 0;
       THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
     } catch (error) {
+      const committedWrites = active.committedKeys.size;
       let failure = error;
       if (!authorityRefused) {
         try {

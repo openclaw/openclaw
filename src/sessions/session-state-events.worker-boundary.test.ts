@@ -30,7 +30,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   getOpenClawStateRuntimeSchema,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "../state/openclaw-state-schema-compatibility.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -63,8 +63,10 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
+import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 import * as notices from "./session-state-notices.js";
-import { readSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
+import { upsertSessionUpstreamLink } from "./session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -126,9 +128,11 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
     await withinTest(Promise.all([blocking, resetting, deleting]), signal);
     expect(readCursor(database, watcher, "late-target")).toBeUndefined();
     expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(readSessionUpstreamLink(child, "main", database)).toBeUndefined();
+    expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
     expect(readCursor(replacement, watcher, "late-target")).toBeDefined();
-    expect(readSessionUpstreamLink(child, "main", replacement)?.threadId).toBe("late-link");
+    expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
+      "late-link",
+    );
   } finally {
     read.release();
     release.resolve();
@@ -247,7 +251,7 @@ it("preserves older readers and version markers when watcher provenance is first
       /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
       "",
     ),
-    STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    STATE_RUNTIME_SCHEMA_COMPATIBILITY,
   );
   reopened.db
     .prepare(
@@ -696,6 +700,55 @@ it("reads session state and commits watch registration and acknowledgment withou
   } finally {
     sql.restore();
   }
+});
+
+it("reconstructs a committed followup when acknowledgment publication is lost", async () => {
+  const database = createDatabaseOptions();
+  await upsertSessionEntryCore(
+    { sessionKey: nestedWatcher, env: database.env },
+    { sessionId: "retained-watcher", updatedAt: Date.now() },
+  );
+  expect(
+    await registerSessionStateWatch(
+      { watcherSessionKey: nestedWatcher, targetSessionKey: child },
+      database,
+    ),
+  ).toBe(true);
+  const frozen = expectDefined(
+    await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
+    "frozen notice",
+  );
+  const newer = expectDefined(
+    await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
+    "newer notice",
+  );
+  const originalNotice = expectDefined(peekSystemEventEntries(nestedWatcher)[0], "original notice");
+  resetSystemEventsForTest();
+  const publish = vi.fn(() => {
+    throw new Error("Publication lost after commit");
+  });
+  await acknowledgeSessionStateNoticesInWorker(
+    nestedWatcher,
+    [{ targetSessionKey: child, watcherStorePath: originalNotice.sessionStorePath ?? null }],
+    publish,
+    database,
+  );
+  expect(publish).toHaveBeenCalledOnce();
+  expect(peekSystemEventEntries(nestedWatcher)).toEqual([]);
+  expect(readCursor(database, nestedWatcher)).toEqual({
+    last_seen_sequence: frozen.sequence,
+    notified_sequence: newer.sequence,
+    material_sequence: newer.sequence,
+  });
+  await sweepSessionStateWatchNotices(database);
+  expect(peekSystemEventEntries(nestedWatcher).map(({ text }) => text)).toEqual([
+    expect.stringContaining(`changesSince ${frozen.sequence}`),
+  ]);
+  expect(readCursor(database, nestedWatcher)).toEqual({
+    last_seen_sequence: frozen.sequence,
+    notified_sequence: newer.sequence,
+    material_sequence: newer.sequence,
+  });
 });
 
 it("rolls back watch writes when the system-event store changes at transaction or commit admission", async () => {

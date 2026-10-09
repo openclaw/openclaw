@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ProviderCatalogContext,
   ProviderCatalogResult,
@@ -13,14 +14,16 @@ import {
   type LiveModelCatalogFetchGuard,
   type LiveModelRowProjection,
 } from "./provider-catalog-live-acquisition.internal.js";
-import { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
+import {
+  buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogId,
+} from "./provider-catalog-live-normalize.internal.js";
 import {
   LiveModelCatalogHttpError,
   runLiveProviderCatalog,
 } from "./provider-catalog-live-outcome.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
-  getCachedLiveCatalogValue,
   type ManifestProviderCatalogEntry,
 } from "./provider-catalog-shared.js";
 import {
@@ -74,7 +77,10 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     models: readonly T[];
     ttlMs?: number;
     cacheKeyParts?: readonly unknown[];
-    /** Provider-owned projection for catalogs that publish richer metadata than model ids. */
+    /**
+     * Provider-owned projection for catalogs that publish richer metadata than model ids.
+     * Defaults to the shared chat classifier, which keeps unfamiliar listed chat models.
+     */
     projectRows?: LiveModelRowProjection<T>;
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
     fallbackToAnonymousOnUnauthorized?: boolean;
@@ -128,6 +134,21 @@ function matchesProviderCatalogScope(
   );
 }
 
+// The id selector decides which rows are models and what they are called; the
+// shared classifier then drops non-chat rows and enriches catalogued ids.
+function projectSelectedLiveModelRows(
+  readModelId: (row: unknown) => string | undefined,
+): LiveModelRowProjection {
+  return (rows, fallback) =>
+    buildOpenAICompatibleLiveModels(
+      rows.flatMap((row) => {
+        const id = readModelId(row);
+        return id ? [{ ...asOptionalRecord(row), id }] : [];
+      }),
+      fallback,
+    );
+}
+
 async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T> & {
     fallback: ModelProviderConfig;
@@ -178,7 +199,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     params.discoveryMode === "strict"
       ? [
           params.providerId,
-          params.projectRows ? "model-rows" : "models",
+          "model-rows",
           params.endpoint,
           liveModelCatalogAuthCacheKey(params),
           "strict",
@@ -186,34 +207,18 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
         ]
       : params.cacheKeyParts;
   try {
-    if (params.projectRows) {
-      const models = await projectCachedLiveModelRows({
-        ...params,
-        cacheKeyParts,
-        fallback,
-        projectRows: params.projectRows,
-      });
-      if (models.length > 0 || params.discoveryMode === "strict") {
-        return { ...fallback, models: [...models] };
-      }
-      return fallback;
-    }
-    const liveModelIds = await getCachedLiveCatalogValue({
-      keyParts: cacheKeyParts ?? [
-        params.providerId,
-        "models",
-        params.endpoint,
-        liveModelCatalogAuthCacheKey(params),
-      ],
-      ttlMs: params.ttlMs,
-      signal: params.signal,
-      load: async (signal) => await fetchLiveProviderModelIds({ ...params, signal }),
-      shouldCache: (modelIds) => modelIds.length > 0 || params.discoveryMode === "strict",
+    // The authenticated listing owns model existence; static rows only enrich
+    // listed ids, so unfamiliar chat models appear without a release.
+    const models = await projectCachedLiveModelRows<ModelDefinitionConfig>({
+      ...params,
+      cacheKeyParts,
+      fallback,
+      projectRows:
+        params.projectRows ??
+        projectSelectedLiveModelRows(params.readModelId ?? readLiveModelCatalogId),
     });
-    const liveModelIdSet = new Set(liveModelIds);
-    const models = params.models.filter((model) => liveModelIdSet.has(model.id));
     if (models.length > 0 || params.discoveryMode === "strict") {
-      return { ...fallback, models };
+      return { ...fallback, models: [...models] };
     }
   } catch (error) {
     if (params.discoveryMode === "strict") {

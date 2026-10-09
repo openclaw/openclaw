@@ -15,13 +15,15 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { registerSessionStateWatch } from "./session-state-events.js";
-import { settleSessionUpstreamLink } from "./session-upstream-links-runtime.js";
+import {
+  captureSessionUpstreamLinkReadSource,
+  prepareSessionUpstreamLink,
+  settleSessionUpstreamLink,
+} from "./session-upstream-links-runtime.js";
 import {
   deleteSessionUpstreamLink,
   deleteSessionUpstreamLinkAsync,
   listWatchedSessionUpstreamLinks,
-  readSessionUpstreamLink,
-  readSessionUpstreamLinkAsync,
   upsertSessionUpstreamLink,
   upsertSessionUpstreamLinkAsync,
   upsertSessionUpstreamLinkWithCurrentSource,
@@ -178,7 +180,10 @@ describe("session upstream links", () => {
         { ...database, ifAbsent: true },
       );
       expect(await Promise.all([first, second])).toEqual([true, false]);
-      expect(await readSessionUpstreamLinkAsync(input.sessionKey, input.agentId, database)).toEqual(
+      const readSource = captureSessionUpstreamLinkReadSource(
+        captureOpenClawStateWorkerContext(database),
+      );
+      expect(await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId)).toEqual(
         expected,
       );
       expect(
@@ -200,20 +205,29 @@ describe("session upstream links", () => {
         }),
       ).toBe("absent");
       expect(
-        await readSessionUpstreamLinkAsync(input.sessionKey, input.agentId, database),
+        await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId),
       ).toBeUndefined();
       sql.expectIdle();
     } finally {
       sql.restore();
     }
-    expect(readSessionUpstreamLink(input.sessionKey, input.agentId, database)).toBeUndefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(
+        openOpenClawStateDatabase(database).db,
+        input.sessionKey,
+        input.agentId,
+      ),
+    ).toBeUndefined();
   });
 
   it("observes foreign source changes and rolls back a revoked commit grant", async () => {
     const database = createDatabaseOptions();
     const sourceKey = "agent:main:adopted:source";
     upsertLink(sourceKey, "claude", database);
-    const source = (await readSessionUpstreamLinkAsync(sourceKey, "main", database))!;
+    const readSource = captureSessionUpstreamLinkReadSource(
+      captureOpenClawStateWorkerContext(database),
+    );
+    const source = (await prepareSessionUpstreamLink(readSource, sourceKey, "main"))!;
     const child = { ...source, sessionKey: "agent:main:adopted:child" };
     const sourceCurrent = {
       context: captureOpenClawStateWorkerContext(database),
@@ -231,7 +245,7 @@ describe("session upstream links", () => {
     upsertSessionUpstreamLink({ ...source, threadId: "replacement" }, database);
     const sql = observeMainThreadSql();
     try {
-      expect(await readSessionUpstreamLinkAsync(sourceKey, "main", database)).toMatchObject({
+      expect(await prepareSessionUpstreamLink(readSource, sourceKey, "main")).toMatchObject({
         threadId: "replacement",
       });
       sql.expectIdle();
@@ -262,7 +276,11 @@ describe("session upstream links", () => {
     await expect(
       deleteSessionUpstreamLinkAsync(child.sessionKey, child.agentId, {
         ...database,
-        expected: readSessionUpstreamLink(child.sessionKey, child.agentId, database),
+        expected: readSessionUpstreamLinkInDatabase(
+          openOpenClawStateDatabase(database).db,
+          child.sessionKey,
+          child.agentId,
+        ),
         assertCommitAllowed: () => {
           if (revoked) {
             throw new Error("initializer revoked");
@@ -270,8 +288,20 @@ describe("session upstream links", () => {
         },
       }),
     ).rejects.toThrow("initializer revoked");
-    expect(readSessionUpstreamLink(child.sessionKey, child.agentId, database)).toBeDefined();
-    expect(readSessionUpstreamLink("agent:main:adopted:stale", "main", database)).toBeUndefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(
+        openOpenClawStateDatabase(database).db,
+        child.sessionKey,
+        child.agentId,
+      ),
+    ).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(
+        openOpenClawStateDatabase(database).db,
+        "agent:main:adopted:stale",
+        "main",
+      ),
+    ).toBeUndefined();
   });
   it("returns each watched link once and skips ambiguous agent ownership without host SQL", async () => {
     const database = createDatabaseOptions();
@@ -336,7 +366,11 @@ describe("session upstream links", () => {
       hostSql.restore();
     }
 
-    const expected = readSessionUpstreamLink(watched, "main", database);
+    const expected = readSessionUpstreamLinkInDatabase(
+      openOpenClawStateDatabase(database).db,
+      watched,
+      "main",
+    );
     if (!expected) {
       throw new Error("Expected watched link");
     }
@@ -396,7 +430,11 @@ describe("session upstream links", () => {
       { watcherSessionKey: "agent:main:main", targetSessionKey: sessionKey },
       database,
     );
-    const expected = readSessionUpstreamLink(sessionKey, "main", database);
+    const expected = readSessionUpstreamLinkInDatabase(
+      openOpenClawStateDatabase(database).db,
+      sessionKey,
+      "main",
+    );
     if (!expected) {
       throw new Error("Expected watched link");
     }

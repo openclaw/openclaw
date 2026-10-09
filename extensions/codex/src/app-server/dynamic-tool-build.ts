@@ -344,14 +344,20 @@ export async function buildDynamicTools(
   const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
   const persistentCodexWebSearchSurface =
     params.config?.tools?.web?.search?.enabled !== false &&
-    !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
-      (name) => normalizeCodexDynamicToolName(name) === "web_search",
-    );
-  // An authorized search tool already proves persistent availability. Only absent
-  // tools need policy resolution to distinguish transient restrictions from denial.
+    !isCodexDynamicToolExcluded(input.pluginConfig, ["web_search"]);
+  // A turn-scoped native restriction must not erase persistent hosted availability.
+  // Permission still comes from the policy owner, independently of managed tools.
+  const persistentHostedWebSearchEligible =
+    resolveCodexWebSearchPlan({
+      config: params.config,
+      nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
+    }).kind === "native-hosted";
+  let nativeWebSearchAllowed = false;
   let persistentWebSearchAllowed = webSearchPresent;
   if (
-    input.onPersistentWebSearchPolicyResolved &&
+    (input.onPersistentWebSearchPolicyResolved ||
+      (webSearchPlan.kind === "native-hosted" &&
+        (input.onWebSearchPolicyResolved || webSearchPlan.webFetchHostnameAllowlist))) &&
     !webSearchPresent &&
     persistentCodexWebSearchSurface
   ) {
@@ -363,6 +369,10 @@ export async function buildDynamicTools(
       modelId: params.modelId,
       agentId: input.policyAgentId,
       sessionKey: input.sandboxSessionKey,
+      sessionId: params.sessionId,
+      ...(persistentHostedWebSearchEligible
+        ? { runtimeToolAllowlist: toolRunContext.runtimeToolAllowlist }
+        : {}),
       sandboxToolPolicy: input.sandbox?.tools,
       messageProvider: messageToolProvider,
       agentAccountId: params.agentAccountId,
@@ -380,7 +390,13 @@ export async function buildDynamicTools(
     });
     persistentWebSearchAllowed =
       webSearchPolicy.persistentAllowed &&
-      (!webSearchPolicy.allowed || isCodexMemoryFlushRun(params));
+      (persistentHostedWebSearchEligible ||
+        !webSearchPolicy.allowed ||
+        isCodexMemoryFlushRun(params));
+    nativeWebSearchAllowed =
+      webSearchPlan.kind === "native-hosted" &&
+      webSearchPolicy.allowed &&
+      !isCodexMemoryFlushRun(params);
   }
   input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
   const filteredTools = applyEmbeddedAttemptToolsAllow(
@@ -421,7 +437,8 @@ export async function buildDynamicTools(
   toolBuildStages.mark("runtime-normalization");
   // Resolve policy before hiding the managed tool. Hosted search follows the
   // same effective policy, while only one search implementation is exposed.
-  const webSearchAllowed = normalizedTools.some((tool) => tool.name === "web_search");
+  const webSearchAllowed =
+    nativeWebSearchAllowed || normalizedTools.some((tool) => tool.name === "web_search");
   webFetchHostnameAllowlistRef.value = webSearchAllowed
     ? webSearchPlan.webFetchHostnameAllowlist
     : undefined;

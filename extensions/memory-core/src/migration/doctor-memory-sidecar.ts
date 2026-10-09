@@ -17,14 +17,15 @@ import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.j
 
 const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
-async function existingLegacySidecarPaths(basePath: string): Promise<string[]> {
+async function existingPaths(candidates: string[]): Promise<string[]> {
   const paths = await Promise.all(
-    LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-      const filePath = `${basePath}${suffix}`;
-      return (await legacyStateFileExists(filePath)) ? filePath : null;
-    }),
+    candidates.map(async (filePath) => ((await legacyStateFileExists(filePath)) ? filePath : null)),
   );
   return paths.filter((filePath) => filePath !== null);
+}
+
+function existingLegacySidecarPaths(basePath: string): Promise<string[]> {
+  return existingPaths(LEGACY_MEMORY_SIDECAR_SUFFIXES.map((suffix) => `${basePath}${suffix}`));
 }
 
 function formatLegacyVectorRows(count: number | undefined): string {
@@ -33,18 +34,25 @@ function formatLegacyVectorRows(count: number | undefined): string {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
-function resolveConfiguredAgentIds(config: unknown): string[] {
+function readLegacyAgentEntries(config: unknown) {
   const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
-  const entries = readLegacyObjectRecord(agents?.entries);
-  const listedEntries: unknown[] =
+  const listed: unknown[] =
     Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
       ? agents.list
       : [];
-  const listedIds = listedEntries.flatMap((entry) => {
-    const id = readLegacyObjectRecord(entry)?.id;
+  return {
+    keyed: readLegacyObjectRecord(agents?.entries),
+    listed,
+  };
+}
+
+function resolveConfiguredAgentIds(config: unknown): string[] {
+  const { keyed, listed } = readLegacyAgentEntries(config);
+  const listedIds = listed.flatMap((value) => {
+    const id = readLegacyObjectRecord(value)?.id;
     return typeof id === "string" ? [id] : [];
   });
-  const ids = new Set([...Object.keys(entries ?? {}), ...listedIds].map(normalizeAgentId));
+  const ids = new Set([...Object.keys(keyed ?? {}), ...listedIds].map(normalizeAgentId));
   return ids.size > 0 ? [...ids] : [normalizeAgentId(undefined)];
 }
 
@@ -52,22 +60,17 @@ function readAgentMemorySearch(
   config: unknown,
   agentId: string,
 ): Record<string, unknown> | undefined {
-  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
-  const keyedEntries = readLegacyObjectRecord(agents?.entries);
-  const keyedEntry = keyedEntries
-    ? Object.entries(keyedEntries).find(([id]) => normalizeAgentId(id) === agentId)?.[1]
-    : undefined;
+  const { keyed, listed } = readLegacyAgentEntries(config);
+  const keyedEntry = Object.entries(keyed ?? {}).find(
+    ([id]) => normalizeAgentId(id) === agentId,
+  )?.[1];
   const keyedSearch = readLegacyObjectRecord(
     readLegacyObjectRecord(readLegacyObjectRecord(keyedEntry)?.memory)?.search,
   );
   if (keyedSearch) {
     return keyedSearch;
   }
-  const entries: unknown[] =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
-  const entry = entries
+  const entry = listed
     .map(readLegacyObjectRecord)
     .find(
       (candidate) =>
@@ -245,14 +248,9 @@ async function archiveLegacyMemorySidecar(params: {
   if (existingSources.length === 0) {
     return;
   }
-  const existingArchives = (
-    await Promise.all(
-      existingSources.map(async (sourcePath) => {
-        const archivedPath = `${sourcePath}.migrated`;
-        return (await legacyStateFileExists(archivedPath)) ? archivedPath : null;
-      }),
-    )
-  ).filter((filePath): filePath is string => filePath !== null);
+  const existingArchives = await existingPaths(
+    existingSources.map((sourcePath) => `${sourcePath}.migrated`),
+  );
   if (existingArchives.length > 0) {
     params.warnings.push(
       `Left migrated Memory Core legacy memory index sidecar in place because ${existingArchives[0]} already exists`,

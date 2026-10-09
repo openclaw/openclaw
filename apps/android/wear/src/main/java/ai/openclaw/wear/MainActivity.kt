@@ -180,13 +180,12 @@ internal fun OpenClawWearApp(
   var interaction by remember { mutableStateOf(WearInteractionState.READY) }
   var themeMode by remember { mutableStateOf(initialSettings.themeMode) }
   var autoSpeak by remember { mutableStateOf(initialSettings.autoSpeak) }
-  var notificationsGranted by remember {
-    mutableStateOf(
-      Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-        ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
-        PackageManager.PERMISSION_GRANTED,
-    )
-  }
+
+  fun hasNotificationPermission(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+      ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+  var notificationsGranted by remember { mutableStateOf(hasNotificationPermission()) }
   var microphoneGranted by remember {
     mutableStateOf(ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
   }
@@ -241,18 +240,6 @@ internal fun OpenClawWearApp(
   val sessionSearchLauncher = rememberTextInputLauncher(onText = viewModel::searchSessions)
   val modelSearchLauncher = rememberTextInputLauncher(onText = viewModel::searchModels)
 
-  fun startRealtimeTalk() {
-    speaker.stop()
-    if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
-    microphoneGranted = ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    if (!microphoneGranted) {
-      microphoneDenied = true
-      return
-    }
-    microphoneDenied = false
-    viewModel.startRealtimeTalk()
-  }
-
   fun leaveConversationContext() {
     awaitingReplySessionId = null
     awaitingReplyRunId = null
@@ -289,10 +276,7 @@ internal fun OpenClawWearApp(
             microphoneDenied = true
             microphoneSettingsRequired = activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == false
           }
-          notificationsGranted =
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
+          notificationsGranted = hasNotificationPermission()
         }
         if (event == Lifecycle.Event.ON_PAUSE) {
           viewModel.cancelPendingRealtimeTalkStart()
@@ -317,7 +301,15 @@ internal fun OpenClawWearApp(
       ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
     ) {
-      startRealtimeTalk()
+      speaker.stop()
+      if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+      microphoneGranted = ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+      if (!microphoneGranted) {
+        microphoneDenied = true
+        return
+      }
+      microphoneDenied = false
+      viewModel.startRealtimeTalk()
     } else {
       audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
@@ -330,7 +322,6 @@ internal fun OpenClawWearApp(
   WearReplyCompletionEffect(
     state = state,
     snapshot = snapshot,
-    awaitingReply = awaitingReplySessionId != null,
     awaitingReplySessionId = awaitingReplySessionId,
     awaitingReplyRunId = awaitingReplyRunId,
     expectedAssistantKey = expectedAssistantKey,
@@ -544,7 +535,6 @@ private fun wearTextInputIntent(
 internal fun WearReplyCompletionEffect(
   state: WearUiState,
   snapshot: WearConversationSnapshot?,
-  awaitingReply: Boolean,
   awaitingReplySessionId: String?,
   expectedAssistantKey: String?,
   awaitingReplyRunId: String? = null,
@@ -562,12 +552,11 @@ internal fun WearReplyCompletionEffect(
     state.replyTerminal,
     state.replyCompletion,
     state.pendingAbortRunId,
-    awaitingReply,
     awaitingReplySessionId,
     expectedAssistantKey,
     awaitingReplyRunId,
   ) {
-    if (!awaitingReply) return@LaunchedEffect
+    if (awaitingReplySessionId == null) return@LaunchedEffect
     if (snapshot == null || snapshot.activeSessionId != awaitingReplySessionId) {
       complete(null)
       return@LaunchedEffect

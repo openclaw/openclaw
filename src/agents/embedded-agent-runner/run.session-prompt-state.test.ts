@@ -1,12 +1,36 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { captureExecRequestCancellation } from "../bash-process-control.js";
+import {
+  deleteSession,
+  getSession,
+  waitForExecSession,
+  type ProcessSession,
+} from "../bash-process-registry.js";
+import { createLazyExecTool } from "../lazy-exec-tool.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { acceptCompactionSuccessor } from "./compaction-successor.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
+import { claimAgentSessionWriter } from "./run/session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
@@ -91,6 +115,192 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
+    await using state = await createState({ prompt: "Task B: inspect the blue database." });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [],
+    });
+    const completed = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "The blue database was inspected." }],
+    });
+    state.continueFromCurrentTranscript({ messages: [completed] });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [completed],
+    });
+    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it.each([
+    { name: "moves command cancellation to an accepted compaction successor", replaced: false },
+    { name: "preserves command ownership when a replacement rejects compaction", replaced: true },
+  ])("$name", async ({ replaced }) => {
+    await withOpenClawTestState(
+      {
+        label: "exec-compaction-handoff",
+        scenario: "minimal",
+        env: { OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" },
+      },
+      async (fixture) => {
+        const target = {
+          agentId: "main",
+          sessionId: randomUUID(),
+          sessionKey: `agent:main:${randomUUID()}`,
+          storePath: path.join(fixture.agentDir(), "openclaw-agent.sqlite"),
+        };
+        await replaceSessionEntry(target, {
+          sessionId: target.sessionId,
+          lifecycleRevision: randomUUID(),
+          updatedAt: 1,
+        });
+        const runId = randomUUID();
+        const admission = prepareSystemAgentRunAdmission(
+          {},
+          runId,
+          target.agentId,
+          "exec-compaction",
+        );
+        const commands: ProcessSession[] = [];
+        const startCommand = async (commandRunId: string) => {
+          const tool = createLazyExecTool({
+            ...target,
+            runId: commandRunId,
+            cwd: fixture.workspaceDir,
+            scopeKey: target.sessionKey,
+            host: "gateway",
+            mode: "full",
+            ask: "off",
+            allowBackground: true,
+            notifyOnExit: false,
+            preparedStoreEnvironment: {},
+          });
+          const result = await tool.execute("compaction-command", {
+            command: `node -e "require('fs').watch('.', () => {})"`,
+            yieldMs: 10,
+            timeoutSeconds: 60,
+          });
+          const details = asOptionalRecord(result.details);
+          expect(details?.status).toBe("running");
+          if (typeof details?.sessionId !== "string") {
+            throw new Error("Expected a running command's process handle");
+          }
+          const command = expectDefined(getSession(details.sessionId), "running command");
+          commands.push(command);
+          return command;
+        };
+        try {
+          const previousRunId = randomUUID();
+          const unrelated = await withExecRequestTurn(
+            { identity: { ...target, runId: previousRunId } },
+            () => startCommand(previousRunId),
+          );
+          const admittedRunContext = await admission.admit("embedded");
+          const assertAdmittedActive = expectDefined(
+            resolveAdmittedRunActiveAssertion(admittedRunContext),
+            "live compaction admission",
+          );
+          const runParams: PreparedEmbeddedRunInput["runParams"] = {
+            ...BASE_RUN_PARAMS,
+            ...target,
+            admittedRunContext,
+            sessionFile: target.sessionKey,
+            sessionTarget: target,
+            workspaceDir: fixture.workspaceDir,
+            runId,
+          };
+          const writer = expectDefined(await claimAgentSessionWriter(runParams), "claimed writer");
+          runParams.sessionTarget = { ...target, ...writer };
+          const expectedEntry = expectDefined(loadSessionEntry(target), "original session writer");
+          await withExecRequestTurn({ identity: { ...target, runId } }, async () => {
+            await using state = await createEmbeddedRunSessionPromptState({
+              runParams,
+              sessionAgentId: target.agentId,
+              resolvedSessionKey: target.sessionKey,
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              onInterrupt: () => {},
+            });
+            const ordinary = await startCommand(runId);
+            const successorId = randomUUID();
+            const replacementId = randomUUID();
+            if (replaced) {
+              await replaceSessionEntry(target, {
+                ...expectedEntry,
+                sessionId: replacementId,
+                lifecycleRevision: randomUUID(),
+                activeWriterRunId: "replacement-run",
+              });
+            }
+            const acceptance = acceptCompactionSuccessor({
+              currentTarget: target,
+              currentSessionFile: state.sessionFile,
+              expectedEntry: {
+                sessionId: expectedEntry.sessionId,
+                lifecycleRevision: expectedEntry.lifecycleRevision,
+                activeWriterRunId: expectedEntry.activeWriterRunId,
+              },
+              assertActive: assertAdmittedActive,
+              result: {
+                ok: true,
+                compacted: true,
+                result: {
+                  summary: "Compacted request context",
+                  tokensBefore: 4_097,
+                  sessionTarget: { sessionId: successorId },
+                },
+              },
+              onCommitted: state.recordCommittedCompactionSuccessor,
+            });
+            if (replaced) {
+              await expect(acceptance).rejects.toBeInstanceOf(
+                SessionTranscriptWriterClaimReboundError,
+              );
+              expect(state.sessionId).toBe(target.sessionId);
+            } else {
+              const accepted = await acceptance;
+              state.notifyCompactionSessionAdopted(accepted.previousSessionId);
+              expect(state.sessionId).toBe(successorId);
+            }
+            const currentSessionId = replaced ? replacementId : successorId;
+            expect(loadSessionEntry(target)?.sessionId).toBe(currentSessionId);
+            const stopped = captureExecRequestCancellation({
+              sessionKey: target.sessionKey,
+              agentId: target.agentId,
+              sessionId: currentSessionId,
+            });
+            expect(stopped.cancel()).toBe(!replaced);
+            await stopped.settle();
+            if (replaced) {
+              expect(ordinary.exited).toBe(false);
+              expect(ordinary.cancellationRequested).not.toBe(true);
+            } else {
+              expect(ordinary).toMatchObject({ exited: true, exitReason: "manual-cancel" });
+              expect(ordinary.finalizationFailed).not.toBe(true);
+            }
+            // An older request sharing the original session is not this run's successor.
+            expect(unrelated.exited).toBe(false);
+            expect(unrelated.cancellationRequested).not.toBe(true);
+          });
+        } finally {
+          try {
+            for (const command of commands) {
+              getProcessSupervisor().cancel(command.id, "manual-cancel");
+            }
+            await Promise.all(commands.map(waitForExecSession));
+            for (const command of commands) {
+              deleteSession(command.id);
+            }
+          } finally {
+            admission.close();
+          }
+        }
+      },
+    );
+  });
+
   it("keeps a compound internal prompt across a missing-assistant retry", async () => {
     await using state = await createState();
     state.activateInternalPrompt("  finish the reasoning exactly  ");

@@ -9,6 +9,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionBranchSummary,
 } from "./session-accessor.types.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 export type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
@@ -47,6 +48,7 @@ export type SessionTranscriptModelContext = {
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
   eventJson?: string[];
+  eventSeqs?: number[];
   version: SessionTranscriptContextVersion;
 };
 
@@ -58,7 +60,11 @@ export type SessionTranscriptContextSnapshot = {
 
 export type PreparedSessionTranscriptHydration =
   | { kind: "full"; snapshot: SessionTranscriptReadSnapshot }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
+  | {
+      kind: "bounded";
+      snapshot: SessionTranscriptBoundedActiveContext;
+      transcript?: SessionTranscriptAnchorFacts;
+    };
 
 export type SessionPendingInputReceipt =
   | { runId: string; state: "pending"; cancelled?: true }

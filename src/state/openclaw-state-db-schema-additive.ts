@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -124,6 +126,10 @@ export function reconstructAgentDeletionJournalSchema(
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_database_leases");
+  if (sql && parseSqliteTableDefinition(sql, "agent_database_leases").columns.has("provenance")) {
+    return;
+  }
   ensureTable(database, "agent_database_leases");
   ensureColumn(database, "agent_database_leases", "provenance TEXT");
 }
