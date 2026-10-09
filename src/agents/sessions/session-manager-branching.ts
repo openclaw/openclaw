@@ -215,6 +215,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           assertCurrent();
           assertDestinationOwned();
         };
+        let adopted = false;
         const receipt = await receiveSessionManagerCommit("session.transcript.branch", () =>
           withSessionMetadataWorker(
             admission.options,
@@ -229,6 +230,35 @@ export class SessionManagerBranching extends SessionManagerMetadata {
                   expectedLifecycleRevision: facts.lifecycleRevision,
                 },
               }),
+            {
+              beforeIdentityPublication: (publication) => {
+                const transcript = publication.transcriptPublication
+                  .flatMap((committedReceipt) => [...committedReceipt.facts.values()])
+                  .find(
+                    (fact) =>
+                      fact.kind === "postimage" &&
+                      fact.value.sessionKey === scope.sessionKey &&
+                      fact.value.sessionId === newSessionId,
+                  );
+                if (transcript?.kind !== "postimage") {
+                  throw new Error("Committed session branch omitted its transcript postimage");
+                }
+                this.assertTranscriptViewAvailable();
+                assertNavigation();
+                if (
+                  !sameSessionTranscriptTargetBinding(identity, this.persistenceTarget) ||
+                  this.transcriptVersion !== version
+                ) {
+                  throw new Error("Session transcript changed before branch publication");
+                }
+                const { generation, rawSeq, updatedAt } = transcript.value;
+                adoptBranch(
+                  { ...fencedTarget, sessionId: newSessionId },
+                  { generation, rawSeq, updatedAt },
+                );
+                adopted = true;
+              },
+            },
           ),
         );
         const committed = receipt.value;
@@ -243,8 +273,10 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           if (receipt.failure) {
             throw receipt.failure;
           }
-          assertCurrent();
-          adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
+          if (!adopted) {
+            assertCurrent();
+            adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
+          }
         } catch (cause) {
           failure = { cause };
         }

@@ -88,6 +88,9 @@ it("retains unchanged generation authority inside a native transaction and after
       expect(() =>
         runOpenClawAgentWriteTransaction(
           ({ db }) => {
+            db.prepare(
+              "UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?",
+            ).run(scope.sessionKey);
             generation.assertCurrent();
             db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
               JSON.stringify({ ...original, lifecycleRevision: "tentative-lifecycle" }),

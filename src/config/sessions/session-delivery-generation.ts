@@ -162,7 +162,7 @@ async function prepareSessionGenerationLease(
       throw new SessionDeliveryGenerationUnavailableError();
     }
   };
-  const checkEntry = (entry: SessionGenerationEntry | null | undefined) => {
+  const checkEntry = (entry: SessionGenerationEntry | null | undefined, committed = true) => {
     if (entry === undefined) {
       throw new SessionDeliveryGenerationUnavailableError();
     }
@@ -170,6 +170,9 @@ async function prepareSessionGenerationLease(
       (entry?.sessionId ?? null) !== generation.sessionId ||
       (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
     ) {
+      if (!committed) {
+        throw new SessionDeliveryGenerationUnavailableError();
+      }
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
     }
@@ -486,14 +489,13 @@ async function prepareSessionGenerationLease(
               if (revision === nativeRevision) {
                 return;
               }
-              if (native.db.isTransaction) {
-                throw new SessionDeliveryGenerationUnavailableError();
-              }
+              const committed = !native.db.isTransaction;
               // Raw same-handle commits do not advance data_version or publish entry facts.
               // Keep their final native guard until managed raw settlement is complete.
               try {
                 const observed = checkEntry(
                   readSessionEntryGenerationInDatabase(native, generation.sessionKey) ?? null,
+                  committed,
                 );
                 if (
                   observed?.permissionMode !== current?.permissionMode ||
@@ -505,7 +507,10 @@ async function prepareSessionGenerationLease(
                 assertActive();
                 nativeRevision = revision;
               } catch (error) {
-                invalidated = true;
+                // Tentative native changes may roll back; committed revocation stays permanent.
+                if (committed) {
+                  invalidated = true;
+                }
                 throw error;
               }
             };

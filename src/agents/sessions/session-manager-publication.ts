@@ -35,6 +35,7 @@ export function createSessionManagerPublicationHooks(params: {
   storePath: string;
   databaseIdentity: string | (() => string | undefined);
   initialWriter?: InitialSessionTranscriptWriter;
+  beforeIdentityPublication?: (publication: SessionManagerAuthorityPublication) => void;
 }) {
   type Pending = {
     expected?: SessionManagerAuthorityPublication;
@@ -123,7 +124,8 @@ export function createSessionManagerPublicationHooks(params: {
           throw new Error("SessionManager receipt differs from its admitted postimage");
         }
         const scope = owner.scope;
-        const entryPublication = owner.expected.entryPublication;
+        const expected = owner.expected;
+        const entryPublication = expected.entryPublication;
         committed = true;
         try {
           owner.entry.settleMetadata(
@@ -131,6 +133,7 @@ export function createSessionManagerPublicationHooks(params: {
             owner.transcript.settle(true, false, owner.expected.transcriptPublication),
             (previous, current) => {
               try {
+                params.beforeIdentityPublication?.(expected);
                 const initialWriter = params.initialWriter;
                 if (initialWriter && !initialWriter.committedFence) {
                   for (const receipt of entryPublication) {

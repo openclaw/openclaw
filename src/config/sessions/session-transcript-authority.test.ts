@@ -473,10 +473,16 @@ it("publishes the committed branch identity when its ordinary reply is lost", as
     const manager = await SessionManager.openAsync(scope);
     const seed = await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
     const identities: SessionIdentityMutation[] = [];
+    const originalTarget = manager.getSessionTarget();
+    const observedManagers: unknown[] = [];
     releases.push(
       onSessionIdentityMutation((mutation) => {
         if ("current" in mutation && mutation.current.sessionKeys.includes(scope.sessionKey)) {
           identities.push(mutation);
+          observedManagers.push({
+            sessionId: manager.getSessionId(),
+            target: manager.getSessionTarget(),
+          });
         }
       }),
     );
@@ -513,6 +519,12 @@ it("publishes the committed branch identity when its ordinary reply is lost", as
       },
     ]);
     expect(identities).toHaveLength(1);
+    expect(observedManagers).toEqual([
+      {
+        sessionId: stored?.sessionId,
+        target: { ...originalTarget, sessionId: stored?.sessionId },
+      },
+    ]);
   });
 });
 it("keeps captured context current after a granted worker append rolls back at COMMIT", async () => {

@@ -133,16 +133,20 @@ Prepared delivery-generation checks retain a narrow native guard for an existing
 managed handle that has changed since preparation. That slow path reuses the
 canonical indexed row reader to check identity and execution settings, without
 opening another connection or querying schema or freshness metadata. An observed
-revocation remains permanent even if a later raw write restores the old bytes.
+committed revocation remains permanent even if a later raw write restores the old bytes.
 Unchanged uses perform no SQL, and ordinary typed metadata writes remain valid.
+Inside an owned native transaction, unchanged authority remains usable; tentative
+mismatches refuse use without permanently revoking the committed generation if
+the transaction rolls back.
 
 This guard does not certify arbitrary raw batches, callbacks, unfinished
 iterators, unobserved raw revoke-and-restore sequences, or foreign writers.
-Complete raw write-set settlement and foreign recertification remain separate
-work; native final-authority guards stay in place until those contracts and the
-next Plugin SDK major's raw-writer removal permit retirement. Conversation
+Other processes must write through the Gateway owner or while the Gateway is
+stopped. Complete raw write-set settlement remains separate work; native
+final-authority guards stay in place until that contract and the next Plugin
+SDK major's raw-writer removal permit retirement. Conversation
 catalogue and link mutations performed by entry writes also retain their own
-publication and freshness requirements. Session receipts grant no cross-store
+publication and final-authority guards. Session receipts grant no cross-store
 exclusion through another database's commit.
 
 No persistent schema, stored-byte, permission, retention, or upgrade contract

@@ -24,7 +24,10 @@ import type {
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
-import { createSessionManagerPublicationHooks } from "./session-manager-publication.js";
+import {
+  createSessionManagerPublicationHooks,
+  type SessionManagerAuthorityPublication,
+} from "./session-manager-publication.js";
 
 const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionManagerMetadata);
 const log = createSubsystemLogger("agents/session-metadata");
@@ -38,6 +41,7 @@ export async function withSessionMetadataWorker<T>(
   controls?: {
     beforeFreshMessageCommit?: () => void;
     initialWriter?: InitialSessionTranscriptWriter;
+    beforeIdentityPublication?: (publication: SessionManagerAuthorityPublication) => void;
   },
 ): Promise<T> {
   if ("withMetadata" in database) {
@@ -52,6 +56,7 @@ export async function withSessionMetadataWorker<T>(
           storePath: database.path,
           databaseIdentity: physical.identity,
           initialWriter: controls?.initialWriter,
+          beforeIdentityPublication: controls?.beforeIdentityPublication,
         })
       : undefined;
   const worker =

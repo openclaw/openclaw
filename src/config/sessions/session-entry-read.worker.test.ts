@@ -805,7 +805,10 @@ it.each(["durable", "incognito"] as const)(
         const queries = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
         try {
           authority.assertCurrent();
-          expect(queries.counts.all).toBe(0);
+          // Native writers can share a handle with raw SDK writes; one final row read certifies it.
+          expect(queries.counts.all).toBe(kind === "durable" ? 1 : 0);
+          authority.assertCurrent();
+          expect(queries.counts.all).toBe(kind === "durable" ? 1 : 0);
         } finally {
           queries.restore();
         }
