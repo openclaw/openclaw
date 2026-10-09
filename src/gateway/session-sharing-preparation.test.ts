@@ -115,8 +115,8 @@ it("enforces host birthtime identity across same-inode replacement and registrat
           `file:${original.dev}:${original.ino}`,
           readDatabaseIdentityBirthtime(original),
         );
-      // Linux cannot distinguish native birthtime from Node's ctime fallback.
-      if (process.platform === "linux") {
+      // Linux and Android cannot distinguish native birthtime from Node's ctime fallback.
+      if (process.platform === "linux" || process.platform === "android") {
         expect(assertOriginal).not.toThrow();
       } else {
         expect(assertOriginal).toThrow(
@@ -127,7 +127,7 @@ it("enforces host birthtime identity across same-inode replacement and registrat
         if (registered) {
           registerOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
         }
-        if (process.platform === "linux") {
+        if (process.platform === "linux" || process.platform === "android") {
           expect(authorize()).toBeNull();
         } else {
           expect(authorize).toThrow(unavailableMessage);

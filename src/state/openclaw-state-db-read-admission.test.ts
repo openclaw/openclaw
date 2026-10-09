@@ -112,7 +112,7 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
     const before = statSync(pathname, { bigint: true });
     const captured = captureOpenClawStateWorkerContext({ env: state.env });
     const preparedRead =
-      process.platform === "linux"
+      process.platform === "linux" || process.platform === "android"
         ? prepareOpenClawStateReadSource({ path: pathname, env: state.env })
         : undefined;
     const backend = runWithSqliteWorkerStateContext(captured, () =>
@@ -153,7 +153,9 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
           ),
         ).toBe(true);
         expect(captured.admission.identity.birthtime).toBe(
-          process.platform === "linux" ? "0" : before.ctimeNs.toString(),
+          process.platform === "linux" || process.platform === "android"
+            ? "0"
+            : before.ctimeNs.toString(),
         );
         const database = openOpenClawStateDatabase({ env: state.env });
         expect(
