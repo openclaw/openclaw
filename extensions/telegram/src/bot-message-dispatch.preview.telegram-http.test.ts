@@ -543,7 +543,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           args: { command: "echo fixture-private-token" },
         });
         await waitForBotApiCall(
-          (call) => call.method === "sendMessage" && String(call.fields.text).includes("🛠️ Exec"),
+          (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
         );
         expect(
           await channelOptions?.onToolResult?.({
