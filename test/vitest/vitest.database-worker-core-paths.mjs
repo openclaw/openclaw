@@ -479,8 +479,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/provenance.test.ts",
   "src/claws/package-update.test.ts",
   "src/claws/packages.runtime.test.ts",
-  "src/claws/update-apply.adopted.test.ts",
-  "src/claws/update-apply.requirements.test.ts",
   "src/claws/update-apply.test.ts",
   "src/claws/workspace-update.test.ts",
   "src/claws/workspace.test.ts",

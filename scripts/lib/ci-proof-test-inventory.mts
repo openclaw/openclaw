@@ -1631,7 +1631,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/claws/packages.test.ts",
   "src/claws/provenance.test.ts",
   "src/claws/read-only-state-compat.test.ts",
-  "src/claws/update-apply.requirements.test.ts",
   "src/claws/update-apply.test.ts",
   "src/claws/update-plan-readiness.test.ts",
   "src/claws/update-plan.test.ts",
