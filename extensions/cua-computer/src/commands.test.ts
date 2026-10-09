@@ -222,7 +222,7 @@ describe("cua-computer provider", () => {
         elements: Array<{ elementRef: string }>;
       };
     };
-    expect(Boolean(observed.observation.base64)).toBe(includeScreenshot !== false);
+    expect(Boolean(observed.observation.base64)).toBe(includeScreenshot);
     const { observationId } = observed.observation;
     const elementRef = observed.observation.elements[0]!.elementRef;
     expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });

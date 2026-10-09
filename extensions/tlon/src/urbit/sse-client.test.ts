@@ -271,6 +271,13 @@ describe("UrbitSSEClient", () => {
     });
   });
 
+  it("generates unique channel ID", () => {
+    const client1 = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+    const client2 = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+
+    expect(client1.channelId).not.toBe(client2.channelId);
+  });
+
   it("backs off through ten attempts before the cooldown resets the schedule", async () => {
     vi.useFakeTimers();
     const onReconnect = vi.fn(() => {
