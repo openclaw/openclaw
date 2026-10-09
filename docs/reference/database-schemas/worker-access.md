@@ -3918,6 +3918,11 @@ stay in memory, and worker writes retain their transaction-local lease checks.
 Retire the synchronous package guard after the next Plugin SDK major removes raw
 synchronous package writers and complete revocation publication replaces them.
 
+Doctor's reserved-session-key repair awaits its temporary history readers' cleanup
+before returning or starting another repair. A following repair can immediately
+reopen the same database; the existing journal and retry semantics remain intact.
+This changes no schema, retention, permissions, or update format.
+
 OAuth peer fencing, restoration, and settlement use the existing auth reader and
 agent writer. Discovery retains each candidate's physical database identity,
 including registered custom paths. The writer compares the exact credential

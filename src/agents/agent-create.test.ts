@@ -50,6 +50,7 @@ vi.mock("./agent-lifecycle-registry.js", () => ({
 // mock-isolation: Creation preconditions use injected tombstones without a real SQLite journal owner.
 vi.mock("../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalForCreation: mocks.readAgentDeletionJournal,
+  readAgentDeletionRecoveryHoldsInWorker: async () => [],
 }));
 
 vi.mock("../state/agent-provenance.js", () => ({
