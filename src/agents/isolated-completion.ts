@@ -12,6 +12,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
  */
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -63,7 +64,7 @@ import {
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
-import type { UsageLike } from "./usage.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 
 type RunIsolatedCompletionParams = {
   purpose?: IsolatedCompletionPurpose;
@@ -266,6 +267,49 @@ function prepareIsolatedHostAuthorization<
     model,
     auth: { ...authorization.auth, apiKey },
   };
+}
+
+/**
+ * Count each completed isolated completion once, so utility calls reach the same
+ * token and cost series as other model calls. Plugin completions are skipped:
+ * their callers finalize usage through finalizePluginLlmCompletion, which emits.
+ */
+async function emitIsolatedCompletionUsage(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  result: IsolatedCompletionResult;
+}): Promise<void> {
+  const usage = normalizeUsage(params.result.usage);
+  if (!usage) {
+    return;
+  }
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const promptTokens = input + cacheRead + cacheWrite;
+  const total = usage.total ?? promptTokens + output;
+  const { estimateAggregateUsageCost } = await import("../utils/usage-format.js");
+  const costUsd = estimateAggregateUsageCost({
+    provider: params.result.provider,
+    model: params.result.model,
+    config: params.config,
+    usage,
+  });
+  const hasPositiveUsage = [input, output, cacheRead, cacheWrite, total, costUsd].some(
+    (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
+  if (!isDiagnosticsEnabled(params.config) || !hasPositiveUsage) {
+    return;
+  }
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    agentId: params.agentId,
+    provider: params.result.provider,
+    model: params.result.model,
+    usage: { input, output, cacheRead, cacheWrite, promptTokens, total },
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  });
 }
 
 /** Run one fresh completion with the selected runtime's documented isolation boundary. */
@@ -668,6 +712,9 @@ async function runIsolatedCompletionOwned(
         "output-rejected",
         "Isolated completion returned empty output.",
       );
+    }
+    if (input.purpose !== "plugin-completion") {
+      await emitIsolatedCompletionUsage({ config: lease.snapshot.config, agentId, result });
     }
     return result;
   } finally {
