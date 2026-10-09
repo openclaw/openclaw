@@ -582,56 +582,6 @@ export function listCronHeartbeatWaitOwners(): {
   return { activeJobMarkers, owningCronLaneTaskMarkers };
 }
 
-/**
- * Counts active cron runs that belong to *other* agents.
- *
- * Callers that hold a process-wide lane depth can subtract this to recover the part of
- * the lane that is not attributable to a named agent. Markers without a recorded agent
- * are never counted here: unattributed work stays in the global count on purpose.
- */
-export function countActiveCronJobsForOtherAgents(agentId: string): number {
-  const state = getCronActiveJobState();
-  let active = 0;
-  for (const marker of state.activeJobs.values()) {
-    if (
-      marker.agentId &&
-      marker.agentId !== agentId &&
-      isMarkerActiveInGeneration(marker, state.generation)
-    ) {
-      active += 1;
-    }
-  }
-  return active;
-}
-
-/**
- * Agent-scoped view of the live cron and lane owners awaiting heartbeat settlement.
- *
- * `listCronHeartbeatWaitOwners` reports process-wide owners; a heartbeat for agent A
- * must only discount the coalesced wake it is itself servicing, so the entries are
- * filtered to that agent. Markers without a recorded agent are kept for every agent,
- * matching the conservative fallback the busy queries use.
- */
-export function listCronHeartbeatWaitOwnersForAgent(agentId: string): {
-  activeJobMarkers: CronActiveJobMarker[];
-  owningCronLaneTaskMarkers: CommandLaneTaskMarker[];
-} {
-  const owners = listCronHeartbeatWaitOwners();
-  const activeJobMarkers: CronActiveJobMarker[] = [];
-  const owningCronLaneTaskMarkers: CommandLaneTaskMarker[] = [];
-  for (const marker of owners.activeJobMarkers) {
-    if (marker.agentId && marker.agentId !== agentId) {
-      continue;
-    }
-    activeJobMarkers.push(marker);
-    const owningLaneTaskMarker = marker.heartbeatWait?.owningCronLaneTaskMarker;
-    if (owningLaneTaskMarker) {
-      owningCronLaneTaskMarkers.push(owningLaneTaskMarker);
-    }
-  }
-  return { activeJobMarkers, owningCronLaneTaskMarkers };
-}
-
 /** Returns the number of active cron runs in this process. */
 export function getActiveCronJobCount() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState());
