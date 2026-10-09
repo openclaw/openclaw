@@ -465,7 +465,19 @@ Auth preparation returns only source presence, including explicit absence;
 credentials and shared-store routing retain their auth owner. Each new phase
 refreshes current database facts, and policy preparation keeps live caller and
 reader checks through asynchronous work. A fresh phase validates its sandbox
-predicates before returning the prepared result. Local placement preflight carries its
+predicates before returning the prepared result. Reusable skill preparation consumes
+the full current entry in that final phase, sharing its foreign-commit observation
+with sandbox validation instead of requesting the entry again. Skill refreshes and
+persistence still prepare their own subsequent reads.
+
+Attempt dispatch carries its selected transcript target, including an adopted
+compaction successor, into transcript lifecycle preparation. The original attempt
+and prompt-state owner validate that selection after preparation waits. Foreign
+window rebinding cannot redirect it; lifecycle and writer predicates still guard
+transcript effects. Standalone callers retain target resolution, and plugin
+handoffs omit this private preparation fact.
+
+Local placement preflight carries its
 existing observation through session preparation, then releases it before the
 claim transaction rereads placement predicates. Bootstrap routing consumes fresh
 file absence without another setup-state read, and checks the file again after
@@ -550,7 +562,10 @@ through the existing session workers. Missing rows retain the selected store's r
 facts without opening a writable database on the Gateway thread. The router
 captures the original caller before session preparation yields, and admission
 rechecks current membership, session identity, and physical source before starting
-work. If a speculative metadata snapshot races a committed write, its one bounded
+work. When no recovery is needed, pre-admission consumes retry classification and
+new-input routing and work-start checks in one synchronous authorization phase.
+Transcript comparison and recovery waits still require fresh authorization.
+If a speculative metadata snapshot races a committed write, its one bounded
 reread joins the existing writer FIFO. Read refreshes retain the original discovery
 owner and never replay a consumer that has begun effects. Process-held incognito
 reads keep their existing owner. Configuration, schemas, and stored formats are unchanged.
