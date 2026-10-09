@@ -1,40 +1,25 @@
 import assert from "node:assert/strict";
-import { constants, PerformanceObserver } from "node:perf_hooks";
 import { getHeapStatistics } from "node:v8";
 import { MessagePort, resourceLimits, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
+const collectedPayloads = new FinalizationRegistry<MessagePort>((receipt) => {
+  receipt.postMessage({ heap: getHeapStatistics().used_heap_size, threadId }, []);
+  receipt.close();
+});
+
 serveWorkerTasks((input) => {
   assert.ok(isRecord(input));
   if (input.receipt instanceof MessagePort) {
     const receipt = input.receipt;
-    const payload =
-      input.allocate === true ? Array.from({ length: 16 * 1024 * 1024 }, () => 37) : undefined;
+    const payload = Array.from({ length: 16 * 1024 * 1024 }, () => 37);
     const before = getHeapStatistics().used_heap_size;
-    const observer = new PerformanceObserver((list) => {
-      const major = list
-        .getEntries()
-        .find(
-          (entry) =>
-            "detail" in entry &&
-            isRecord(entry.detail) &&
-            entry.detail.kind === constants.NODE_PERFORMANCE_GC_MAJOR,
-        );
-      if (major) {
-        observer.disconnect();
-        receipt.postMessage(
-          { heap: getHeapStatistics().used_heap_size, gcMs: major.duration, threadId },
-          [],
-        );
-        receipt.close();
-      }
-    });
-    // Observe after the handler releases its payload, excluding allocation-time GC.
-    setImmediate(() => observer.observe({ entryTypes: ["gc"] }));
+    // Bun does not emit perf_hooks GC entries; acknowledge this payload's actual collection.
+    collectedPayloads.register(payload, receipt);
     return {
       heap: before,
-      checksum: payload ? payload[0]! + payload.at(-1)! : undefined,
+      checksum: payload[0]! + payload.at(-1)!,
       threadId,
       resourceLimits,
     };

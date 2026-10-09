@@ -7,7 +7,7 @@ import { WorkerTaskPool } from "./worker-task-pool.js";
 it("collects a completed large payload while keeping the bounded worker warm", async () => {
   const cacheVersion = cachedDataVersionTag();
   const pool = new WorkerTaskPool<
-    { receipt?: MessagePort; allocate?: true },
+    { receipt?: MessagePort },
     {
       heap: number;
       threadId: number;
@@ -25,15 +25,12 @@ it("collects a completed large payload while keeping the bounded worker warm", a
     // A disposable payload guarantees collection before measuring the warm baseline.
     const warmed = once(warmPorts.port1, "message");
     const startup = await pool.run(
-      { receipt: warmPorts.port2, allocate: true },
+      { receipt: warmPorts.port2 },
       { transferList: () => [warmPorts.port2] },
     );
     const [warm] = await warmed;
     const collected = once(port1, "message");
-    const allocated = await pool.run(
-      { receipt: port2, allocate: true },
-      { transferList: () => [port2] },
-    );
+    const allocated = await pool.run({ receipt: port2 }, { transferList: () => [port2] });
     const [idle] = await collected;
     expect(allocated.checksum).toBe(74);
     expect(allocated.heap).toBeGreaterThan(warm.heap + 100 * 1024 * 1024);
@@ -48,8 +45,6 @@ it("collects a completed large payload while keeping the bounded worker warm", a
         startup: startup.heap,
         allocated: allocated.heap,
         idle: idle.heap,
-        warmGcMs: warm.gcMs,
-        gcMs: idle.gcMs,
       }),
     );
   } finally {
