@@ -270,10 +270,11 @@ sidebarTitle: "Advanced"
     live previews can still update when enabled.
     See [Pending text phases](/concepts/streaming#pending-text-phases).
 
-    For native requests, thinking control is forwarded directly: `/think off`
-    and `openclaw agent --thinking off` send top-level `think: false` unless
-    an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string. Verified full-effort
+    For native requests, `/think off`, `openclaw agent --thinking off`, and
+    plugin `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level
+    `think: false` unless an explicit `params.think`/`params.thinking` is
+    configured. Direct completions that omit `reasoning` keep the model default.
+    `/think low|medium|high` send the matching effort string. Verified full-effort
     Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3,
     DeepSeek V4, and DeepSeek V4.1 Flash also send native
     `think: "max"` for `/think max`; other models and local servers keep the

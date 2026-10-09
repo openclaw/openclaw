@@ -228,16 +228,6 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   }
 }
 
-function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
-  const params = model.params;
-  const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
-  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl));
-  if (think !== undefined) {
-    requestParams.think = think;
-  }
-  return Object.keys(requestParams).length > 0 ? requestParams : undefined;
-}
-
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
   if (nextText.startsWith(previousText)) {
     return nextText.slice(previousText.length);
@@ -858,6 +848,10 @@ function createRawOllamaStreamFn(
                 baseUrl,
                 modelId: model.id,
               });
+        // Direct completions skip the agent wrapper; configured thinking still wins over off.
+        const think =
+          resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl)) ??
+          (options?.reasoning === "off" ? false : undefined);
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
@@ -866,7 +860,8 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model, baseUrl),
+          ...pickOllamaParams(model.params, OLLAMA_TOP_LEVEL_PARAM_KEYS),
+          ...(think !== undefined ? { think } : {}),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 

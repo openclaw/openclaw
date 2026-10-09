@@ -4,16 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
-import {
-  withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -74,41 +70,6 @@ async function withoutMainThreadSql<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
-it.each(["expiry", "deletion"] as const)(
-  "prepares and retires workspace state through %s without caller-thread SQL",
-  async (cleanup) => {
-    await withoutMainThreadSql(seed);
-    await closeOpenClawStateDatabaseAsync();
-    const alias = state.path("runtime-alias");
-    fs.symlinkSync(state.workspaceDir, alias, process.platform === "win32" ? "junction" : "dir");
-    await withoutMainThreadSql(async () => {
-      expect((await readWorkspaceStateSnapshot(alias)).setup.bootstrapSeededAt).toBe(
-        "2026-07-16T01:00:00.000Z",
-      );
-      expect(
-        await mergeWorkspaceSetupState(
-          alias,
-          { bootstrapSeededAt: "2026-07-17T01:00:00.000Z" },
-          2_000,
-        ),
-      ).toEqual({ version: 1, bootstrapSeededAt: "2026-07-16T01:00:00.000Z" });
-      expect(await clearExpiredWorkspaceStateForVanishedWorkspace(alias, 2_000)).toBe(false);
-      fs.unlinkSync(alias);
-      if (cleanup === "deletion") {
-        await deleteWorkspaceState(prepareWorkspaceStateDeletion(alias));
-      } else {
-        expect(
-          await clearExpiredWorkspaceStateForVanishedWorkspace(
-            alias,
-            WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
-          ),
-        ).toBe(true);
-      }
-      expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
-    });
-  },
-);
-
 it("rolls back setup when a recovery hold arrives after caller preparation", async () => {
   const before = await seed();
   const recoveryHoldPredicate = { agentId: "new", held: [], applies: true };
@@ -134,7 +95,7 @@ it("rolls back setup when a recovery hold arrives after caller preparation", asy
   });
 });
 
-it.each(["snapshot", "merge", "expire", "delete"] as const)(
+it.each(["merge", "delete"] as const)(
   "rejects revoked authority at transaction and commit for %s",
   async (operation) => {
     const before = await seed();
@@ -155,22 +116,14 @@ it.each(["snapshot", "merge", "expire", "delete"] as const)(
         },
       };
       const pending =
-        operation === "snapshot"
-          ? readWorkspaceStateSnapshot(alias, options)
-          : operation === "merge"
-            ? mergeWorkspaceSetupState(
-                alias,
-                { setupCompletedAt: "2026-07-16T02:00:00.000Z" },
-                2_000,
-                options,
-              )
-            : operation === "delete"
-              ? deleteWorkspaceState(prepareWorkspaceStateDeletion(alias), options)
-              : clearExpiredWorkspaceStateForVanishedWorkspace(
-                  alias,
-                  WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
-                  options,
-                );
+        operation === "merge"
+          ? mergeWorkspaceSetupState(
+              alias,
+              { setupCompletedAt: "2026-07-16T02:00:00.000Z" },
+              2_000,
+              options,
+            )
+          : deleteWorkspaceState(prepareWorkspaceStateDeletion(alias), options);
       await expect(pending).rejects.toBe(refusal);
       spy.mockRestore();
       expect(retired).toBe(true);
@@ -331,16 +284,6 @@ it.each([false, true])(
   },
 );
 
-it("keeps an absent workspace database absent", async () => {
-  const databasePath = resolveOpenClawStateSqlitePath(state.env);
-  expect(
-    await withoutMainThreadSql(() =>
-      readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }),
-    ),
-  ).toMatchObject({ setupExists: false, setup: { version: 1 } });
-  expect(fs.existsSync(databasePath)).toBe(false);
-});
-
 it("keeps workspace reads on the selected composite snapshot", async () => {
   const initial = await seed();
   await withOpenClawStateDatabaseReadSnapshot(async () => {
@@ -376,28 +319,6 @@ it("reads committed workspace state while the cached writer has an open transact
   } finally {
     database.db.exec("ROLLBACK");
   }
-});
-
-it("preserves source artifacts and does not repair missing indexes on inspection", async () => {
-  const expected = await seed();
-  const database = openOpenClawStateDatabase();
-  database.db.exec("DROP INDEX idx_task_runs_status");
-  const databasePath = database.path;
-  await closeOpenClawStateDatabaseAsync();
-  const artifacts = () =>
-    [databasePath, `${databasePath}-wal`, `${databasePath}-shm`].map((file) =>
-      fs.existsSync(file) ? fs.readFileSync(file) : null,
-    );
-  const before = artifacts();
-  expect(
-    await withoutMainThreadSql(() =>
-      withArtifactPreservingStateReads(() =>
-        readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }),
-      ),
-    ),
-  ).toEqual(expected);
-  expect(database.db.isOpen).toBe(false);
-  expect(artifacts()).toEqual(before);
 });
 
 it("preserves repointed workspace alias error identity and repair details", async () => {

@@ -5,6 +5,7 @@ import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
@@ -148,6 +149,7 @@ export function prepareEmbeddedRunTerminal(input: {
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts
+    .map((text) => sanitizeAssistantVisibleStreamText(text))
     .findLast((text) => text.trim().length > 0)
     ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText

@@ -532,6 +532,8 @@ export const gatewayServerIsolatedTestFiles = [
   // Native source captures must not retain this fixture's forbidden process constructors.
   "src/gateway/server-startup-post-attach.test.ts",
   "src/gateway/server.agent-artifact-apis.test.ts",
+  // Exercise real config publication without neighboring Gateway module mocks.
+  "src/gateway/server.agents.config-readiness.test.ts",
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",
