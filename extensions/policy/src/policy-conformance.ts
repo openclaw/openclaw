@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   POLICY_RULE_METADATA,
@@ -9,6 +8,7 @@ import {
   type PolicyScopeSelectorKind,
 } from "./doctor/metadata.js";
 import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
+import { normalizePolicySelectorValues, scopedPolicyOverlays } from "./doctor/policy-scope.js";
 import { policyContainerShapeFindings } from "./doctor/policy-shape.js";
 import { isPolicyValueAtLeastAsStrict } from "./doctor/strictness.js";
 import { ocPathSegment } from "./doctor/utils.js";
@@ -195,7 +195,7 @@ function collectInvalidScopedPolicyFindings(
         continue;
       }
       const selectorMatches = (metadata.scopeSelectors ?? []).some(
-        (selector) => normalizeSelectorValues(overlay[selector], selector).length > 0,
+        (selector) => normalizePolicySelectorValues(overlay[selector], selector).length > 0,
       );
       if (selectorMatches) {
         continue;
@@ -352,16 +352,10 @@ function collectTopLevelPolicyRuleClaims(document: PolicyDocument): readonly Pol
 }
 
 function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly PolicyRuleClaim[] {
-  if (!isRecord(document.value) || !isRecord(document.value.scopes)) {
-    return [];
-  }
   const claims: PolicyRuleClaim[] = [];
-  for (const [scopeName, overlay] of Object.entries(document.value.scopes)) {
-    if (!isRecord(overlay)) {
-      continue;
-    }
+  for (const [scopeName, overlay] of scopedPolicyOverlays(document.value)) {
     for (const selector of ["agentIds", "channelIds"] as const) {
-      const selectorValues = normalizeSelectorValues(overlay[selector], selector);
+      const selectorValues = normalizePolicySelectorValues(overlay[selector], selector);
       if (selectorValues.length === 0) {
         continue;
       }
@@ -409,20 +403,6 @@ function coalesceScopedPolicyRuleClaims(
     }
   }
   return [...byKey.values()];
-}
-
-function normalizeSelectorValues(
-  value: unknown,
-  selector: PolicyScopeSelectorKind,
-): readonly string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
-    .map((entry) =>
-      selector === "agentIds" ? normalizeAgentId(entry) : entry.trim().toLowerCase(),
-    );
 }
 
 async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResult> {
