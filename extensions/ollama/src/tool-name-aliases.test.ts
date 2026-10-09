@@ -163,7 +163,7 @@ it("keeps aliases stable across tool order and disjoint from real replay names",
   expect((await stream.result()).content[0]).toMatchObject({ name: "openclaw_tool_call" });
 });
 
-it.each(["tool_calls", "function", "TOOL_CALLS", "name"])(
+it.each(["ls", "call", "tool_calls", "function", "TOOL_CALLS", "name"])(
   "protects the known Ollama envelope collision %s",
   async (name) => {
     respond(`openclaw_${name}`);
@@ -180,6 +180,71 @@ it.each(["tool_calls", "function", "TOOL_CALLS", "name"])(
         parameters: { type: "object", properties: {} },
       },
     });
+  },
+);
+
+it("translates managed Tooling instructions without rewriting project text or unrelated descriptions", async () => {
+  const input = context(["ls", "tool_call", "tool_search", "exec", "custom-tool_call"]);
+  const projectText =
+    "## Workspace\nRun ls; preserve the literal tool_call example.\n## Tooling\n- tool_call";
+  input.systemPrompt = [
+    "<!-- openclaw:attempt:STABLE -->",
+    "You are a personal assistant running inside OpenClaw.",
+    "## Tooling",
+    "Tools policy-filtered. Names case-sensitive; call exact.",
+    "- ls: List directories",
+    "- tool_call",
+    "- tool_search",
+    "- custom-tool_call",
+    "### Deferred Tool Schemas",
+    "- function (plugin)",
+    "Call tool_call with the result id or name in id and all tool parameters in args.",
+    projectText,
+  ].join("\n");
+  input.tools = input.tools?.map((tool) => ({
+    ...tool,
+    description:
+      tool.name === "tool_search"
+        ? "Execute results with tool_call. Preserve custom-tool_call."
+        : "Literal ls and tool_call.",
+  }));
+  const original = structuredClone(input);
+  respond("openclaw_tool_call");
+  await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
+  const request = readRequest();
+  expect(request.messages[0].content).toContain(
+    "- openclaw_ls: List directories\n- openclaw_tool_call\n",
+  );
+  expect(request.messages[0].content).toContain("Call openclaw_tool_call with the result id");
+  expect(request.messages[0].content).toContain("- custom-tool_call\n");
+  expect(request.messages[0].content).toContain(projectText);
+  expect(request.tools).toContainEqual({
+    type: "function",
+    function: {
+      name: "tool_search",
+      description: "Execute results with openclaw_tool_call. Preserve custom-tool_call.",
+      parameters: { type: "object", properties: {} },
+    },
+  });
+  expect(request.tools).toContainEqual({
+    type: "function",
+    function: {
+      name: "exec",
+      description: "Literal ls and tool_call.",
+      parameters: { type: "object", properties: {} },
+    },
+  });
+  expect(input).toEqual(original);
+});
+
+it.each(["", "<!-- openclaw:attempt:STABLE -->\n## Workspace\n"])(
+  "preserves a non-managed Tooling example after %j",
+  async (prefix) => {
+    const input = context(["tool_call"]);
+    input.systemPrompt = `${prefix}## Tooling\nTools policy-filtered. Names case-sensitive; call exact.\n- tool_call`;
+    respond("openclaw_tool_call");
+    await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
+    expect(readRequest().messages[0].content.startsWith(input.systemPrompt)).toBe(true);
   },
 );
 
