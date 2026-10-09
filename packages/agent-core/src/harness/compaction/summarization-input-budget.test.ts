@@ -425,34 +425,42 @@ describe("summary request input budget", () => {
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
   });
 
-  it("reserves the thinking budget Anthropic Messages adds to the output limit", async () => {
-    const { streamFn, prompts } = createCapturingStream();
-    const model: Model = {
-      ...createModel(32_768, 64_000),
-      id: "claude-legacy-thinking",
-      api: "anthropic-messages",
-      provider: "anthropic",
-      reasoning: true,
-    };
-    const result = await generateSummary(
-      createLongSession(40),
-      model,
-      8_192,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "high",
-      streamFn,
-    );
+  it.each([
+    // 0.8 × 8,192 visible output plus each level's thinking budget.
+    { api: "anthropic-messages", level: "high", window: 32_768, thinking: 16_384 },
+    // The standalone Anthropic provider keeps the full `max` budget.
+    { api: "anthropic-messages", level: "max", window: 65_536, thinking: 32_768 },
+    { api: "bedrock-converse-stream", level: "high", window: 32_768, thinking: 16_384 },
+  ] as const)(
+    "reserves the $level thinking budget $api adds to the output limit",
+    async ({ api, level, window, thinking }) => {
+      const { streamFn, prompts } = createCapturingStream();
+      const model: Model = {
+        ...createModel(window, 64_000),
+        id: "claude-legacy-thinking",
+        api,
+        provider: "anthropic",
+        reasoning: true,
+      };
+      const result = await generateSummary(
+        createLongSession(80),
+        model,
+        8_192,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        level,
+        streamFn,
+      );
 
-    expect(result).toEqual({ ok: true, value: "summary" });
-    // 0.8 × 8,192 visible output plus the 16,384-token high thinking budget.
-    const completionTokens = Math.floor(0.8 * 8_192) + 16_384;
-    const promptTokens = estimateStringChars(prompts[0] ?? "") / CHARS_PER_TOKEN_ESTIMATE;
-    expect(promptTokens + completionTokens).toBeLessThan(32_768);
-  });
+      expect(result).toEqual({ ok: true, value: "summary" });
+      const completionTokens = Math.floor(0.8 * 8_192) + thinking;
+      const promptTokens = estimateStringChars(prompts[0] ?? "") / CHARS_PER_TOKEN_ESTIMATE;
+      expect(promptTokens + completionTokens).toBeLessThan(window);
+    },
+  );
 
   it("does not reserve a thinking budget when maxTokens is the total output limit", async () => {
     const { streamFn, prompts } = createCapturingStream();
