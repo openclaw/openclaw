@@ -2,6 +2,7 @@ import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -560,6 +561,20 @@ describe("Slack thread failure notices", () => {
     await threadReply("105.040002", "105.040000");
 
     expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not suppress warnings for non-terminal tool failures", async () => {
+    const warning = setReplyPayloadMetadata(
+      { text: "A tool failed, but the run completed.", isError: true },
+      { nonTerminalToolErrorWarning: true },
+    );
+    mockReplySequence({ text: "Working normally" }, warning, warning);
+
+    await dispatchEvent({ text: "<@bot-user> please help", ts: "105.100000" });
+    await threadReply("105.100001", "105.100000");
+    await threadReply("105.100002", "105.100000");
+
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(3);
   });
 
   it("keeps failures visible in Slack group direct messages", async () => {

@@ -536,6 +536,24 @@ describe("embedded run session prompt state", () => {
     expect(state.activePrompt.persisted).toBe(true);
   });
 
+  it("keeps the original prompt when canonical persistence appends nothing", async () => {
+    const persistApproved = vi.fn(async () => undefined);
+    const recorder = createRecorder({ persistApproved });
+    const onUserMessagePersisted = vi.fn();
+    await using state = await createState({
+      userTurnTranscriptRecorder: recorder,
+      onUserMessagePersisted,
+    });
+
+    state.onUserMessagePersisted(makeUserMessage());
+    await state.prepareCompactedTranscriptRetry(assertActive);
+
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    expect(state.activePrompt).toEqual({ persisted: false, internal: false });
+    expect(state.suppressNextUserMessagePersistence).toBe(false);
+  });
+
   it.each(["active", "closed"] as const)(
     "revalidates the %s owner after pending canonical persistence before retry",
     async (owner) => {

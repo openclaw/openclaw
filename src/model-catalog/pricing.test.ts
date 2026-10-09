@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RemoteModelCatalogPricing } from "@openclaw/model-catalog-core";
+import type {
+  RemoteModelCatalogPricing,
+  RemoteModelCatalogPricingV2,
+} from "@openclaw/model-catalog-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -739,6 +742,44 @@ describe("OpenRouter routing shortcut estimates", () => {
       ).toEqual(cost);
     }
   });
+
+  it("retains exact shortcut prices and does not strip distinct or nested variants", () => {
+    const agentDir = tempDirs.make("openclaw-routing-variants-");
+    hostedPricing["openrouter/openai/gpt-catalog:nitro"] = { input: 7, output: 8 };
+    hostedPricing["openrouter/openai/gpt-catalog:free"] = { input: 3, output: 4 };
+    const config: OpenClawConfig = {
+      models: {
+        providers: { openrouter: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
+      },
+    };
+    const resolve = (model: string, provider = "openrouter") =>
+      resolveModelCostConfig({ config, agentDir, provider, model });
+    expect(resolve("openai/gpt-catalog:nitro")).toEqual({
+      input: 7,
+      output: 8,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    expect(resolve("openai/gpt-catalog:free")).toEqual({
+      input: 3,
+      output: 4,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    for (const suffix of [
+      "batch",
+      "extended",
+      "thinking",
+      "online",
+      "unknown",
+      "free:nitro",
+      "nitro:floor",
+    ]) {
+      expect(resolve(`openai/gpt-catalog:${suffix}`), suffix).toBeUndefined();
+    }
+    expect(resolve("openai/unknown:floor")).toBeUndefined();
+    expect(resolve("gpt-catalog:floor", "openai")).toBeUndefined();
+  });
 });
 
 describe("standalone v2 pricing", () => {
@@ -857,6 +898,10 @@ describe("standalone v2 pricing", () => {
 
   it.each([
     {
+      name: "unknown catalog row is not revived by upstream or a colliding standalone rate",
+      ref: "vendor/catalogued",
+    },
+    {
       name: "gateway uses the vendor's own row over an upstream promotion",
       ref: "gateway/vendor/rowpriced",
       cost: rates(4, 20),
@@ -880,10 +925,12 @@ describe("standalone v2 pricing", () => {
 
 describe("inline v2 pricing", () => {
   const known = { status: "known", currency: "USD", unit: "million_tokens" } as const;
+  let pricing: RemoteModelCatalogPricingV2;
 
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-pricing-"));
     resetUsageFormatCachesForTest();
+    pricing = { ...known, input: 0, output: 0, source: "models.dev" };
     vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
       createPluginMetadataSnapshotFixture({
         plugins: ["fixture", "other"].map((provider) => ({
@@ -909,11 +956,7 @@ describe("inline v2 pricing", () => {
           sourceCommit: "v2-pricing-test",
           providers: { fixture: { defaultModel: "native/model" }, other: {} },
           models: [
-            {
-              id: "native/model",
-              provider: "fixture",
-              pricing: { ...known, input: 0, output: 0, source: "models.dev" },
-            },
+            { id: "native/model", provider: "fixture", pricing },
             { id: "native/model", provider: "other", pricing: { ...known, input: 7, output: 14 } },
           ],
         }),
@@ -933,21 +976,34 @@ describe("inline v2 pricing", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses known free pricing without reviving the bundled price", () => {
+  it.each([
+    {
+      name: "known free without a native source label",
+      price: { ...known, input: 0, output: 0, source: "models.dev" },
+      expected: { input: 0, output: 0 },
+    },
+    { name: "partial", price: { ...known, input: 3 }, expected: { input: 3 } },
+    { name: "unknown", price: { status: "unknown" }, expected: undefined },
+    { name: "withdrawn", price: { status: "unavailable", source: "native" }, expected: undefined },
+  ] satisfies Array<{
+    name: string;
+    price: RemoteModelCatalogPricingV2;
+    expected: { input: number; output?: number } | undefined;
+  }>)("uses $name pricing without reviving the bundled price", ({ price, expected }) => {
+    pricing = price;
     const config = {};
     const context = resolveModelPricingContext(config);
-    expect(resolveModelPricing(context, "fixture/native/model")).toEqual({ input: 0, output: 0 });
+    expect(resolveModelPricing(context, "fixture/native/model")).toEqual(expected);
     expect(resolveModelPricing(context, "other/native/model")).toEqual({ input: 7, output: 14 });
     expect(getRemoteModelCatalogProviderOverlay(config, "fixture")).toMatchObject({
       defaultModel: "native/model",
       models: [{ id: "native/model" }],
     });
-    expect(resolveModelCostConfig({ config, provider: "fixture", model: "native/model" })).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
+    expect(resolveModelCostConfig({ config, provider: "fixture", model: "native/model" })).toEqual(
+      expected
+        ? { input: expected.input, output: expected.output ?? 0, cacheRead: 0, cacheWrite: 0 }
+        : undefined,
+    );
   });
 
   it("does not let known zero bypass disabled external pricing", () => {

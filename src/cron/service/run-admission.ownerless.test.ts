@@ -263,6 +263,51 @@ describe("ownerless reservation and manual completion", () => {
   });
 });
 
+const changedPlans: Array<{ name: string; change: (job: CronJob) => void }> = [
+  {
+    name: "enabled state",
+    change: (job) => {
+      job.enabled = false;
+    },
+  },
+  {
+    name: "next run time",
+    change: (job) => {
+      job.state.nextRunAtMs = NOW + 60_000;
+    },
+  },
+  {
+    name: "last run time",
+    change: (job) => {
+      job.state.lastRunAtMs = NOW - 1;
+    },
+  },
+  {
+    name: "last run status",
+    change: (job) => {
+      job.state.lastRunStatus = "ok";
+    },
+  },
+  {
+    name: "configuration revision",
+    change: (job) => {
+      job.payload = { kind: "command", argv: ["echo", "edited"] };
+    },
+  },
+  {
+    name: "queued marker",
+    change: (job) => {
+      job.state.queuedAtMs = NOW;
+    },
+  },
+  {
+    name: "running marker",
+    change: (job) => {
+      job.state.runningAtMs = NOW;
+    },
+  },
+];
+
 describe("ownerless skip transaction guards", () => {
   it.each([
     { label: "captured agent", configuredDefault: "original-agent", rawDefault: undefined },
@@ -334,21 +379,24 @@ describe("ownerless skip transaction guards", () => {
     }
   });
 
-  it("does not overwrite changed enabled state or emit a scheduled completion", async () => {
-    const planned = commandJob("ownerless-stale-enabled-state");
-    const { state, storePath, events, execute } = await setupOwnerlessJob(planned);
-    const current = structuredClone(planned);
-    current.enabled = false;
-    await saveCronStore(storePath, { version: 1, jobs: [current] });
-    const before = await loadCronStore(storePath);
-    await expect(
-      persistQueuedCronRunReservations({ state, candidates: [planned], reservedAtMs: NOW }),
-    ).resolves.toEqual([]);
-    expect(await loadCronStore(storePath)).toEqual(before);
-    expect(events).toEqual([]);
-    expect(history(storePath, planned.id)).toEqual([]);
-    expect(execute).not.toHaveBeenCalled();
-  });
+  it.each(changedPlans)(
+    "does not overwrite changed $name or emit a scheduled completion",
+    async ({ name, change }) => {
+      const planned = commandJob(`ownerless-stale-${name.replaceAll(" ", "-")}`);
+      const { state, storePath, events, execute } = await setupOwnerlessJob(planned);
+      const current = structuredClone(planned);
+      change(current);
+      await saveCronStore(storePath, { version: 1, jobs: [current] });
+      const before = await loadCronStore(storePath);
+      await expect(
+        persistQueuedCronRunReservations({ state, candidates: [planned], reservedAtMs: NOW }),
+      ).resolves.toEqual([]);
+      expect(await loadCronStore(storePath)).toEqual(before);
+      expect(events).toEqual([]);
+      expect(history(storePath, planned.id)).toEqual([]);
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
 
   it("rolls back an ownerless skip when host activity begins after worker preparation", async () => {
     const job = commandJob("ownerless-active-before-commit");

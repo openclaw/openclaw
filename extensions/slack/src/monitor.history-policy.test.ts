@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
@@ -64,12 +64,12 @@ function captureReplyContexts<T extends Record<string, unknown>>() {
   return contexts;
 }
 
-function historyConfig(users = ["U1"]) {
+function historyConfig(users = ["U1"], contextVisibility: ContextVisibilityMode = "allowlist") {
   const config: OpenClawConfig = {
     channels: {
       slack: {
         groupPolicy: "open",
-        contextVisibility: "allowlist",
+        contextVisibility,
         channels: { C1: { requireMention: true, users } },
       },
     },
@@ -115,44 +115,49 @@ async function runHistoryMessage(event: SlackMessageEvent) {
 }
 
 describe("Slack native history sender policy through monitor dispatch", () => {
-  it("enforces allowlist visibility before bot history hydration and dispatch", async () => {
-    historyConfig(["U1", "UALLOWED", "BONLY"]);
-    const messages = [
-      { ts: "102", user: "UDENIED", bot_id: "BONLY", text: "denied user identity" },
-      { ts: "101", bot_id: "BDENIED", text: "denied bot identity" },
-      { ts: "100", user: "UALLOWED", bot_id: "BALLOWED", text: "allowed bot user" },
-      { ts: "99", bot_id: "BONLY", text: "allowed bot-only identity" },
-    ].map((message) => Object.assign(message, { files: [imageFile(message.ts)] }));
-    getSlackClient().conversations.history.mockResolvedValue({ messages });
-    mediaFetchMock.mockImplementation(async () => imageResponse());
-    const captured = captureReplyContexts<{
-      Body?: string;
-      RawBody?: string;
-      InboundHistory?: Array<{ body: string; media?: Array<{ path?: string }> }>;
-    }>();
-    await runHistoryMessage(
-      makeSlackMessageEvent({
-        text: "<@bot-user> inspect prior bot discussion",
-        ts: "103",
-        channel_type: "channel",
-      }),
-    );
-    expect(captured).toHaveLength(1);
-    const visible = messages.slice(2);
-    expect(captured[0]?.InboundHistory?.map((entry) => entry.body)).toEqual(
-      visible.toReversed().map((message) => message.text),
-    );
-    expect(captured[0]?.InboundHistory?.map((entry) => entry.media?.length)).toEqual(
-      visible.map(() => 1),
-    );
-    expect(mediaFetchMock.mock.calls.map(([url]) => url)).toEqual(
-      visible.toReversed().flatMap((message) => message.files.map((file) => file.url_private)),
-    );
-    expect(captured[0]?.RawBody).toContain("inspect prior bot discussion");
-    expect(captured[0]?.Body).toContain("allowed bot user");
-    expect(captured[0]?.Body).toContain("allowed bot-only identity");
-    expect(captured[0]?.Body).not.toContain("denied");
-  });
+  it.each(["allowlist", "all"] as const)(
+    "enforces %s visibility before bot history hydration and dispatch",
+    async (contextVisibility) => {
+      historyConfig(["U1", "UALLOWED", "BONLY"], contextVisibility);
+      const messages = [
+        { ts: "102", user: "UDENIED", bot_id: "BONLY", text: "denied user identity" },
+        { ts: "101", bot_id: "BDENIED", text: "denied bot identity" },
+        { ts: "100", user: "UALLOWED", bot_id: "BALLOWED", text: "allowed bot user" },
+        { ts: "99", bot_id: "BONLY", text: "allowed bot-only identity" },
+      ].map((message) => Object.assign(message, { files: [imageFile(message.ts)] }));
+      getSlackClient().conversations.history.mockResolvedValue({ messages });
+      mediaFetchMock.mockImplementation(async () => imageResponse());
+      const captured = captureReplyContexts<{
+        Body?: string;
+        RawBody?: string;
+        InboundHistory?: Array<{ body: string; media?: Array<{ path?: string }> }>;
+      }>();
+      await runHistoryMessage(
+        makeSlackMessageEvent({
+          text: "<@bot-user> inspect prior bot discussion",
+          ts: "103",
+          channel_type: "channel",
+        }),
+      );
+      expect(captured).toHaveLength(1);
+      const visible = contextVisibility === "all" ? messages : messages.slice(2);
+      expect(captured[0]?.InboundHistory?.map((entry) => entry.body)).toEqual(
+        visible.toReversed().map((message) => message.text),
+      );
+      expect(captured[0]?.InboundHistory?.map((entry) => entry.media?.length)).toEqual(
+        visible.map(() => 1),
+      );
+      expect(mediaFetchMock.mock.calls.map(([url]) => url)).toEqual(
+        visible.toReversed().flatMap((message) => message.files.map((file) => file.url_private)),
+      );
+      expect(captured[0]?.RawBody).toContain("inspect prior bot discussion");
+      expect(captured[0]?.Body).toContain("allowed bot user");
+      expect(captured[0]?.Body).toContain("allowed bot-only identity");
+      if (contextVisibility !== "all") {
+        expect(captured[0]?.Body).not.toContain("denied");
+      }
+    },
+  );
 
   it.each(["room", "thread"] as const)(
     "stops %s bot history media and dispatch when live policy is revoked during its native read",

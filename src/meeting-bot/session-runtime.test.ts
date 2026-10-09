@@ -687,6 +687,53 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
     expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();
   });
+
+  it.each(["transport", "browser"])(
+    "retries failed %s cleanup without repeating settled work",
+    async (failure) => {
+      const stopError = new Error("transport stop failed");
+      const stop = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      if (failure === "transport") {
+        stop.mockRejectedValueOnce(stopError);
+      }
+      const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+        if (failure === "transport" && session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
+      });
+      if (failure === "browser") {
+        releaseBrowserTab.mockResolvedValueOnce(false);
+      }
+      const { runtime } = createTestRuntime({
+        releaseBrowserTab,
+        joinTransport: async ({ session, context }) => {
+          session.browser = {
+            launched: true,
+            tab: { targetId: "leave-tab", openedByPlugin: true },
+          };
+          context.attachRuntimeHandles(session, { stop });
+          return {};
+        },
+      });
+      const { session } = await runtime.join({
+        url: "https://meeting.example/room",
+        agentId: "main",
+      });
+      const leaving = runtime.leave(session.id);
+      if (failure === "transport") {
+        await expect(leaving).rejects.toBe(stopError);
+      } else {
+        await expect(leaving).resolves.toMatchObject({ found: true, browserLeft: false });
+      }
+      await expect(runtime.leave(session.id)).resolves.toMatchObject({
+        found: true,
+        browserLeft: true,
+      });
+      expect(stop).toHaveBeenCalledTimes(failure === "transport" ? 2 : 1);
+      expect(releaseBrowserTab).toHaveBeenCalledTimes(failure === "browser" ? 2 : 1);
+    },
+  );
 });
 
 describe("MeetingSessionRuntime speech readiness", () => {

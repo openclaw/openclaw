@@ -210,20 +210,24 @@ describe("Codex registration procfs boundary", () => {
     },
   );
 
-  it("retains registrations when required identity inspection fails with EIO", async () => {
-    const registration = { parent, child: { ...child, commandFingerprint } };
-    store.register("owned", registration);
-    procfs.files.set(
-      `/proc/${parent.pid}/stat`,
-      Object.assign(new Error("required inspection failed"), { code: "EIO" }),
-    );
+  it.each([
+    { code: "EIO", reason: "unavailable" },
+    { code: "EACCES", reason: "permission" },
+  ])(
+    "retains registrations when required identity inspection fails with $code",
+    async ({ code, reason }) => {
+      const registration = { parent, child: { ...child, commandFingerprint } };
+      store.register("owned", registration);
+      procfs.files.set(
+        `/proc/${parent.pid}/stat`,
+        Object.assign(new Error("required inspection failed"), { code }),
+      );
 
-    await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({
-      reason: "unavailable",
-    });
-    expect(store.lookup("owned")).toEqual(registration);
-    expect(kill).not.toHaveBeenCalled();
-  });
+      await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({ reason });
+      expect(store.lookup("owned")).toEqual(registration);
+      expect(kill).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps full-tree inspection fail-closed with the same unreadable neighbor", async () => {
     await expect(readCodexAppServerProcessSnapshot()).rejects.toMatchObject({
