@@ -14,7 +14,6 @@ import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
 } from "./update-failure-facts.js";
-import type { UpdateStepProgress } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export function createPackageVerificationFailureStep(
@@ -145,7 +144,9 @@ export async function deferPackageStateVerification(
     root: string;
     restart?: boolean;
     results?: UpdateStepResult[];
-    progress: UpdateStepProgress;
+    progress:
+      | { onStepComplete?: (step: UpdateStepResult & { index: number; total: number }) => unknown }
+      | undefined;
     assertCurrent: () => void;
   },
   error: unknown,
