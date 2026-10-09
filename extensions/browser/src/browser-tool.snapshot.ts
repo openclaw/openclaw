@@ -16,6 +16,7 @@ import {
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -43,12 +44,16 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
 
 type BrowserExternalJsonKind = keyof typeof BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS;
 
+export function wrapBrowserExternalContent(value: string, includeWarning: boolean): string {
+  return wrapExternalContent(neutralizeMediaDirectives(value), {
+    source: "browser",
+    includeWarning,
+  });
+}
+
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
   const bounded = truncateSanitizedExternalContent(value, maxChars);
-  if (!bounded.truncated) {
-    return bounded;
-  }
-  if (marker.length > maxChars) {
+  if (!bounded.truncated || marker.length > maxChars) {
     return bounded;
   }
   const marked = truncateSanitizedExternalContent(value, Math.max(0, maxChars - marker.length));
@@ -355,21 +360,7 @@ export async function executeSnapshotAction(params: {
       externalContent,
     });
   }
-  if (snapshot.format === "ai") {
-    if (snapshot.blockedByDialog) {
-      const wrapped = wrapBrowserExternalJson({
-        kind: "snapshot",
-        payload: {
-          ...identity,
-          ...dialogState,
-        },
-      });
-      return textResult(wrapped.wrappedText, {
-        ...wrapped.safeDetails,
-        ...identity,
-        ...dialogState,
-      });
-    }
+  if (snapshot.format === "ai" && !snapshot.blockedByDialog) {
     const boundedSnapshot = wrapBrowserExternalText({
       value: snapshot.snapshot ?? "",
       marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
@@ -387,19 +378,17 @@ export async function executeSnapshotAction(params: {
       externalContent,
     });
   }
-  {
-    const wrapped = wrapBrowserExternalJson({
-      kind: "snapshot",
-      payload: snapshot,
-    });
-    return textResult(wrapped.wrappedText, {
-      ...wrapped.safeDetails,
-      ...identity,
-      nodeCount: snapshot.nodes.length,
-      ...dialogState,
-      externalContent,
-    });
-  }
+  const wrapped = wrapBrowserExternalJson({
+    kind: "snapshot",
+    payload: snapshot.format === "ai" ? { ...identity, ...dialogState } : snapshot,
+  });
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    ...identity,
+    ...(snapshot.format === "ai"
+      ? dialogState
+      : { nodeCount: snapshot.nodes.length, ...dialogState, externalContent }),
+  });
 }
 
 /**
@@ -433,10 +422,7 @@ export async function appendNavigatedPageState(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
-    const reason = wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
-      source: "browser",
-      includeWarning: false,
-    });
+    const reason = wrapBrowserExternalContent(formatErrorMessage(err), false);
     return {
       ...params.result,
       content: [
@@ -448,12 +434,8 @@ export async function appendNavigatedPageState(params: {
       ],
     };
   }
-  const baseDetails =
-    params.result.details && typeof params.result.details === "object"
-      ? (params.result.details as Record<string, unknown>)
-      : {};
   return {
     content: [...params.result.content, ...snapshot.content],
-    details: { ...baseDetails, pageState: snapshot.details },
+    details: { ...asRecord(params.result.details), pageState: snapshot.details },
   };
 }

@@ -15,6 +15,7 @@ import {
   type SessionEndTranscriptSource,
 } from "../../plugins/session-end-transcript.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
@@ -85,7 +86,9 @@ export function emitReplySessionStartHook(
   // Lifecycle hooks outlive their requester; deferred plugin work must belong
   // to the detached scope that keeps the Gateway drain alive until completion.
   void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionStart(payload.event, payload.context);
+    await runOutsideStoreWriterContext(() =>
+      hookRunner.runSessionStart(payload.event, payload.context),
+    );
   }, "hooks:session-start").catch(() => {});
 }
 
@@ -142,6 +145,8 @@ export function emitReplySessionEndHook(params: {
     : { available: false as const, reason: "unsupported-source" as const };
   const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
   void runWithGatewayDetachedWorkContinuation(async () => {
-    await params.hookRunner.runSessionEnd(payload.event, payload.context);
+    await runOutsideStoreWriterContext(() =>
+      params.hookRunner.runSessionEnd(payload.event, payload.context),
+    );
   }, "hooks:session-end").catch(() => {});
 }

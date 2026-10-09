@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
@@ -37,6 +38,7 @@ import {
   getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
   hasOpenClawAgentCanonicalValidation,
+  invalidateOpenClawAgentCanonicalValidation,
   markOpenClawAgentCanonicalValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -580,8 +582,25 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   return metadata;
 }
 
+/** Offline imports and repairs queue unvalidated rows before releasing their custody. */
+export function markCanonicalSessionValidationPending(
+  database: { agentId: string; db: DatabaseSync },
+  sessionKeys?: readonly string[],
+): void {
+  const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
+  const insert = db.insertInto("session_canonical_validation_pending").columns(["session_key"]);
+  const pending = sessionKeys
+    ? insert.values(sessionKeys.map((session_key) => ({ session_key })))
+    : insert.expression(db.selectFrom("session_nodes").select("session_key").where(sql.lit(true)));
+  executeSqliteQuerySync(
+    database.db,
+    pending.onConflict((conflict) => conflict.column("session_key").doNothing()),
+  );
+  invalidateOpenClawAgentCanonicalValidation(database);
+}
+
 export function setCanonicalSqliteSessionMainKey(
-  database: { db: DatabaseSync },
+  database: { agentId: string; db: DatabaseSync },
   mainKey: string | undefined,
 ): void {
   const canonicalMainKey = normalizeMainKey(mainKey);
@@ -593,6 +612,7 @@ export function setCanonicalSqliteSessionMainKey(
   if (currentMainKey === canonicalMainKey) {
     return;
   }
+  markCanonicalSessionValidationPending(database);
   executeSqliteQuerySync(
     database.db,
     db

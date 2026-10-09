@@ -212,16 +212,10 @@ function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
     return "transient-network";
   }
   const looksLikeAbort =
-    detailLower.includes("aborterror") ||
-    detailLower.includes("aborted") ||
     detailLower.includes("abort") ||
     detailLower.includes("cancelled") ||
     detailLower.includes("canceled");
   return looksLikeAbort ? "aborted" : "persistent";
-}
-
-function isPersistentBrowserServiceFailure(message: string, status: number | undefined): boolean {
-  return status === 401 || BROWSER_PERSISTENT_FAILURE_RE.test(message);
 }
 
 function resolveBrowserServiceModelHint(
@@ -234,7 +228,7 @@ function resolveBrowserServiceModelHint(
   if (message.includes(BROWSER_TOOL_TRANSIENT_MODEL_HINT)) {
     return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
   }
-  if (isPersistentBrowserServiceFailure(message, status)) {
+  if (status === 401 || BROWSER_PERSISTENT_FAILURE_RE.test(message)) {
     return BROWSER_TOOL_PERSISTENT_MODEL_HINT;
   }
   if (status === 408 || status === 504) {
@@ -244,9 +238,7 @@ function resolveBrowserServiceModelHint(
     return undefined;
   }
   const kind = classifyBrowserFetchFailure(new Error(message));
-  return kind === "timeout" || kind === "transient-network"
-    ? BROWSER_TOOL_TRANSIENT_MODEL_HINT
-    : undefined;
+  return kind === "persistent" ? undefined : resolveBrowserToolModelHint(kind);
 }
 
 function resolveBrowserToolModelHint(kind: BrowserFetchFailureKind): string | undefined {
@@ -305,9 +297,9 @@ function createBrowserRequestAbort(timeoutMs: number, upstreamSignal?: AbortSign
 
 async function fetchHttpJson<T>(
   url: string,
-  init: RequestInit & { timeoutMs?: number },
+  init: RequestInit & { timeoutMs: number },
 ): Promise<T> {
-  const timeoutMs = resolveTimerTimeoutMs(init.timeoutMs, 5000);
+  const { timeoutMs } = init;
   const abort = createBrowserRequestAbort(timeoutMs, init.signal);
   const { signal } = abort;
   let release: (() => Promise<void>) | undefined;

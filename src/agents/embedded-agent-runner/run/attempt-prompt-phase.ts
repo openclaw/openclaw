@@ -418,6 +418,8 @@ export async function runEmbeddedAttemptPromptPhase(
           promptState.finalPromptText = prompt;
         },
         assertHostActive: promptAssembly.assertHostActive,
+        withTranscriptWrite,
+        getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
         preparePrimaryModelRequest: () =>
           promptToolPolicy.prepareForDispatch(async () => {
             promptAssembly.decisionPrefilter.restrictionApplied = false;

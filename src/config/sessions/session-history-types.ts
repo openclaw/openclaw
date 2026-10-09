@@ -96,6 +96,7 @@ export type ChatHistoryPageParams = {
   maxHistoryBytes: number;
   responseHistoryBytes?: number;
   effectiveMaxChars: number;
+  toolResultMaxChars?: number;
   offset: number | undefined;
   messageId: string | undefined;
   pageCursor?: ChatHistoryPageCursor;

@@ -252,14 +252,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.embeddingBootstrapFailure = undefined;
     this.providerUnavailableReason = undefined;
     if (this.provider) {
-      this.providerLifecycle = this.fallbackFrom
-        ? {
-            mode: "fallback-active",
-            providerId: this.provider.id,
-            fallbackFrom: this.fallbackFrom,
-            reason: this.fallbackReason ?? "fallback activated",
-          }
-        : { mode: "active", providerId: this.provider.id };
+      this.providerLifecycle = resolveMemoryProviderLifecycle({
+        provider: this.provider,
+        requestedProvider: this.settings.provider,
+        fallbackFrom: this.fallbackFrom,
+        fallbackReason: this.fallbackReason,
+      });
     }
     this.embeddingProbeCache.delete(this.cacheKey);
   }

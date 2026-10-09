@@ -280,11 +280,19 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/startup-local-cli-pairing.test.ts",
   "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
   "src/gateway/talk/client-authority.test.ts",
+  "src/gateway/talk/client-gateway-control.agent-consult.test.ts",
   "src/gateway/talk/client-spoken-confirmation.test.ts",
+  "src/gateway/talk/handlers/client-consult-authority.test.ts",
+  "src/gateway/talk/handlers/client-create-authority.test.ts",
   "src/gateway/talk/handlers/client-native-actions.test.ts",
   "src/gateway/talk/handlers/client-native-control.test.ts",
   "src/gateway/talk/handlers/client.test.ts",
   "src/gateway/talk/handlers/native-consult-target.test.ts",
+  "src/gateway/talk/handlers/realtime-relay-close.test.ts",
+  "src/gateway/talk/handlers/voice.test.ts",
+  "src/gateway/talk/relay-audio-base64.test.ts",
+  "src/gateway/talk/relay/agent-consult.registration.test.ts",
+  "src/gateway/talk/relay/barge-in.regression.test.ts",
   "src/gateway/talk/relay/index.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
@@ -524,6 +532,8 @@ export const gatewayServerIsolatedTestFiles = [
   // Native source captures must not retain this fixture's forbidden process constructors.
   "src/gateway/server-startup-post-attach.test.ts",
   "src/gateway/server.agent-artifact-apis.test.ts",
+  // Exercise real config publication without neighboring Gateway module mocks.
+  "src/gateway/server.agents.config-readiness.test.ts",
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",

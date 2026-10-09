@@ -113,9 +113,28 @@ export async function appendSessionTurnInWorker(
     custody: custody?.facts,
     relocation: custody?.relocation,
   };
-  // Observable append predicates retain their existing restoration ordering.
+  const fixedVoiceTranscript =
+    !incognito &&
+    Boolean(options.voiceTranscript) &&
+    !custody &&
+    !cliWriter &&
+    !options.sessionTurnMutation &&
+    !options.sessionLifecyclePatch &&
+    !options.initialSessionEntry &&
+    messages.every(
+      (message) =>
+        !message.shouldAppend &&
+        !message.workerPreparation &&
+        !message.preparation &&
+        !message.prepareMessageAfterIdempotencyCheck &&
+        !message.beforeFreshMessageCommit &&
+        !message.shouldAppendInTransaction &&
+        !message.predicate,
+    );
+  // Observable append predicates and fixed voice commits retain eager restoration.
   const prepareColdTranscript =
     !incognito &&
+    !fixedVoiceTranscript &&
     !messages.some((append) => append.shouldAppend) &&
     (Boolean(sessionTurnMutation) ||
       messages.some(
@@ -237,6 +256,19 @@ export async function appendSessionTurnInWorker(
         }
       },
       async run(prepareTurn, commit) {
+        if (fixedVoiceTranscript) {
+          // Fixed voice events keep transaction-local validation without a planning read.
+          plan.options.messages = messages.map(({ config, ...message }) => ({
+            ...message,
+            message:
+              options.atomicGroup === true
+                ? message.message
+                : redactTranscriptMessageForStorage(message.message, {
+                    config: config ?? options.config,
+                  }),
+          }));
+          return commit();
+        }
         const prepareOwnedTurn = async () => {
           const prepared = await prepareTurn();
           if (prepared.refusedOwnerSource) {

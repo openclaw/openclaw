@@ -270,15 +270,16 @@ the schema migration; changing the cold-storage age setting afterward needs no
 Gateway restart. These are separate operations: live configuration reload does
 not authorize an active schema migration.
 
-Agent schema 21 makes the canonical-validation pending table and its node,
-window and main-key invalidation triggers required. This needs a version bump:
-older schema inspectors reject unexpected triggers on canonical tables. The
-maintenance migration marks existing nodes pending without rewriting their
-contents; readiness and Doctor own validation. Already-open older connections
-leave pending markers when they change canonical inputs. Reopening with older
-code is refused. Rollback uses the verified pre-migration backup and matching
-build, not marker changes or removal of the derived table alone. See
-[incremental canonical-session validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation).
+Agent schemas 21–24 require the canonical-validation pending table and its node,
+window, and main-key invalidation triggers. Schema 25 removes those triggers and
+the `entry_valid` reset triggers: canonical writers validate their final serialized
+inputs before SQL, while offline import and repair explicitly queue admission
+work. This needs a version bump because older schema inspectors require the
+retired triggers. Migration preserves payloads, seeds all existing nodes, and
+clears the old canonical receipt before publishing the new version. Admission
+still rejects invalid imported rows. Reopening with older code is refused;
+rollback uses the verified pre-migration backup and matching build. See
+[canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
 Agent schema 22 introduced exact transcript FTS row ownership with a nullable
 completeness count and lazy backfill. Schema 23 accepts that deployed shape as

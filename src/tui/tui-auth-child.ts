@@ -31,16 +31,6 @@ export function createTuiAuthChildOwner() {
   let active: ActiveAuthChild | null = null;
   let closed = false;
 
-  const clearActive = (owned: ActiveAuthChild): void => {
-    if (owned.forceTimer) {
-      clearTimeout(owned.forceTimer);
-      owned.forceTimer = undefined;
-    }
-    if (active === owned) {
-      active = null;
-    }
-  };
-
   const cancel = (owned: ActiveAuthChild): void => {
     if (!isChildRunning(owned.child)) {
       return;
@@ -67,7 +57,11 @@ export function createTuiAuthChildOwner() {
       active = owned;
       return await new Promise<TuiAuthChildResult>((resolve, reject) => {
         const settle = (complete: () => void): void => {
-          clearActive(owned);
+          clearTimeout(owned.forceTimer);
+          owned.forceTimer = undefined;
+          if (active === owned) {
+            active = null;
+          }
           complete();
         };
         owned.child.once("error", (error) => settle(() => reject(error)));

@@ -16,7 +16,7 @@ import type { CanonicalSessionReaderContinuation } from "./session-canonical-key
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
   SessionSourcePredicateFacts,

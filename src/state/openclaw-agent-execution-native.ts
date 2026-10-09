@@ -42,6 +42,7 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   retireReplacedAgentValidation,
 } from "./openclaw-agent-db-validation-cache.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
   cleanupRetiredAgentDatabaseLease,
   readAgentDatabaseClosedReceipt,
@@ -54,7 +55,6 @@ import type {
   AgentDatabaseExecutionScope,
   AgentDatabaseNativeGeneration,
   AgentDatabaseNativeStore as Store,
-  AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";

@@ -187,6 +187,36 @@ function rollbackTransactionState(states: PendingTransactionState[], error: unkn
   }
 }
 
+/** Install a received commit without borrowing a reentrant native transaction's rollback scope. */
+export function withSqliteCommittedPublications<T>(db: DatabaseSync, stage: () => T): T {
+  const outerPublications = pendingPublications.get(db);
+  const outerState = pendingTransactionState.get(db);
+  const publications: Array<() => void> = [];
+  const states: PendingTransactionState[] = [];
+  pendingPublications.set(db, publications);
+  pendingTransactionState.set(db, states);
+  let result: T;
+  try {
+    result = stage();
+  } catch (error) {
+    rollbackTransactionState(states, error);
+    throw error;
+  } finally {
+    if (outerPublications) {
+      pendingPublications.set(db, outerPublications);
+    } else {
+      pendingPublications.delete(db);
+    }
+    if (outerState) {
+      pendingTransactionState.set(db, outerState);
+    } else {
+      pendingTransactionState.delete(db);
+    }
+  }
+  installCommittedState(states, publications);
+  return result;
+}
+
 /** A lost transaction invalidates every savepoint's staged state and observers. */
 export function discardSqliteTransactionState(db: DatabaseSync, error: unknown): void {
   pendingPublications.get(db)?.splice(0);

@@ -109,8 +109,8 @@ const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
       }
       return query(key);
     },
-    canonical: (key: string, projection: SessionEntryProjection) => {
-      const shape = `${JSON.stringify(projection)}:${hasSqliteSessionOwnerColumns(database)}`;
+    canonical: (key: string, projection: SessionEntryProjection, includeOwner = true) => {
+      const shape = `${JSON.stringify(projection)}:${includeOwner}:${includeOwner && hasSqliteSessionOwnerColumns(database)}`;
       let query = canonicalQueries.get(shape);
       if (!query) {
         query = cacheSessionEntryQuery(
@@ -119,7 +119,8 @@ const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
             string,
             CanonicalSessionValidationRow & ResolvedSessionEntryRow["row"]
           >(database, (parameter) =>
-            canonicalSessionValidationQuery({ db: database }, { metadata: true })
+            canonicalSessionValidationQuery({ db: database }, { metadata: includeOwner })
+              .$if(!includeOwner, (builder) => builder.select("session_nodes.updated_at"))
               .select(sessionEntrySnapshotColumnsForKeys(undefined, projection))
               .where(
                 "session_nodes.session_key",
@@ -296,6 +297,21 @@ export function readSessionEntryRow(
   return scanSessionEntryRows(database, sessionKey, projection)?.selected;
 }
 
+/** Identity preparation retains normal alias validation without loading participant display data. */
+export function readSessionEntryIdentity(
+  database: OpenClawAgentDatabaseReader,
+  sessionKey: string,
+): Pick<SessionEntry, "sessionId" | "updatedAt" | "lifecycleRevision"> | undefined {
+  const entry = scanSessionEntryRows(database, sessionKey, "list", false)?.selected?.entry;
+  return (
+    entry && {
+      sessionId: entry.sessionId,
+      updatedAt: entry.updatedAt,
+      lifecycleRevision: entry.lifecycleRevision,
+    }
+  );
+}
+
 /**
  * Reads the selected row plus every raw row the lookup scanned. A write transaction that must
  * prove this logical row is unchanged can re-read and compare the raw rows instead of decoding
@@ -339,6 +355,7 @@ function scanSessionEntryRows(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
   projection: SessionEntryProjection,
+  includeParticipants = true,
 ):
   | {
       lookupKeys: string[];
@@ -356,7 +373,9 @@ function scanSessionEntryRows(
     const rows = readSelectedSessionEntryRows(database, lookupKeys, projection);
     let selected: ResolvedSessionEntryRow | undefined;
     for (const row of rows) {
-      const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
+      const entry = includeParticipants
+        ? parseReadableSqliteSessionEntryRow(database, row, projection)
+        : parseReadableSessionEntryData(database, row, projection);
       if (!entry || row.session_key !== sessionKey.trim()) {
         continue;
       }
@@ -391,6 +410,22 @@ export function readSessionChildEntriesInDatabase(
     childRows.filter((row) => !isInternalSessionEffectsKey(row.session_key)),
     projection,
   );
+}
+
+/** Final generation guards reuse an admitted native handle without freshness or schema queries. */
+export function readSessionEntryGenerationInDatabase(
+  database: OpenClawAgentDatabaseReader,
+  sessionKey: string,
+):
+  | Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode" | "toolOverrides">
+  | undefined {
+  const row = getExactSessionEntryQueries(database.db).canonical(sessionKey, "list", false);
+  const entry = row && parseReadableSessionEntryData(database, row, "list");
+  if (!entry) {
+    return undefined;
+  }
+  const { sessionId, lifecycleRevision, permissionMode, toolOverrides } = entry;
+  return { sessionId, lifecycleRevision, permissionMode, toolOverrides };
 }
 
 export function readExactSessionEntryRow(

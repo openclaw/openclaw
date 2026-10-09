@@ -22,11 +22,20 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
+for runtime application before reporting success. A successful response lets
+clients immediately create sessions or read the updated agent roster. If the
+config was saved but could not be applied, including when reload is `off`, the
+method returns `UNAVAILABLE` with recovery guidance instead of reporting the
+agent change as ready. Inspect `config.get` before retrying a saved mutation.
+
 If a busy state store temporarily refuses the reload's lifecycle lease, the
-Gateway keeps the change pending and retries automatically with a capped backoff.
-No additional config edit is needed. The previous runtime stays active until the
-change applies, and shutdown cancels pending retries. Other reload failures remain
-visible in the Gateway log.
+Gateway keeps the change pending and retries automatically with increasing backoff,
+up to one final attempt after the five-second backoff. The previous runtime stays
+active until the change applies. Exhausted retries or a non-retryable admission
+failure return `UNAVAILABLE` to waiting config mutations; a later config observation
+can retry the saved change. Shutdown cancels retries and settles waiting mutations.
+Reload failures remain visible in the Gateway log.
 
 If an automatic plugin reload cannot drain active work, the Gateway records the
 failure and keeps the last-good runtime. When the drain timed out on that
