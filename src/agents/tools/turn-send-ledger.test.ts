@@ -24,7 +24,8 @@ const OLD_TTL_MS = 10 * 60_000;
 // prefix, mirroring what a real telegram plugin normalizer does. Any other target
 // (e.g. "reef:peer-agent") passes through unchanged, matching the real no-plugin
 // fallback so the canonical-key test below stays valid.
-vi.mock("../../infra/outbound/target-normalization.js", () => ({
+vi.mock("../../infra/outbound/target-normalization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/target-normalization.js")>()),
   normalizeTargetForProvider: (_channel: string, raw?: string): string | undefined => {
     if (raw === undefined) {
       return undefined;
