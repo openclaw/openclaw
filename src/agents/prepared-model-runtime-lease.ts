@@ -263,7 +263,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
             [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
           };
         }
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
+        throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
         );
       }
