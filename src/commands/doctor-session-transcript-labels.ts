@@ -1,23 +1,15 @@
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import {
-  readTranscriptEventRows,
-  type SqliteTranscriptSnapshotRow,
-} from "../config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "../infra/session-sqlite-migration-readers.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
+import {
+  scanDoctorSessionTranscripts,
+  transcriptSnapshotsMatch,
+} from "./doctor-session-transcript-scan.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Session transcript labels";
@@ -143,19 +135,6 @@ function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
   return changed;
 }
 
-function snapshotsMatch(
-  expected: readonly SqliteTranscriptSnapshotRow[],
-  current: readonly SqliteTranscriptSnapshotRow[],
-): boolean {
-  return (
-    expected.length === current.length &&
-    expected.every(
-      (row, index) =>
-        row.seq === current[index]?.seq && row.eventJson === current[index]?.eventJson,
-    )
-  );
-}
-
 export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -167,22 +146,15 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let repairedSessions = 0;
   let repairedEvents = 0;
 
-  for (const target of projectExistingAgentDatabaseTargets(
-    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
-    env,
-    params.cfg,
-  )) {
-    const databaseOptions = resolveTargetSqliteOptions(target, env);
-    const sqlitePath = target.sqlitePath;
-    const { agentId } = target;
-
-    let readDatabase: DatabaseSync | undefined;
-    try {
-      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
-      // Detect read-only, then repair each session in its own transaction as it is found, so a large
-      // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
-      // latter gained its columns post-ship and is not safe to assume on old databases.
+  scanDoctorSessionTranscripts(
+    {
+      cfg: params.cfg,
+      env,
+      title: NOTE_TITLE,
+      failureLabel: "Failed to inspect or rewrite labels",
+    },
+    ({ reader, target, databaseOptions, reportError }) => {
+      const { agentId } = target;
       for (const sessionId of reader.sessionIds()) {
         const readResult = reader.repairSnapshot(
           sessionId,
@@ -190,10 +162,9 @@ export async function noteSessionTranscriptLabelHealth(params: {
           mayContainLegacyInboundContextLabels,
         );
         if (!readResult.ok) {
-          const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
-          note(
-            `- Failed to read transcript for session ${sessionId} (${agentId}): ${detail}`,
-            NOTE_TITLE,
+          reportError(
+            `- Failed to read transcript for session ${sessionId} (${agentId})`,
+            readResult.error,
           );
           continue;
         }
@@ -229,7 +200,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
                 const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
-                if (!snapshotsMatch(readResult.rows, currentRows)) {
+                if (!transcriptSnapshotsMatch(readResult.rows, currentRows)) {
                   throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
                 }
                 // Surgical per-row update: preserves seq, created_at, and sessions row.
@@ -241,24 +212,15 @@ export async function noteSessionTranscriptLabelHealth(params: {
             repairedSessions += 1;
             repairedEvents += updates.length;
           } catch (repairError) {
-            const detail = formatErrorMessage(repairError).replace(/\s+/g, " ").trim();
-            note(
-              `- Failed to rewrite labels for session ${sessionId} (${agentId}): ${detail}`,
-              NOTE_TITLE,
+            reportError(
+              `- Failed to rewrite labels for session ${sessionId} (${agentId})`,
+              repairError,
             );
           }
         }
       }
-    } catch (error) {
-      const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-      note(
-        `- Failed to inspect or rewrite labels for ${agentId} (${sqlitePath}): ${detail}`,
-        NOTE_TITLE,
-      );
-    } finally {
-      readDatabase?.close();
-    }
-  }
+    },
+  );
 
   if (params.shouldRepair && repairedSessions > 0) {
     note(

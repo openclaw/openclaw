@@ -347,7 +347,7 @@ export async function mutateManagedPluginEnabled(
           pluginId,
           acknowledge: params.acknowledgeCapabilities,
           onCapabilityConsent: params.onCapabilityConsent,
-          beforePersistentApply,
+          beforePersistentApply: params.beforePersistentApply,
           metadata,
         });
       }
@@ -533,7 +533,7 @@ export async function reloadManagedPlugin(
         pluginId,
         metadata,
         acknowledge: params.acknowledgeCapabilities,
-        beforePersistentApply,
+        beforePersistentApply: params.beforePersistentApply,
       });
     }
     const resolved = resolveTargets();

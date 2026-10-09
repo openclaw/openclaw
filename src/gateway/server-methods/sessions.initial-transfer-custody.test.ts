@@ -505,6 +505,7 @@ it.each([
         ).toMatchObject({
           sessionId: `${restored.childSessionKey}-session`,
         });
+        expect(() => assertAgentDatabaseAdmitted("main")).toThrow(AgentDatabaseAdmissionError);
       }
       const activation = activateSubagentRegistry(context.resolveGatewayContext);
       if (conflicted) {

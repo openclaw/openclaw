@@ -1,38 +1,6 @@
-type UrlPatternToken = { kind: "lit"; text: string } | { kind: "star" } | { kind: "glob" };
 type UrlCursorRange = { start: number; end: number };
 
-function tokenizeBrowserUrlPattern(pattern: string): UrlPatternToken[] {
-  const tokens: UrlPatternToken[] = [];
-  let literal = "";
-  const flush = () => {
-    if (!literal) {
-      return;
-    }
-    tokens.push({ kind: "lit", text: literal });
-    literal = "";
-  };
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index] ?? "";
-    if (char !== "*") {
-      literal += char;
-      continue;
-    }
-    flush();
-    if (pattern[index + 1] === "*") {
-      tokens.push({ kind: "glob" });
-      index += 1;
-      continue;
-    }
-    tokens.push({ kind: "star" });
-  }
-  flush();
-  return tokens;
-}
-
 function mergeCursorRanges(ranges: UrlCursorRange[]): UrlCursorRange[] {
-  if (ranges.length === 0) {
-    return [];
-  }
   const sorted = ranges.toSorted((left, right) => left.start - right.start || left.end - right.end);
   const merged: UrlCursorRange[] = [];
   for (const range of sorted) {
@@ -126,26 +94,23 @@ function globCursorRanges(url: string, ranges: readonly UrlCursorRange[]): UrlCu
   return [{ start, end: url.length }];
 }
 
-function rangeContains(ranges: readonly UrlCursorRange[], cursor: number): boolean {
-  return ranges.some((range) => range.start <= cursor && cursor <= range.end);
-}
-
 function matchBrowserUrlWildcard(pattern: string, url: string): boolean {
-  const tokens = tokenizeBrowserUrlPattern(pattern);
+  // Tokenize only; URL matching below stays range-based to avoid backtracking.
+  const tokens = pattern.match(/\*\*|\*|[^*]+/g) ?? [];
   let ranges: UrlCursorRange[] = [{ start: 0, end: 0 }];
   for (const token of tokens) {
-    if (token.kind === "lit") {
-      ranges = literalCursorRanges(url, token.text, ranges);
-    } else if (token.kind === "star") {
+    if (token === "*") {
       ranges = starCursorRanges(url, ranges);
-    } else {
+    } else if (token === "**") {
       ranges = globCursorRanges(url, ranges);
+    } else {
+      ranges = literalCursorRanges(url, token, ranges);
     }
     if (ranges.length === 0) {
       return false;
     }
   }
-  return rangeContains(ranges, url.length);
+  return ranges.some((range) => range.start <= url.length && url.length <= range.end);
 }
 
 export function matchBrowserUrlPattern(pattern: string, url: string): boolean {

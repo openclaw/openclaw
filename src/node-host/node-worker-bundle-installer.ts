@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
@@ -44,6 +44,7 @@ import {
   NodeWorkerTransferHttpError,
   withNodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
+import { replaceNodeWorkerDirectory } from "./node-worker-workspace-replacement.js";
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
 const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
@@ -329,37 +330,6 @@ async function removeStaleInstallStaging(bundlesRoot: string): Promise<void> {
   );
 }
 
-async function publishBundle(
-  destination: string,
-  staging: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const prior = `${destination}.previous-${process.pid}-${randomUUID()}`;
-  let movedPrior = false;
-  signal?.throwIfAborted();
-  try {
-    await fsp.rename(destination, prior);
-    movedPrior = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  try {
-    // Cancellation after moving the old install must restore it through the same rollback path.
-    signal?.throwIfAborted();
-    await fsp.rename(staging, destination);
-  } catch (error) {
-    if (movedPrior) {
-      await fsp.rename(prior, destination).catch(() => undefined);
-    }
-    throw error;
-  }
-  if (movedPrior) {
-    await fsp.rm(prior, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #packageRoot: string | null;
@@ -471,7 +441,7 @@ export class NodeWorkerBundleInstaller {
             } finally {
               await receipt.close();
             }
-            await publishBundle(destination, staging, params.signal);
+            await replaceNodeWorkerDirectory(destination, staging, "bundle", params.signal);
             if (!(await validateInstalledBundle(destination, input.build))) {
               throw new Error("published worker bundle failed validation");
             }

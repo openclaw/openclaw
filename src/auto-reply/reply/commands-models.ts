@@ -45,21 +45,19 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
   let all = false;
   for (const [index, token] of tokens.entries()) {
     const lower = token.toLowerCase();
-    if (lower.startsWith("limit=") || lower.startsWith("size=")) {
-      const value = parseStrictPositiveInteger(lower.slice(lower.indexOf("=") + 1));
-      if (value !== undefined) {
+    if (index > 0 && (lower === "all" || lower === "--all")) {
+      all = true;
+      continue;
+    }
+    const isPageSize = lower.startsWith("limit=") || lower.startsWith("size=");
+    const value = parseStrictPositiveInteger(
+      isPageSize || lower.startsWith("page=") ? lower.slice(lower.indexOf("=") + 1) : lower,
+    );
+    if (value !== undefined) {
+      if (isPageSize) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
-      }
-    } else if (index > 0) {
-      if (lower === "all" || lower === "--all") {
-        all = true;
-      } else {
-        const value = parseStrictPositiveInteger(
-          lower.startsWith("page=") ? lower.slice("page=".length) : lower,
-        );
-        if (value !== undefined) {
-          page = value;
-        }
+      } else if (index > 0) {
+        page = value;
       }
     }
   }

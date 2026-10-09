@@ -103,7 +103,7 @@ describe("deferred plugin session receipt retirement", () => {
     },
   );
 
-  it("rebinds an archived receipt to a replaced database before retiring it and importing later history", async () => {
+  it("supersedes an archived receipt bound to a replaced database before importing later history", async () => {
     await withOpenClawTestState({ label: "deferred-archived-database-rebind" }, async (state) => {
       const { cfg, scope } = await seedDeferredPluginSessionSource(state, "default");
       const run = () =>
@@ -160,16 +160,16 @@ describe("deferred plugin session receipt retirement", () => {
         laterTranscript,
         `${laterEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
       );
-      const rebound = await run();
-      const issues = rebound.targets.flatMap((entry) => entry.issues);
+      const recovered = await run();
+      const issues = recovered.targets.flatMap((entry) => entry.issues);
       expect(issues).not.toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_conflict" }),
       );
       expect(issues).toContainEqual(
-        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+        expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
       );
-      expect(rebound.totals.importedEntries).toBe(1);
-      expect(rebound.totals.importedTranscriptEvents).toBe(2);
+      expect(recovered.totals.importedEntries).toBe(1);
+      expect(recovered.totals.importedTranscriptEvents).toBe(2);
       expect(readDeferredPluginSessionImport(receiptParams)).toBeUndefined();
       expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
         "current SQLite metadata",

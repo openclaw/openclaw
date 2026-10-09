@@ -1,4 +1,3 @@
-// Plugin state store exposes persisted per-plugin state operations.
 import { toUSVString } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import type {
@@ -83,8 +82,6 @@ import {
 } from "./plugin-state-worker-client.js";
 import { serializePluginStoreJson } from "./plugin-store-validation.js";
 
-// Public plugin-state facade over the sqlite-backed store. It validates plugin
-// ids, namespaces, JSON values, TTLs, and namespace limits before persistence.
 export type {
   OpenAsyncKeyedStoreOptions,
   OpenRetainedKeyedStoreOptions,
@@ -287,6 +284,7 @@ function createAsyncKeyedStore<T>(
         ...scope,
         key: normalizedKey,
         assertCurrent: opts?.assertCurrent,
+        signal: opts?.signal,
       });
     },
     entries: async () => {

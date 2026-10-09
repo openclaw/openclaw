@@ -406,20 +406,39 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
     return entry;
   },
 }));
-vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
-  >()),
-  loadSessionEntryForAdmission: (
-    ...args: Parameters<NonNullable<typeof sessionStoreMocks.databaseEntryLoader>>
-  ) =>
-    sessionStoreMocks.databaseEntryLoader
-      ? sessionStoreMocks.databaseEntryLoader(...args)
-      : {
-          entry: sessionStoreMocks.loadSessionEntry(...args),
-          databaseClaim: undefined,
-        },
-}));
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  const { reduceSessionEntryPatch } =
+    await import("../../config/sessions/session-entry-patch-operation.js");
+  return {
+    ...actual,
+    applySessionEntryOperation: async (
+      ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
+    ) => {
+      let wrote = false;
+      const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
+        const patch = reduceSessionEntryPatch(operation, { sessionId: "", updatedAt: 0, ...entry });
+        wrote = patch !== null;
+        return patch;
+      });
+      const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
+      if (wrote && entry) {
+        options?.onCommitted?.(entry);
+      }
+      return entry;
+    },
+    loadSessionEntryForAdmission: (
+      ...args: Parameters<NonNullable<typeof sessionStoreMocks.databaseEntryLoader>>
+    ) =>
+      sessionStoreMocks.databaseEntryLoader
+        ? sessionStoreMocks.databaseEntryLoader(...args)
+        : {
+            entry: sessionStoreMocks.loadSessionEntry(...args),
+            databaseClaim: undefined,
+          },
+  };
+});
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
   return {
@@ -443,6 +462,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalPluginRegistry: () => hookMocks.registry,
   resetGlobalHookRunner: vi.fn(),
 }));
+// mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
   readAcpSessionEntry: acpMocks.readAcpSessionEntry,
@@ -451,7 +471,6 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
     agentId?: string;
     cfg?: OpenClawConfig;
   }) => acpMocks.readAcpSessionEntry(params),
-  readAcpSessionMeta: acpMocks.readAcpSessionMeta,
   readAcpSessionMetaAsync: async (params: {
     sessionKey: string;
     agentId?: string;

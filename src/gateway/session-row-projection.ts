@@ -224,7 +224,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     registryFactsReady: () => Boolean(inOwnerContext(subagents.snapshotIdentity)),
     acquireEntry,
     markRelated,
-    invalidatePlacement: (sessionId) => placementFacts.invalidate(sessionId),
+    placement: placementFacts,
     invalidateFacts: (row, domain) => rowFacts.invalidate(row, domain),
     enqueue,
     defer(row) {
@@ -347,12 +347,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
       }
-    } else if (change.scope === "automation") {
-      records.markAutomation(
-        matching({ key: change.sessionKey }).filter((row) => !isCold(row)),
-        change.agentId,
-        dirty,
-      );
+    } else if (!change.factsInvalidated && (change.scope === "automation" || presentationOnly)) {
+      const affected = matching({ key: change.sessionKey }).filter((row) => !isCold(row));
+      records.markAutomation(affected, change.agentId, dirty);
     } else if (!presentationOnly) {
       rowScope.visitSessionRowPublicationTargets(change, {
         matching,
@@ -488,7 +485,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     mark,
     read: (id) => rows.get(id),
     invalidate: backfill.remove,
-    refresh(id) {
+    refresh(id, retained) {
       const row = rows.get(id);
       if (!row || (isCold(row) && !row.pendingDatabaseFacts)) {
         return;
@@ -496,7 +493,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       epoch++;
       revisions.invalidate();
       revisions.publishFacts(row);
-      records.invalidateDatabaseFacts(row);
+      records.invalidateDatabaseFacts(row, retained);
       dirty.add(id);
       void ensureMaterialized().catch(() => {});
     },

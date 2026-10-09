@@ -24,6 +24,7 @@ import {
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -398,6 +399,7 @@ export function createCliEventHandlers(params: {
       signalExecutionPhase("assistant_output_started");
     }
     emitLiveEvent("assistant", () => ({
+      itemId: cliAssistantItemId(runParams.runId),
       text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
       delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
     }));

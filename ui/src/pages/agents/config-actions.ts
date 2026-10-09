@@ -15,23 +15,17 @@ export function renderAgentConfigActions(
   beforeSave: TemplateResult | typeof nothing = nothing,
   buttonType?: "button",
 ) {
-  return html`
-    <button
-      type=${buttonType ?? nothing}
-      class="btn btn--sm"
-      ?disabled=${props.configLoading}
-      @click=${props.onConfigReload}
-    >
-      ${t("common.reloadConfig")}
-    </button>
-    ${beforeSave}
-    <button
-      type=${buttonType ?? nothing}
-      class="btn btn--sm primary"
-      ?disabled=${!props.canUpdateConfig || props.configSaving || !props.configDirty}
-      @click=${props.onConfigSave}
-    >
-      ${props.configSaving ? t("common.saving") : t("common.save")}
-    </button>
-  `;
+  return [false, true].map(
+    (save) => html`
+      ${save ? beforeSave : nothing}
+      <button
+        type=${buttonType ?? nothing}
+        class=${save ? "btn btn--sm primary" : "btn btn--sm"}
+        ?disabled=${save ? !props.canUpdateConfig || props.configSaving || !props.configDirty : props.configLoading}
+        @click=${save ? props.onConfigSave : props.onConfigReload}
+      >
+        ${t(save ? (props.configSaving ? "common.saving" : "common.save") : "common.reloadConfig")}
+      </button>
+    `,
+  );
 }

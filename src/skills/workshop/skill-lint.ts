@@ -18,13 +18,9 @@ const NARRATIVE_LINE = /^(?:[-*+]\s*)?(?:\*\*)?(?:UPDATE|NOTE|EDIT)\b|\b20\d\d-\
 
 type SkillLintFinding = { rule: string; message: string };
 
-function readDescription(content: string): string {
-  return (parseFrontmatterBlock(content).description ?? "").trim();
-}
-
 /** Authoring-convention findings for one SKILL.md, most useful first. */
 function lintSkillMarkdown(content: string): SkillLintFinding[] {
-  const description = readDescription(content);
+  const description = (parseFrontmatterBlock(content).description ?? "").trim();
   const body = stripFrontmatterBlock(content);
   // Code is quoted material; only prose carries authoring style.
   const prose = body

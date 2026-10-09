@@ -1,9 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
+import type {
+  WorkerOperationContext,
+  WorkerWriteOperationContext,
+} from "../state/worker-operation-registry.js";
 import * as deviceAuth from "./device-auth-store.kernel.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 function read<Input>(
   operation: (db: DatabaseSync, input: Input) => deviceAuth.DeviceAuthTokenObservation,
@@ -18,16 +19,8 @@ function read<Input>(
 }
 
 function write<Input, Output>(operation: (db: DatabaseSync, input: Input) => Output) {
-  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = operation(db, input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return result;
-      },
-      { database: open(), ...stateOptions() },
-    );
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
+    writeAdmitted(({ db }) => operation(db, input));
 }
 
 export const deviceAuthWorkerOperations = {

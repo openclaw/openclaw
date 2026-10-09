@@ -590,9 +590,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
-  Keep their logical classes, names, file inventories, serial project execution
-  and two-worker pins. Tooling files use the shared worker scheduler; price their
+- Source-only serial Blacksmith tooling bins use the 16-class after packing,
+  retaining logical classes, names, file inventories, and two-worker pins.
+  Keep the 32-class for compiler/artifact capacity files, explicit runner or
+  memory anchors, builds, dist, mixed configs, and parallel jobs. Require complete
+  file lists; unknown envelopes retain their planned runner. The final capacity
+  rule does not change hosted or hybrid plans, packing, timing identities, or
+  registration counts. Tooling files use the shared worker scheduler; price their
   current file costs by effective workers without dividing the longest file.
   Docker helper fixtures retain their separate serial config. This does not
   promote hosted or hybrid tooling as a family; capacity alone is not a measured speedup.

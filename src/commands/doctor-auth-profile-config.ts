@@ -10,34 +10,21 @@ import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
-const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
-  "api_key",
-  "aws-sdk",
-  "oauth",
-  "token",
-]);
-
 function normalizeMode(value: unknown): AuthProfileConfig["mode"] | null {
-  return typeof value === "string" && AUTH_PROFILE_MODES.has(value as AuthProfileConfig["mode"])
-    ? (value as AuthProfileConfig["mode"])
-    : null;
+  switch (value) {
+    case "api_key":
+    case "aws-sdk":
+    case "oauth":
+    case "token":
+      return value;
+    default:
+      return null;
+  }
 }
 
-function extractProviderFromModelRef(value: string): string | null {
-  const { model } = splitTrailingAuthProfile(value);
-  const slash = model.indexOf("/");
-  if (slash <= 0) {
-    return null;
-  }
-  return normalizeProviderId(model.slice(0, slash)) || null;
-}
-
-function extractProviderFromProfileId(profileId: string): string | null {
-  const colon = profileId.indexOf(":");
-  if (colon <= 0) {
-    return null;
-  }
-  return normalizeProviderId(profileId.slice(0, colon)) || null;
+function extractProviderPrefix(value: string, separator: ":" | "/"): string | null {
+  const index = value.indexOf(separator);
+  return index > 0 ? normalizeProviderId(value.slice(0, index)) || null : null;
 }
 
 function collectActiveAuthHints(config: OpenClawConfig) {
@@ -55,8 +42,8 @@ function collectActiveAuthHints(config: OpenClawConfig) {
   }
 
   for (const { value } of collectConfiguredModelRefs(config)) {
-    const { profile } = splitTrailingAuthProfile(value);
-    const provider = extractProviderFromModelRef(value);
+    const { model, profile } = splitTrailingAuthProfile(value);
+    const provider = extractProviderPrefix(model, "/");
     if (profile) {
       explicitProfileIds.add(profile);
       if (provider) {
@@ -93,36 +80,6 @@ function isValidProfileMetadata(value: unknown): value is AuthProfileConfig {
     return false;
   }
   return normalizeProviderId(value.provider) !== "" && normalizeMode(value.mode) !== null;
-}
-
-function buildProfileMetadata(params: {
-  profileId: string;
-  before: unknown;
-  after: unknown;
-  providerHint?: string;
-}): AuthProfileConfig | null {
-  const before = isRecord(params.before) ? params.before : {};
-  const after = isRecord(params.after) ? params.after : {};
-  const provider =
-    normalizeProviderId(after.provider) ||
-    normalizeProviderId(before.provider) ||
-    extractProviderFromProfileId(params.profileId) ||
-    normalizeProviderId(params.providerHint);
-  if (!provider) {
-    return null;
-  }
-  const mode = normalizeMode(after.mode) ?? normalizeMode(before.mode) ?? "api_key";
-  const repaired: AuthProfileConfig = { provider, mode };
-  const email = normalizeOptionalString(after.email) ?? normalizeOptionalString(before.email);
-  const displayName =
-    normalizeOptionalString(after.displayName) ?? normalizeOptionalString(before.displayName);
-  if (email) {
-    repaired.email = email;
-  }
-  if (displayName) {
-    repaired.displayName = displayName;
-  }
-  return repaired;
 }
 
 export function ensureConfigAuthProfiles(
@@ -166,35 +123,38 @@ export function protectActiveAuthProfileConfig(params: {
 
   for (const [profileId, beforeProfile] of Object.entries(beforeProfiles)) {
     const afterProfile = afterProfiles[profileId];
-    const afterProfileRecord = isRecord(afterProfile) ? afterProfile : null;
-    const beforeProfileRecord = isRecord(beforeProfile) ? beforeProfile : null;
+    const after: Record<string, unknown> = isRecord(afterProfile) ? afterProfile : {};
+    const before: Record<string, unknown> = isRecord(beforeProfile) ? beforeProfile : {};
     if (isValidProfileMetadata(afterProfile)) {
       continue;
     }
-    const provider =
-      normalizeProviderId(afterProfileRecord?.provider) ||
-      normalizeProviderId(beforeProfileRecord?.provider) ||
-      extractProviderFromProfileId(profileId);
+    let provider =
+      normalizeProviderId(after.provider) ||
+      normalizeProviderId(before.provider) ||
+      extractProviderPrefix(profileId, ":");
     const protectsActiveProvider = provider !== null && activeProviders.has(provider);
     const protectsExplicitProfile = explicitProfileIds.has(profileId);
     if (!protectsActiveProvider && !protectsExplicitProfile) {
       continue;
     }
 
-    const repaired = buildProfileMetadata({
-      profileId,
-      before: beforeProfile,
-      after: afterProfile,
-      providerHint:
-        explicitProfileProviders.get(profileId)?.size === 1
-          ? [...(explicitProfileProviders.get(profileId) ?? [])][0]
-          : undefined,
-    });
-    if (!repaired) {
+    const hints = explicitProfileProviders.get(profileId);
+    provider ||= normalizeProviderId(hints?.size === 1 ? [...hints][0] : undefined);
+    if (!provider) {
       warnings.push(
         `auth.profiles.${profileId}: active auth profile metadata could not be inferred; repair manually before running doctor --fix.`,
       );
       continue;
+    }
+    const repaired: AuthProfileConfig = {
+      provider,
+      mode: normalizeMode(after.mode) ?? normalizeMode(before.mode) ?? "api_key",
+    };
+    for (const key of ["email", "displayName"] as const) {
+      const value = normalizeOptionalString(after[key]) ?? normalizeOptionalString(before[key]);
+      if (value) {
+        repaired[key] = value;
+      }
     }
     const profiles = ensureConfigAuthProfiles(config);
     profiles[profileId] = repaired;

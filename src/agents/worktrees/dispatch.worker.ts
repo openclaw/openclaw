@@ -1,6 +1,7 @@
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
+  WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
 import {
   readPendingWorktreesInDatabase,
@@ -38,8 +39,8 @@ import { reapWorktreeRunLeasesInDatabase } from "./run-lease-owner.js";
 import {
   admitWorktreeRunLeaseInDatabase,
   releaseWorktreeRunLeaseInDatabase,
+  type WorktreeRunLeaseRowInput,
 } from "./run-lease-store.kernel.js";
-import { worktreeRunLeaseOperation } from "./run-lease-store.worker.js";
 import type { ManagedWorktreeOwnerKind, WorktreeRegistryPredicate } from "./types.js";
 
 export const worktreeOperations = {
@@ -117,19 +118,21 @@ export const worktreeOperations = {
     input: Parameters<typeof deferWorktreeCleanupInWorker>[0],
     { open, stateOptions },
   ) => deferWorktreeCleanupInWorker(input, { ...stateOptions(), database: open() }),
-  "worktrees.admitRunLease": worktreeRunLeaseOperation(
-    "worktrees.admitRunLease",
-    admitWorktreeRunLeaseInDatabase,
-  ),
-  "worktrees.releaseRunLease": worktreeRunLeaseOperation(
-    "worktrees.releaseRunLease",
-    (db, { worktreeId, token }: { worktreeId: string; token: string }) =>
-      releaseWorktreeRunLeaseInDatabase(db, worktreeId, token),
-  ),
-  "worktrees.reapRunLeases": worktreeRunLeaseOperation(
-    "worktrees.reapRunLeases",
-    (db, { scopes }: { scopes: string[] }) => reapWorktreeRunLeasesInDatabase(db, scopes),
-  ),
-} satisfies WorkerOperationHandlers;
+  "worktrees.admitRunLease": (input: WorktreeRunLeaseRowInput, { writeAdmitted }) =>
+    writeAdmitted(({ db }) => admitWorktreeRunLeaseInDatabase(db, input), {
+      operationLabel: "worktrees.admitRunLease",
+    }),
+  "worktrees.releaseRunLease": (
+    { worktreeId, token }: { worktreeId: string; token: string },
+    { writeAdmitted },
+  ) =>
+    writeAdmitted(({ db }) => releaseWorktreeRunLeaseInDatabase(db, worktreeId, token), {
+      operationLabel: "worktrees.releaseRunLease",
+    }),
+  "worktrees.reapRunLeases": ({ scopes }: { scopes: string[] }, { writeAdmitted }) =>
+    writeAdmitted(({ db }) => reapWorktreeRunLeasesInDatabase(db, scopes), {
+      operationLabel: "worktrees.reapRunLeases",
+    }),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type WorktreeWorkerOperations = WorkerOperations<typeof worktreeOperations>;

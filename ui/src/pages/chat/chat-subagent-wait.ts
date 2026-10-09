@@ -45,87 +45,65 @@ function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) 
   });
 }
 
-export function resolveChatSubagentWait(
-  input: SubagentRoster & {
-    selectedSession: GatewaySessionRow | undefined;
-    runActive?: boolean;
-    runWorking?: boolean;
-    messages: readonly unknown[];
-  },
-): ChatSubagentWait | null {
-  const session = input.selectedSession;
-  if (
-    !session ||
-    session.archived ||
-    session.hasActiveSubagentRun !== true ||
-    input.runActive ||
-    input.runWorking ||
-    isSessionRunActive(session)
-  ) {
-    return null;
-  }
-  const pending = pendingSessionsYield(input.messages);
-  const yieldedAt = pending?.timestamp ?? null;
-  const handoffAt =
-    yieldedAt !== null && typeof session.startedAt === "number" && yieldedAt > session.startedAt
-      ? yieldedAt
-      : null;
-  const unfinished = unfinishedChildren(session, input);
-  if (input.subagentSessionsHydrated && unfinished.length === 0) {
-    // Every child the pane knows has finished. The resumed run draws the next
-    // status; a wait line here could only say it is waiting on nothing.
-    return null;
-  }
-  // A child session opened in its own right is not a subagent: it is counted
-  // without a name, and only once no subagent is left.
-  const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
-  const child = children.length === 1 ? children[0] : undefined;
-  return {
-    // The yield's transcript row can predate the handoff by its whole wrapping
-    // step; the parent's run end is the handoff itself.
-    startedAt:
-      handoffAt !== null && typeof session.endedAt === "number" && session.endedAt >= handoffAt
-        ? session.endedAt
-        : handoffAt,
-    ...(handoffAt !== null && pending?.runId ? { runId: pending.runId } : {}),
-    runningCount: children.length,
-    ...(unfinished.length > children.length
-      ? { sessionCount: unfinished.length - children.length }
-      : {}),
-    ...(child
-      ? {
-          child: {
-            key: child.key,
-            label: resolveSessionDisplayName(child.key, child),
-          },
-        }
-      : {}),
-  };
-}
-
 /**
  * Everything the transcript reads from the session's subagent roster: the
  * wait and where it is placed, the running count, and the keys that tell
  * memoized rows when any of it changed.
  */
 export function projectSubagentStatus(
-  input: Parameters<typeof resolveChatSubagentWait>[0],
+  input: SubagentRoster & {
+    selectedSession: GatewaySessionRow | undefined;
+    runActive?: boolean;
+    runWorking?: boolean;
+    messages: readonly unknown[];
+  },
   searchFiltering: boolean,
 ) {
-  const wait = resolveChatSubagentWait(input);
   const session = input.selectedSession;
-  const running =
-    session && !session.archived && session.hasActiveSubagentRun === true
-      ? unfinishedChildren(session, input).filter((row) => !isDashboardSessionKey(row.key)).length
-      : 0;
+  const eligible = session && !session.archived && session.hasActiveSubagentRun === true;
+  const shouldWait =
+    eligible && !input.runActive && !input.runWorking && !isSessionRunActive(session);
+  const pending = shouldWait ? pendingSessionsYield(input.messages) : null;
+  const yieldedAt = pending?.timestamp ?? null;
+  const handoffAt =
+    yieldedAt !== null && typeof session?.startedAt === "number" && yieldedAt > session.startedAt
+      ? yieldedAt
+      : null;
+  const unfinished = eligible ? unfinishedChildren(session, input) : [];
+  // Dashboard children count as sessions, never named subagents.
+  const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
+  const running = children.length;
+  const child = running === 1 ? children[0] : undefined;
+  // A hydrated roster with no unfinished children ends the wait.
+  const wait: ChatSubagentWait | null =
+    shouldWait && (!input.subagentSessionsHydrated || unfinished.length > 0)
+      ? {
+          // The yield's transcript row can predate the handoff by its whole wrapping
+          // step; the parent's run end is the handoff itself.
+          startedAt:
+            handoffAt !== null &&
+            typeof session.endedAt === "number" &&
+            session.endedAt >= handoffAt
+              ? session.endedAt
+              : handoffAt,
+          ...(handoffAt !== null && pending?.runId ? { runId: pending.runId } : {}),
+          runningCount: running,
+          ...(unfinished.length > running ? { sessionCount: unfinished.length - running } : {}),
+          ...(child
+            ? {
+                child: {
+                  key: child.key,
+                  label: resolveSessionDisplayName(child.key, child),
+                },
+              }
+            : {}),
+        }
+      : null;
   // The line can lead to the Subagents panel only when that panel lists every
   // subagent it mentions.
   const listed =
-    session !== undefined &&
     (wait !== null || running > 0) &&
-    unfinishedChildren(session, input).every(
-      (row) => isDashboardSessionKey(row.key) || isSubagentsPanelSession(row),
-    );
+    unfinished.every((row) => isDashboardSessionKey(row.key) || isSubagentsPanelSession(row));
   return {
     wait,
     // Only a loaded handoff places the wait inside its run; search omits it.

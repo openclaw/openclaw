@@ -12,7 +12,6 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -99,10 +98,6 @@ export function resolveSessionWorkerPlacementPatchError(
     ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
     : `Session ${params.key} cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
 }
-
-export const loadSessionsRuntimeModule = createLazyRuntimeModule(
-  () => import("./sessions.runtime.js"),
-);
 
 export function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const normalized = normalizeOptionalString(

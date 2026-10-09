@@ -13,6 +13,7 @@ import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -334,26 +335,22 @@ export async function convergeUpdatePlugins(params: {
           failureFacts,
         });
       }
-      resultWithPostUpdate.steps.push(
-        ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message, index) => ({
-          name: `post-plugin-doctor-warning-${index + 1}`,
-          command: "openclaw doctor --fix",
-          cwd: postUpdateRoot,
-          durationMs: 0,
-          exitCode: 0,
-          advisory: { kind: "package-post-install-doctor" as const, message },
-        })),
-      );
-      resultWithPostUpdate.steps.push(
-        ...collectPostCorePluginAdvisories(postCorePluginUpdate).map((message, index) => ({
-          name: `finalize:plugins:${index}`,
-          command: "openclaw plugins update",
-          cwd: postUpdateRoot,
-          durationMs: 0,
-          exitCode: 0,
-          advisory: { kind: "recoverable-maintenance" as const, message },
-        })),
-      );
+      const appendAdvisories = (messages: string[], source: "doctor" | "plugins") => {
+        const doctor = source === "doctor";
+        const kind = doctor ? "package-post-install-doctor" : "recoverable-maintenance";
+        resultWithPostUpdate.steps.push(
+          ...messages.map<UpdateStepResult>((message, index) => ({
+            name: doctor ? `post-plugin-doctor-warning-${index + 1}` : `finalize:plugins:${index}`,
+            command: doctor ? "openclaw doctor --fix" : "openclaw plugins update",
+            cwd: postUpdateRoot,
+            durationMs: 0,
+            exitCode: 0,
+            advisory: { kind, message },
+          })),
+        );
+      };
+      appendAdvisories(normalizeUpdatePostInstallDoctorWarnings(doctorWarnings), "doctor");
+      appendAdvisories(collectPostCorePluginAdvisories(postCorePluginUpdate), "plugins");
       if (params.result.gitRuntime) {
         const observed = await readGitRuntimeArtifactIdentity(postUpdateRoot);
         assertCurrent?.();

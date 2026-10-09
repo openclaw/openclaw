@@ -143,22 +143,7 @@ export async function withAcceptedSuffix(
         };
       });
       const retain = agentDatabases.retainOpenClawAgentDatabaseReadCandidates;
-      vi.spyOn(agentDatabases, "retainOpenClawAgentDatabaseReadCandidates").mockImplementation(
-        (...args) => {
-          const owner = retain(...args);
-          if (!trackingCustody) {
-            return owner;
-          }
-          expect(owner.databases).toHaveLength(1);
-          return {
-            ...owner,
-            release() {
-              owner.release();
-              releases.push("native");
-            },
-          };
-        },
-      );
+      const nativeCustody = vi.spyOn(agentDatabases, "retainOpenClawAgentDatabaseReadCandidates");
       const reads: SessionRowDatabaseFacts[][] = [];
       const readDatabases = history.withSessionHistoryWorkerDatabases;
       vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -193,6 +178,18 @@ export async function withAcceptedSuffix(
       const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
       vi.spyOn(databaseFactsRead, "withSessionRowDatabaseFacts").mockImplementationOnce(
         async (...args) => {
+          // The row reader acquires its hold before worker admission retains its own.
+          nativeCustody.mockImplementationOnce((...selected) => {
+            const owner = retain(...selected);
+            expect(owner.databases).toHaveLength(1);
+            return {
+              ...owner,
+              release() {
+                owner.release();
+                releases.push("native");
+              },
+            };
+          });
           trackingCustody = true;
           try {
             await readFacts(...args);

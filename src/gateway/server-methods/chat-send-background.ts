@@ -48,13 +48,6 @@ type DashboardSessionTitleTurn = {
   settled: Promise<void>;
 };
 
-export function scheduleChatDashboardSessionTitle(
-  params: DashboardSessionTitleRequest,
-  turn: DashboardSessionTitleTurn,
-): void {
-  scheduleDashboardSessionTitle(params, turn);
-}
-
 export function scheduleCreatedDashboardSessionTitle(
   created: {
     key: string;
@@ -70,7 +63,7 @@ export function scheduleCreatedDashboardSessionTitle(
   if (!created.isNew || created.entry.incognito || !titleSource) {
     return;
   }
-  scheduleDashboardSessionTitle({
+  scheduleChatDashboardSessionTitle({
     admittedSessionId: created.entry.sessionId,
     agentId: created.agentId,
     cfg,
@@ -81,7 +74,7 @@ export function scheduleCreatedDashboardSessionTitle(
   });
 }
 
-function scheduleDashboardSessionTitle(
+export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   turn?: DashboardSessionTitleTurn,
 ): void {

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -21,11 +20,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
-import {
-  beginAgentDeletionJournal,
-  removeAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
-import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -94,6 +88,7 @@ import {
   installActiveGitHubOAuthLifecycle,
   requestCurrentGitHubOAuthRefresh,
 } from "./github-oauth-lifecycle.js";
+import { registerGitHubOAuthRetirementTests } from "./github-oauth-lifecycle.retirement.test-support.js";
 import {
   ACCOUNT,
   configForScope,
@@ -234,6 +229,17 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(mocks.clearVerificationCache).not.toHaveBeenCalled();
     await lifecycle.stop();
     expect(mocks.clearVerificationCache).toHaveBeenCalledOnce();
+  });
+
+  registerGitHubOAuthRetirementTests({
+    createLifecycle: () => {
+      currentConfig = configForScope("agent");
+      return createLifecycle();
+    },
+    replaceIdentity: () => setSelectedIdentity("agent", "main", identity(OTHER_PROFILE)),
+    getConfig: () => currentConfig,
+    advanceToPoll,
+    mocks,
   });
 
   it.each(["system", "agent"] as const)(
@@ -726,54 +732,6 @@ describe("GitHub OAuth authorization lifecycle", () => {
       }
     },
   );
-
-  it("rejects an agent authorization after the agent enters deletion", async () => {
-    currentConfig = configForScope("agent");
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "agent");
-    const deletion = beginAgentDeletionJournal({
-      agentId: "main",
-      operationId: randomUUID(),
-      agentDir: "/agents/main",
-      workspaceDir: "/workspaces/main",
-      sessionsDir: "/sessions/main",
-      deleteFiles: true,
-    });
-    try {
-      await advanceToPoll(started.requestId);
-
-      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-        status: "failed",
-        reason: "identity_changed",
-      });
-      expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
-      expect(mocks.installProfile).not.toHaveBeenCalled();
-    } finally {
-      removeAgentDeletionJournal(deletion.agentId, deletion.operationId);
-    }
-  });
-
-  it("rejects an agent authorization after same-id recreation gets fresh provenance", async () => {
-    currentConfig = configForScope("agent");
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "agent");
-    recordAgentProvenance("main", { createdVia: "operator" }, { nowMs: NOW + 1 });
-    await advanceToPoll(started.requestId);
-
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "failed",
-      reason: "identity_changed",
-    });
-    expect(mocks.installProfile).not.toHaveBeenCalled();
-    expect(mocks.updateConfig).not.toHaveBeenCalled();
-    expect(
-      resolveConfiguredGitHubToolIdentity({
-        config: currentConfig,
-        scope: "agent",
-        agentId: "main",
-      }),
-    ).toBeUndefined();
-  });
 
   it("replaces an older pending authorization for the same exact scope only", async () => {
     const lifecycle = createLifecycle();

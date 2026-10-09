@@ -623,6 +623,83 @@ describe("prompt cache observability", () => {
     expect(second.changes).toBeNull();
   });
 
+  it.each([
+    ["## Skills", "Skills", "prefix"],
+    ["# Project Context\n## MEMORY.md\n## Skills", "Project Context", "prefix"],
+    ["## Runtime", "Runtime", "suffix"],
+    ["## Temporal Context", "Temporal Context", "suffix"],
+    ["## private-plugin-heading", "Other", "suffix"],
+  ] as const)("attributes changed %s content in the %s section (%s)", (heading, section, side) => {
+    const sessionId = scopedKey("changed-prompt-section");
+    const prompt = (content: string) => {
+      const changed = `${heading}\n${content}\n`;
+      return side === "prefix"
+        ? `${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`
+        : `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}${changed}`;
+    };
+    beginOpenAIObservation({ sessionId, systemPrompt: prompt("private-content-before") });
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    beginOpenAIObservation({ sessionId, systemPrompt: prompt("private-content-after") });
+
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
+    ).toEqual([
+      {
+        code: side === "prefix" ? "systemPrompt" : "systemPromptSuffix",
+        detail: `system prompt${side === "suffix" ? " suffix" : ""} digest changed (sections: ${section})`,
+      },
+    ]);
+  });
+
+  it("bounds section metadata and excludes arbitrary headings and contents", () => {
+    const sessionId = scopedKey("bounded-prompt-sections");
+    const unknown = Array.from(
+      { length: 100 },
+      (_, index) => `## private-heading-${index}\nprivate-content-${index}`,
+    ).join("\n");
+    const first = beginOpenAIObservation({
+      sessionId,
+      systemPrompt: `${unknown}\n## Skills\nprivate-skill\n`,
+    });
+    expect(first.snapshot.systemPromptSections).toEqual({
+      Other: expect.stringMatching(/^[a-f0-9]{64}$/),
+      Skills: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    const changed = beginOpenAIObservation({
+      sessionId,
+      systemPrompt: `${unknown.replace("private-content-0", "private-replaced")}\n## Skills\nprivate-skill\n`,
+    });
+    expect(changed.changes).toEqual([
+      { code: "systemPrompt", detail: "system prompt digest changed (sections: Other)" },
+    ]);
+    expect(JSON.stringify([first.snapshot, changed])).not.toContain("private-");
+  });
+
+  it("reuses section digests when only the other side of the cache boundary changes", () => {
+    const sessionId = scopedKey("reused-prompt-sections");
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const prefix = "## Skills\nlarge-skill-catalog\n## Tooling\ntool descriptions\n";
+    const suffix = "## Runtime\nreasoning=off\n";
+    const observe = (stable: string, dynamic: string) =>
+      beginOpenAIObservation({
+        sessionId,
+        systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamic}`,
+      });
+    const first = observe(prefix, suffix);
+    expect(observe(prefix, suffix).changes).toBeNull();
+    const second = observe(prefix, `${suffix}new runtime fact\n`);
+    expect(second.snapshot.systemPromptSections).toEqual(first.snapshot.systemPromptSections);
+    expect(
+      hashes.mock.calls.filter(([value]) => value === "## Skills\nlarge-skill-catalog\n"),
+    ).toHaveLength(1);
+    expect(second.changes).toEqual([
+      {
+        code: "systemPromptSuffix",
+        detail: "system prompt suffix digest changed (sections: Runtime)",
+      },
+    ]);
+  });
+
   it("attributes dynamic system prompt suffix changes separately from the stable prefix", () => {
     const sessionId = scopedKey("dynamic-system-suffix");
     const stablePrefix = "stable instructions and tool capability directory";
@@ -663,63 +740,92 @@ describe("prompt cache observability", () => {
     });
   });
 
-  it("reports visible schema changes even when tool names and count are unchanged", () => {
+  it.each([
+    {
+      change: "schema",
+      override: { parameters: { type: "number" } },
+      detail: '1 -> 1 tools; schema: "read"',
+    },
+    {
+      change: "description",
+      override: { description: "Read a workspace file" },
+      detail: '1 -> 1 tools; description: "read"',
+    },
+    {
+      change: "replacement",
+      override: { name: "write" },
+      detail: '1 -> 1 tools; added: "write"; removed: "read"',
+    },
+    { change: "removal", override: undefined, detail: '1 -> 0 tools; removed: "read"' },
+  ])("attributes a tool $change to the changed definition", ({ override, detail }) => {
     const sessionId = scopedKey("changed-tool-schema");
-    const initialTools = collectPromptCacheTools([
-      {
-        name: "read",
-        description: "Read a file",
-        parameters: { type: "object", properties: { path: { type: "string" } } },
-      },
-    ]);
+    const tool = {
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    };
     beginOpenAIObservation({
       sessionId,
-      tools: initialTools,
+      tools: collectPromptCacheTools([tool]),
     });
     completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
 
     const next = beginOpenAIObservation({
       sessionId,
-      tools: collectPromptCacheTools([
-        {
-          name: "read",
-          description: "Read a file",
-          parameters: { type: "object", properties: { path: { type: "number" } } },
-        },
-      ]),
+      tools: collectPromptCacheTools(override ? [{ ...tool, ...override }] : []),
     });
 
-    expect(next.changes).toEqual([{ code: "tools", detail: "tool set changed with same count" }]);
+    expect(next.changes).toEqual([{ code: "tools", detail }]);
     expect(completePromptCacheObservation({ sessionId, usage: { cacheRead: 0 } })).toEqual({
       previousCacheRead: 8_000,
       cacheRead: 0,
-      changes: [{ code: "tools", detail: "tool set changed with same count" }],
+      changes: [{ code: "tools", detail }],
     });
   });
 
-  it("tracks recurring prompt-cache affinity across rotating session ids", () => {
-    // Cron-style isolated runs use promptCacheKey to carry cache affinity across
-    // new session ids.
-    beginOpenAIObservation({
-      sessionId: "isolated-run-1",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-1",
+  it("bounds and escapes names in tool-change diagnostics without exposing descriptor content", () => {
+    const sessionId = scopedKey("bounded-tool-change");
+    beginOpenAIObservation({ sessionId, tools: [] });
+    const next = beginOpenAIObservation({
+      sessionId,
+      tools: collectPromptCacheTools(
+        Array.from({ length: 6 }, (_, index) => ({
+          name: `${index}\n${"x".repeat(500)}`,
+          description: "private descriptor",
+        })),
+      ),
     });
-    completePromptCacheObservation({
-      sessionId: "isolated-run-1",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-1",
-      usage: { cacheRead: 8_000 },
-    });
+    const detail = next.changes?.[0]?.detail ?? "";
+    expect(detail).toContain('added: "0\\n');
+    expect(detail).toContain("(+1 more)");
+    expect(detail).not.toContain("\n");
+    expect(detail).not.toContain("private descriptor");
+    expect(detail.length).toBeLessThan(500);
+  });
 
-    const nextRun = beginOpenAIObservation({
-      sessionId: "isolated-run-2",
-      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
-      sessionKey: "agent:cron:run:isolated-run-2",
-    });
+  it("starts a fresh diagnostic baseline when a cache affinity rotates sessions", () => {
+    const promptCacheKey = scopedKey("openclaw-cron-stable-cache-key");
+    const observe = (sessionId: string, cacheRead: number) => {
+      const identity = { sessionId, promptCacheKey, sessionKey: `agent:cron:run:${sessionId}` };
+      beginOpenAIObservation({
+        ...identity,
+        messages: [{ role: "user", content: sessionId, timestamp: 1 }],
+      });
+      return completePromptCacheObservation({
+        ...identity,
+        usage: { input: 100, cacheRead },
+      });
+    };
 
-    expect(nextRun.previousCacheRead).toBe(8_000);
-    expect(nextRun.changes).toBeNull();
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      expect(observe("isolated-run-1", 8_000)).toBeNull();
+      expect(observe("isolated-run-2", 2_000)).toBeNull();
+      expect(observe("isolated-run-2", 0)).toEqual({
+        previousCacheRead: 2_000,
+        cacheRead: 0,
+        changes: null,
+      });
+    });
   });
 
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {

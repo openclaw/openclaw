@@ -26,13 +26,6 @@ import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operati
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
 
-type TelegramGeneralTopicConversationRepair = {
-  agentId: string;
-  canonicalConversationId: string;
-  legacyConversationId: string;
-  storePath: string;
-};
-
 function canonicalIdentity(row: Conversations) {
   const targetMatch = LEGACY_GENERAL_TARGET.exec(row.delivery_target);
   if (
@@ -92,7 +85,7 @@ function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
 export function detectTelegramGeneralTopicConversationRepairs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): TelegramGeneralTopicConversationRepair[] {
+}) {
   const env = params.env ?? process.env;
   return resolveRepairScopes(params.cfg, env).flatMap(({ scope, storePath }) => {
     const databaseOptions = toDatabaseOptions(scope);
@@ -105,14 +98,7 @@ export function detectTelegramGeneralTopicConversationRepairs(params: {
             listLegacyRows(database.db).flatMap((row) => {
               const canonical = canonicalIdentity(row);
               return canonical && canonical.conversationId !== row.conversation_id
-                ? [
-                    {
-                      agentId: scope.agentId,
-                      canonicalConversationId: canonical.conversationId,
-                      legacyConversationId: row.conversation_id,
-                      storePath,
-                    },
-                  ]
+                ? [{ agentId: scope.agentId }]
                 : [];
             }),
           databaseOptions,
@@ -188,33 +174,26 @@ function repairLegacyRow(database: OpenClawAgentDatabase, legacyConversationId: 
     throw new Error(`canonical Telegram conversation id collision: ${canonical.conversationId}`);
   }
 
-  const merged = existing ?? legacy;
+  const merged = {
+    created_at: Math.min(existing?.created_at ?? legacy.created_at, legacy.created_at),
+    updated_at: Math.max(existing?.updated_at ?? legacy.updated_at, legacy.updated_at),
+    native_channel_id: existing?.native_channel_id ?? legacy.native_channel_id,
+    native_direct_user_id: existing?.native_direct_user_id ?? legacy.native_direct_user_id,
+    label: existing?.label ?? legacy.label,
+    metadata_json: existing?.metadata_json ?? legacy.metadata_json,
+  };
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
       .values({
+        ...(existing ?? legacy),
         ...merged,
         conversation_id: canonical.conversationId,
         peer_id: canonical.peerId,
         delivery_target: canonical.deliveryTarget,
-        created_at: Math.min(existing?.created_at ?? legacy.created_at, legacy.created_at),
-        updated_at: Math.max(existing?.updated_at ?? legacy.updated_at, legacy.updated_at),
-        native_channel_id: existing?.native_channel_id ?? legacy.native_channel_id,
-        native_direct_user_id: existing?.native_direct_user_id ?? legacy.native_direct_user_id,
-        label: existing?.label ?? legacy.label,
-        metadata_json: existing?.metadata_json ?? legacy.metadata_json,
       })
-      .onConflict((conflict) =>
-        conflict.column("conversation_id").doUpdateSet({
-          created_at: Math.min(existing?.created_at ?? legacy.created_at, legacy.created_at),
-          updated_at: Math.max(existing?.updated_at ?? legacy.updated_at, legacy.updated_at),
-          native_channel_id: existing?.native_channel_id ?? legacy.native_channel_id,
-          native_direct_user_id: existing?.native_direct_user_id ?? legacy.native_direct_user_id,
-          label: existing?.label ?? legacy.label,
-          metadata_json: existing?.metadata_json ?? legacy.metadata_json,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("conversation_id").doUpdateSet(merged)),
   );
 
   const boundWindows = executeSqliteQuerySync(
@@ -274,27 +253,22 @@ function repairLegacyRow(database: OpenClawAgentDatabase, legacyConversationId: 
       db.insertInto("session_conversations").values([...mergedBindings.values()]),
     );
   }
-  executeSqliteQuerySync(
-    database.db,
+  for (const query of [
     db
       .updateTable("session_windows")
       .set({ primary_conversation_id: canonical.conversationId })
       .where("primary_conversation_id", "=", legacy.conversation_id),
-  );
-  executeSqliteQuerySync(
-    database.db,
     db
       .updateTable("conversation_deliveries")
       .set({ conversation_id: canonical.conversationId })
       .where("conversation_id", "=", legacy.conversation_id),
-  );
-  executeSqliteQuerySync(
-    database.db,
     db
       .updateTable("conversations")
       .set({ parent_conversation_id: canonical.conversationId })
       .where("parent_conversation_id", "=", legacy.conversation_id),
-  );
+  ]) {
+    executeSqliteQuerySync(database.db, query);
+  }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("conversations").where("conversation_id", "=", legacy.conversation_id),

@@ -58,6 +58,10 @@ and unavailable results remain distinct; a partial response never implies that
 all checks passed. These results describe CI, not approval or merge readiness.
 Use **Refresh** to fetch the current PR and its checks again.
 
+Descriptions and replies render named emoji shortcodes such as `:white_check_mark:`
+and `:rocket:` in prose, tables, link labels, and disclosure summaries. Code, URLs,
+unknown shortcodes, and plain emoticons such as `:)` stay literal.
+
 HTML comments in descriptions and replies stay hidden, matching
 GitHub; literal comment examples inside code remain visible.
 Markdown images and standalone HTML image attachments can display inline. The

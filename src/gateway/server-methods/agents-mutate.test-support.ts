@@ -59,6 +59,8 @@ export function registerAgentCreationCommitTests(fixture: {
   configuredConfig: () => unknown;
   ensureAgentWorkspace: Mock;
   resolveAgentWorkspaceDir: Mock;
+  applyAgentConfig: Mock;
+  rootWrite: Mock;
   writeConfigFile: Mock;
   hasDeletedAgentDatabases: Mock<() => boolean>;
   reviveAgentDatabases: Mock<(agentIds: readonly string[]) => Promise<void>>;
@@ -104,6 +106,53 @@ export function registerAgentCreationCommitTests(fixture: {
     expect(fixture.reviveAgentDatabases).toHaveBeenCalledExactlyOnceWith(["test-agent"]);
     expect(fixture.logGatewayWarn).toHaveBeenCalledExactlyOnceWith(
       "agent config committed; worker reader revival will reconcile at next task: worker acknowledgement failed",
+    );
+  });
+
+  it("rejects invalid params (missing name)", async () => {
+    const { respond, promise } = fixture.create({ workspace: "/tmp/ws" });
+    await promise;
+
+    expectRespondErrorContaining(respond, "invalid");
+  });
+
+  it("writes emoji and avatar to both config and IDENTITY.md", async () => {
+    const { respond, promise } = fixture.create({
+      name: "Fancy Agent",
+      model: "sonnet-4.6",
+      workspace: "/tmp/ws",
+      emoji: "🤖",
+      avatar: "https://example.com/avatar.png",
+    });
+    await promise;
+
+    expectRespondOk(respond, {
+      ok: true,
+      agentId: "fancy-agent",
+      name: "Fancy Agent",
+      model: "sonnet-4.6",
+    });
+    const configOptions = expectRecordFields(mockCallArg(fixture.applyAgentConfig, 0, 1), {
+      model: "sonnet-4.6",
+    });
+    expectRecordFields(configOptions.identity, {
+      name: "Fancy Agent",
+      emoji: "🤖",
+      avatar: "https://example.com/avatar.png",
+    });
+    const write = expectRecordFields(mockCallArg(fixture.rootWrite), {
+      rootDir: "/resolved/tmp/ws",
+      relativePath: "IDENTITY.md",
+    });
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Fancy Agent",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 }

@@ -1,4 +1,4 @@
-import { createDeferredCore } from "../../../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -44,18 +44,10 @@ export function createEmbeddedRunPermissionChanges(
   const authority: PermissionChangeAuthority = {};
   permissionChangeAuthorities.set(owner, authority);
   const baseExecOverrides = Object.freeze({ ...params.execOverrides });
-  let closed = false;
   let revision = 0;
-  let pending:
-    | {
-        mode: PermissionMode;
-        promise: Promise<boolean>;
-        resolve: (applied: boolean) => void;
-      }
-    | undefined;
+  let pending: (Deferred<boolean> & { mode: PermissionMode }) | undefined;
   const assertAuthorized = (mode: PermissionMode) => {
     if (
-      closed ||
       permissionChangeAuthorities.get(owner) !== authority ||
       authority.authorized?.mode !== mode
     ) {
@@ -99,7 +91,7 @@ export function createEmbeddedRunPermissionChanges(
           updatePermissionMode(mode);
         },
         applied: () => {
-          if (closed || preparedRevision !== revision) {
+          if (!permissionChangeAuthorities.has(owner) || preparedRevision !== revision) {
             return false;
           }
           pending?.resolve(true);
@@ -109,14 +101,13 @@ export function createEmbeddedRunPermissionChanges(
       };
     },
     prepareRestart: () => {
-      if (closed || !pending) {
+      if (!permissionChangeAuthorities.has(owner) || !pending) {
         return false;
       }
       updatePermissionMode(pending.mode);
       return true;
     },
     close: () => {
-      closed = true;
       permissionChangeAuthorities.delete(owner);
       pending?.resolve(false);
       pending = undefined;

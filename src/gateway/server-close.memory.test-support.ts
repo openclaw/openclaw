@@ -15,8 +15,10 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
-  const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-    memoryRuntime: MemoryPluginRuntime;
+  const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+    createMemoryRuntime: (host: {
+      runInBackgroundContext: <T>(run: () => T) => T;
+    }) => MemoryPluginRuntime;
     configureMemoryCoreDreamingState: (
       open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
     ) => void;
@@ -28,9 +30,6 @@ export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawCo
     }),
   );
   const env = { ...process.env };
-  configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", { ...options, env }),
-  );
   const registry = (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
     const builder = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -47,7 +46,20 @@ export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawCo
     memory.kind = "memory";
     memory.memorySlotSelected = true;
     builder.registry.plugins.push(memory);
-    builder.createApi(memory, { config }).registerMemoryCapability({ runtime: memoryRuntime });
+    const api = builder.createApi(memory, { config });
+    assert(api.lifecycle.runInBackgroundContext);
+    // Dreaming state is instance-owned (#167724): configure it where the memory
+    // registration runs, as Memory Core's own register() does.
+    api.lifecycle.runInBackgroundContext(() =>
+      configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStore<T>("memory-core", { ...options, env }),
+      ),
+    );
+    api.registerMemoryCapability({
+      runtime: createMemoryRuntime({
+        runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+      }),
+    });
     const embedding = createPluginRecord({
       id: "fixture-embedding",
       source: "fixture",

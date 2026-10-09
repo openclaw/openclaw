@@ -44,9 +44,13 @@ import {
   registerIncognitoHistoryVisibilityTests,
   type HistoryWiringFixture,
 } from "./openclaw-agent-execution-incognito.history-visibility.test-support.js";
+import type { IncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 
-export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixture) {
+export function registerIncognitoHistoryWiringTests(
+  fixture: HistoryWiringFixture,
+  probe: IncognitoActorProbe,
+) {
   const { authority, create, append, targetInput } = fixture;
 
   it("keeps a multi-page history read current across an unrelated session write", async () => {
@@ -215,7 +219,7 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const captured = createDeferredCore();
-    const held = actor.run(authority, async () => {
+    const held = probe.read(actor, authority, async () => {
       entered.resolve();
       await resume.promise;
     });
@@ -284,7 +288,9 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
           env: undefined,
           sessionKey: "agent:foreign:dashboard:incognito-wired-history",
         }),
-      ).rejects.toThrow("another incognito actor");
+      ).rejects.toThrow(
+        "Explicit incognito database target does not match its agent and state root",
+      );
       expect(
         await loadTranscriptEvents({
           ...scope,
@@ -654,7 +660,7 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
           releasing = borrowed.release().then(() => {
             released = true;
           });
-          await actor.run(authority, async () => undefined);
+          await probe.read(actor, authority);
           expect(released).toBe(false);
         }
         resume.resolve();

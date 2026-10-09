@@ -102,6 +102,7 @@ function fixture(
       readFullModelCatalog: () => undefined,
       readPublishedModels: () => undefined,
       refreshExpiredModelCatalog: () => {},
+      recheckNativeLogin: () => {},
       loadNativeModelCatalog: async () => {
         throw new Error("Configured index lookups must not discover native models");
       },

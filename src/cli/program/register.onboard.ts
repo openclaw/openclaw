@@ -255,6 +255,19 @@ export async function resolveOnboardCommandOptions(
   };
 }
 
+export function registerOnboardFlowOptions(command: Command): Command {
+  return command
+    .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
+    .option(
+      "--accept-risk",
+      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
+    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
+    .option("--mode <mode>", "Onboard mode: local|remote");
+}
+
 export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
@@ -272,16 +285,8 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false)
-    .option("--classic", "Use the classic multi-step setup wizard", false)
-    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
-    .option(
-      "--accept-risk",
-      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
-      false,
-    )
-    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
-    .option("--mode <mode>", "Onboard mode: local|remote");
+    .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false);
+  registerOnboardFlowOptions(command);
 
   registerOnboardAuthOptions(command);
   registerOnboardGatewayOptions(command);

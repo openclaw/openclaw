@@ -29,6 +29,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { renderSessionSources } from "./session-sources.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 import {
   renderChatPreferencesSection,
   renderLanguageSection,
@@ -36,6 +37,7 @@ import {
   serverUiPrefProvenanceHint,
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
+import { renderTabIconSection } from "./view-tab-icon.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
@@ -105,9 +107,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
   }));
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.appearance.typography")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.appearance.typography"))}
       <div class="settings-group">
         ${(["ui", "chat"] as const).map((slot) => {
           const isUi = slot === "ui";
@@ -289,9 +289,7 @@ export function renderAppearanceSection(props: ConfigProps) {
     <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.appearance.theme"))}
         <p class="settings-section__desc">
           ${t("configView.appearance.chooseTheme")}
           ${renderSettingsDefaultDescription(themeDefault, props.themeOverridden)}
@@ -480,9 +478,7 @@ export function renderAppearanceSection(props: ConfigProps) {
       </section>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.appearance.accent"))}
         <p class="settings-section__desc">${t("configView.appearance.accentHint")}</p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
@@ -566,12 +562,10 @@ export function renderAppearanceSection(props: ConfigProps) {
         </p>
       </section>
 
-      ${renderTypography(props, presentedTheme)}
+      ${renderTypography(props, presentedTheme)} ${renderTabIconSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.appearance.textSize")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.appearance.textSize"))}
         <p class="settings-section__desc">
           ${renderSettingsDefaultDescription(
             `${UI_APPEARANCE_DEFAULTS.textScale}%`,
@@ -606,9 +600,7 @@ export function renderAppearanceSection(props: ConfigProps) {
       ${renderChatPreferencesSection(props)} ${renderSessionSources(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.connection.title")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.connection.title"))}
         <div class="settings-group">
           ${renderSettingsRow({
             title: t("configView.connection.gateway"),

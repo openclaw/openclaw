@@ -1,4 +1,4 @@
-import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
@@ -62,7 +62,6 @@ import {
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
-  userTurnRunId,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
@@ -79,7 +78,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { latestPersistedSteerBoundary } from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -122,16 +121,54 @@ function canvasAssistantItemKey(
   return identity ? `canvas:${identity}` : `${fallback}:canvas`;
 }
 
+/** Move selected rows after their run output without changing saved transcript order. */
+function orderSteersAfterRunOutput<T>(
+  items: T[],
+  steerTarget: (item: T) => string | null,
+  outputRuns: (item: T) => Iterable<string>,
+): T[] {
+  const lastOutput = new Map<string, number>();
+  for (const [index, item] of items.entries()) {
+    for (const runId of outputRuns(item)) {
+      lastOutput.set(runId, index);
+    }
+  }
+  const deferred = new Map<number, T[]>();
+  return items.flatMap((item, index) => {
+    const target = steerTarget(item);
+    const after = target ? lastOutput.get(target) : undefined;
+    if (after !== undefined && after > index) {
+      const steers = deferred.get(after) ?? [];
+      steers.push(item);
+      deferred.set(after, steers);
+      return [];
+    }
+    return [item, ...(deferred.get(index) ?? [])];
+  });
+}
+
 export function buildChatItems(
   props: BuildChatItemsProps,
   inputOrder: ChatInputOrderState = { keys: [] },
 ): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
+  const outputRuns = new Map<string, Set<string>>();
+  const ownOutput = <T extends ChatItem>(item: T, sourceRunId: unknown): T => {
+    const runId = normalizeOptionalString(sourceRunId);
+    if (runId) {
+      const runs = outputRuns.get(item.key) ?? new Set<string>();
+      runs.add(runId);
+      outputRuns.set(item.key, runs);
+    }
+    return item;
+  };
   const tools = props.toolMessages.filter(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
   const toolItems = buildMessageItems(tools).map((item) => {
-    const projection: ChatProjection<typeof item> = { item };
+    const projection: ChatProjection<typeof item> = {
+      item: ownOutput(item, transcriptRunId(item.message)),
+    };
     return {
       projection,
       runId: normalizeOptionalString(item.message.runId),
@@ -165,31 +202,32 @@ export function buildChatItems(
     props.persistCommentary === false && (props.runWorking || props.runActive)
       ? normalizeOptionalString(resolveProgress().runId)
       : undefined;
-  const history = composeTranscriptDisplay(
-    props.messages.filter(
-      (message) =>
-        !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false ||
-          !isKeyedAssistantStreamFallbackMessage(message) ||
-          (activeCommentaryRunId !== undefined &&
-            transcriptRunId(message) === activeCommentaryRunId)),
+  const history = orderSteersAfterRunOutput(
+    composeTranscriptDisplay(
+      props.messages.filter(
+        (message) =>
+          !isAssistantHeartbeatAckForDisplay(message) &&
+          (props.persistCommentary !== false ||
+            !isKeyedAssistantStreamFallbackMessage(message) ||
+            (activeCommentaryRunId !== undefined &&
+              transcriptRunId(message) === activeCommentaryRunId)),
+      ),
     ),
+    (message) =>
+      readSessionMessageIdentity(message)?.role === "user"
+        ? persistedSteerTargetRunId(message)
+        : null,
+    (message) => {
+      const runId =
+        readSessionMessageIdentity(message)?.role === "user" ? undefined : transcriptRunId(message);
+      return runId ? [runId] : [];
+    },
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const hiddenHistoryKeys = new Set<string>();
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
-  const persistedCommentaryKeys = new Map<string, string>();
-  for (const [index, message] of history.entries()) {
-    const identity = readAssistantStreamSegmentIdentity(message);
-    if (identity) {
-      persistedCommentaryKeys.set(
-        `${identity.runId ?? ""}\u0000${identity.itemId}`,
-        historyItems[index]!.key,
-      );
-    }
-  }
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
     lastMatchingAssistantIndex: number;
@@ -237,11 +275,16 @@ export function buildChatItems(
         rawMessageTimestamp(msg) ?? Date.now(),
         i,
       );
-      items.push({
-        ...divider,
-        compactionId: divider.key,
-        ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
-      });
+      items.push(
+        ownOutput(
+          {
+            ...divider,
+            compactionId: divider.key,
+            ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
+          },
+          transcriptRunId(msg) ?? (matchesLive ? compaction?.runId : undefined),
+        ),
+      );
       hasPersistedCompaction ||= matchesLive;
       continue;
     }
@@ -258,7 +301,12 @@ export function buildChatItems(
     if (role === "system") {
       const text = extractTextCached(msg);
       if (text?.trim()) {
-        items.push({ kind: "notice", key: itemKey, text, timestamp: normalized.timestamp });
+        items.push(
+          ownOutput(
+            { kind: "notice", key: itemKey, text, timestamp: normalized.timestamp },
+            transcriptRunId(msg),
+          ),
+        );
       }
       continue;
     }
@@ -279,6 +327,7 @@ export function buildChatItems(
     if (persistedCanvasSource && matchingCanvas) {
       // Enrich the owned display row, including a later assistant shortcode,
       // without changing transcript input or introducing a second widget card.
+      ownOutput(matchingCanvas.item, transcriptRunId(msg));
       matchingCanvas.item.message = appendCanvasBlockToAssistantMessage(
         matchingCanvas.item.message,
         persistedCanvasSource.preview,
@@ -290,14 +339,19 @@ export function buildChatItems(
       !matchingCanvas &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
-      items.push({
-        kind: "message",
-        key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
-        message: createCanvasAssistantMessage(
-          persistedCanvasSource,
-          persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
+      items.push(
+        ownOutput(
+          {
+            kind: "message",
+            key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
+            message: createCanvasAssistantMessage(
+              persistedCanvasSource,
+              persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
+            ),
+          },
+          transcriptRunId(msg),
         ),
-      });
+      );
     }
 
     if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
@@ -319,7 +373,11 @@ export function buildChatItems(
       continue;
     }
 
-    items.push(...projectChatSystemNotice(item, normalized));
+    items.push(
+      ...projectChatSystemNotice(item, normalized).map((projected) =>
+        role === "user" ? projected : ownOutput(projected, transcriptRunId(msg)),
+      ),
+    );
   }
   const currentRunId =
     props.runId ??
@@ -339,6 +397,9 @@ export function buildChatItems(
   const currentTurnBounds =
     (currentRunId ? canvasRunBounds(currentRunId) : null) ??
     (activeInputKey ? { afterKey: activeInputKey } : historyTurnBounds);
+  const resolveRunBounds = (lookup: typeof canvasRunBounds, runId: unknown) =>
+    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds) ??
+    (!runId && activeInputKey ? currentTurnBounds : undefined);
   const boundToPendingInputs = (
     bounds: TurnInsertionBounds | null | undefined,
   ): TurnInsertionBounds | undefined => {
@@ -357,12 +418,7 @@ export function buildChatItems(
       continue;
     }
     const canvasBounds = boundToPendingInputs(
-      resolveRunInsertionBounds(
-        canvasRunBounds,
-        projection.item.message.runId,
-        currentRunId,
-        currentTurnBounds,
-      ) ?? (!projection.item.message.runId && activeInputKey ? currentTurnBounds : undefined),
+      resolveRunBounds(canvasRunBounds, projection.item.message.runId),
     );
     const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
       items,
@@ -375,14 +431,17 @@ export function buildChatItems(
       canvasMaximumIndex,
     );
     if (assistant) {
-      items[assistant.index] = {
-        ...assistant.item,
-        message: appendCanvasBlockToAssistantMessage(
-          assistant.item.message,
-          preview.preview,
-          preview.text,
-        ),
-      };
+      items[assistant.index] = ownOutput(
+        {
+          ...assistant.item,
+          message: appendCanvasBlockToAssistantMessage(
+            assistant.item.message,
+            preview.preview,
+            preview.text,
+          ),
+        },
+        transcriptRunId(projection.item.message),
+      );
       continue;
     }
     if (searchFiltering) {
@@ -401,11 +460,18 @@ export function buildChatItems(
       preview.timestamp != null && nextTimestamp != null
         ? Math.min(preview.timestamp, nextTimestamp)
         : preview.timestamp;
-    items.splice(insertionIndex, 0, {
-      kind: "message",
-      key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
-      message: createCanvasAssistantMessage(preview, timestamp),
-    });
+    items.splice(
+      insertionIndex,
+      0,
+      ownOutput(
+        {
+          kind: "message",
+          key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
+          message: createCanvasAssistantMessage(preview, timestamp),
+        },
+        transcriptRunId(projection.item.message),
+      ),
+    );
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
@@ -414,31 +480,22 @@ export function buildChatItems(
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
     projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
+      item: ownOutput(
+        {
+          ...buildCompactionDividerItem(
+            {},
+            timestamp,
+            0,
+            compaction.phase === "complete" ? "complete" : "active",
+          ),
+          key: compactionKey,
+        },
+        compaction.runId,
+      ),
     });
   }
-  const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
-  let latestBoundaryRunId: string | undefined;
-  for (const segment of segments) {
-    const afterBoundaryRunId =
-      normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
-    if (afterBoundaryRunId) {
-      afterBoundaryBySegment.set(segment, afterBoundaryRunId);
-    }
-    latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
-  }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
-  const indexedSegments = segments.filter(
-    (segment) => !streamSegmentHasItemId(segment) && segment.boundaryMarker !== true,
-  );
+  const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
   const toolLookup = createToolCallLookup<ChatProjection>();
   for (const tool of toolItems) {
     toolLookup.add(tool.runId, tool.callId, tool.projection);
@@ -446,76 +503,34 @@ export function buildChatItems(
   // Empty user rows may have disappeared since canvas placement. Preserve the
   // earlier current-turn fallback, but resolve exact bounds over rendered rows.
   const projectionRunBounds = createRunTurnLookup(executionItems());
-  const resolveProjectionBounds = (
-    runId: unknown,
-    boundaryRunId?: string,
-    afterBoundaryRunId?: string,
-  ): TurnInsertionBounds | undefined => {
-    const bounds =
-      resolveRunInsertionBounds(projectionRunBounds, runId, currentRunId, currentTurnBounds) ??
-      (!runId && activeInputKey ? currentTurnBounds : undefined);
-    const boundaryKey = boundaryRunId ? projectionRunBounds(boundaryRunId)?.afterKey : undefined;
-    const afterBounds = afterBoundaryRunId ? projectionRunBounds(afterBoundaryRunId) : undefined;
-    return boundToPendingInputs(
-      bounds || boundaryKey || afterBounds
-        ? {
-            ...bounds,
-            ...(afterBounds?.afterKey ? { afterKey: afterBounds.afterKey } : {}),
-            ...(afterBounds?.beforeKey ? { beforeKey: afterBounds.beforeKey } : {}),
-            ...(boundaryKey ? { beforeKey: boundaryKey } : {}),
-          }
-        : undefined,
-    );
-  };
+  const resolveProjectionBounds = (runId: unknown): TurnInsertionBounds | undefined =>
+    boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId));
   if (!searchFiltering) {
     if (props.archiveNotice) {
       projections.push({ item: props.archiveNotice });
     }
     for (const notice of props.guardianNotices ?? []) {
       projections.push({
-        item: buildGuardianNoticeItem(notice),
+        item: ownOutput(buildGuardianNoticeItem(notice), notice.runId),
         bounds: resolveProjectionBounds(notice.runId),
       });
     }
   }
-  const toolBeforeBoundaries = createToolCallLookup<string>();
-  const toolAfterBoundaries = createToolCallLookup<string>();
-  for (const segment of indexedSegments) {
-    const callId = normalizeOptionalString(segment.toolCallId);
-    const runId = normalizeOptionalString(segment.runId);
-    const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
-    if (boundaryRunId) {
-      toolBeforeBoundaries.add(runId, callId, boundaryRunId);
-    }
-    if (afterBoundaryRunId) {
-      toolAfterBoundaries.add(runId, callId, afterBoundaryRunId);
-    }
-  }
   const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
-    const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
-    const pendingItemId = normalizeOptionalString(segment.pendingCommentaryPrefixFor);
-    const persistedCommentaryKey = pendingItemId
-      ? (persistedCommentaryKeys.get(
-          `${normalizeOptionalString(segment.runId) ?? ""}\u0000${pendingItemId}`,
-        ) ?? persistedCommentaryKeys.get(`\u0000${pendingItemId}`))
-      : undefined;
-    const bounds = resolveProjectionBounds(
-      segment.runId,
-      segment.boundaryRunId,
-      afterBoundaryRunId,
-    );
     projections.push({
-      item: {
-        kind: "stream",
-        key,
-        text,
-        startedAt: segment.ts,
-        isStreaming: false,
-        ...optionalRunIdentity(segment.runId),
-        ...optionalBoundaryIdentity(afterBoundaryRunId ?? segment.runId),
-      },
-      bounds: persistedCommentaryKey ? { ...bounds, beforeKey: persistedCommentaryKey } : bounds,
+      item: ownOutput(
+        {
+          kind: "stream",
+          key,
+          text,
+          startedAt: segment.ts,
+          isStreaming: false,
+          ...optionalRunIdentity(segment.runId),
+          ...optionalBoundaryIdentity(segment.runId),
+        },
+        segment.runId,
+      ),
+      bounds: resolveProjectionBounds(segment.runId),
     });
   };
   let previousAccumulatedStreamText: string | null = null;
@@ -550,13 +565,7 @@ export function buildChatItems(
     }
     const tool = toolItems[i];
     if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
-      const before =
-        normalizeOptionalString(tool.projection.item.message.boundaryRunId) ??
-        toolBeforeBoundaries.get(tool.runId, tool.callId);
-      const after =
-        normalizeOptionalString(tool.projection.item.message.afterBoundaryRunId) ??
-        toolAfterBoundaries.get(tool.runId, tool.callId);
-      tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
+      tool.projection.bounds = resolveProjectionBounds(tool.runId);
       projections.push(tool.projection);
     }
   }
@@ -582,7 +591,7 @@ export function buildChatItems(
       startedAt: prompt.createdAtMs,
     };
     projections.push({
-      item: questionItem,
+      item: ownOutput(questionItem, prompt.runId),
       bounds: prompt.runId ? resolveProjectionBounds(prompt.runId) : undefined,
     });
   }
@@ -614,22 +623,14 @@ export function buildChatItems(
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
-  const persistedBoundary = currentRunId
-    ? latestPersistedSteerBoundary(history, currentRunId)
-    : null;
-  const activeBoundaryRunId =
-    persistedBoundary &&
-    (!latestBoundaryRunId ||
-      history.findIndex((message) => userTurnRunId(message) === latestBoundaryRunId) <=
-        persistedBoundary.index)
-      ? persistedBoundary.runId
-      : latestBoundaryRunId;
-  const activeTurnRunId = activeBoundaryRunId ?? currentRunId;
   const activeTurnBounds = boundToPendingInputs(
-    (activeTurnRunId ? createRunTurnLookup(executionItems())(activeTurnRunId) : null) ??
+    (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
       (activeInputKey ? { afterKey: activeInputKey } : null),
   );
-  const appendActiveRunItem = (item: ChatItem) => {
+  const appendActiveRunItem = (
+    item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+  ) => {
+    ownOutput(item, item.runId);
     // Queued custody is a ceiling for the whole live response, not just its text.
     // Moving its working indicator past that ceiling splits and remeasures the run.
     if (activeTurnBounds) {
@@ -648,14 +649,12 @@ export function buildChatItems(
       const liveRunId = props.runId ?? liveProgress.runId;
       const liveStreamItem: ChatItem = {
         kind: "stream",
-        key: activeBoundaryRunId
-          ? `${liveProgress.key}:after:${activeBoundaryRunId}`
-          : liveProgress.key,
+        key: liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
         ...optionalRunIdentity(liveRunId),
-        ...optionalBoundaryIdentity(activeBoundaryRunId ?? liveRunId),
+        ...optionalBoundaryIdentity(liveRunId),
       };
       appendActiveRunItem(liveStreamItem);
     }
@@ -668,7 +667,7 @@ export function buildChatItems(
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
       ...optionalRunIdentity(workingRunId),
-      ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
+      ...optionalBoundaryIdentity(workingRunId),
     });
   } else if (props.subagentWait && !initialHistoryLoad) {
     // The handoff ended the parent's run, not its work. Carrying that run's
@@ -681,6 +680,14 @@ export function buildChatItems(
       runId: props.subagentWait.runId,
     });
   }
+  items = orderSteersAfterRunOutput(
+    items,
+    (item) =>
+      item.kind === "message" && readSessionMessageIdentity(item.message)?.role === "user"
+        ? persistedSteerTargetRunId(item.message)
+        : null,
+    (item) => outputRuns.get(item.key) ?? [],
+  );
   // Place output against the complete transcript before search hides any rows.
   // Pending/local inputs contribute people and turn boundaries just like history;
   // queued future inputs must remain after the live output they do not own.

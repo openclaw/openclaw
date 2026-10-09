@@ -6,12 +6,16 @@ import {
   ServiceOwnershipRefusalError,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdUnitObjectPath,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 const MANAGER = "org.freedesktop.systemd1";
-const BUS = "org.freedesktop.DBus";
 const unavailable = () => new Error("Original systemd manager binding is unavailable or changed.");
 
 // Native peer credentials apply only to the selected local Unix transport.
@@ -73,16 +77,14 @@ export async function admitSystemdServiceReadBinding(
     if (!broker) {
       throw unavailable();
     }
-    const values = await broker.query(
-      ["call", BUS, "/org/freedesktop/DBus", BUS, method, "s", name],
-      [signature],
-      deadline,
+    const connection = broker;
+    return readSystemdBusCall(
+      (args, signatures) => connection.query(args, signatures, deadline),
+      method,
+      ["s", name],
+      signature,
+      unavailable,
     );
-    const tuple = values?.[0];
-    if (!Array.isArray(tuple) || tuple.length !== 1) {
-      throw unavailable();
-    }
-    return tuple[0];
   };
   let peer: Awaited<ReturnType<typeof openSystemdPrivatePeer>> | undefined;
   try {
@@ -102,12 +104,7 @@ export async function admitSystemdServiceReadBinding(
       throw unavailable();
     }
     const managerUid = await query("GetConnectionUnixUser", destination, "u");
-    if (
-      typeof managerUid !== "number" ||
-      !Number.isInteger(managerUid) ||
-      managerUid < 0 ||
-      managerUid >= 0xffffffff
-    ) {
+    if (!isSystemdManagerUid(managerUid)) {
       throw unavailable();
     }
     if (managerUid !== uid) {
@@ -203,18 +200,11 @@ export async function admitSystemdServiceReadBinding(
         const values = await retained.query(args, signatures, until, assertCurrent);
         if (args[0] === "call" && ["GetUnit", "LoadUnit"].includes(args[4] ?? "") && values) {
           const [value] = values;
-          if (
-            !Array.isArray(value) ||
-            value.length !== 1 ||
-            typeof value[0] !== "string" ||
-            !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(value[0])
-          ) {
-            throw unavailable();
-          }
-          if (unitPath && value[0] !== unitPath) {
+          const observedPath = readSystemdUnitObjectPath(value, unavailable);
+          if (unitPath && observedPath !== unitPath) {
             throw new ServiceOwnershipRefusalError("systemd-unit-changed");
           }
-          unitPath = value[0];
+          unitPath = observedPath;
         }
         return values;
       },

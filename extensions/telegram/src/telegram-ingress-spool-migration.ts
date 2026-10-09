@@ -64,18 +64,18 @@ async function listSpoolSources(stateDir: string): Promise<SpoolSource[]> {
   return sources;
 }
 
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function parseSource(source: SpoolSource, bytes: Buffer): ChannelIngressLegacyEntry {
   const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   if (
     !isRecord(value) ||
     value.version !== 1 ||
-    typeof value.updateId !== "number" ||
-    !Number.isSafeInteger(value.updateId) ||
-    value.updateId < 0 ||
+    !isNonNegativeSafeInteger(value.updateId) ||
     String(value.updateId).padStart(16, "0") !== source.id ||
-    typeof value.receivedAt !== "number" ||
-    !Number.isSafeInteger(value.receivedAt) ||
-    value.receivedAt < 0
+    !isNonNegativeSafeInteger(value.receivedAt)
   ) {
     throw new Error("invalid version, update ID, or receipt timestamp");
   }
@@ -86,9 +86,7 @@ function parseSource(source: SpoolSource, bytes: Buffer): ChannelIngressLegacyEn
       typeof failure.reason !== "string" ||
       !failure.reason ||
       typeof failure.message !== "string" ||
-      typeof failure.failedAt !== "number" ||
-      !Number.isSafeInteger(failure.failedAt) ||
-      failure.failedAt < 0
+      !isNonNegativeSafeInteger(failure.failedAt)
     ) {
       throw new Error("invalid failure tombstone");
     }

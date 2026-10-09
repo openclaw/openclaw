@@ -33,7 +33,7 @@ export async function runDelegatedUpdateRepairTurn(
     message.wallClockMs,
   );
   const traceTimings = log.isEnabled("trace");
-  const timings = { checks: 0, fenceMs: 0, requesterMs: 0, runMs: 0, totalMs: 0 };
+  const timings = { checks: 0, liveChecks: 0, fenceMs: 0, requesterMs: 0, runMs: 0, totalMs: 0 };
   const measure = <T>(phase: "fenceMs" | "requesterMs" | "runMs", operation: () => T): T => {
     if (!traceTimings) {
       return operation();
@@ -102,6 +102,21 @@ export async function runDelegatedUpdateRepairTurn(
           signal.throwIfAborted();
           return assertAuthority();
         };
+        // The embedded run re-checks its source at every preparation stage; copying
+        // the shared database for each one made those checks the turn's critical
+        // path. Preparation carries the run row and requester policy observed before
+        // the turn and keeps executor ownership, the parent connection, and
+        // cancellation live. Model candidates, tool admission, tool effect guards,
+        // and settlement still observe the run row and requester policy fresh.
+        const assertTurnLive = () => {
+          signal.throwIfAborted();
+          timings.liveChecks += 1;
+          if (!process.connected) {
+            throw new Error("Repair no longer owns the update attempt.");
+          }
+          measure("fenceMs", () => fence.assertCurrent());
+          return true;
+        };
         assertCurrent();
         const selected = await runtime.withUpdateRepairEnvironment(message.target, () =>
           runtime.prepareUpdateRepairInference(signal, Math.max(1, deadline - Date.now())),
@@ -133,6 +148,7 @@ export async function runDelegatedUpdateRepairTurn(
               maxToolCalls: message.maxToolCalls,
               signal,
               isCurrent: assertCurrent,
+              isLive: assertTurnLive,
             }),
           );
           // Parent cancellation revokes the whole delegated request. A local

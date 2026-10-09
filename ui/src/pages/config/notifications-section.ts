@@ -16,6 +16,7 @@ import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -159,9 +160,7 @@ function renderUserNotificationPreferences(
     onChange({ ...preferences, ...next });
   return html`
     <section class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.notifications.accountDefaults")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.notifications.accountDefaults"))}
       <div class="settings-group">
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsToggleRow({
@@ -204,9 +203,7 @@ function renderDeviceNotificationPreferences(
   const deviceQuietHours = preferences.quietHours;
   return html`
     <section class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.notifications.installedApp")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.notifications.installedApp"))}
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("configView.notifications.deliverDevice"),

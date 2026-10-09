@@ -393,15 +393,11 @@ export async function maybeRepairGatewayServiceConfig(
     : null;
   const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
-    const warning = renderSystemNodeWarning(systemNodeInfo);
-    if (warning) {
-      note(warning, "Gateway runtime");
-    } else {
-      note(
+    note(
+      renderSystemNodeWarning(systemNodeInfo) ||
         `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
-        "Gateway runtime",
-      );
-    }
+      "Gateway runtime",
+    );
   }
 
   const expectedRuntimePlan =
@@ -710,16 +706,15 @@ export async function maybeScanExtraGatewayServices(
       const { darwinUserServices, linuxUserServices, failed } =
         classifyLegacyServices(legacyServices);
 
-      if (darwinUserServices.length > 0) {
-        const result = await cleanupLegacyDarwinServices(darwinUserServices);
-        removed.push(...result.removed);
-        failed.push(...result.failed);
-      }
-
-      if (linuxUserServices.length > 0) {
-        const result = await cleanupLegacyLinuxUserServices(linuxUserServices, runtime);
-        removed.push(...result.removed);
-        failed.push(...result.failed);
+      for (const [services, cleanup] of [
+        [darwinUserServices, () => cleanupLegacyDarwinServices(darwinUserServices)],
+        [linuxUserServices, () => cleanupLegacyLinuxUserServices(linuxUserServices, runtime)],
+      ] as const) {
+        if (services.length > 0) {
+          const result = await cleanup();
+          removed.push(...result.removed);
+          failed.push(...result.failed);
+        }
       }
 
       if (removed.length > 0) {

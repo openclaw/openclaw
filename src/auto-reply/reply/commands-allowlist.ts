@@ -354,7 +354,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       );
     }
     const applyConfigEdit = plugin.allowlist.applyConfigEdit;
-    const editScope = parsed.scope;
 
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
@@ -386,9 +385,8 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (configChanged) {
       try {
         await applyAllowlistConfigMutation({
-          cfg: params.cfg,
           accountId,
-          scope: editScope,
+          scope: parsed.scope,
           action: parsed.action,
           entry: parsed.entry,
           applyConfigEdit,

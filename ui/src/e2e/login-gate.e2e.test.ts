@@ -11,8 +11,12 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { closeContext, renderLoginGate } from "./login-gate-e2e.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { closeContext, mountLoginGate, renderLoginGate } from "./login-gate-e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI responsive login gate E2E",
@@ -749,9 +753,26 @@ suite.define(() => {
   it("keeps generic help collapsed until requested when there is no failure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    const chatModule = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+    );
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl, { lastError: null });
+      await renderLoginGate(page, suite.server.baseUrl);
+      await chatModule.request;
+      const mounting = mountLoginGate(page, null);
+      void mounting.catch(() => {});
+      // Let fixture mounting begin before the startup route can finish loading.
+      expect(
+        await page.evaluate(
+          () =>
+            document.querySelector<HTMLElement & { startupPending: boolean }>("openclaw-app")
+              ?.startupPending,
+        ),
+      ).toBe(true);
+      chatModule.release();
+      await mounting;
       expect(await page.locator(".login-gate__failure").count()).toBe(0);
 
       const help = page.locator(".login-gate__help");
@@ -761,6 +782,8 @@ suite.define(() => {
       await help.locator("summary").click();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
     } finally {
+      chatModule.release();
+      await page.unrouteAll({ behavior: "wait" });
       await closeContext(context);
     }
   });

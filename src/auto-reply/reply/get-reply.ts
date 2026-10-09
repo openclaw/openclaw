@@ -14,7 +14,6 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -49,7 +48,6 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
@@ -59,6 +57,7 @@ import {
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { finishCommandTurn } from "./command-turn-completion.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -105,6 +104,7 @@ import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -190,31 +190,6 @@ function canSelfServeLocalPaths(params: {
   );
 }
 
-/**
- * A sender who may not run commands is owed no reply when command handling ends without one;
- * the refusal is the answer. Authorized commands keep their requirement: a failure throws or
- * returns an error, and an empty result (such as unsent streamed blocks) still gets the notice.
- */
-function finishCommandTurn(params: {
-  opts: GetReplyOptions | undefined;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  reply: ReplyPayload | ReplyPayload[] | undefined;
-}): ReplyPayload | ReplyPayload[] | undefined {
-  const { opts, ctx, cfg, reply } = params;
-  const runState = resolveReplyOperationRunState(opts);
-  if (
-    runState &&
-    runState.replyCompletion?.outcome !== "blocked" &&
-    (Array.isArray(reply) ? reply.length === 0 : !reply) &&
-    !resolveCommandAuthorization({ ctx, cfg, commandAuthorized: ctx.CommandAuthorized === true })
-      .isAuthorizedSender
-  ) {
-    runState.replyCompletion = resolveReplyCompletion("optional", "empty");
-  }
-  return reply;
-}
-
 export async function getReplyFromConfig(
   ctx: MsgContext,
   options?: GetReplyOptions,
@@ -264,6 +239,7 @@ export async function getReplyFromConfig(
   );
   assertReplyPreprocessingActive(opts?.abortSignal);
   opts?.operatorAuthority?.assertCurrent();
+  opts?.internalEventExecution?.assertCurrent?.();
   const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
   if (refusal) {
     return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };
@@ -605,18 +581,10 @@ export async function getReplyFromConfig(
         })
       : await traceGetReplyPhase("reply.init_session_state", () =>
           initSessionState({
-            providerReviewAcknowledgment: optsWithSkillFilter?.providerReviewAcknowledgment,
+            ...resolveReplySessionInitializationOptions(optsWithSkillFilter),
             ctx: finalized,
             cfg,
             commandAuthorized,
-            ...(optsWithSkillFilter?.expectedExistingSessionId
-              ? { expectedExistingSessionId: optsWithSkillFilter.expectedExistingSessionId }
-              : {}),
-            pinExpectedExistingSession: optsWithSkillFilter?.pinExpectedExistingSession === true,
-            newlyCreatedSessionId: optsWithSkillFilter?.newlyCreatedSessionId,
-            requestedSessionId: optsWithSkillFilter?.requestedSessionId,
-            resumeRequestedSession: optsWithSkillFilter?.resumeRequestedSession,
-            signal: optsWithSkillFilter?.abortSignal,
           }),
         );
   } catch (error) {

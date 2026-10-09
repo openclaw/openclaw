@@ -417,7 +417,7 @@ function readIncognitoSessionRow(params: {
   agentId: string;
   storePath?: string;
 }) {
-  const { cfg, key, agentId, storePath } = params;
+  const { key, agentId, storePath } = params;
   const binding = captureIncognitoSessionBinding({ agentId, sessionKey: key, storePath });
   if (binding) {
     const { actor } = binding;
@@ -427,9 +427,7 @@ function readIncognitoSessionRow(params: {
     }
     const snapshot = actor.sessions.captureSnapshot(key);
     return records.createIncognitoSessionRow({
-      cfg,
-      key,
-      agentId,
+      ...params,
       storePath: actor.path,
       entry,
       source: {
@@ -452,9 +450,7 @@ function readIncognitoSessionRow(params: {
     return undefined;
   }
   return records.createIncognitoSessionRow({
-    cfg,
-    key,
-    agentId,
+    ...params,
     storePath: ephemeralPath,
     entry: storedEntry,
     source: row.privateSource,
@@ -501,18 +497,16 @@ export function findSessionRowById(
   }
   // Select each key's physical winner before matching its ID. A shadowed row
   // must not resurrect an old run mapping that the combined store would hide.
-  const selected = candidates.length
-    ? [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
-        const paths = owner.scope.select(query).paths;
-        const row = records.first(
-          owner
-            .matching({ ...query, key })
-            .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
-          paths.keys(),
-        );
-        return row?.entry?.sessionId === query.sessionId ? [row] : [];
-      })
-    : [];
+  const selected = [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
+    const paths = owner.scope.select(query).paths;
+    const row = records.first(
+      owner
+        .matching({ ...query, key })
+        .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
+      paths.keys(),
+    );
+    return row?.entry?.sessionId === query.sessionId ? [row] : [];
+  });
   // Process-held private stores keep their existing exact native reader;
   // private rows never enter the resident index or a new cache.
   const binding = captureIncognitoSessionBinding();

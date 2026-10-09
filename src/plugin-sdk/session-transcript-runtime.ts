@@ -11,8 +11,6 @@ import {
   loadTranscriptEvents,
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
-  readTranscriptRawDelta,
-  readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
@@ -23,6 +21,8 @@ import {
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
+import { normalizeRawDeltaLimits } from "../config/sessions/session-accessor.sqlite-raw-delta-read.js";
+import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -30,7 +30,9 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -76,6 +78,8 @@ export {
 export {
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogGitHubLinker,
+  prepareSessionCatalogSourceActorProjector,
 } from "../gateway/session-catalog-identity.js";
 
 export {
@@ -99,6 +103,7 @@ export function composeSessionTranscriptWriteAssertion(
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
     // A plugin's wrapper remains opaque even when all of its children are prepared.
+    hasOpaqueCheck: check !== undefined,
     preparedCheck: (assertSources) => assertSources(),
   });
 }
@@ -280,10 +285,9 @@ export async function readSessionTranscriptRawDelta(
 ): Promise<SessionTranscriptRawDeltaResult> {
   const { cursor, maxBytes, maxEvents, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  return readRestoredSessionTranscript(scope, () =>
-    readTranscriptRawDelta(scope, {
+  normalizeRawDeltaLimits({ maxBytes, maxEvents });
+  return withSessionTranscriptDeltaReader(scope, (reader) =>
+    reader.raw({
       ...(cursor !== undefined ? { cursor } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
       ...(maxEvents !== undefined ? { maxEvents } : {}),
@@ -297,12 +301,11 @@ export async function readSessionTranscriptVisibleMessageDelta(
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
   const { cursor, maxBytes, maxMessages, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  let result: ReturnType<typeof readVisibleMessageDelta>;
+  normalizeVisibleDeltaLimits({ maxBytes, maxMessages });
+  let result: import("../config/sessions/session-accessor.sqlite-contract.js").SessionTranscriptVisibleMessageDeltaResult;
   try {
-    result = await readRestoredSessionTranscript(scope, () =>
-      readVisibleMessageDelta(scope, {
+    result = await withSessionTranscriptDeltaReader(scope, (reader) =>
+      reader.visible({
         ...(cursor !== undefined ? { cursor } : {}),
         ...(maxBytes !== undefined ? { maxBytes } : {}),
         ...(maxMessages !== undefined ? { maxMessages } : {}),
@@ -372,7 +375,12 @@ export async function appendAssistantMirrorMessageByIdentity(
   const scope = bindSessionTranscriptStoreScope(params, params.config);
   return await withTranscriptWriteLock(scope, async (locked) => {
     params.signal?.throwIfAborted();
-    const currentEntry = await readSessionEntryReadOnlyInWorker(scope);
+    const currentEntry = await readSessionEntryReadOnlyInWorker(
+      scope,
+      undefined,
+      undefined,
+      targetDiscoveryLane,
+    );
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }
@@ -407,11 +415,16 @@ export async function appendAssistantMirrorMessageByIdentity(
       } else {
         let events: readonly SessionTranscriptEvent[];
         try {
-          const latest = await prepareSessionTranscriptHydration({
-            ...scope,
-            agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
-            sessionId: currentEntry.sessionId,
-          }).readLatestActiveMessage();
+          const latest = await prepareSessionTranscriptHydration(
+            {
+              ...scope,
+              agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+              sessionId: currentEntry.sessionId,
+            },
+            undefined,
+            params.signal,
+            targetDiscoveryLane,
+          ).readLatestActiveMessage();
           events = latest ? [latest.event] : [];
         } catch (error) {
           if (!isSessionTranscriptProjectionUnavailableError(error)) {
@@ -551,6 +564,9 @@ export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
 
 /**
  * Publishes a transcript update by scoped transcript target.
+ * `update.assistantItemIds` retires exact native display occurrences only after
+ * their row commits. It is internal provenance, not terminal/run authorization,
+ * and must be omitted for independently owned commentary and async rows.
  */
 export async function publishSessionTranscriptUpdateByIdentity(
   params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },

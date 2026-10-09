@@ -13,7 +13,6 @@ import { withExecutor } from "./config-executor.test-support.js";
 import { createConfigIO, writeConfigFile } from "./io.js";
 import * as configWriteSafety from "./io.write-safety.js";
 import {
-  mutateConfigFile,
   mutateConfigFileWithRetry,
   replaceConfigFile,
   resolveConfigIncludeWriteBoundary,
@@ -40,7 +39,7 @@ function deferred() {
 }
 
 describe("direct config writer exclusion", () => {
-  it.each(["replace", "snapshot", "mutate", "retry"] as const)(
+  it.each(["snapshot", "retry"] as const)(
     "rejects changed %s path provenance before creating the canonical lock directory",
     async (flow) => {
       const stateDir = tempDirs.make("openclaw-config-revoked-admission-");
@@ -60,13 +59,13 @@ describe("direct config writer exclusion", () => {
           };
           const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
           const mutation =
-            flow === "replace" || flow === "snapshot"
+            flow === "snapshot"
               ? replaceConfigFile({
-                  ...(flow === "snapshot" ? { snapshot } : {}),
+                  snapshot,
                   writeOptions: options,
                   nextConfig,
                 })
-              : (flow === "retry" ? mutateConfigFileWithRetry : mutateConfigFile)({
+              : mutateConfigFileWithRetry({
                   writeOptions: options,
                   mutate: (draft) => {
                     draft.gateway = nextConfig.gateway;

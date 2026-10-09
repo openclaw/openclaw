@@ -96,13 +96,7 @@ function hasAuthoritativeSessionWork(
     resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
     hasSessionLifecycleQueueWork(queueTarget) ||
-    hasGatewaySessionAbortOwner({
-      context: params.context,
-      sessionKeys: params.sessionKeys,
-      sessionId,
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-    }) ||
+    hasGatewaySessionAbortOwner(params) ||
     Boolean(
       sessionId &&
       params.context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)?.turnClaim,

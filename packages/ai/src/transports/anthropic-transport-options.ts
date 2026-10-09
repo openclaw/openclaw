@@ -80,12 +80,7 @@ export function resolveAnthropicTransportOptions(
       `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
     );
   }
-  const reasoningModelMaxTokens =
-    resolvePositiveAnthropicTokenLimit(model.maxTokens) ?? baseMaxTokens;
-  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
-  const reasoning =
-    options?.reasoning === "off" && mandatoryAdaptiveThinking ? "low" : options?.reasoning;
-  const resolved: AnthropicTransportOptions = copyProviderAcceptanceObserver(options, {
+  const resolved = copyProviderAcceptanceObserver(options, {
     temperature: options?.temperature,
     stop: options?.stop,
     maxTokens: baseMaxTokens,
@@ -102,39 +97,58 @@ export function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     thinkingDisplay: options?.thinkingDisplay,
-    reasoning,
+    reasoning: options?.reasoning,
     anthropicServerCompaction: options?.anthropicServerCompaction,
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
-  });
+  } satisfies AnthropicTransportOptions);
+  resolved.reasoning = applyAnthropicThinkingOptions(model, resolved, options, "transport");
+  return resolved;
+}
+
+/** Keep both entry points on one thinking mode while retaining their output-budget policies. */
+export function applyAnthropicThinkingOptions(
+  model: Model<"anthropic-messages">,
+  resolved: AnthropicOptions & { maxTokens: number },
+  options: Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets"> | undefined,
+  profile: "provider" | "transport",
+): SimpleStreamOptions["reasoning"] {
+  const managed = profile === "transport";
+  const reasoning =
+    options?.reasoning === "off" && requiresClaudeAdaptiveThinking(model)
+      ? "low"
+      : options?.reasoning;
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
-    return resolved;
+    return reasoning;
   }
-  if (!reasoning) {
-    resolved.thinkingEnabled = defaultsClaudeAdaptiveThinking(model);
+  if (
+    !reasoning ||
+    supportsClaudeAdaptiveThinking(model) ||
+    (!managed && defaultsClaudeAdaptiveThinking(model))
+  ) {
+    resolved.thinkingEnabled = Boolean(reasoning) || defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
       resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);
     }
-    return resolved;
-  }
-  if (supportsClaudeAdaptiveThinking(model)) {
-    resolved.thinkingEnabled = true;
-    resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);
-    return resolved;
+    return reasoning;
   }
   const adjusted = adjustMaxTokensForThinking(
-    baseMaxTokens,
-    reasoningModelMaxTokens,
-    reasoning === "max" ? "high" : reasoning,
+    resolved.maxTokens,
+    (managed ? resolvePositiveAnthropicTokenLimit(model.maxTokens) : model.maxTokens) ??
+      resolved.maxTokens,
+    managed && reasoning === "max" ? "high" : reasoning,
     options?.thinkingBudgets,
   );
   // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
   // consumers (payload, replay, temperature, tool-choice) see consistent state.
   const thinkingEnabled = adjusted.thinkingBudget >= 1024;
-  resolved.maxTokens = adjusted.maxTokens;
+  // The standalone provider restores the original output cap when thinking cannot fit.
+  if (managed || thinkingEnabled) {
+    resolved.maxTokens = adjusted.maxTokens;
+  }
   resolved.thinkingEnabled = thinkingEnabled;
   resolved.thinkingBudgetTokens = thinkingEnabled ? adjusted.thinkingBudget : undefined;
-  return resolved;
+  return reasoning;
 }

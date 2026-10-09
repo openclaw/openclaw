@@ -12,7 +12,7 @@ import {
   foreignSessionIngestionSource,
   resolveAdmissionPolicy,
   scanSessionIngestionSource,
-  sessionExclusionReason,
+  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
 } from "./session-ingestion.js";
 
@@ -90,7 +90,7 @@ describe("session ingestion", () => {
           excludeSessions: { hookExternalContentSources: [hookExternalContentSource] },
         },
       });
-      expect(sessionExclusionReason(source, policy, new Set<string>())).toBe(
+      expect(sessionExclusionReasons([source], policy, new Set<string>()).get(source)).toBe(
         `hookExternalContentSource:${hookExternalContentSource}`,
       );
     },

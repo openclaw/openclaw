@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { chatMetadataSessionFields } from "../../gateway/server-methods/chat-metadata-contract.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
@@ -28,6 +30,7 @@ import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-hea
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { sessionEntryReadRevision } from "./session-entry-read-revision.js";
 import {
   isIncognitoComputeCommand,
   isIncognitoComputeWrite,
@@ -81,6 +84,7 @@ import type {
   PendingInputMutationReceipt,
 } from "./session-pending-input-operations.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 
 /** Connection-bound kernels: no namespace lookup, second connection, or shared-state write. */
 export function createIncognitoSessionWorker(
@@ -90,6 +94,7 @@ export function createIncognitoSessionWorker(
 ) {
   let revision = 0;
   const sessionRevisions = new Map<string, number>();
+  const history = createIncognitoHistoryWorker(database, env);
   const read = (sessionKey: string): IncognitoSessionSnapshot => {
     const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
     return {
@@ -99,9 +104,73 @@ export function createIncognitoSessionWorker(
           identity,
           sessionKey,
           revision: sessionRevisions.get(sessionKey) ?? 0,
+          completionSources: history.completionFacts(sessionKey),
           capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
+          entryReadRevision: entry ? sessionEntryReadRevision(entry) : undefined,
+          chatMetadataRevision: entry
+            ? createHash("sha256")
+                .update(JSON.stringify(chatMetadataSessionFields.map((field) => entry[field])))
+                .digest("hex")
+            : undefined,
+          delivery: entry
+            ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+            : undefined,
+          media: entry
+            ? {
+                sessionId: entry.sessionId,
+                updatedAt: entry.updatedAt,
+                lifecycleRevision: entry.lifecycleRevision,
+                permissionMode: entry.permissionMode,
+                execNode: entry.execNode,
+                repositoryWorkspaceId: entry.repositoryWorkspaceId,
+                worktreeId: entry.worktree?.id,
+                sessionRoot: entry.sessionRoot,
+                spawnedCwd: entry.spawnedCwd,
+                spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+                pendingWorktree: entry.pendingWorktree,
+                pendingProjectGitUrl: entry.pendingProjectGitUrl,
+              }
+            : undefined,
           steering: entry
             ? {
+                lifecycleRevision: entry.lifecycleRevision,
+                restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion,
+                restartRecoveryTerminalDeliveryEvidence:
+                  entry.restartRecoveryTerminalDeliveryEvidence?.map((receipt) => ({
+                    runId: receipt.runId,
+                    harnessCompletion: receipt.harnessCompletion,
+                    deliveryContext: receipt.deliveryContext,
+                    payloads: receipt.payloads?.map(({ visible }) => ({ visible })),
+                    payloadsTruncated: receipt.payloadsTruncated,
+                    deliveryStatus: receipt.deliveryStatus && {
+                      status: receipt.deliveryStatus.status,
+                      resultCount: receipt.deliveryStatus.resultCount,
+                    },
+                    messagingToolSentTargets: receipt.messagingToolSentTargets?.map(
+                      ({
+                        provider,
+                        accountId,
+                        to,
+                        threadId,
+                        threadImplicit,
+                        threadSuppressed,
+                        visible,
+                        sourceReplyFinal,
+                      }) => ({
+                        provider,
+                        accountId,
+                        to,
+                        threadId,
+                        threadImplicit,
+                        threadSuppressed,
+                        visible,
+                        sourceReplyFinal,
+                      }),
+                    ),
+                    messagingToolSentTargetsTruncated: receipt.messagingToolSentTargetsTruncated,
+                    messagingToolAggregateEvidenceUnaccounted:
+                      receipt.messagingToolAggregateEvidenceUnaccounted,
+                  })),
                 sessionId: entry.sessionId,
                 updatedAt: entry.updatedAt,
                 status: entry.status,
@@ -191,12 +260,11 @@ export function createIncognitoSessionWorker(
   );
   const outbox = createIncognitoOutboxWorker(database, admit);
   const lifecycle = createIncognitoLifecycleWorker(database, identity, env, admit);
-  const history = createIncognitoHistoryWorker(database, env);
   const compute = createIncognitoComputeWorker(database, env, admit);
   const entryAdmission = (
     stage: "transaction" | "commit",
     keys: readonly string[],
-    entry: { guarded?: boolean; value?: unknown },
+    entry: { guarded?: boolean; value?: unknown; sourceValidation?: SessionSourceValidation },
   ) => {
     if (stage === "transaction") {
       admit(stage, keys, undefined, undefined, entry);
@@ -216,7 +284,11 @@ export function createIncognitoSessionWorker(
         });
       },
       candidate,
-      (receipt) => ({ ...receipt, guarded: entry.guarded }),
+      (receipt) => ({
+        ...receipt,
+        guarded: entry.guarded,
+        sourceValidation: entry.sourceValidation,
+      }),
     );
   };
   const entryCreation = createIncognitoEntryCreationWorker(database, env, entryAdmission);
@@ -440,7 +512,14 @@ export function createIncognitoSessionWorker(
             stage: "prepare",
             facts: { identity, sessions: facts },
           });
-          return history.execute(command, facts);
+          const result = history.execute(command, facts);
+          if (
+            command.type === "session.history.completion-source.open" ||
+            command.type === "session.history.completion-source.release"
+          ) {
+            result.facts = keys.flatMap((key) => read(key).facts);
+          }
+          return result;
         });
       }
       if (isIncognitoLifecycleCommand(command)) {
@@ -543,6 +622,7 @@ export function createIncognitoSessionWorker(
       sessionRevisions.clear();
       manager.close();
       compute.close();
+      history.close();
       sideData.close();
       transcript.close();
       outbox.close();

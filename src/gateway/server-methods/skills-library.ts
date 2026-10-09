@@ -13,6 +13,11 @@ import {
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { captureSessionEntrySourceAssertion } from "../../config/sessions/session-entry-source-authority.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
 import {
   assertPreparedSkillLibrarySelection,
@@ -52,18 +57,23 @@ export function libraryAuthority(
     scopes: client?.connect.scopes ?? [],
     getConfig: context.getRuntimeConfig,
     assertFileMutationAllowed,
-    assertCurrent: () => {
-      assertFileMutationAllowed?.();
-      options.sessionMutationCommitGuard?.();
-      options.sessionMutationAuthorization?.assertCurrent();
-      // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
-      if (client?.internal?.syntheticClient) {
-        throw new SkillLibraryError(
-          "IDENTITY_REQUIRED",
-          "Synthetic calls cannot acquire personal ownership. Ask the person to send a fresh attributed message or use My skills.",
-        );
-      }
-    },
+    assertCurrent: composeSessionSourceAssertion(
+      [
+        assertFileMutationAllowed,
+        options.sessionMutationCommitGuard,
+        options.sessionMutationAuthorization?.assertCurrent,
+      ],
+      (assertSources) => {
+        assertSources();
+        // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
+        if (client?.internal?.syntheticClient) {
+          throw new SkillLibraryError(
+            "IDENTITY_REQUIRED",
+            "Synthetic calls cannot acquire personal ownership. Ask the person to send a fresh attributed message or use My skills.",
+          );
+        }
+      },
+    ),
   };
 }
 
@@ -81,10 +91,9 @@ export async function activateLibrarySelection(
   if (authorization.error) {
     throw new SessionMutationAuthorizationChangedError(authorization.error);
   }
-  const target = resolveSessionSharingTarget({
-    cfg: context.getRuntimeConfig(),
-    sessionKey: params.sessionKey,
-  });
+  const resolveTarget = () =>
+    resolveSessionSharingTarget({ cfg: context.getRuntimeConfig(), sessionKey: params.sessionKey });
+  const target = resolveTarget();
   if (!target) {
     throw new SkillLibraryError("NOT_FOUND", "Session not found.");
   }
@@ -92,33 +101,43 @@ export async function activateLibrarySelection(
   let plannedSelections: SkillLibrarySelection[] | undefined;
   const sessionChanged = () =>
     new SkillLibraryError("CONFLICT", "Session changed before activation; refresh and retry.");
-  const assertCurrent = () => {
-    authority.assertCurrent();
-    authorization.authorization?.assertCurrent();
-    assertPreparedSkillLibrarySelection(plannedSelections);
-    const current = resolveSessionSharingTarget({
-      cfg: context.getRuntimeConfig(),
-      sessionKey: params.sessionKey,
-    });
-    if (
-      !current ||
-      current.entry.sessionId !== target.entry.sessionId ||
-      current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-      current.storePath !== target.storePath ||
-      current.storeKey !== target.storeKey
-    ) {
+  const source = captureSessionEntrySourceAssertion({
+    scope: { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+    readSource: target.readSource,
+    expected: target.entry,
+    fields: ["sessionId", "lifecycleRevision", "pluginOwnerId"],
+    refuse: () => {
       throw sessionChanged();
-    }
-    const ownershipError = resolvePluginSessionOwnershipError({
-      action: "patch",
-      entry: current.entry,
-      key: current.canonicalKey,
-      pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
-    });
-    if (ownershipError) {
-      throw new SessionMutationAuthorizationChangedError(ownershipError);
-    }
-  };
+    },
+    assertCurrent: () => {
+      const current = resolveTarget();
+      if (
+        !current ||
+        current.entry.sessionId !== target.entry.sessionId ||
+        current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
+        current.storePath !== target.storePath ||
+        current.storeKey !== target.storeKey
+      ) {
+        throw sessionChanged();
+      }
+      const ownershipError = resolvePluginSessionOwnershipError({
+        action: "patch",
+        entry: current.entry,
+        key: current.canonicalKey,
+        pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
+      });
+      if (ownershipError) {
+        throw new SessionMutationAuthorizationChangedError(ownershipError);
+      }
+    },
+  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [authority.assertCurrent, authorization.authorization?.assertCurrent, source],
+    (assertSources) => {
+      assertSources();
+      assertPreparedSkillLibrarySelection(plannedSelections);
+    },
+  );
   const entry = await patchSessionEntryCore(
     { storePath: target.storePath, sessionKey: target.storeKey, agentId: target.agentId },
     async (current) => {
@@ -132,7 +151,7 @@ export async function activateLibrarySelection(
       // Existing runs keep their prepared snapshot; the next turn rebuilds against the new pins.
       return { skillLibrarySelections: plannedSelections, updatedAt: Date.now() };
     },
-    { assertCommitAllowed: assertCurrent },
+    sessionEntryCommitGuardOptions(assertCurrent),
   );
   if (!entry) {
     throw sessionChanged();

@@ -21,6 +21,7 @@ export function withOpenClawAgentDatabaseWrite<T>(
   inputOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T,
   expectedDatabase?: DatabaseSync,
+  signal?: AbortSignal,
 ): Promise<T> {
   const options = {
     ...inputOptions,
@@ -64,5 +65,7 @@ export function withOpenClawAgentDatabaseWrite<T>(
       }
     },
     true,
+    undefined,
+    signal,
   );
 }

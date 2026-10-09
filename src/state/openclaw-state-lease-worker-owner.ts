@@ -24,6 +24,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "renew" | "release";
 
 export type OpenClawStateLeaseWorkerAuthority = {
+  signal?: AbortSignal;
   assertCurrent(this: void): void;
   /** Live authority for the first transaction grant, separate from transport preparation. */
   beforeTransaction?(this: void): void;

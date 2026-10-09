@@ -48,10 +48,8 @@ extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
-extensions/copilot/src/tool-bridge.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts
-extensions/diagnostics-prometheus/src/service.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
@@ -221,7 +219,6 @@ src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/profiles.test.ts
 src/agents/auth-profiles/store.ts
 src/agents/auth-profiles/usage.test.ts
-src/agents/auth-profiles/usage.ts
 src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
@@ -265,8 +262,6 @@ src/agents/models.profiles.live.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
-src/agents/provider-transport-fetch.ts
-src/agents/runtime-plan/prepare-auth.test.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
@@ -543,7 +538,6 @@ src/plugins/update.test.ts
 src/secrets/apply.test.ts
 src/secrets/apply.ts
 src/secrets/configure.ts
-src/secrets/resolve.ts
 src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/secrets/runtime-web-tools.test.ts
@@ -579,7 +573,6 @@ ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/view.ts
-ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts

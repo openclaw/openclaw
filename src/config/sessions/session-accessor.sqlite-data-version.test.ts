@@ -54,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 function createSessionScope(label: string) {
@@ -244,6 +245,7 @@ describe("SQLite session entry cache", () => {
     "cleans selected plugin metadata without materializing siblings or saved prompts (%s)",
     async (mode) => {
       const scope = createSessionScope("plugin-cleanup");
+      vi.stubEnv("OPENCLAW_STATE_DIR", scope.env.OPENCLAW_STATE_DIR);
       const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
       const { skillsSnapshot, systemPromptReport } = savedPrompts(
         "unneeded cleanup prompt".repeat(4096),

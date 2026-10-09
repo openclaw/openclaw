@@ -23,6 +23,7 @@ import { resolvePhysicalSessionStorePath } from "../config/sessions/session-stor
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -312,29 +313,24 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     const targetSessionKey = "agent:main:dashboard:incognito-lineage-watch";
     let watched: boolean | undefined;
     let witnessed = false;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     registerBeforeToolCallHook(async () => {
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, allow) => {
-            if (request.stage === "commit" && !witnessed) {
-              witnessed = true;
-              runOpenClawAgentWriteTransaction(
-                (database) =>
-                  writeSessionEntry(database, incognitoChildKey, {
-                    ...childEntry,
-                    completionOwnerSessionKey: "agent:main:direct:another-requester",
-                  }),
-                {
-                  agentId: "main",
-                  path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-                },
-              );
-            }
-            admit(request, allow);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, allow, admit) => {
+        if (request.stage === "commit" && !witnessed) {
+          witnessed = true;
+          runOpenClawAgentWriteTransaction(
+            (database) =>
+              writeSessionEntry(database, incognitoChildKey, {
+                ...childEntry,
+                completionOwnerSessionKey: "agent:main:direct:another-requester",
+              }),
+            {
+              agentId: "main",
+              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+            },
+          );
+        }
+        admit(request, allow);
+      });
       try {
         watched = await registerSessionStateWatch(
           { watcherSessionKey: requesterKey, targetSessionKey },
@@ -373,31 +369,26 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       );
       let witnessed = false;
       let watched: boolean | undefined;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       registerBeforeToolCallHook(async () => {
-        const admission = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, allow) => {
-              if (
-                request.stage === stage &&
-                !witnessed &&
-                request.facts !== null &&
-                typeof request.facts === "object" &&
-                "kind" in request.facts &&
-                request.facts.kind === "session-entry-current"
-              ) {
-                witnessed = true;
-                const replacementOwner = "agent:main:direct:another-requester";
-                peer
-                  .prepare(
-                    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.spawnedBy', ?), spawned_by = ?, parent_session_key = ? WHERE session_key = ?",
-                  )
-                  .run(replacementOwner, replacementOwner, replacementOwner, childKey);
-              }
-              admit(request, allow);
-            }, attachment),
-          );
+        const admission = probe.admission(workerAdmission, (request, allow, admit) => {
+          if (
+            request.stage === stage &&
+            !witnessed &&
+            request.facts !== null &&
+            typeof request.facts === "object" &&
+            "kind" in request.facts &&
+            request.facts.kind === "session-entry-current"
+          ) {
+            witnessed = true;
+            const replacementOwner = "agent:main:direct:another-requester";
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.spawnedBy', ?), spawned_by = ?, parent_session_key = ? WHERE session_key = ?",
+              )
+              .run(replacementOwner, replacementOwner, replacementOwner, childKey);
+          }
+          admit(request, allow);
+        });
         try {
           watched = await registerSessionStateWatch(watch, {
             prepareCurrent: prepareGatewayToolCallerAssertion,

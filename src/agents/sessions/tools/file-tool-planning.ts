@@ -6,6 +6,7 @@ import type {
 } from "./file-tool-planning.worker.js";
 
 const pool = new WorkerTaskPool<FileToolPlanningRequest, FileToolPlanningResult>({
+  workerClass: "compute",
   sharedCompute: true,
   workerUrl: resolveRuntimeProcessEntrypointUrl("fileToolPlanning"),
 });

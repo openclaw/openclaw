@@ -1,4 +1,5 @@
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import {
@@ -291,17 +292,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
-    typeof report.bootstrapMaxChars === "number" &&
-    Number.isFinite(report.bootstrapMaxChars) &&
-    report.bootstrapMaxChars > 0
-      ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapMaxChars) ??
+    resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
-    typeof report.bootstrapTotalMaxChars === "number" &&
-    Number.isFinite(report.bootstrapTotalMaxChars) &&
-    report.bootstrapTotalMaxChars > 0
-      ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapTotalMaxChars) ??
+    resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -345,7 +340,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     cachedContextUsageTokens != null
       ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
       : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
-  const sharedContextLines = [
+  const detailed = sub === "detail" || sub === "deep";
+  const lines = [
+    detailed ? "🧠 Context breakdown (detailed)" : "🧠 Context breakdown",
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
@@ -361,7 +358,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     skillsNamesLine,
   ];
 
-  if (sub === "detail" || sub === "deep") {
+  if (detailed) {
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
     );
@@ -404,50 +401,38 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       targetSessionEntry,
     );
 
-    return {
-      text: [
-        "🧠 Context breakdown (detailed)",
-        ...sharedContextLines,
-        ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
-        ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
-        "",
-        toolListLine,
-        toolSchemaLine,
-        toolsNamesLine,
-        "Top tools (schema size):",
-        ...perToolSchema.lines,
-        ...(perToolSchema.omitted ? [`… (+${perToolSchema.omitted} more tools)`] : []),
-        "",
-        "Top tools (summary text size):",
-        ...perToolSummary.lines,
-        ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
-        ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
-        "",
-        trackedPromptLine,
-        actualContextLine,
-        ...(overheadLine ? [overheadLine] : []),
-        ...transcriptCompactabilityLines,
-        "",
-        totalsLine,
-        "",
-        "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    };
-  }
-
-  return {
-    text: [
-      "🧠 Context breakdown",
-      ...sharedContextLines,
+    lines.push(
+      ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
+      ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
+      "",
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,
+      "Top tools (schema size):",
+      ...perToolSchema.lines,
+      ...(perToolSchema.omitted ? [`… (+${perToolSchema.omitted} more tools)`] : []),
       "",
-      totalsLine,
+      "Top tools (summary text size):",
+      ...perToolSummary.lines,
+      ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
+      ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
       "",
-      "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-    ].join("\n"),
+      trackedPromptLine,
+      actualContextLine,
+      ...(overheadLine ? [overheadLine] : []),
+      ...transcriptCompactabilityLines,
+    );
+  } else {
+    lines.push(toolListLine, toolSchemaLine, toolsNamesLine);
+  }
+
+  lines.push(
+    "",
+    totalsLine,
+    "",
+    "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+  );
+  return {
+    text: (detailed ? lines.filter(Boolean) : lines).join("\n"),
   };
 }

@@ -425,16 +425,15 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 /** Validate the canonical terminal fact before acquiring a domain-operation lease. */
 export async function getOpenClawStateDatabaseTerminalFailureAsync(
   context: OpenClawStateWorkerContext,
+  signal?: AbortSignal,
 ): Promise<Error | undefined> {
   context.admission.assertCurrent();
   const failure = await terminalOpenLatch.getAsync(
     context.admission.databasePath,
     async (_path, generation) => {
-      const { inspectOpenClawStateDatabase } = await import("./openclaw-state-worker-store.js");
-      const matches = await inspectOpenClawStateDatabase(context, {
-        type: "database.generationMatches",
-        input: { generation },
-      });
+      const { inspectOpenClawStateDatabaseGeneration } =
+        await import("./openclaw-state-worker-store.js");
+      const matches = await inspectOpenClawStateDatabaseGeneration(context, generation, signal);
       if (matches === undefined) {
         throw new Error("Recorded shared-state database generation is unavailable");
       }
@@ -570,7 +569,6 @@ function retireOpenClawStateDatabaseHandles(
   return found;
 }
 
-/** Close one cached shared state database handle by exact pathname. */
 export function closeOpenClawStateDatabaseByPath(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
@@ -582,7 +580,6 @@ export function closeOpenClawStateDatabaseByPath(
   );
 }
 
-/** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
@@ -629,7 +626,6 @@ export async function closeOpenClawStateDatabaseAsync(
   });
 }
 
-/** Test whether a cached shared state database handle is still open, optionally at one path. */
 export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   if (pathname !== undefined) {
     return cachedDatabases.get(resolveDatabasePath({ path: pathname }))?.db.isOpen === true;

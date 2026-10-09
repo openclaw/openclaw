@@ -315,12 +315,14 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
-The build emits one self-contained JavaScript entry and optional CSS. Embed
-other static assets in the bundle; arbitrary files and split lazy chunks are
+The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
+imports. The content hash covers the complete generation, including its chunks.
+CSS remains attached to the entry; loading a JavaScript chunk does not attach
+stylesheets. Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
 `require` calls, and `require.resolve` are rejected. Each asset is limited to
-4 MiB, with an 8 MiB limit for the whole plugin browser build.
+4 MiB, with an 8 MiB and 128-asset limit for the whole plugin browser build.
 
 Plugins with prebuilt browser bundles can omit `package.json.openclaw.controlUi`
 and declare the built entry and styles in `openclaw.plugin.json.controlUi`.

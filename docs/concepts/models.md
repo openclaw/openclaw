@@ -96,7 +96,7 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
-- Chat and New Session keep the Default reset choice pinned in its provider group, then put the selected model before the remaining catalog choices. Models settings puts the selected model first. Other rows keep the Gateway's catalog order, including provider-curated recommendations where supplied. Text `/models <provider>` pages also put the current model first instead of alphabetizing the catalog. Picker search checks the full list, not just the visible rows.
+- Chat and New Session keep the Default reset choice pinned in its provider group, then the selected model, then that provider's [recommended models](/concepts/recommended-models). The provider's other models wait behind **All models (N)**; providers without recommendations list every model. The terminal `/models` picker shows the current and recommended models with an **All models (N)** row for the rest. Text `/models <provider>` pages put the current model first, then the recommended models, instead of alphabetizing the catalog. Models settings puts the selected model first. Other rows keep the Gateway's catalog order. Picker search checks the full list, not just the visible rows.
 - Signing in to a provider keeps existing choices visible in open Control UI and terminal model pickers while discovery refreshes in the background. Changes to model restrictions, operator roles, or catalog mode still retire the old choices until the replacement catalog is ready.
 - The first catalog published after Gateway startup uses the same provider-owned model order as later refreshes. Captured rows inherit provider recommendations where available; rows without a provider rank keep the catalog's alphabetical fallback.
 
@@ -113,14 +113,26 @@ model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Chat and session metadata read published rows without starting
-provider discovery. Model-inventory requests return those rows immediately and
-can renew expired provider inventory in the background. A selected native model
-can load its own metadata while that renewal is still running.
+provider discovery. Ordinary `models.list` requests reuse the published catalog;
+provider response-cache expiry alone does not rebuild it. Startup, changed
+configuration or credentials, plugin and hosted metadata updates, and explicit
+**Refresh** own catalog acquisition. Startup discovers the same full catalog as
+**Refresh**, in the background; a later configuration or credential change
+rediscovers only the affected providers. A provider whose discovery fails keeps its
+saved or built-in rows and retries in the background after 30 seconds, backing off
+to 30 minutes while it keeps failing. A selected native model can load its own
+metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons return the newest completed list
 without waiting for discovery. Pending providers show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent.
+
+Refreshing a selected account also keeps its last completed catalog available to
+other readers until discovery succeeds. Failed refreshes retain that catalog;
+replacing the account credentials invalidates it immediately. Ordinary reads use
+the published inventory even for a newly selected personal account. Use **Refresh**
+to acquire that account's provider-specific catalog details.
 
 If preparing a large fleet takes longer than the two-minute startup budget, the
 Gateway starts with the agent model runtimes that have finished preparing. A
@@ -450,11 +462,17 @@ no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
-prepares a new catalog generation in the background, then publishes its model
-rows and prices together without restarting. Picker reads keep using the current
-generation during preparation; a failed or superseded preparation leaves it in
-place. Admitted runs retain their captured generation, and each usage-estimation
-operation uses one pricing context.
+prepares a new catalog generation in the background, including each agent's
+provider model discovery, then publishes its model rows and prices together
+without restarting. Picker reads keep using the current generation during
+preparation; a failed or superseded preparation leaves it in place. A provider
+whose discovery fails publishes with the new generation's built-in rows.
+Reply, scheduled-run, and agent RPC preparation retain their captured model
+generation through admission. Publishing a newer catalog does not interrupt
+those turns before their first model request. Native model lookups can finish
+for an admitted turn without replacing the newer shared catalog. Nested model
+calls keep the admitted config, and each usage-estimation operation uses one
+pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a
 background refresh fails, the Gateway records the error and keeps serving its
@@ -499,12 +517,22 @@ mixing rates from different sources.
 Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
 catalogs, so connected installations can receive advertised price changes without
 a new OpenClaw release. When a valid native feed no longer supplies a model's
-price, publication preserves the model metadata without an estimate. It does not
-infer retirement or substitute another source's rate. Explicit user costs still
-win. DeepInfra uses its agent projection for model metadata and its native
+price, publication preserves the model metadata without an estimate. A missing
+price alone does not retire the model or substitute another source's rate.
+Explicit user costs still win. DeepInfra uses its agent projection for model
+metadata and its native
 `/models/list` feed for prices, including numeric discounts. Qualified schedules
 that cannot be represented as unconditional token costs stay unknown. Models
 remain available. See [DeepInfra price estimates](/providers/deepinfra#price-estimates).
+
+For providers with a public model list that needs no API key (Chutes, DeepInfra,
+Hugging Face, Kilo Gateway, Novita, NVIDIA, OpenCode Zen, OpenCode Go, and
+Venice), publication also fetches that list. A published row the provider no
+longer lists is marked `deprecated`, so pickers and recommended models drop it
+while an exact configured reference still resolves. Ids are matched exactly,
+except for Novita, whose list mixes letter case, so only a case-insensitive miss
+counts. If a list is unreachable, malformed, or empty, that provider's rows
+publish as authored.
 
 Run `openclaw models refresh` for an immediate metadata and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:

@@ -250,6 +250,7 @@ describe("handleLoginCommand", () => {
     patchSessionEntryMock.mockImplementationOnce(async (write) => {
       const patch = await write.update({ ...previous }, { existingEntry: { ...previous } });
       setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
+      write.workerGuard?.source?.();
       write.assertCommitAllowed?.();
       persisted = patch ? { ...previous, ...patch } : previous;
       return persisted;
@@ -278,6 +279,7 @@ describe("handleLoginCommand", () => {
     setRuntimeConfigSnapshot(params.cfg);
     patchSessionEntryMock.mockImplementationOnce(async (write) => {
       const patch = await write.update({ ...previous }, { existingEntry: { ...previous } });
+      write.workerGuard?.source?.();
       write.assertCommitAllowed?.();
       const persisted = patch ? { ...previous, ...patch } : previous;
       setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });

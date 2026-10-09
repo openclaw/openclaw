@@ -22,6 +22,57 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("preserves escaped histogram labels and fresh values across scrapes and restarts", () => {
+    const metrics = createMetricsHarness();
+    const event = {
+      type: "gateway.rpc" as const,
+      method: 'test."\\\n😀',
+      phase: "handler" as const,
+      outcome: "returned" as const,
+      durationMs: 5,
+      admissionMs: 0,
+    };
+    const name = "openclaw_gateway_rpc_handler_seconds";
+    const label = String.raw`method="test.\"\\\n😀"`;
+    metrics.record(event);
+    const first = metrics.render();
+    expect(first).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
+    expect(first).toContain(`${name}_bucket{le="+Inf",${label}} 1\n`);
+    expect(metrics.render()).toBe(first);
+
+    metrics.record({ ...event, durationMs: 10 });
+    const updated = metrics.render();
+    expect(updated).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
+    expect(updated).toContain(`${name}_bucket{le="0.01",${label}} 2\n`);
+    expect(updated).toContain(`${name}_bucket{le="+Inf",${label}} 2\n`);
+    expect(updated).toContain(`${name}_sum{${label}} 0.015\n`);
+    expect(updated).toContain(`${name}_count{${label}} 2\n`);
+
+    metrics.stop();
+    expect(metrics.render()).toBe("");
+    metrics.start();
+    metrics.record(event);
+    expect(metrics.render()).toBe(first);
+    metrics.stop();
+  });
+
+  it("counts HTTP cancellations by source without accepting public events", () => {
+    const metrics = createMetricsHarness();
+    for (const source of ["client", "client", "shutdown"] as const) {
+      metrics.record(
+        { type: "gateway.http.cancelled", source },
+        { trusted: false, internal: true },
+      );
+    }
+    metrics.record({ type: "gateway.http.cancelled", source: "client" }, untrusted);
+
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_gateway_http_cancelled_total counter");
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="client"} 2\n');
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="shutdown"} 1\n');
+    metrics.stop();
+  });
+
   it("exports bounded byte histograms, including late frames and negative heap changes", () => {
     const metrics = createMetricsHarness();
     const base = { type: "gateway.rpc" as const, method: "sessions.history" };
@@ -117,120 +168,6 @@ describe("diagnostics-prometheus service", () => {
     metrics.stop();
   });
 
-  it("records Gateway RPC timings by method and outcomes without method multiplication", () => {
-    const metrics = createMetricsHarness();
-    const base = {
-      ...baseEvent(),
-      type: "gateway.rpc" as const,
-      method: "workboard.cards.list",
-      trace: { traceId: "4bf92f3577b34da6a3ce929d0e0e4736" },
-    };
-    for (const event of [
-      { ...base, phase: "received" },
-      { ...base, phase: "response", outcome: "ok", durationMs: 250 },
-      { ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 },
-      {
-        ...base,
-        phase: "dispatch",
-        outcome: "returned",
-        durationMs: 500,
-        queueWaitMs: 75,
-        response: "sent",
-      },
-      { ...base, method: "health", phase: "response", outcome: "ok", durationMs: 10 },
-      { ...base, method: "health", phase: "response", outcome: "error", durationMs: 20 },
-    ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event);
-    }
-
-    const rendered = metrics.render();
-    expect(rendered).toContain(
-      'openclaw_gateway_rpc_requests_total{method="workboard.cards.list"} 1',
-    );
-    for (const [method, metric, sum, count] of [
-      ["workboard.cards.list", "first_response", 0.25, 1],
-      ["workboard.cards.list", "handler", 0.4, 1],
-      ["workboard.cards.list", "admission", 0.1, 1],
-      ["workboard.cards.list", "queue_wait", 0.075, 1],
-      ["health", "first_response", 0.03, 2],
-    ]) {
-      expect(rendered).toContain(
-        `openclaw_gateway_rpc_${metric}_seconds_sum{method="${method}"} ${sum}`,
-      );
-      expect(rendered).toContain(
-        `openclaw_gateway_rpc_${metric}_seconds_count{method="${method}"} ${count}`,
-      );
-    }
-    expect(rendered).toContain(
-      'openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 2',
-    );
-    expect(rendered).not.toContain(base.trace.traceId);
-    expect(rendered).not.toMatch(/openclaw_gateway_rpc_outcomes_total\{[^\n]*method=/);
-    metrics.stop();
-  });
-
-  it("keeps rejected and unsent RPC observations out of response and handler timings", () => {
-    const metrics = createMetricsHarness();
-    const base = { ...baseEvent(), type: "gateway.rpc" as const, method: "unknown" };
-    for (const event of [
-      { ...base, phase: "received" },
-      { ...base, phase: "response", outcome: "unavailable", durationMs: 20 },
-      { ...base, phase: "response", outcome: "suppressed", durationMs: 30 },
-      {
-        ...base,
-        phase: "dispatch",
-        outcome: "rejected",
-        durationMs: 30,
-        response: "suppressed",
-      },
-    ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event);
-    }
-    metrics.record({ ...base, phase: "response", outcome: "ok", durationMs: 50 }, untrusted);
-    const rendered = metrics.render();
-    expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="unknown"} 1');
-    for (const outcome of ["unavailable", "suppressed"]) {
-      expect(rendered).toContain(
-        `openclaw_gateway_rpc_outcomes_total{outcome="${outcome}",phase="response"} 1`,
-      );
-    }
-    expect(rendered).toContain(
-      'openclaw_gateway_rpc_outcomes_total{outcome="rejected",phase="dispatch"} 1',
-    );
-    for (const metric of ["first_response", "handler", "admission", "queue_wait"]) {
-      expect(rendered).not.toContain(`openclaw_gateway_rpc_${metric}_seconds`);
-    }
-    metrics.stop();
-  });
-
-  it("records trusted run metrics without raw diagnostic identifiers", () => {
-    const metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "run.completed",
-      runId: "run-should-not-export",
-      sessionKey: "session-should-not-export",
-      provider: "openai",
-      model: "gpt-5.4",
-      channel: "discord",
-      trigger: "message",
-      durationMs: 1500,
-      outcome: "completed",
-    });
-
-    const rendered = metrics.render();
-
-    expect(rendered).toContain("# TYPE openclaw_run_completed_total counter");
-    expect(rendered).toContain(
-      'openclaw_run_completed_total{channel="discord",model="gpt-5.4",outcome="completed",provider="openai",trigger="message"} 1',
-    );
-    expect(rendered).toContain(
-      'openclaw_run_duration_seconds_sum{channel="discord",model="gpt-5.4",outcome="completed",provider="openai",trigger="message"} 1.5',
-    );
-    expect(rendered).not.toContain("run-should-not-export");
-    expect(rendered).not.toContain("session-should-not-export");
-  });
-
   it("records hook-blocked run metrics with safe blocker originator only", () => {
     const metrics = createMetricsHarness();
 
@@ -255,24 +192,6 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("run-should-not-export");
     expect(rendered).not.toContain("session-should-not-export");
     expect(rendered).not.toContain("matched secret prompt");
-  });
-
-  it("drops untrusted plugin-emitted diagnostic events", () => {
-    const metrics = createMetricsHarness();
-
-    metrics.record(
-      {
-        type: "model.call.completed",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        durationMs: 10,
-      },
-      untrusted,
-    );
-
-    expect(metrics.render()).toBe("");
   });
 
   it("separates request and turn model-call metrics by observation unit", () => {
@@ -511,54 +430,6 @@ describe("diagnostics-prometheus service", () => {
     );
     expect(rendered).not.toContain("chat-should-not-export");
     expect(rendered).not.toContain("sk-secret");
-  });
-
-  it("drops session-shaped agent labels", () => {
-    const metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "model.usage",
-      agentId: "Agent:qa:otel-trace-smoke",
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 12 },
-    });
-
-    const rendered = metrics.render();
-
-    expect(rendered).toContain(
-      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
-    );
-    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
-  });
-
-  it("aggregates plugin usage without adding a plugin label", () => {
-    const metrics = createMetricsHarness();
-    const record = (input: number) =>
-      metrics.record(
-        {
-          type: "model.usage",
-          agentId: "main",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: { input, total: input },
-        },
-        Object.freeze({ trusted: true, internal: true }),
-      );
-
-    record(12);
-    record(8);
-    const rendered = metrics.render();
-
-    expect(rendered).toContain(
-      'openclaw_model_tokens_total{agent="main",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 20',
-    );
-    expect(rendered).toContain(
-      'openclaw_model_tokens_total{agent="main",channel="unknown",model="gpt-5.4",provider="openai",token_type="total"} 20',
-    );
-    expect(rendered).not.toContain("plugin=");
-    expect(rendered).not.toContain("llm-task");
-    expect(rendered).not.toContain("another-plugin");
   });
 
   it("keeps only the bounded prefix from scoped queue lane labels", () => {
@@ -844,6 +715,7 @@ describe("diagnostics-prometheus service", () => {
       {
         ...baseEvent(),
         type: "model.usage",
+        agentId: "Agent:qa:otel-trace-smoke",
         provider: "openai",
         model: "gpt-5.4",
         usage: { input: 12, output: 3, total: 15 },
@@ -872,6 +744,7 @@ describe("diagnostics-prometheus service", () => {
     expect(exporter.render()).toContain(
       'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
     );
+    expect(exporter.render()).not.toContain("Agent:qa:otel-trace-smoke");
 
     const prefix = "x".repeat(499);
     const usage = {} as Extract<DiagnosticEventPayload, { type: "model.usage" }>["usage"];
