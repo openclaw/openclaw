@@ -158,10 +158,11 @@ export class AcpTranslatorAgentEvents {
     if (progressText === previous) {
       return;
     }
+    if (!progressText.startsWith(previous)) {
+      return;
+    }
     snapshots.set(itemId, progressText);
-    const text = progressText.startsWith(previous)
-      ? progressText.slice(previous.length)
-      : progressText;
+    const text = progressText.slice(previous.length);
     if (!text) {
       return;
     }

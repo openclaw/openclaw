@@ -107,6 +107,70 @@ describe("acp final chat snapshots", () => {
       ["agent_message_chunk", "Done"],
     ]);
   });
+
+  it("ignores commentary shrink snapshots and resumes from the last emitted snapshot", async () => {
+    const { agent, sessionUpdate, runId } = await createPendingPromptHarness();
+    const commentary = (progressText: string): EventFrame =>
+      ({
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: DEFAULT_SESSION_KEY,
+          runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-shrink",
+            phase: "update",
+            progressText,
+          },
+        },
+      }) as EventFrame;
+
+    await agent.handleGatewayEvent(commentary("Checking files"));
+    await agent.handleGatewayEvent(commentary("Checking"));
+    await agent.handleGatewayEvent(commentary("Checking files now"));
+
+    expect(
+      sessionUpdate.mock.calls.flatMap(([notification]) =>
+        notification.update.sessionUpdate === "agent_message_chunk"
+          ? [notification.update.content.text]
+          : [],
+      ),
+    ).toEqual(["Checking files", " now"]);
+  });
+
+  it("ignores commentary replacement snapshots and resumes from the last emitted snapshot", async () => {
+    const { agent, sessionUpdate, runId } = await createPendingPromptHarness();
+    const commentary = (progressText: string): EventFrame =>
+      ({
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: DEFAULT_SESSION_KEY,
+          runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-replacement",
+            phase: "update",
+            progressText,
+          },
+        },
+      }) as EventFrame;
+
+    await agent.handleGatewayEvent(commentary("Checking files"));
+    await agent.handleGatewayEvent(commentary("Reading files"));
+    await agent.handleGatewayEvent(commentary("Checking files now"));
+
+    expect(
+      sessionUpdate.mock.calls.flatMap(([notification]) =>
+        notification.update.sessionUpdate === "agent_message_chunk"
+          ? [notification.update.content.text]
+          : [],
+      ),
+    ).toEqual(["Checking files", " now"]);
+  });
 });
 
 describe("acp prompt size hardening", () => {
