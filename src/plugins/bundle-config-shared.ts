@@ -74,7 +74,8 @@ export function readBundleJsonObject(params: {
 }
 
 export function loadEnabledBundleConfig<TConfig>(params: {
-  workspaceDir: string;
+  /** Omit to keep shared (bundled/managed/global) inventory without a workspace scope. */
+  workspaceDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   createEmptyConfig: () => TConfig;

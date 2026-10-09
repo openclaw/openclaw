@@ -300,7 +300,7 @@ describe("mcp cli", () => {
     },
   );
 
-  it("labels listed MCP servers as OpenClaw-managed", async () => {
+  it("lists configured MCP servers with the registry scope note", async () => {
     await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
       mockLog.mockClear();
@@ -308,9 +308,9 @@ describe("mcp cli", () => {
       await runMcpCommand(["mcp", "list"]);
 
       const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(output).toContain("OpenClaw-managed MCP servers (");
+      expect(output).toContain("MCP servers (");
       expect(output).toContain("- context7");
-      expect(output).toContain("OpenClaw-managed mcp.servers entries");
+      expect(output).toContain("show OpenClaw mcp.servers entries plus MCP servers contributed");
       expect(output).toContain("does not include mcporter servers from config/mcporter.json");
     });
   });
@@ -698,7 +698,7 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "list"]);
       const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(output).toContain("No OpenClaw-managed MCP servers configured in ");
+      expect(output).toContain("No MCP servers found in ");
       expect(output).toContain("does not include mcporter servers from config/mcporter.json");
     });
   });
