@@ -93,6 +93,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.agentId === "string" &&
         typeof input.command.input.afterSequence === "number" &&
         typeof input.command.input.limit === "number") ||
+      (input.command.type === "sessionUpstream.read" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.sessionKey === "string" &&
+        typeof input.command.input.agentId === "string") ||
       (input.command.type === "diagnostic.latest" &&
         isRecord(input.command.input) &&
         typeof input.command.input.scope === "string" &&
@@ -289,6 +293,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "userProfiles.catalog" ||
       (input.command.type === "userModelAccounts.links" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userModelAccounts.summary" &&
+        typeof input.command.profileId === "string" &&
+        typeof input.command.authProfileId === "string") ||
       (input.command.type === "userModelAccounts.catalog" &&
         isRecord(input.command.selection) &&
         (typeof input.command.selection.profileId === "string" ||

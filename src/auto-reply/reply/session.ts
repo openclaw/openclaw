@@ -866,6 +866,7 @@ async function initSessionStateAttemptLocked(
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
+    bindCreation: params.bindSessionCreation,
     ...sessionTarget,
     commitGuard: !entry
       ? () => {

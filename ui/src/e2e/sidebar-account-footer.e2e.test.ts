@@ -188,6 +188,7 @@ suite.define(() => {
   it("shows one lifecycle subtitle and retries through the account menu", async () => {
     const opened = await openSidebarFooterProofPage(suite, {
       ...gatewayBuild,
+      awaitInitialRoster: false,
       gatewaySuspensionPhase: "prepared",
     });
     try {

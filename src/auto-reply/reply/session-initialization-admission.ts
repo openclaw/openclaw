@@ -5,6 +5,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import type { resolveSessionConversationBindingContext } from "./session-conversation-binding.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
 
 export type InitSessionStateParams = {
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
@@ -18,6 +19,7 @@ export type InitSessionStateParams = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
+  bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
 };
 
 export type InitSessionStateAttemptContext = {
@@ -55,6 +57,7 @@ export function resolveReplySessionInitializationOptions(
       : {}),
     pinExpectedExistingSession: opts?.pinExpectedExistingSession === true,
     newlyCreatedSessionId: opts?.newlyCreatedSessionId,
+    bindSessionCreation: opts?.internalEventExecution?.bindSessionCreation,
     requestedSessionId: opts?.requestedSessionId,
     resumeRequestedSession: opts?.resumeRequestedSession,
     signal: opts?.abortSignal,

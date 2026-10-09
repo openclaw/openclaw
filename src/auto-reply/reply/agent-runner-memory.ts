@@ -47,6 +47,10 @@ import {
 } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveMaxActiveTranscriptBytes,
+  refreshTranscriptByteCompactionLatch,
+} from "../../context-engine/transcript-byte-limit.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -61,7 +65,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { createPreflightCompactionError } from "./agent-runner-failure-reply.js";
 import {
   readPreflightTranscriptContextMessages,
   readSessionLogSnapshot,
@@ -86,7 +89,6 @@ import {
 import {
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
-  resolveMaxActiveTranscriptBytes,
   resolveCompactionThreshold,
   resolveEffectivePromptTokens,
   resolveResponsesServerCompactionThreshold,
@@ -449,31 +451,26 @@ export async function runSessionCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
+  let terminalCompactionNoticeSent = false;
+  const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
+    terminalCompactionNoticeSent = phase !== "start";
+    try {
+      await params.onCompactionNotice?.(phase, text);
+    } catch (err) {
+      logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
+    }
+  };
   const latch = entry.transcriptByteCompactionLatch;
   // Codex still re-evaluates its native rollout fuse every turn; this only latches host-byte retries.
-  let transcriptByteCompactionLatched =
-    exceedsTranscriptByteThreshold &&
-    latch?.sessionId === entry.sessionId &&
-    latch.maxBytes === maxActiveTranscriptBytes &&
-    activeTranscriptBytes - latch.activeBytes < maxActiveTranscriptBytes;
-  const refreshedTranscriptByteCompactionLatch =
-    transcriptByteCompactionLatched &&
-    typeof activeTranscriptBytes === "number" &&
-    activeTranscriptBytes < (latch?.activeBytes ?? 0)
-      ? {
-          activeBytes: activeTranscriptBytes,
-          sessionId: entry.sessionId,
-          maxBytes: maxActiveTranscriptBytes!,
-        }
-      : undefined;
-  // Unknown projection size cannot invalidate a latch whose identity and threshold still apply.
-  const shouldClearTranscriptByteCompactionLatch =
-    latch !== undefined &&
-    (typeof maxActiveTranscriptBytes !== "number" ||
-      latch.sessionId !== entry.sessionId ||
-      latch.maxBytes !== maxActiveTranscriptBytes ||
-      (typeof activeTranscriptBytes === "number" && !transcriptByteCompactionLatched));
-  if (refreshedTranscriptByteCompactionLatch || shouldClearTranscriptByteCompactionLatch) {
+  const refreshedTranscriptByteCompactionLatch = refreshTranscriptByteCompactionLatch(
+    latch,
+    entry.sessionId,
+    maxActiveTranscriptBytes,
+    activeTranscriptBytes,
+  );
+  const transcriptByteCompactionLatched =
+    exceedsTranscriptByteThreshold && refreshedTranscriptByteCompactionLatch !== undefined;
+  if (refreshedTranscriptByteCompactionLatch !== latch) {
     const compactionCount = await incrementCompactionCount({
       ...compactionTarget,
       amount: 0,
@@ -486,10 +483,13 @@ export async function runSessionCompactionIfNeeded(params: {
       throw new Error("Session changed before byte-compaction progress could be cleared");
     }
     entry = compactionStore[compactionSessionKey] ?? entry;
-    transcriptByteCompactionLatched = refreshedTranscriptByteCompactionLatch !== undefined;
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
+  if (transcriptByteCompactionLatched) {
+    await notifyCompaction("context_bounded");
+    assertActive();
+  }
   if (isCodexRuntime && !shouldCompactByTranscriptBytes) {
     // Codex owns native-thread token pressure; OpenClaw owns the host transcript byte fuse
     // that bounds fresh-thread bootstrap seeds.
@@ -577,19 +577,6 @@ export async function runSessionCompactionIfNeeded(params: {
 
   assertActive();
   params.onCompactionStart?.();
-  let terminalCompactionNoticeSent = false;
-  const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
-    terminalCompactionNoticeSent ||= phase !== "start";
-    try {
-      if (text) {
-        await params.onCompactionNotice?.(phase, text);
-      } else {
-        await params.onCompactionNotice?.(phase);
-      }
-    } catch (err) {
-      logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
-    }
-  };
   // Provider work can outlive the caller; never account against a replacement session row.
   let expectedSession = entry;
   let admissionTransition: AcceptedCompactionSuccessor["admissionTransition"];
@@ -600,10 +587,9 @@ export async function runSessionCompactionIfNeeded(params: {
     compactionKind: Parameters<typeof incrementCompactionCount>[0]["compactionKind"],
     amount = 1,
   ) => {
-    const postCompactionBytes =
-      compactionTrigger === "transcript_bytes" && typeof maxActiveTranscriptBytes === "number"
-        ? (await readTranscriptSize(acceptedEntry.sessionId)).byteSize
-        : undefined;
+    const postCompactionBytes = exceedsTranscriptByteThreshold
+      ? (await readTranscriptSize(acceptedEntry.sessionId)).byteSize
+      : undefined;
     assertActive();
     const transcriptByteCompactionLatch =
       typeof postCompactionBytes === "number" &&
@@ -623,6 +609,10 @@ export async function runSessionCompactionIfNeeded(params: {
       compactionKind,
       expectedSession: acceptedEntry,
       transcriptByteCompactionLatch,
+      authorize: () => {
+        assertActive();
+        return true;
+      },
     });
     if (compactionCount === undefined) {
       throw new Error("Session changed before compaction maintenance could be recorded");
@@ -756,14 +746,20 @@ export async function runSessionCompactionIfNeeded(params: {
       assertActive();
       const reason =
         (result?.ok ? normalizeOptionalString(result.reason) : result?.reason) ?? "not_compacted";
-      if (result && isBenignCompactionSkipResult(result)) {
+      if (!exceedsTranscriptByteThreshold && result && isBenignCompactionSkipResult(result)) {
         await notifyCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry;
       }
-      await notifyCompaction("incomplete");
       preflightCompactionLog.warn(`preflight compaction failed: ${reason}`);
-      throw createPreflightCompactionError(reason, isCodexRuntime);
+      if (exceedsTranscriptByteThreshold) {
+        await recordCompactionAccounting(expectedSession, undefined, undefined, 0);
+        assertActive();
+        await notifyCompaction("context_bounded");
+        return compactionStore[compactionSessionKey] ?? entry;
+      }
+      await notifyCompaction("incomplete");
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
 
     if (params.replyOperation && admissionTransition) {
@@ -782,7 +778,7 @@ export async function runSessionCompactionIfNeeded(params: {
     const transcriptByteCompactionLatch = entry.transcriptByteCompactionLatch;
     if (transcriptByteCompactionLatch) {
       preflightCompactionLog.warn(
-        "byte-triggered compaction left the active transcript above its limit; suppressing repeats until it grows by another threshold",
+        "byte-triggered compaction left oversized history; continuing with bounded context",
         {
           sessionKey: compactionSessionKey,
           activeTranscriptBytes: transcriptByteCompactionLatch.activeBytes,
@@ -801,7 +797,10 @@ export async function runSessionCompactionIfNeeded(params: {
       typeof result.result.tokensAfter === "number"
         ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
         : undefined;
-    await notifyCompaction("end", serverNotice);
+    await notifyCompaction(
+      transcriptByteCompactionLatch ? "context_bounded" : "end",
+      transcriptByteCompactionLatch ? undefined : serverNotice,
+    );
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
     const previousSessionId = params.followupRun.run.sessionId;

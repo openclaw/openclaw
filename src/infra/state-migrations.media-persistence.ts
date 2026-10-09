@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
@@ -10,7 +9,6 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { deleteSessionTranscriptFtsRowsInTransaction } from "../config/sessions/session-transcript-fts.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -53,16 +51,11 @@ import { VERSION } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySync,
   getNodeSqliteKysely,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import {
-  backupDoctorSqliteRepair,
-  repairDoctorSqliteIndexCorruption,
-} from "./sqlite-index-recovery.js";
+import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
@@ -90,6 +83,7 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
+import { repairDoctorSessionWindowOrphans } from "./state-migrations.session-window-repair.js";
 import {
   MEDIA_ARCHIVE_VERIFICATION_KEY,
   migrateCanonicalTranscriptArchives,
@@ -100,54 +94,6 @@ const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
 const ARCHIVE_TEMP_MARKER = ".media-retirement";
 
 type MediaMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
-
-/** Doctor alone may remove windows whose logical node no longer exists. */
-function repairDoctorSessionWindowOrphans(
-  database: DatabaseSync,
-  pathname: string,
-  assertCurrent: () => void,
-): string[] {
-  assertCurrent();
-  database.exec("PRAGMA foreign_keys = ON;");
-  return runSqliteImmediateTransactionSync(
-    database,
-    () => {
-      assertCurrent();
-      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-      const windows = db
-        .selectFrom("session_windows")
-        .leftJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
-        .where("session_nodes.session_key", "is", null)
-        .select("session_windows.session_id");
-      if (!executeSqliteQueryTakeFirstSync(database, windows)) {
-        return [];
-      }
-      const backupPath = backupDoctorSqliteRepair(pathname, "session-window");
-      assertCurrent();
-      // FTS is virtual and has no FK cascade; its existing owner clears derived rows.
-      for (const window of iterateSqliteQuerySync(database, windows)) {
-        deleteSessionTranscriptFtsRowsInTransaction(database, window.session_id);
-      }
-      const deleted = executeSqliteQuerySync(
-        database,
-        db.deleteFrom("session_windows").where("session_id", "in", windows),
-      );
-      assertSqliteIntegrity(database, pathname);
-      return [
-        `Saved pre-repair SQLite backup: ${backupPath}`,
-        `Removed ${deleted.numAffectedRows} orphan session window(s) from ${pathname}; their dependent history remains in the backup.`,
-      ];
-    },
-    {
-      databaseLabel: pathname,
-      operationLabel: "session.orphan-window-repair",
-      withCommit: (commit) => {
-        assertCurrent();
-        commit();
-      },
-    },
-  );
-}
 
 async function migrateAgentDatabase(params: {
   agentId: string;
