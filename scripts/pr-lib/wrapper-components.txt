@@ -1380,6 +1380,7 @@ src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
+src/plugins/plugin-instance-value-adoption.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-manifest-id-normalizer.ts
