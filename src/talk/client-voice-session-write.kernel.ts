@@ -3,8 +3,6 @@ import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   assertVoiceSessionOwnership,
   readVoiceSessionRecordInTransaction,
-  recordVoiceToolEffectInTransaction,
-  registerVoiceConsultRunInTransaction,
   writeVoiceSessionRecordInTransaction,
   VOICE_SESSION_RECORD_VERSION,
   type ClientVoiceRunBinding,
@@ -12,33 +10,29 @@ import {
 } from "./client-voice-session-store.js";
 import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
-export type VoiceSessionMutation = ClientVoiceRunBinding &
-  (
+export type VoiceSessionMutation = ClientVoiceRunBinding & { now: number } & (
     | {
         kind: "create";
         provider?: string;
         origin: "client" | "relay";
         transcriptCapable?: boolean;
-        now: number;
       }
-    | { kind: "consult"; runId: string; now: number }
-    | { kind: "effect"; event: TrustedToolExecutionEvent; now: number }
+    | { kind: "consult"; runId: string }
+    | { kind: "effect"; event: TrustedToolExecutionEvent }
     | {
         kind: "reserve";
         failureKey: string;
         origin: "client" | "relay";
         transcriptSessionKey?: string;
-        now: number;
       }
-    | { kind: "confirm"; failureKey: string; role: "user" | "assistant"; now: number }
+    | { kind: "confirm"; failureKey: string; role: "user" | "assistant" }
     | {
         kind: "close";
         transcriptFailurePolicy: "require-success" | "retain-and-close";
         expectedOrigin?: "client";
         staleBefore?: number;
-        now: number;
       }
-    | { kind: "delivered"; deliveredAt: number; now: number }
+    | { kind: "delivered"; deliveredAt: number }
   );
 
 /** The caller owns the transaction; all predicates use its current canonical row. */
@@ -46,23 +40,12 @@ export function mutateVoiceSessionInDatabase(
   database: OpenClawAgentDatabase,
   input: VoiceSessionMutation,
 ): ClientVoiceSessionRecord | undefined {
-  if (input.kind === "consult") {
-    return registerVoiceConsultRunInTransaction(database, input);
-  }
-  if (input.kind === "effect") {
-    return input.event.runId
-      ? recordVoiceToolEffectInTransaction(
-          database,
-          input,
-          input.event.runId,
-          input.event,
-          input.now,
-        )
-      : undefined;
+  if (input.kind === "effect" && !input.event.runId) {
+    return undefined;
   }
   let record = readVoiceSessionRecordInTransaction(database, input.voiceSessionId);
   if (!record) {
-    if (input.kind === "delivered") {
+    if (input.kind === "delivered" || input.kind === "effect") {
       return undefined;
     }
     if (input.kind !== "create") {
@@ -86,6 +69,50 @@ export function mutateVoiceSessionInDatabase(
   }
   assertVoiceSessionOwnership(record, input);
   switch (input.kind) {
+    case "consult":
+      // A close can race the ACK: the accepted run still owns its effects.
+      if (record.consultRunIds.includes(input.runId)) {
+        return record;
+      }
+      record.consultRunIds.push(input.runId);
+      break;
+    case "effect": {
+      const { event } = input;
+      const runId = event.runId!;
+      const existing = event.toolCallId
+        ? record.effects.find(
+            (effect) => effect.runId === runId && effect.toolCallId === event.toolCallId,
+          )
+        : record.effects.findLast(
+            (effect) =>
+              effect.runId === runId &&
+              effect.toolName === event.toolName &&
+              effect.status === "started",
+          );
+      if (event.type !== "tool.execution.started" && !existing) {
+        return record;
+      }
+      if (event.type !== "tool.execution.started" && existing) {
+        existing.status =
+          event.type === "tool.execution.completed"
+            ? "succeeded"
+            : event.type === "tool.execution.blocked"
+              ? "blocked"
+              : event.terminalReason === "cancelled"
+                ? "cancelled"
+                : "failed";
+        existing.finishedAt = event.ts;
+      } else if (event.mutatingAction === true && (!event.toolCallId || !existing)) {
+        record.effects.push({
+          runId,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+          toolName: event.toolName,
+          startedAt: event.ts,
+          status: "started",
+        });
+      }
+      break;
+    }
     case "create":
       if (record.origin !== input.origin) {
         throw new Error("voice session origin does not match");
