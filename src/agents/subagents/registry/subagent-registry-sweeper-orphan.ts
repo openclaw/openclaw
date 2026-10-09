@@ -46,7 +46,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
   const { entry, now, runId } = params;
   const accountId = entry.requesterOrigin?.accountId;
   const runStartedAtMs = entry.execution.startedAt ?? entry.createdAt;
-  const sessionEntry = loadSubagentSessionEntry({
+  const sessionEntry = await loadSubagentSessionEntry({
     childSessionKey: entry.childSessionKey,
   });
   // A fresh persisted terminal state is the child's authoritative outcome.
