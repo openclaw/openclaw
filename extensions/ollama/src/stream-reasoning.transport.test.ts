@@ -32,7 +32,7 @@ describe("native Ollama direct completion reasoning", () => {
     ["Cloud model thinking floor", { id: "glm-5.3:cloud" }, "off", "low"],
   ] as const)("serializes %s", async (_name, overrides, reasoning, expectedThink) => {
     guardedFetch.mockResolvedValue({
-      url: "http://localhost:11434/api/chat",
+      finalUrl: "http://localhost:11434/api/chat",
       response: new Response(
         JSON.stringify({
           model: "qwen3:4b",
@@ -46,6 +46,7 @@ describe("native Ollama direct completion reasoning", () => {
     const model: Model = {
       api: "ollama",
       provider: "ollama",
+      baseUrl: "http://localhost:11434",
       id: "qwen3:4b",
       name: "Qwen3 4B",
       reasoning: true,
