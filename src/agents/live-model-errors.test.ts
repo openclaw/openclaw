@@ -1,6 +1,9 @@
 // Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
-import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import {
+  isModelNotFoundErrorMessage,
+  isProviderWideModelNotFoundErrorMessage,
+} from "./live-model-errors.js";
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
@@ -83,5 +86,59 @@ describe("live model error helpers", () => {
       false,
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
+  });
+
+  it("treats only affirmative model absence as provider-wide", () => {
+    expect(isProviderWideModelNotFoundErrorMessage("404 model not found")).toBe(true);
+    expect(isProviderWideModelNotFoundErrorMessage("The model gpt-foo does not exist.")).toBe(true);
+    expect(isProviderWideModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(
+      true,
+    );
+    expect(
+      isProviderWideModelNotFoundErrorMessage("The model gpt-foo is no longer available."),
+    ).toBe(true);
+    expect(isProviderWideModelNotFoundErrorMessage("The model gpt-foo has been retired.")).toBe(
+      true,
+    );
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      ),
+    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("The model does not exist or you do not have access")).toBe(
+      true,
+    );
+    expect(isModelNotFoundErrorMessage("404 page not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("not_found_error")).toBe(true);
+    expect(
+      isProviderWideModelNotFoundErrorMessage("The model does not exist or you do not have access"),
+    ).toBe(false);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        "The 'gpt-5.5-pro' model is not supported when using Codex with a ChatGPT account.",
+      ),
+    ).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("current candidate model unavailable")).toBe(
+      false,
+    );
+    expect(isProviderWideModelNotFoundErrorMessage("404 page not found")).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("not_found_error")).toBe(false);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
+      ),
+    ).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("")).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("   ")).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("provider returned an unknown error")).toBe(
+      false,
+    );
+    expect(isProviderWideModelNotFoundErrorMessage("model not found: permission denied")).toBe(
+      false,
+    );
+    expect(
+      isProviderWideModelNotFoundErrorMessage("The model gpt-foo was not found for your account"),
+    ).toBe(false);
   });
 });
