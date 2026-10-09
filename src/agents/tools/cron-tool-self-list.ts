@@ -19,8 +19,9 @@ function filterCronListResultToJobId(
   jobId: string,
 ) {
   const jobs = result.jobs.filter((job) => isRecord(job) && job.id === jobId);
-  const filteredResult: Record<string, unknown> = {
-    ...result,
+  const { snapshotRevision: _snapshotRevision, ...page } = result;
+  return {
+    ...page,
     jobs,
     total: jobs.length,
     offset: 0,
@@ -31,8 +32,6 @@ function filterCronListResultToJobId(
       ? { deliveryPreviews: filterDeliveryPreviewsByJobId(result.deliveryPreviews, jobId) }
       : {}),
   };
-  delete filteredResult.snapshotRevision;
-  return filteredResult;
 }
 
 export async function listCronSelfJob(params: {

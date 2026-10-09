@@ -1,7 +1,8 @@
 // Logger redaction behavior tests cover secret scrubbing before log writes.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
@@ -47,6 +48,7 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   resetLogger();
   setLoggerOverride(null);
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -375,15 +377,16 @@ describe("file log redaction", () => {
     setLoggerOverride({ level: "info", file: logPath });
     const hostnames = ["", "lr-macbook", "changed-host"];
     const resolvedHostnames: string[] = [];
-    loggerTest.setHostnameResolverForTests(() => {
+    const logger = getLogger();
+    vi.spyOn(os, "hostname").mockImplementation(() => {
       const hostname = hostnames.shift() ?? "changed-host";
       resolvedHostnames.push(hostname);
       return hostname;
     });
 
-    getLogger().info({ route: "/api/health" }, "first request");
-    getLogger().info({ route: "/api/health" }, "second request");
-    getLogger().info({ route: "/api/health" }, "third request");
+    logger.info({ route: "/api/health" }, "first request");
+    logger.info({ route: "/api/health" }, "second request");
+    logger.info({ route: "/api/health" }, "third request");
 
     const records = (await readLogFile(logPath))
       .trim()

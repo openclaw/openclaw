@@ -122,7 +122,8 @@ describe("post-core plugin payload degradation", () => {
     ["integrity", "warning", "unsafe", "integrity-drift"],
     ["unclassified", "ok", "unsafe", "convergence-failed"],
     ["mixed", "warning", "unsafe", "unowned-plugin-payload"],
-    ["repaired-advisory", "warning", "optional-repair-needed", undefined],
+    ["repaired-advisory", "warning", "unsafe", "plugin-requirement-unknown"],
+    ["retained-clawhub", "warning", "no-payload-repair", undefined],
     ["invalid-config", "error", "core-critical", "invalid-config"],
     ["config-read-file", "error", "core-critical", "config-read-failed"],
     ["config-read-include", "error", "core-critical", "config-read-failed"],
@@ -131,6 +132,7 @@ describe("post-core plugin payload degradation", () => {
     await withOpenClawTestState({ label: `plugin-assessment-${failure}` }, async (state) => {
       await state.writeConfig({ plugins: { enabled: false } });
       const refusal = new Error("original updater authority refused");
+      const retained = failure === "retained-clawhub";
       const installPath = state.path("fixture");
       const smokeFailure = {
         pluginId: "fixture",
@@ -140,7 +142,7 @@ describe("post-core plugin payload degradation", () => {
       };
       const convergeCohort = cohort.convergePluginReleaseCohort;
       const cohortSpy =
-        failure === "integrity" || failure === "repaired-advisory"
+        failure === "integrity" || failure === "repaired-advisory" || retained
           ? vi
               .spyOn(cohort, "convergePluginReleaseCohort")
               .mockImplementationOnce(async (options) => {
@@ -154,6 +156,34 @@ describe("post-core plugin payload degradation", () => {
                   });
                 }
                 const result = await convergeCohort(options);
+                if (retained) {
+                  return {
+                    ...result,
+                    config: {
+                      ...result.config,
+                      plugins: {
+                        ...result.config.plugins,
+                        installs: {
+                          fixture: {
+                            source: "clawhub",
+                            spec: "clawhub:fixture",
+                            version: "1.0.0",
+                            installPath,
+                          },
+                        },
+                      },
+                    },
+                    updateOutcomes: [
+                      {
+                        pluginId: "fixture",
+                        status: "unchanged",
+                        code: "plugin-target-unavailable",
+                        currentVersion: "1.0.0",
+                        message: "Retained fixture while registry publication is pending.",
+                      },
+                    ],
+                  };
+                }
                 return failure === "repaired-advisory"
                   ? {
                       ...result,
@@ -184,7 +214,7 @@ describe("post-core plugin payload degradation", () => {
             installedPluginIdRecovery: new Map(),
             changes: [],
             warnings:
-              failure === "unclassified"
+              failure === "unclassified" || retained
                 ? []
                 : [
                     {
@@ -194,10 +224,10 @@ describe("post-core plugin payload degradation", () => {
                       guidance: [],
                     },
                   ],
-            installRecords: {},
-            errored: true,
+            installRecords: retained ? (cfg.plugins?.installs ?? {}) : {},
+            errored: !retained,
             smokeFailures:
-              failure === "unclassified"
+              failure === "unclassified" || retained
                 ? []
                 : [
                     smokeFailure,
@@ -238,7 +268,6 @@ describe("post-core plugin payload degradation", () => {
           root: state.root,
           channel: "stable" as const,
           ...prepared,
-          pluginRequirements: { fixture: "optional" as const },
           timeoutMs: 1_000,
           json: true,
         };
@@ -252,6 +281,15 @@ describe("post-core plugin payload degradation", () => {
             assessment: { kind, ...(reason ? { reason } : {}) },
           });
           expect(result.reason).toBe(kind === "core-critical" ? reason : undefined);
+          if (retained) {
+            expect(result.warnings).toEqual([
+              expect.objectContaining({
+                pluginId: "fixture",
+                reason: "plugin-target-unavailable",
+                guidance: ["openclaw plugins update fixture"],
+              }),
+            ]);
+          }
           if (kind === "core-critical") {
             expect(spy).not.toHaveBeenCalled();
             expect(result.changed).toBe(false);
@@ -274,9 +312,6 @@ describe("post-core plugin payload degradation", () => {
               }),
             ]);
           }
-          if (kind === "optional-repair-needed") {
-            expect(result.assessment).toMatchObject({ failures: [smokeFailure] });
-          }
           if (failure === "repaired-advisory") {
             expect(result.npm.outcomes).toEqual(
               expect.arrayContaining([
@@ -296,91 +331,73 @@ describe("post-core plugin payload degradation", () => {
 });
 
 describe("failed cohort repair requirement assessment", () => {
-  it.each(["required", "unknown", "optional"] as const)(
-    "keeps an unavailable %s payload visible after the real failed repair",
-    async (requirement) => {
-      await withOpenClawTestState({ label: `unavailable-repair-${requirement}` }, async (state) => {
-        const pluginId = "cohort-broken";
-        const installPath = state.path("missing-package");
-        const records: Record<string, PluginInstallRecord> = {
-          [pluginId]: { source: "npm", spec: "@example/cohort-broken", installPath },
-        };
-        const config = {
-          plugins: { entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } } },
-        };
-        await state.writeConfig(config);
-        const dataPath = await state.writeText("plugin-data.txt", "newer data survives");
-        const npmConfigPath = await state.writeText("empty.npmrc", "");
-        await seedInstalledPluginIndex(records, {
-          config,
-          env: process.env,
-        });
-        let requests = 0;
-        await withServer(
-          (_request, response) => {
-            requests += 1;
-            response.writeHead(404);
-            response.end("Fixture package unavailable");
-          },
-          async (registry) => {
-            await withEnvAsync(
-              {
-                NPM_CONFIG_REGISTRY: registry,
-                npm_config_registry: registry,
-                NPM_CONFIG_CACHE: state.path("npm-cache"),
-                NPM_CONFIG_USERCONFIG: npmConfigPath,
-                OPENCLAW_BUNDLED_PLUGINS_DIR: state.path("empty-bundled"),
-              },
-              async () => {
-                const result = await withPluginCache(createPluginCache(), async () =>
-                  updatePluginsAfterCoreUpdate({
-                    root: state.root,
-                    channel: "stable",
-                    ...(await preparePostCorePluginConfig({ requestedChannel: null })),
-                    pluginInstallRecords: records,
-                    ...(requirement === "unknown"
-                      ? {}
-                      : { pluginRequirements: { [pluginId]: requirement } }),
-                    timeoutMs: 10_000,
-                    json: true,
-                  }),
-                );
-                expect(requests).toBeGreaterThan(0);
-                expect(result.npm.outcomes).toContainEqual(
-                  expect.objectContaining({
-                    pluginId,
-                    status: "error",
-                  }),
-                );
-                const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-                expect(persisted.plugins.entries[pluginId]).toMatchObject({
-                  enabled: true,
-                  config: { retained: "authored" },
-                });
-                expect(result.reason).toBeUndefined();
-                expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
-                expect(await fs.readFile(dataPath, "utf8")).toBe("newer data survives");
-                expect(result).toMatchObject({
-                  status: "warning",
-                  assessment:
-                    requirement === "optional"
-                      ? {
-                          kind: "optional-repair-needed",
-                          failures: [expect.objectContaining({ pluginId, installPath })],
-                        }
-                      : {
-                          kind: "unsafe",
-                          reason:
-                            requirement === "required"
-                              ? "required-plugin-unavailable"
-                              : "plugin-requirement-unknown",
-                        },
-                });
-              },
-            );
-          },
-        );
+  it("keeps an unavailable payload visible after the real failed repair", async () => {
+    await withOpenClawTestState({ label: "unavailable-repair" }, async (state) => {
+      const pluginId = "cohort-broken";
+      const installPath = state.path("missing-package");
+      const records: Record<string, PluginInstallRecord> = {
+        [pluginId]: { source: "npm", spec: "@example/cohort-broken", installPath },
+      };
+      const config = {
+        plugins: { entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } } },
+      };
+      await state.writeConfig(config);
+      const dataPath = await state.writeText("plugin-data.txt", "newer data survives");
+      const npmConfigPath = await state.writeText("empty.npmrc", "");
+      await seedInstalledPluginIndex(records, {
+        config,
+        env: process.env,
       });
-    },
-  );
+      let requests = 0;
+      await withServer(
+        (_request, response) => {
+          requests += 1;
+          response.writeHead(404);
+          response.end("Fixture package unavailable");
+        },
+        async (registry) => {
+          await withEnvAsync(
+            {
+              NPM_CONFIG_REGISTRY: registry,
+              npm_config_registry: registry,
+              NPM_CONFIG_CACHE: state.path("npm-cache"),
+              NPM_CONFIG_USERCONFIG: npmConfigPath,
+              OPENCLAW_BUNDLED_PLUGINS_DIR: state.path("empty-bundled"),
+            },
+            async () => {
+              const result = await withPluginCache(createPluginCache(), async () =>
+                updatePluginsAfterCoreUpdate({
+                  root: state.root,
+                  channel: "stable",
+                  ...(await preparePostCorePluginConfig({ requestedChannel: null })),
+                  pluginInstallRecords: records,
+                  timeoutMs: 10_000,
+                  json: true,
+                }),
+              );
+              expect(requests).toBeGreaterThan(0);
+              expect(result.npm.outcomes).toContainEqual(
+                expect.objectContaining({
+                  pluginId,
+                  status: "error",
+                }),
+              );
+              const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+              expect(persisted.plugins.entries[pluginId]).toMatchObject({
+                enabled: true,
+                config: { retained: "authored" },
+              });
+              expect(result.reason).toBeUndefined();
+              expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+              expect(await fs.readFile(dataPath, "utf8")).toBe("newer data survives");
+              expect(result).toMatchObject({
+                status: "warning",
+                assessment: { kind: "unsafe", reason: "plugin-requirement-unknown" },
+              });
+            },
+          );
+        },
+      );
+    });
+  });
 });

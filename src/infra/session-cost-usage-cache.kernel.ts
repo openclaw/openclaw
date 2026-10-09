@@ -229,6 +229,12 @@ export function acquireSessionCostUsageRefreshLockInDatabase(
   if (currentRaw !== params.previousRaw || params.previousOwnerIsRunning) {
     return false;
   }
+  const values = {
+    value_json: params.lockJson,
+    blob: null,
+    expires_at: null,
+    updated_at: params.startedAt,
+  };
   executeSqliteQuerySync(
     db,
     kysely
@@ -236,19 +242,9 @@ export function acquireSessionCostUsageRefreshLockInDatabase(
       .values({
         scope: LEGACY_CACHE_SCOPE,
         key: REFRESH_LOCK_KEY,
-        value_json: params.lockJson,
-        blob: null,
-        expires_at: null,
-        updated_at: params.startedAt,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.columns(["scope", "key"]).doUpdateSet({
-          value_json: params.lockJson,
-          blob: null,
-          expires_at: null,
-          updated_at: params.startedAt,
-        }),
-      ),
+      .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
   );
   return true;
 }

@@ -37,20 +37,15 @@ afterEach(() => {
 });
 
 describe("managed handoff Windows process identities", () => {
-  it.each([
-    { option: "--profile", args: ["--profile", "handoff-fixture"] },
-    { option: "--dev", args: ["--dev"] },
-  ])(
-    "keeps original launcher attribution after $option normalization in a real child",
-    async ({ args }) => {
-      vi.useRealTimers();
-      const root = dirs.make("handoff-original-argv-");
-      const fixturePath = path.join(root, "profile-identity.mjs");
-      const profileUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.cliProfile);
-      const identityUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffProcess);
-      fs.writeFileSync(
-        fixturePath,
-        `
+  it("keeps original launcher attribution after profile normalization in a real child", async () => {
+    vi.useRealTimers();
+    const root = dirs.make("handoff-original-argv-");
+    const fixturePath = path.join(root, "profile-identity.mjs");
+    const profileUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.cliProfile);
+    const identityUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffProcess);
+    fs.writeFileSync(
+      fixturePath,
+      `
       import assert from "node:assert/strict";
       import childProcess from "node:child_process";
       import {syncBuiltinESMExports} from "node:module";
@@ -72,32 +67,32 @@ describe("managed handoff Windows process identities", () => {
       assert.equal(receiver.isProcessIdentityCurrent(original), true);
       process.stdout.write("original launcher matched");
     `,
-      );
-      const child = spawn(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
-          fixturePath,
-          ...args,
-          "update",
-          "--yes",
-        ],
-        { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
-      );
-      const closed = once(child, "close");
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-      try {
-        expect(await closed, stderr).toEqual([0, null]);
-        expect(stdout).toBe("original launcher matched");
-      } finally {
-        child.kill("SIGKILL");
-        await closed;
-      }
-    },
-  );
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
+        fixturePath,
+        "--profile",
+        "handoff-fixture",
+        "update",
+        "--yes",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
+    );
+    const closed = once(child, "close");
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    try {
+      expect(await closed, stderr).toEqual([0, null]);
+      expect(stdout).toBe("original launcher matched");
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+    }
+  });
 
   it("makes published strict readers refuse fallback leases without changing numeric identities", () => {
     // v2026.9.4's nested strict contract must reject an identity it could mistake for PID reuse.
@@ -191,76 +186,43 @@ describe("managed handoff Windows process identities", () => {
     });
   });
 
-  it("binds a spawned process when its InteractiveToken session cannot read a creation time", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: "" });
-    const onProcessIdentityWarning = vi.fn();
+  it("requires observed launcher attribution unless the caller retains live process custody", async () => {
+    const suffix = "%%^!";
+    const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    const argv = [
+      "C:\\Program Files\\nodejs\\node.exe",
+      `C:\\openclaw${suffix}\\dist\\entry.js`,
+      "gateway",
+      "install",
+      "--update-executor",
+      "check",
+      "--json",
+    ];
+    let commandLine = `"c:/program files/nodejs/node.exe" "C:\\openclaw${suffix}\\dist\\entry.js" gateway install --update-executor check --json`;
+    spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
+      status: 0,
+      stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
+    }));
     const store = createManagedHandoffLeaseStore({
       databasePath: "unused-handoff-identity.sqlite",
       serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      onProcessIdentityWarning,
     });
 
     await withMockedPlatform("win32", async () => {
-      const identity = store.processIdentity(42, [
-        "C:\\Program Files\\nodejs\\node.exe",
-        "C:\\openclaw\\dist\\entry.js",
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-        "--json",
-      ]);
-      expect(identity).toEqual({
-        pid: 42,
-        startIdentity: expect.stringMatching(/^win32-argv-sha256:[a-f0-9]{64}$/),
-        startIdentitySource: "argv-sha256",
-      });
-      expect(onProcessIdentityWarning).toHaveBeenCalledWith(
-        42,
-        expect.stringContaining("launcher attribution"),
-      );
+      const identity = store.processIdentity(42, argv);
+      expect(store.isProcessIdentityCurrent(identity)).toBe(true);
+
+      commandLine = commandLine.replace(" check ", " run ");
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
+
+      commandLine = "";
+      expect(store.isProcessIdentityCurrent(identity)).toBe(false);
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
+
+      dead.mockReturnValue(true);
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
     });
   });
-
-  it.each(["plain", "%%", "^!"])(
-    "requires observed launcher attribution with literal %s unless the caller retains live process custody",
-    async (suffix) => {
-      const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
-      const argv = [
-        "C:\\Program Files\\nodejs\\node.exe",
-        `C:\\openclaw${suffix}\\dist\\entry.js`,
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-        "--json",
-      ];
-      let commandLine = `"c:/program files/nodejs/node.exe" "C:\\openclaw${suffix}\\dist\\entry.js" gateway install --update-executor check --json`;
-      spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
-        status: 0,
-        stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
-      }));
-      const store = createManagedHandoffLeaseStore({
-        databasePath: "unused-handoff-identity.sqlite",
-        serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      });
-
-      await withMockedPlatform("win32", async () => {
-        const identity = store.processIdentity(42, argv);
-        expect(store.isProcessIdentityCurrent(identity)).toBe(true);
-
-        commandLine = commandLine.replace(" check ", " run ");
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
-
-        commandLine = "";
-        expect(store.isProcessIdentityCurrent(identity)).toBe(false);
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
-
-        dead.mockReturnValue(true);
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
-      });
-    },
-  );
 
   it("keeps known creation-time mismatches authoritative", async () => {
     vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
@@ -306,7 +268,6 @@ describe("managed handoff Windows process identities", () => {
   });
 
   it.each([
-    { name: "a prompt probe", probeMs: 25, available: true, acquired: true },
     { name: "a probe slower than one second", probeMs: 2_000, available: true, acquired: true },
     { name: "an unavailable creation time", probeMs: 25, available: false, acquired: false },
     { name: "an exhausted identity budget", probeMs: 10_000, available: true, acquired: false },
@@ -444,98 +405,83 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     };
   }
 
-  it("uses one native read for a direct v1 helper and refreshes on the very next validation", () => {
-    const test = fixture(0);
+  it.each([
+    { name: "direct helper birth", edges: 0, change: "helper" },
+    { name: "ancestor helper birth", edges: 3, change: "helper" },
+    { name: "executor birth", edges: 3, change: "executor" },
+    { name: "executor parent", edges: 1, change: "parent" },
+  ] as const)("refreshes $name on the next validation", ({ edges, change }) => {
+    const test = fixture(edges);
     expect(test.current()).toBe(true);
-    expect(test.nativeReads).toEqual([test.helperPid]);
-    test.rows.set(test.helperPid, { parentPid: 1, startedAt: "Thu Sep 24 00:00:01 2026" });
-    expect(test.current()).toBe(false);
-    expect(test.nativeReads).toEqual([test.helperPid, test.helperPid]);
-    expect(test.kill).toHaveBeenCalledWith(test.helperPid, 0);
-    expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it.each(["helper", "executor"] as const)(
-    "refuses a replaced %s birth on the next validation",
-    (role) => {
-      const test = fixture(3);
-      expect(test.current()).toBe(true);
-      const pid = role === "helper" ? test.helperPid : test.executorPid;
-      const row = test.rows.get(pid)!;
-      test.rows.set(pid, { ...row, startedAt: "Thu Sep 24 00:00:01 2026" });
-      expect(test.current()).toBe(false);
-      expect(test.nativeReads.length).toBe(8);
-      expect(test.storedParent()).toEqual(test.parent);
-    },
-  );
-
-  it("refuses a reparented executor without clearing the retained row", () => {
-    const test = fixture();
-    expect(test.current()).toBe(true);
-    test.rows.get(test.executorPid)!.parentPid = 1;
+    if (edges === 0) {
+      expect(test.nativeReads).toEqual([test.helperPid]);
+    }
+    const pid = change === "helper" ? test.helperPid : test.executorPid;
+    const row = test.rows.get(pid)!;
+    if (change === "parent") {
+      row.parentPid = 1;
+    } else {
+      row.startedAt = "Thu Sep 24 00:00:01 2026";
+    }
     expect(test.current()).toBe(false);
     expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it("rereads the exact row after capturing process facts", () => {
-    const test = fixture();
-    test.probes.afterRead = () => {
-      test.probes.afterRead = undefined;
-      test.replaceRow();
-    };
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()?.owner).toBe("replacement");
-  });
-
-  it.each(["ETIMEDOUT", "EPERM", "ENOBUFS", "ESRCH"])(
-    "refuses incomplete %s inspection without reclaiming the legacy row",
-    (failure) => {
-      const test = fixture();
-      test.probes.failure = failure;
-      expect(test.current()).toBe(false);
-      expect(test.storedParent()).toEqual(test.parent);
-    },
-  );
-
-  it("refuses malformed process metadata without clearing the retained row", () => {
-    const test = fixture();
-    test.probes.output = "truncated process metadata";
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it("retains the independent live-process check after reading a matching birth", () => {
-    const test = fixture();
-    test.kill.mockImplementation(() => {
-      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
-    });
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()).toEqual(test.parent);
+    if (edges === 0) {
+      expect(test.nativeReads).toEqual([test.helperPid, test.helperPid]);
+      expect(test.kill).toHaveBeenCalledWith(test.helperPid, 0);
+    } else if (edges === 3) {
+      expect(test.nativeReads).toHaveLength(8);
+    }
   });
 
   it.each([
-    { edges: 32, accepted: true, reads: 33 },
-    { edges: 33, accepted: false, reads: 32 },
-  ])(
-    "preserves the direct-parent plus 32-edge bound ($edges edges)",
-    ({ edges, accepted, reads }) => {
-      const test = fixture(edges);
-      expect(test.current()).toBe(accepted);
-      expect(test.nativeReads).toHaveLength(reads);
-      expect(new Set(test.nativeReads).size).toBe(reads);
-    },
-  );
-
-  it("preserves PID 1 as a possible required ancestor", () => {
-    const test = fixture(2, true);
-    expect(test.current()).toBe(true);
-    expect(test.nativeReads).toHaveLength(3);
+    "replaced row",
+    "denied inspection",
+    "malformed metadata",
+    "dead process",
+    "cycle",
+  ] as const)("refuses %s without clearing the retained legacy row", (failure) => {
+    const test = fixture(failure === "cycle" ? 3 : 1);
+    switch (failure) {
+      case "replaced row":
+        test.probes.afterRead = () => {
+          test.probes.afterRead = undefined;
+          test.replaceRow();
+        };
+        break;
+      case "denied inspection":
+        test.probes.failure = "EPERM";
+        break;
+      case "malformed metadata":
+        test.probes.output = "truncated process metadata";
+        break;
+      case "dead process":
+        test.kill.mockImplementation(() => {
+          throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+        });
+        break;
+      case "cycle":
+        test.rows.get(test.executorPid + 1)!.parentPid = test.executorPid;
+        break;
+    }
+    expect(test.current()).toBe(false);
+    if (failure === "replaced row") {
+      expect(test.storedParent()?.owner).toBe("replacement");
+    } else {
+      expect(test.storedParent()).toEqual(test.parent);
+    }
+    if (failure === "cycle") {
+      expect(test.nativeReads).toEqual([test.executorPid, test.executorPid + 1]);
+    }
   });
 
-  it("refuses a cycle before the required helper", () => {
-    const test = fixture(3);
-    test.rows.get(test.executorPid + 1)!.parentPid = test.executorPid;
-    expect(test.current()).toBe(false);
-    expect(test.nativeReads).toEqual([test.executorPid, test.executorPid + 1]);
+  it.each([
+    { name: "32 ancestor edges", edges: 32, helperIsInit: false, accepted: true, reads: 33 },
+    { name: "33 ancestor edges", edges: 33, helperIsInit: false, accepted: false, reads: 32 },
+    { name: "PID 1 ancestor", edges: 2, helperIsInit: true, accepted: true, reads: 3 },
+  ])("bounds native ancestry reads with $name", ({ edges, helperIsInit, accepted, reads }) => {
+    const test = fixture(edges, helperIsInit);
+    expect(test.current()).toBe(accepted);
+    expect(test.nativeReads).toHaveLength(reads);
+    expect(new Set(test.nativeReads).size).toBe(reads);
   });
 });

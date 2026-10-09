@@ -11,6 +11,8 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 export type AgentRuntimeSessionSpawnContext = {
   /** Host-verified human requester; inherited ownership still requires a matching parent owner. */
   requesterProfileId?: string;
+  /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
+  requesterSenderIsOwner?: boolean;
   completionOwnerSessionKey?: string;
   resolvedModel?: ProviderModelRef;
   inheritedPermissionMode?: SessionPermissionMode;

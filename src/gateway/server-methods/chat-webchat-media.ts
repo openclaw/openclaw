@@ -41,23 +41,19 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   if (!trimmed || /^(?:data|https?):/i.test(trimmed)) {
     return null;
   }
-  if (/^file:/iu.test(trimmed)) {
-    try {
+  try {
+    if (/^file:/iu.test(trimmed)) {
       const p = safeFileURLToPath(trimmed);
       return path.isAbsolute(p) ? p : null;
-    } catch {
+    }
+    if (!path.isAbsolute(trimmed)) {
       return null;
     }
-  }
-  if (!path.isAbsolute(trimmed)) {
-    return null;
-  }
-  try {
     assertNoWindowsNetworkPath(trimmed, "Local media path");
+    return trimmed;
   } catch {
     return null;
   }
-  return trimmed;
 }
 
 async function readLocalAudioContentBlockForEmbedding(
@@ -70,10 +66,7 @@ async function readLocalAudioContentBlockForEmbedding(
     return null;
   }
   const resolved = resolveLocalMediaPathForEmbedding(raw);
-  if (!resolved) {
-    return null;
-  }
-  if (!isAudioFileName(resolved)) {
+  if (!resolved || !isAudioFileName(resolved)) {
     return null;
   }
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | undefined;
@@ -110,16 +103,9 @@ async function readLocalAudioContentBlockForEmbedding(
   }
 }
 
-function isBase64DataPayload(value: string): boolean {
-  return value.length > 0 && !/[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(value);
-}
-
 function resolveEmbeddableImageUrl(url: string): string | null {
   const trimmed = url.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.length > MAX_WEBCHAT_IMAGE_DATA_URL_CHARS) {
+  if (!trimmed || trimmed.length > MAX_WEBCHAT_IMAGE_DATA_URL_CHARS) {
     return null;
   }
   const commaIndex = trimmed.indexOf(",");
@@ -129,7 +115,7 @@ function resolveEmbeddableImageUrl(url: string): string | null {
   const metadata = trimmed.slice(0, commaIndex);
   const match = /^data:(image\/[a-z0-9.+-]+);base64$/i.exec(metadata);
   const base64Data = trimmed.slice(commaIndex + 1);
-  if (!match || !isBase64DataPayload(base64Data)) {
+  if (!match || !base64Data || /[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(base64Data)) {
     return null;
   }
   const mediaType = normalizeLowercaseStringOrEmpty(match[1]);

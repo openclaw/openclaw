@@ -11,7 +11,11 @@ import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
-import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
+import {
+  isIncognitoComposerScope,
+  isChatComposerOwnerCurrent,
+  type captureChatComposerOwner,
+} from "./composer-persistence-state.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerDraftRevision,
@@ -25,6 +29,7 @@ export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot
 type ComposerPresentation = {
   state: () => ChatPageHost | undefined;
   owner: () => ChatAttachmentGatewayOwner;
+  presentationOwner: () => ReturnType<typeof captureChatComposerOwner> | undefined;
   region: () => ChatInputRegion;
   presented: () => boolean;
   pause: () => void;
@@ -128,6 +133,14 @@ export class ChatPaneComposerHandoff {
 
   private currentScope(): ComposerOwnerScope | null {
     const state = this.host.state();
+    const captured = this.host.presentationOwner();
+    if (
+      state &&
+      captured?.recoveryScope &&
+      !isChatComposerOwnerCurrent({ ...state, connected: false }, captured)
+    ) {
+      return null;
+    }
     const owner = this.host.owner();
     const recoveryScope = owner?.recoveryScope;
     return state && owner && state.client === owner && recoveryScope
@@ -276,7 +289,16 @@ export function preparePaneStagedAttachments(
   state: ChatPageHost,
   owner: ChatAttachmentGatewayOwner,
   draftRevision: number,
+  presentationOwner?: ReturnType<typeof captureChatComposerOwner>,
 ): void {
+  // Teardown may run after hello replaced the identity on this same client.
+  // Never mint a handoff for that new account from the retired pane’s input.
+  if (
+    presentationOwner &&
+    !isChatComposerOwnerCurrent({ ...state, connected: false }, presentationOwner)
+  ) {
+    return;
+  }
   const attachments = [...state.chatAttachments];
   context.chatAttachmentHandoff.prepare({
     reviewPrivateDraft: reviewPrivateComposerDraft,

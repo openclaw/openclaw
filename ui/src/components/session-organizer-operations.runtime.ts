@@ -408,6 +408,51 @@ export async function deleteSessionsBatch(
   }
 }
 
+/**
+ * Reading a parent also acknowledges the hidden runs folded into its unread state.
+ * These reads are implicit, so they stay conditional: a manual unread marker on a
+ * run, including one set after this snapshot, survives at the Gateway.
+ */
+async function acknowledgeUnreadHiddenRuns(
+  host: SessionActionHost,
+  rows: readonly SidebarRecentSession[],
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  const selected = new Set(rows.map((row) => row.key));
+  const runs = new Map<string, SidebarRecentSession>();
+  for (const run of rows.flatMap((row) => row.subagentSummary?.unreadHiddenRuns ?? [])) {
+    if (!selected.has(run.key)) {
+      runs.set(run.key, run);
+    }
+  }
+  await Promise.all(
+    [...runs.values()].map(async (run) => {
+      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
+      const agentId = resolveUiSessionRowAgentId(run, scope.selectedAgentId);
+      const expectedSessionId = run.sessionId ? { expectedSessionId: run.sessionId } : {};
+      const access = readSessionMethodAccess(scope.gateway.snapshot, {
+        method: "sessions.patch",
+        params: { key: run.key, unread: false, agentId, ...expectedSessionId },
+        session: run,
+      });
+      // Runs the caller cannot patch keep their state without a second error.
+      if (!access.allowed) {
+        return;
+      }
+      // The capability publishes request failures once.
+      await scope.sessions
+        .patch(
+          run.key,
+          { unread: false },
+          { agentId, expectedMarkedUnreadAt: null, ...expectedSessionId },
+        )
+        .catch(() => undefined);
+    }),
+  );
+}
+
 export async function runBatchSessionAction(
   host: SessionOrganizerControllerHost,
   action: SessionMenuAction,
@@ -418,6 +463,9 @@ export async function runBatchSessionAction(
   switch (action.kind) {
     case "toggle-unread":
       await patchSessionRows(host, rows, { unread: !allUnread }, scope);
+      if (allUnread) {
+        await acknowledgeUnreadHiddenRuns(host, rows, scope);
+      }
       break;
     case "move-to-group":
       await patchSessionRows(

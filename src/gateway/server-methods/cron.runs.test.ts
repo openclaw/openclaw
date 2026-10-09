@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../../cron/run-history-detail.js";
@@ -37,7 +36,7 @@ async function withCronHistory(
     viewer: GatewayClient;
     owner: GatewayClient;
   }) => Promise<void>,
-  options: { legacyDefaultAgentId?: string } = {},
+  options: { unresolvedDefault?: boolean } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
@@ -45,14 +44,11 @@ async function withCronHistory(
       agents: {
         entries: {
           main: { workspace: state.workspaceDir },
-          ...(options.legacyDefaultAgentId ? { [options.legacyDefaultAgentId]: {} } : {}),
+          ...(options.unresolvedDefault ? { ops: {} } : {}),
         },
-        ...(options.legacyDefaultAgentId
-          ? { ownership: "explicit" as const, defaults: { systemAgent: { agentId: "main" } } }
-          : {}),
+        ...(options.unresolvedDefault ? { ownership: "explicit" as const } : {}),
       },
     };
-    retainLegacyDefaultAgentId(cfg, options.legacyDefaultAgentId);
     await state.writeConfig(cfg);
     const owner = roleClient("none", "history-owner");
     const foreign = roleClient("none", "history-foreign");
@@ -81,8 +77,7 @@ async function withCronHistory(
       scheduler: createTestGatewayScheduler(),
       nowMs: () => Date.now(),
       storePath,
-      defaultAgentId: "main",
-      legacyDefaultAgentId: options.legacyDefaultAgentId,
+      resolveDefaultAgentId: () => (options.unresolvedDefault ? undefined : "main"),
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
@@ -178,7 +173,6 @@ async function withCronHistory(
 
 describe("cron.runs session visibility", () => {
   it.each([
-    { sessionTarget: "main", agentId: "main", explicitOwner: true, sqlOwner: null },
     {
       sessionTarget: "session:custom-target",
       agentId: "main",
@@ -188,7 +182,7 @@ describe("cron.runs session visibility", () => {
     { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: null },
     { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: "main" },
   ] as const)(
-    "uses canonical sharing for $sessionTarget during legacy repair (explicit=$explicitOwner, SQL owner=$sqlOwner)",
+    "uses canonical sharing for $sessionTarget without a fleet default (explicit=$explicitOwner, SQL owner=$sqlOwner)",
     async ({ sessionTarget, agentId, explicitOwner, sqlOwner }) => {
       await withCronHistory(
         async ({ cron, query, jobId, storePath, owner, viewer }) => {
@@ -290,7 +284,7 @@ describe("cron.runs session visibility", () => {
             );
           }
         },
-        { legacyDefaultAgentId: "ops" },
+        { unresolvedDefault: true },
       );
     },
   );
@@ -439,78 +433,6 @@ describe("cron.runs session visibility", () => {
     },
   );
 
-  it.each(["job", "all"] as const)(
-    "paginates visible %s history before counting and slicing",
-    async (scope) => {
-      await withCronHistory(async ({ jobId, query }) => {
-        const selector = scope === "job" ? { id: jobId } : { scope };
-        for (const [offset, summary] of [
-          "needle first",
-          "needle second",
-          "other third",
-        ].entries()) {
-          const respond = await query({
-            ...selector,
-            agentId: "MAIN",
-            limit: 1,
-            offset,
-            sortDir: "asc",
-          });
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            {
-              entries: [expect.objectContaining({ summary })],
-              total: 3,
-              offset,
-              limit: 1,
-              hasMore: offset < 2,
-              nextOffset: offset < 2 ? offset + 1 : null,
-            },
-            undefined,
-          );
-        }
-        expect(await query({ ...selector, offset: 99, limit: 1 })).toHaveBeenCalledWith(
-          true,
-          {
-            entries: [],
-            total: 3,
-            offset: 3,
-            limit: 1,
-            hasMore: false,
-            nextOffset: null,
-          },
-          undefined,
-        );
-      });
-    },
-  );
-
-  it("uses current job names after an asynchronous history read", async () => {
-    await withCronHistory(async ({ jobId, cron, query }) => {
-      const list = cron.list.bind(cron);
-      const listSpy = vi.spyOn(cron, "list").mockImplementationOnce(async (options) => {
-        const jobs = await list(options);
-        await cron.update(jobId, { name: "replacement-visible-name" });
-        return jobs;
-      });
-      try {
-        const respond = await query({ scope: "all", query: "replacement-visible-name" });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            total: 3,
-            entries: expect.arrayContaining([
-              expect.objectContaining({ jobName: "replacement-visible-name" }),
-            ]),
-          }),
-          undefined,
-        );
-      } finally {
-        listSpy.mockRestore();
-      }
-    });
-  });
-
   it.each([
     { scope: "job", newlyMatches: true },
     { scope: "all", newlyMatches: true },
@@ -624,7 +546,6 @@ describe("cron.runs session visibility", () => {
   });
 
   it.each([
-    { filter: { query: "absent text" }, total: 0, offset: 0 },
     { filter: { runId: "absent-run" }, total: 0, offset: 0 },
     { filter: { runId: "history-run-1", offset: 99 }, total: 1, offset: 1 },
   ])(

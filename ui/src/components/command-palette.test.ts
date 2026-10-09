@@ -820,6 +820,7 @@ describe("CommandPalette search", () => {
     await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(list).toHaveBeenCalledExactlyOnceWith({
+      source: "command-palette",
       search: "planning",
       limit: 10,
       includeGlobal: false,
@@ -828,6 +829,7 @@ describe("CommandPalette search", () => {
       excludeSubagents: true,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     });
     expect(palette.textContent).toContain("Visible planning");
   });

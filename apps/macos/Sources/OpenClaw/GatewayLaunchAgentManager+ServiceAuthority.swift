@@ -7,7 +7,7 @@ extension GatewayLaunchAgentManager {
         let plist: URL
         let environment: URL
         let wrapper: URL
-        let definition: ServiceDefinitionDigest
+        private(set) var definition: ServiceDefinitionDigest
         let isLocalGateway: Bool
         let updateSelection: CLIInstallPolicy.ManagedUpdateSelection
 
@@ -20,18 +20,14 @@ extension GatewayLaunchAgentManager {
         }
 
         var afterUninstall: Self {
-            Self(
-                plist: self.plist,
-                environment: self.environment,
-                wrapper: self.wrapper,
-                definition: self.definition.withoutPlist,
-                isLocalGateway: self.isLocalGateway,
-                updateSelection: self.updateSelection)
+            var authority = self
+            authority.definition = self.definition.withoutPlist
+            return authority
         }
     }
 
     struct ServiceDefinitionDigest: Equatable, Sendable {
-        let plist: String?
+        private(set) var plist: String?
         let environment: String?
         let wrapper: String?
 
@@ -44,14 +40,10 @@ extension GatewayLaunchAgentManager {
             self.wrapper = wrapper.map(digest)
         }
 
-        private init(plistDigest: String?, environmentDigest: String?, wrapperDigest: String?) {
-            self.plist = plistDigest
-            self.environment = environmentDigest
-            self.wrapper = wrapperDigest
-        }
-
         var withoutPlist: Self {
-            Self(plistDigest: nil, environmentDigest: self.environment, wrapperDigest: self.wrapper)
+            var definition = self
+            definition.plist = nil
+            return definition
         }
     }
 

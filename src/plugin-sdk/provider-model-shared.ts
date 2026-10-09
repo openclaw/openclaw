@@ -1,3 +1,4 @@
+import { normalizeModelCostConfig } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
@@ -9,15 +10,11 @@ import {
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
-import type {
-  ProviderReasoningOutputModeContext,
-  ProviderReplayPolicyContext,
-  ProviderRuntimeModel,
-  ProviderSanitizeReplayHistoryContext,
-} from "./plugin-entry.js";
+import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 export {
@@ -139,6 +136,7 @@ export type {
 export {
   bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
@@ -204,19 +202,19 @@ export {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
 
-/** Compare canonical flat rates without assuming display-only models include cost metadata. */
+/** Compare canonical rates and tiers; display-only models may omit cost metadata. */
 export function modelCostsEqual(
   current: ProviderRuntimeModel["cost"] | undefined,
   expected: ProviderRuntimeModel["cost"],
 ): boolean {
   return (
-    current?.input === expected.input &&
-    current?.output === expected.output &&
-    current?.cacheRead === expected.cacheRead &&
-    current?.cacheWrite === expected.cacheWrite
+    current !== undefined &&
+    JSON.stringify(normalizeModelCostConfig(current)) ===
+      JSON.stringify(normalizeModelCostConfig(expected))
   );
 }
 
@@ -307,7 +305,10 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+  | "buildReplayPolicy"
+  | "sanitizeReplayHistory"
+  | "sanitizeReplayHistoryAsync"
+  | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -366,22 +367,26 @@ export function buildProviderReplayFamilyHooks(
       };
     }
     case "anthropic-by-model":
+    case "native-anthropic-by-model": {
+      const buildPolicy =
+        options.family === "native-anthropic-by-model"
+          ? buildNativeAnthropicReplayPolicyForModel
+          : buildAnthropicReplayPolicyForModel;
       return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId, model),
+        buildReplayPolicy: ({
+          modelId,
+          model,
+          inHistorySystemUpdates,
+        }: ProviderReplayPolicyContext) => buildPolicy(modelId, model, inHistorySystemUpdates),
       };
-    case "native-anthropic-by-model":
-      return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId, model),
-      };
+    }
     case "google-gemini":
       return {
-        buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
-        sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
-          sanitizeGoogleGeminiReplayHistory(ctx),
-        resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
-          resolveTaggedReasoningOutputMode(),
+        buildReplayPolicy: buildGoogleGeminiReplayPolicy,
+        // Retained adapter for third-party callers of the legacy family hook.
+        sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
+        sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
+        resolveReasoningOutputMode: resolveTaggedReasoningOutputMode,
       };
     case "passthrough-gemini":
       return {
@@ -398,16 +403,6 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
-
-/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
-export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
-export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
 
 /** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({

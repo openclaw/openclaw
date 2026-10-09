@@ -33,6 +33,7 @@ import {
 } from "./chat-history-request.ts";
 import {
   commitCurrentChatHistorySnapshot,
+  historySessionId,
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
@@ -458,13 +459,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           prepended = true;
           return true;
         }
-        const resultSessionId =
-          typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()
-            ? result.sessionInfo.sessionId.trim()
-            : typeof result.sessionId === "string"
-              ? result.sessionId.trim()
-              : "";
-        if (expectedSessionId && resultSessionId !== expectedSessionId) {
+        if (expectedSessionId && historySessionId(result) !== expectedSessionId) {
           // Offset cursors belong to one transcript. A reset can reuse the session
           // key, so replace the tail instead of mixing two session IDs.
           await loadChatHistory(state);

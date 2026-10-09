@@ -1,5 +1,6 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
@@ -99,10 +100,8 @@ function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolCon
 }
 
 async function executeZalouserTool(
-  _toolCallId: string,
   params: ToolParams,
   signal?: AbortSignal,
-  _onUpdate?: unknown,
   context?: ZalouserToolContext,
 ): Promise<AgentToolResult<unknown>> {
   try {
@@ -194,6 +193,14 @@ async function executeZalouserTool(
   } catch (err) {
     return json({
       error: formatErrorMessage(err),
+      ...(isChannelPartialDeliveryError(err)
+        ? {
+            ok: false,
+            deliveryStatus: "partial_failed",
+            sentBeforeError: true,
+            result: err.deliveryResult,
+          }
+        : {}),
     });
   }
 }
@@ -207,7 +214,7 @@ export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool 
       "Actions: send (text message), image (send image URL), link (send link), " +
       "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
     parameters: ZalouserToolSchema,
-    execute: async (toolCallId, params, signal, onUpdate) =>
-      await executeZalouserTool(toolCallId, params as ToolParams, signal, onUpdate, context),
+    execute: async (_toolCallId, params, signal) =>
+      await executeZalouserTool(params as ToolParams, signal, context),
   } satisfies AnyAgentTool;
 }

@@ -40,7 +40,7 @@ import {
   cancelTerminalSourceReplyDelivery,
   reconcileTerminalSourceReplyDelivery,
 } from "../../infra/outbound/source-reply-mirror.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -58,11 +58,9 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { readInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
@@ -149,7 +147,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
-      authorize: messageAuthority.agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       replayResults: messageAuthority.assertReadCurrent === undefined,
       resolveChannel: async (requestChannel) => {
@@ -526,7 +524,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
-      authorize: agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
@@ -570,11 +568,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           const idLikeTarget = await withChannelReadAuthority(
             messageActionAuthorization?.scheduled ? commitAgentRuntimeAuthority : undefined,
             () =>
-              maybeResolveIdLikeTarget({
+              maybeResolvePluginMessagingTarget({
                 cfg,
                 channel,
                 input: resolvedTarget.to,
                 accountId,
+                requireIdLike: true,
               }),
           );
           const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
@@ -590,22 +589,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (sessionOwner && !sessionOwner.ok) {
             return { ok: false, error: sessionOwner.error, meta: { channel } };
           }
-          const sessionAgentId = sessionOwner?.agentId;
-          const implicitAgent =
-            !explicitAgentId && !sessionAgentId
-              ? resolveRequestedSessionAgentId(cfg, "main")
-              : undefined;
-          if (implicitAgent && !implicitAgent.ok) {
-            return { ok: false, error: implicitAgent.error, meta: { channel } };
-          }
-          const effectiveAgentId =
-            explicitAgentId ?? sessionAgentId ?? (implicitAgent?.ok ? implicitAgent.agentId : null);
+          let effectiveAgentId = explicitAgentId ?? sessionOwner?.agentId;
           if (!effectiveAgentId) {
-            return {
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
-              meta: { channel },
-            };
+            const implicitAgent = resolveRequestedSessionAgentId(cfg, "main");
+            if (!implicitAgent.ok) {
+              return { ok: false, error: implicitAgent.error, meta: { channel } };
+            }
+            effectiveAgentId = implicitAgent.agentId;
           }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
@@ -660,20 +650,15 @@ export const sendHandlers: GatewayRequestHandlers = {
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
             normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
           // Message-scoped threads can refine an existing base session only after target lookup.
-          const outboundRoute = derivedRoute
-            ? providedSessionKey
-              ? shouldUseDerivedThreadSessionKey
-                ? {
-                    ...derivedRoute,
-                    baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
-                  }
-                : {
-                    ...derivedRoute,
-                    sessionKey: providedSessionKey,
-                    baseSessionKey: providedSessionKey,
-                  }
-              : derivedRoute
-            : null;
+          const outboundRoute =
+            derivedRoute && providedSessionKey
+              ? {
+                  ...derivedRoute,
+                  ...(shouldUseDerivedThreadSessionKey
+                    ? { baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey }
+                    : { sessionKey: providedSessionKey, baseSessionKey: providedSessionKey }),
+                }
+              : (derivedRoute ?? null);
           const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
           if (outboundSessionKey) {
             const agentAccessError = authorizeGatewaySessionCreation({
@@ -841,7 +826,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
       conflictMessage: "poll account selections do not match",
-      authorize: agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -856,31 +841,22 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg, channel } = resolved;
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const outbound = plugin?.outbound;
-        if (
-          typeof request.durationSeconds === "number" &&
-          outbound?.supportsPollDurationSeconds !== true
-        ) {
-          // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `durationSeconds is not supported for ${channel} polls`,
-            ),
-          );
-          return undefined;
-        }
-        if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `isAnonymous is not supported for ${channel} polls`,
-            ),
-          );
-          return undefined;
+        // Reject channel-specific options before normalization can silently truncate them.
+        for (const [parameter, capability] of [
+          ["durationSeconds", "supportsPollDurationSeconds"],
+          ["isAnonymous", "supportsAnonymousPolls"],
+        ] as const) {
+          if (request[parameter] !== undefined && outbound?.[capability] !== true) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `${parameter} is not supported for ${channel} polls`,
+              ),
+            );
+            return undefined;
+          }
         }
         if (!plugin || !outbound?.sendPoll) {
           respond(

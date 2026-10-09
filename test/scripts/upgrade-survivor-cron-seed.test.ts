@@ -122,7 +122,7 @@ if (args[0] === "config") {
     assert.equal(fs.existsSync(path.join(state, relative)), false,
       "synthetic legacy auth state must not exist during baseline bootstrap: " + relative);
   }
-  assert.equal(fs.existsSync(path.join(state, "sessions", "sessions.json")), false,
+  assert.equal(fs.existsSync(path.join(state, "agents", "main", "sessions", "sessions.json")), false,
     "legacy session specimens must not exist during baseline bootstrap");
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false,
     "legacy cron specimens must not exist during baseline bootstrap");
@@ -144,7 +144,7 @@ if (args[0] === "config") {
   assert.equal(fs.existsSync(live), false, "legacy migration specimens require an offline baseline");
   assert.equal(config, original, "the updater must receive the authored config bytes");
   assert.equal(fs.existsSync(boot), process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth");
-  const sessions = read(path.join(state, "sessions", "sessions.json"));
+  const sessions = read(path.join(state, "agents", "main", "sessions", "sessions.json"));
   assert.deepEqual(Object.values(sessions).map((entry) => entry.sessionId),
     ["upgrade-main-session", "upgrade-direct-session", "upgrade-group-session"]);
   for (const entry of Object.values(sessions)) assert.equal(read(entry.sessionFile).id, entry.sessionId);

@@ -77,6 +77,7 @@ function renderChannelConfigForm(channelId: string, props: ChannelsProps, disabl
             unsupported,
             disabled,
             showLabel: false,
+            maskSensitive: true,
             onPatch: props.onConfigPatch,
           }),
       })}

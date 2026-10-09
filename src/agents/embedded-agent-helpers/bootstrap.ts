@@ -209,7 +209,7 @@ function buildAgentsPolicyDigest(
   };
 }
 
-function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBootstrapResult {
+function trimAgentsBootstrapContent(trimmed: string, maxChars: number): string {
   let headChars = Math.floor(maxChars * AGENTS_POLICY_HEAD_RATIO);
   let tailChars = Math.floor(maxChars * AGENTS_POLICY_TAIL_RATIO);
   let digestBudget = Math.floor(maxChars * AGENTS_POLICY_DIGEST_RATIO);
@@ -266,12 +266,7 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
     rendered = render();
   }
 
-  return {
-    content: rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered,
-    truncated: true,
-    maxChars,
-    originalLength: trimmed.length,
-  };
+  return rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered;
 }
 
 function trimBootstrapContent(
@@ -280,16 +275,17 @@ function trimBootstrapContent(
   maxChars: number,
 ): TrimBootstrapResult {
   const trimmed = content.trimEnd();
+  const finish = (value: string, truncated = true): TrimBootstrapResult => ({
+    content: value,
+    truncated,
+    maxChars,
+    originalLength: trimmed.length,
+  });
   if (trimmed.length <= maxChars) {
-    return {
-      content: trimmed,
-      truncated: false,
-      maxChars,
-      originalLength: trimmed.length,
-    };
+    return finish(trimmed, false);
   }
   if (fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()) {
-    return trimAgentsBootstrapContent(trimmed, maxChars);
+    return finish(trimAgentsBootstrapContent(trimmed, maxChars));
   }
 
   const markerTemplate = (headChars: number, tailChars: number) =>
@@ -365,12 +361,7 @@ function trimBootstrapContent(
     contentWithMarker.length > maxChars
       ? truncateUtf16Safe(contentWithMarker, maxChars)
       : contentWithMarker;
-  return {
-    content: boundedContent,
-    truncated: true,
-    maxChars,
-    originalLength: trimmed.length,
-  };
+  return finish(boundedContent);
 }
 
 function clampToBudget(content: string, budget: number): string {
@@ -453,4 +444,20 @@ export function buildBootstrapContextFiles(
     });
   }
   return result;
+}
+
+/** Builds bounded context files from already-resolved bootstrap file metadata. */
+export function buildBootstrapContextForFiles(
+  bootstrapFiles: WorkspaceBootstrapFile[],
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string | null;
+    warn?: (message: string) => void;
+  },
+): EmbeddedContextFile[] {
+  return buildBootstrapContextFiles(bootstrapFiles, {
+    maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    warn: params.warn,
+  });
 }

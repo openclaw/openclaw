@@ -9,61 +9,42 @@ import {
 } from "./wizard-controller.test-support.ts";
 
 describe("ChannelWizardController cancellation", () => {
-  it("waits for closed input to settle before starting a replacement wizard", async () => {
-    const cancellation = createDeferred();
-    const { controller, request } = createController(async (method) => {
-      if (method === "wizard.start") {
-        return { sessionId: "closing", done: false, status: "running", step: tokenStep };
-      }
-      if (method === "wizard.cancel") {
-        await cancellation.promise;
-        return { status: "cancelled" };
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-
-    await controller.start("telegram");
-    const closing = controller.cancel();
-    expect(controller.state).toEqual({ phase: "idle" });
-    const replacement = controller.start("discord");
-    expect(controller.state).toEqual({ phase: "starting", channel: "discord" });
-
-    try {
-      expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
-    } finally {
-      cancellation.resolve();
-      await Promise.all([closing, replacement]);
-    }
-
-    expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(2);
-    expect(controller.state).toMatchObject({ phase: "step", channel: "discord" });
-  });
-
-  it("starts a replacement wizard after a stalled cancellation reaches its ceiling", async () => {
-    vi.useFakeTimers();
-    try {
+  it.each(["settled", "deadline"])(
+    "waits for %s cancellation before starting a replacement wizard",
+    async (completion) => {
+      vi.useFakeTimers();
+      const cancellation = createDeferred();
       const { controller, request } = createController(async (method) => {
         if (method === "wizard.start") {
-          return { sessionId: "stalled", done: false, status: "running", step: tokenStep };
+          return { sessionId: "closing", done: false, status: "running", step: tokenStep };
         }
         if (method === "wizard.cancel") {
-          return await new Promise(() => {});
+          await cancellation.promise;
+          return { status: "cancelled" };
         }
         throw new Error(`unexpected ${method}`);
       });
-
-      await controller.start("telegram");
-      const closing = controller.cancel();
-      const replacement = controller.start("discord");
-      await vi.advanceTimersByTimeAsync(120_000);
-      await Promise.all([closing, replacement]);
-
-      expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(2);
-      expect(controller.state).toMatchObject({ phase: "step", channel: "discord" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      try {
+        await controller.start("telegram");
+        const closing = controller.cancel();
+        expect(controller.state).toEqual({ phase: "idle" });
+        const replacement = controller.start("discord");
+        expect(controller.state).toEqual({ phase: "starting", channel: "discord" });
+        expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
+        if (completion === "deadline") {
+          await vi.advanceTimersByTimeAsync(120_000);
+        } else {
+          cancellation.resolve();
+        }
+        await Promise.all([closing, replacement]);
+        expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(2);
+        expect(controller.state).toMatchObject({ phase: "step", channel: "discord" });
+      } finally {
+        cancellation.resolve();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("releases a committed wizard's final prompt when its dialog closes", async () => {
     const session = new WizardSession(async (prompter, _signal, currentSession) => {

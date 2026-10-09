@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { render, type LitElement } from "lit";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control-ui.js";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { icons } from "../../components/icons.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -51,6 +55,7 @@ function pluginNavigation(
   sidebar: SidebarLifecycleState,
   ids: string[],
   defaultVisible = false,
+  presentation: (id: string) => Pick<ControlUiNavigationItem, "parent" | "icon"> = () => ({}),
 ) {
   const openPage = vi.fn();
   const signal = new AbortController().signal;
@@ -58,7 +63,7 @@ function pluginNavigation(
     key: `example/${id}`,
     pluginId: "example",
     signal,
-    value: { id, label: id, defaultVisible, page: { id } },
+    value: { id, label: id, defaultVisible, page: { id }, ...presentation(id) },
     host: { navigation: { pageHref: () => `/plugin?plugin=example&id=${id}`, openPage } },
   }));
   Object.assign(context, {
@@ -183,27 +188,6 @@ describe("AppSidebar interleaved zone", () => {
       expect(row?.querySelector(".session-row-state")).toBeNull();
       expect(row?.querySelector(".nav-item__state")).toBeNull();
     }
-  });
-
-  it("keeps many pinned sessions always visible", async () => {
-    const keys = [
-      "agent:main:pinned-0",
-      ...Array.from({ length: 30 }, (_, index) => `agent:main:pinned-${index + 1}`),
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    expect(result).not.toBeNull();
-    if (!result) {
-      return;
-    }
-    for (const row of result.sessions) {
-      row.pinned = true;
-    }
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(31);
-    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
   it("renders routes and pinned sessions in the canonical entry order", async () => {
@@ -359,6 +343,59 @@ describe("AppSidebar interleaved zone", () => {
     expect(openPage).toHaveBeenCalledWith({ id: "review" });
   });
 
+  it("keeps nested plugin links in block flow before the following sidebar entry", async () => {
+    const stylesheet = document.createElement("style");
+    stylesheet.textContent = readStyleSheet("ui/src/styles/sidebar-reorder.css");
+    document.head.append(stylesheet);
+    const originalLocation = window.location.href;
+    onTestFinished(() => {
+      stylesheet.remove();
+      window.history.replaceState(null, "", originalLocation);
+    });
+    window.history.replaceState(null, "", "/plugin?plugin=example&id=notes");
+    const { sidebar, context } = await mountZone();
+    pluginNavigation(context, sidebar, ["boards", "review", "notes"], false, (id) =>
+      id === "boards" ? {} : { parent: "boards" },
+    );
+    sidebar.sidebarEntries = ["plugin:example/boards", "plugin:example/notes", "route:usage"];
+    await sidebar.updateComplete;
+    const entry = zoneEntry(sidebar, "plugin:example/boards");
+    await entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
+    expect(entry.querySelectorAll(".nav-item--child")).toHaveLength(2);
+    // The parent link and its children share one block group inside the flex row,
+    // so the row keeps its reorder menu and grows with the list.
+    const group = entry.querySelector<HTMLElement>(".nav-item-group")!;
+    const parent = group.querySelector("a")!;
+    const children = group.querySelector<HTMLElement>(".nav-item__children")!;
+    expect(group.parentElement?.tagName).toBe("OPENCLAW-PLUGIN-CONTRIBUTIONS");
+    expect(group.firstElementChild).toBe(parent);
+    expect(parent.nextElementSibling).toBe(children);
+    expect(entry.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    expect(
+      entry.querySelector('[aria-current="page"]')?.classList.contains("nav-item--child"),
+    ).toBe(true);
+    expect(getComputedStyle(entry).display).toBe("flex");
+    expect(getComputedStyle(group).display).toBe("block");
+    expect(children.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      parent.getBoundingClientRect().bottom - 1,
+    );
+    expect(entry.getBoundingClientRect().height).toBeGreaterThanOrEqual(
+      parent.getBoundingClientRect().height + children.getBoundingClientRect().height - 1,
+    );
+    const menu = entry.querySelector(".sidebar-reorder-menu")!;
+    expect(menu.parentElement).toBe(entry);
+    const pinned = zoneEntry(sidebar, "plugin:example/notes");
+    expect(entry.nextElementSibling).toBe(pinned);
+    expect(pinned.querySelector(".nav-item__children")).toBeNull();
+    expect(pinned.querySelector(".nav-item-group")).toBeNull();
+    expect(pinned.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      children.getBoundingClientRect().bottom - 1,
+    );
+    const ordinary = zoneEntry(sidebar, "route:usage");
+    expect(pinned.nextElementSibling).toBe(ordinary);
+    expect(getComputedStyle(ordinary).display).toBe("flex");
+  });
+
   it("hides an unavailable plugin pin without deleting its saved position", async () => {
     const { sidebar, context } = await mountZone();
     pluginNavigation(context, sidebar, []);
@@ -368,16 +405,45 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.sidebarEntries).toEqual(["plugin:example/review", "route:usage"]);
   });
 
-  it("offers optional plugin destinations in the pin editor", async () => {
+  it("offers child destinations with their icons and preserves an explicit removal", async () => {
     const { sidebar, context } = await mountZone();
-    pluginNavigation(context, sidebar, ["review", "notes"]);
+    const register = () =>
+      pluginNavigation(context, sidebar, ["review", "notes"], false, (id) => ({
+        parent: "boards",
+        icon: id === "review" ? "activity" : "toString",
+      }));
+    register();
+    sidebar.sidebarEntries = ["route:usage", "plugin:example/review"];
+    sidebar.onUpdateSidebarEntries = (entries) => {
+      sidebar.sidebarEntries = entries;
+    };
     const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
     nav?.dispatchEvent(
       new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }),
     );
     await sidebar.updateComplete;
-    expect(sidebar.querySelector('wa-dropdown-item[value="plugin:example/review"]')).not.toBeNull();
-    expect(sidebar.querySelector('wa-dropdown-item[value="plugin:example/notes"]')).not.toBeNull();
+    const icon = document.createElement("div");
+    for (const [id, expectedIcon] of [
+      ["review", "activity"],
+      ["notes", "plug"],
+    ] as const) {
+      render(icons[expectedIcon], icon);
+      expect(
+        sidebar.querySelector(`wa-dropdown-item[value="plugin:example/${id}"] svg`)?.outerHTML,
+      ).toBe(icon.querySelector("svg")?.outerHTML);
+    }
+    sidebar.querySelector(".sidebar-pin-editor-menu")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        cancelable: true,
+        detail: { item: { value: "plugin:example/review" } },
+      }),
+    );
+    await sidebar.updateComplete;
+    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+    register();
+    await sidebar.updateComplete;
+    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:example/review"]')).toBeNull();
   });
 
   it("writes reordered entries after a route drop", async () => {

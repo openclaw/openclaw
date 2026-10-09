@@ -1,11 +1,10 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateSessionsTitlePrepareParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareDashboardSessionTitle } from "../dashboard-session-title.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { prepareSessionCreateModelSelection } from "../session-create-model-selection.js";
@@ -31,7 +30,6 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         rawAgentId: request.agentId,
         respond,
         cfg,
-        normalize: normalizeOptionalString,
       });
       if (!agent) {
         return;

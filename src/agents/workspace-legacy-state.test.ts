@@ -68,7 +68,7 @@ describe("legacy workspace reset cleanup", () => {
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`;
     const candidates = [
       context.paths.setupStatePaths[0]!,
-      `${context.paths.setupStatePaths[1]!}.doctor-importing`,
+      `${context.paths.setupStatePaths[0]!}.doctor-importing`,
       context.paths.stateDirAttestationPaths[0]!,
       `${context.paths.stateDirAttestationPaths.at(-1)!}.doctor-importing`,
       context.paths.siblingAttestationPaths[0]!,

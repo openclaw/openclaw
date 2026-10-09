@@ -15,9 +15,9 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   activateSwarmRun,
@@ -103,7 +103,7 @@ function createGuardedStopFixture() {
         activeRunIds: [`${runId}-capacity`],
       }),
     ).toBe(true);
-    const registration = registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: scope.sessionKey,
       requesterSessionKey,
@@ -116,9 +116,6 @@ function createGuardedStopFixture() {
       queued: true,
       expectsCompletionMessage: false,
     });
-    if (registration) {
-      await registration;
-    }
     const start = vi.fn(async () => {});
     activateSwarmRun({
       groupId,
@@ -275,7 +272,7 @@ it.each(["replacement", "branch"] as const)(
       expect(test.context.chatQueuedTurns.get("successor-queued")).toBe(successorQueue);
       const successorDescendant = await expectDefined(successorChild, "successor descendant");
       for (const selected of [child, successorDescendant]) {
-        expect(getSubagentRunByChildSessionKey(selected.sessionKey)?.execution.status).toBe(
+        expect((await getSubagentRunByChildSessionKey(selected.sessionKey))?.execution.status).toBe(
           "queued",
         );
         expect(selected.start).not.toHaveBeenCalled();
@@ -462,7 +459,9 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
     }
     expect(test.context.chatQueuedTurns.get("successor-queued")).toBe(queued);
     for (const child of [collector, descendant]) {
-      expect(getSubagentRunByChildSessionKey(child.sessionKey)?.execution.status).toBe("queued");
+      expect((await getSubagentRunByChildSessionKey(child.sessionKey))?.execution.status).toBe(
+        "queued",
+      );
       expect(child.start).not.toHaveBeenCalled();
     }
     const events = await loadTranscriptEvents(replacement);
@@ -574,7 +573,7 @@ it.each([
       expect(parent.controller.signal.aborted).toBe(kind === "owned");
       expect(runningAbort).toHaveBeenCalledTimes(canCascade ? 1 : 0);
       for (const key of [runningKey, queuedKey]) {
-        expect(getSubagentRunByChildSessionKey(key)?.execution.status).toBe(
+        expect((await getSubagentRunByChildSessionKey(key))?.execution.status).toBe(
           canCascade ? "terminal" : key === runningKey ? "running" : "queued",
         );
       }

@@ -7,9 +7,11 @@ import { renderAgentTools } from "./panels-tools-skills.ts";
 installBrowserHistoryIsolation();
 
 describe("agent tool access diagnostics (browser)", () => {
-  it("explains policy exclusions beside the preview status and exposes their inherited source", () => {
+  it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDirty) => {
     const container = document.createElement("div");
+    const label = configDirty ? "Old profile exclusion" : "Messaging profile";
     const params = createBaseParams({
+      configDirty,
       configForm: {
         tools: { profile: "full" },
         agents: { entries: { main: { tools: { profile: "messaging" } } } },
@@ -31,7 +33,7 @@ describe("agent tool access diagnostics (browser)", () => {
               reasons: [
                 {
                   kind: "profile",
-                  label: "Messaging profile",
+                  label,
                   source: "agents.entries.main.tools.profile",
                   profile: "messaging",
                 },
@@ -47,6 +49,12 @@ describe("agent tool access diagnostics (browser)", () => {
     assert(card);
     expect(card.open).toBe(false);
     const summary = card.querySelector("summary");
+    if (configDirty) {
+      expect(summary?.textContent).toContain("Unverified");
+      expect(card.textContent).not.toContain("Old profile exclusion");
+      expect(card.textContent).toContain("Save your changes to refresh the preview.");
+      return;
+    }
     expect(summary?.textContent).toContain("Off");
     expect(summary?.textContent).toContain("Messaging profile");
     card.open = true;
@@ -105,33 +113,5 @@ describe("agent tool access diagnostics (browser)", () => {
     expect(card?.textContent).not.toContain("Included in preview");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
     expect(container.textContent).toContain("No tools are listed in this preview.");
-  });
-
-  it("does not present an unsaved draft as verified policy", () => {
-    const container = document.createElement("div");
-    const params = createBaseParams({
-      configDirty: true,
-      toolsEffectiveResult: {
-        agentId: "main",
-        profile: "messaging",
-        groups: [],
-        toolAccess: {
-          checked: "live-session",
-          profiles: [],
-          tools: [
-            {
-              id: "exec",
-              status: "excluded",
-              reasons: [{ kind: "profile", label: "Old profile exclusion" }],
-            },
-          ],
-        },
-      },
-    });
-    render(renderAgentTools(params), container);
-    const card = container.querySelector("#agent-tool-exec");
-    expect(card?.querySelector("summary")?.textContent).toContain("Unverified");
-    expect(card?.textContent).not.toContain("Old profile exclusion");
-    expect(card?.textContent).toContain("Save your changes to refresh the preview.");
   });
 });

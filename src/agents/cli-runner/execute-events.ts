@@ -4,6 +4,7 @@ import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
+import { registerListener } from "../../shared/listeners.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import type {
   CliCompactionDelta,
@@ -18,11 +19,12 @@ import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import {
   extractToolErrorMessage,
   sanitizeToolArgs,
-  sanitizeToolResult,
+  prepareToolResult,
 } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import {
   evictOldestEntries,
   MAX_RETAINED_TOOL_ARG_CHARS,
@@ -55,8 +57,19 @@ export function createCliEventHandlers(params: {
   let observedCliActivity = false;
   let compactionActive = false;
   const compactionChangeListeners = new Set<() => void>();
-  let signaledToolExecutionStarted = false;
-  let signaledAssistantOutputStarted = false;
+  const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
+  const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
+    if (signaledPhases.has(phase)) {
+      return;
+    }
+    signaledPhases.add(phase);
+    runParams.onExecutionPhase?.({
+      phase,
+      provider: runParams.provider,
+      model: context.modelId,
+      backend: context.backendResolved.id,
+    });
+  };
   let commentaryCounter = 0;
   // Bounded; see `execute-event-retention.ts`. The counts a summary reports are
   // kept as running totals instead of being read off this map's size, so FIFO
@@ -193,15 +206,7 @@ export function createCliEventHandlers(params: {
     observedCliActivity = true;
     const retainedArgs = rememberStartArgs(event, tracked);
     recordToolSummary(event, false);
-    if (!signaledToolExecutionStarted) {
-      signaledToolExecutionStarted = true;
-      runParams.onExecutionPhase?.({
-        phase: "tool_execution_started",
-        provider: runParams.provider,
-        model: context.modelId,
-        backend: context.backendResolved.id,
-      });
-    }
+    signalExecutionPhase("tool_execution_started");
     if (tracked) {
       // Ordered: loopback correlation and messaging-delivery evidence are both
       // decided inside this call from the real arguments, so the retention drop
@@ -224,6 +229,7 @@ export function createCliEventHandlers(params: {
   };
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
+    const readResult = prepareToolResult(event.result);
     const summary = recordToolSummary(event, event.isError);
     const firstTerminal = !summary.terminalObserved;
     summary.terminalObserved = true;
@@ -240,7 +246,7 @@ export function createCliEventHandlers(params: {
       !loopbackOutcome &&
       stripOpenClawMcpToolPrefix(event.name) === event.name
     ) {
-      const result = sanitizeToolResult(event.result);
+      const result = readResult();
       void runAgentHarnessAfterToolCallHook({
         toolName: normalizeCliToolName(event.name),
         toolCallId: event.toolCallId,
@@ -289,7 +295,7 @@ export function createCliEventHandlers(params: {
           name: event.name,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: sanitizeToolResult(event.result),
+          result: readResult(),
           ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
@@ -305,12 +311,6 @@ export function createCliEventHandlers(params: {
       );
     }
   };
-  // Display-only native events never enter host-tool correlation or delivery accounting.
-  const emitCliToolUseStart = (event: CliToolUseStartDelta) => emitToolUseStart(event, true);
-  const emitCliToolResult = (event: CliToolResultDelta) => emitToolResult(event, true);
-  const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) =>
-    emitToolUseStart(event, false);
-  const emitCliDisplayToolResult = (event: CliToolResultDelta) => emitToolResult(event, false);
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
     // Refuse-new rather than FIFO: the oldest entry here is the long-running
@@ -350,7 +350,7 @@ export function createCliEventHandlers(params: {
           })
         : diagnosticEvent,
     );
-    emitCliToolUseStart(event);
+    emitToolUseStart(event, true);
   };
   const emitParsedToolTerminal = (event: {
     toolCallId: string;
@@ -433,7 +433,7 @@ export function createCliEventHandlers(params: {
   };
   const emitParsedToolResult = (event: CliToolResultDelta) => {
     emitParsedToolTerminal(event);
-    emitCliToolResult(event);
+    emitToolResult(event, true);
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
@@ -481,17 +481,10 @@ export function createCliEventHandlers(params: {
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
     if (text || delta) {
       observedCliActivity = true;
-      if (!signaledAssistantOutputStarted) {
-        signaledAssistantOutputStarted = true;
-        runParams.onExecutionPhase?.({
-          phase: "assistant_output_started",
-          provider: runParams.provider,
-          model: context.modelId,
-          backend: context.backendResolved.id,
-        });
-      }
+      signalExecutionPhase("assistant_output_started");
     }
     emitLiveEvent("assistant", () => ({
+      itemId: cliAssistantItemId(runParams.runId),
       text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
       delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
     }));
@@ -529,10 +522,9 @@ export function createCliEventHandlers(params: {
 
   return {
     emitLiveEvents,
-    emitCliToolUseStart,
-    emitCliToolResult,
-    emitCliDisplayToolUseStart,
-    emitCliDisplayToolResult,
+    // Display-only native events never enter host-tool correlation or delivery accounting.
+    emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
+    emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),
     emitParsedToolUseStart,
     emitParsedToolResult,
     emitCliCompaction,
@@ -544,10 +536,8 @@ export function createCliEventHandlers(params: {
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
     hasActiveCompaction: () => compactionActive,
-    onCompactionActiveChange: (listener: () => void) => {
-      compactionChangeListeners.add(listener);
-      return () => compactionChangeListeners.delete(listener);
-    },
+    onCompactionActiveChange: (listener: () => void) =>
+      registerListener(compactionChangeListeners, listener),
     activeParsedToolCount: () => activeParsedTools.size,
     /**
      * What this consumer is holding right now. The caps in

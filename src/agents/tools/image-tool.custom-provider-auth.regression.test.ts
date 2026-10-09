@@ -16,6 +16,8 @@ import {
 } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
+const buildProviderRegistry = buildMediaUnderstandingRegistry;
+
 const USER_PROVIDER = "hatchery-qwen3.6-plus";
 const USER_MODEL = "qwen3.6-plus";
 const USER_PRIMARY = `${USER_PROVIDER}/${USER_MODEL}`;
@@ -283,7 +285,7 @@ describe("image tool provider loading", () => {
         if (preparedProviders === undefined) {
           throw new Error("unrelated media plugin failed to initialize");
         }
-        return buildMediaUnderstandingRegistry(overrides, cfg, preparedProviders);
+        return buildProviderRegistry(overrides, cfg, preparedProviders);
       },
       resolveRegisteredMediaUnderstandingProvider: resolveProvider,
       resolveImageCompressionPolicy: async () => ({ imageCount: 1 }),

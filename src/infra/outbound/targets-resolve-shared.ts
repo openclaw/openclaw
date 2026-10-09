@@ -1,7 +1,7 @@
 // Shared target resolution applies plugin defaults, allowlists, prefixes, and
 // fallback errors for direct and loaded-channel send paths.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,7 +18,7 @@ export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; e
 /**
  * Inputs shared by direct and heartbeat outbound target resolution.
  */
-type ResolveOutboundTargetParams = {
+export type ResolveOutboundTargetParams = {
   channel: string;
   to?: string;
   allowFrom?: string[];
@@ -91,21 +91,18 @@ export function resolveOutboundTargetWithPlugin(params: {
   }
 
   const resolveTarget = plugin.outbound?.resolveTarget;
-  if (resolveTarget) {
-    return resolveTarget({
-      cfg: params.target.cfg,
-      to: effectiveTo,
-      allowFrom,
-      accountId: params.target.accountId ?? undefined,
-      mode: params.target.mode ?? "explicit",
-    });
-  }
-
-  if (effectiveTo) {
-    return { ok: true, to: effectiveTo };
-  }
-  return {
-    ok: false,
-    error: missingTargetError(plugin.meta.label ?? params.target.channel, hint),
-  };
+  return resolveTarget
+    ? resolveTarget({
+        cfg: params.target.cfg,
+        to: effectiveTo,
+        allowFrom,
+        accountId: params.target.accountId ?? undefined,
+        mode: params.target.mode ?? "explicit",
+      })
+    : effectiveTo
+      ? { ok: true, to: effectiveTo }
+      : {
+          ok: false,
+          error: missingTargetError(plugin.meta.label ?? params.target.channel, hint),
+        };
 }

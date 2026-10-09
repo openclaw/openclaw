@@ -4,6 +4,7 @@ import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-cl
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -11,7 +12,11 @@ import {
 } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  dispatchChannelMessageAction,
+  isFencedProviderReadAction,
+  isScheduledMessageWriteAction,
+} from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -24,6 +29,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
+import { withEffectPreparation } from "../../shared/effect-authority.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
@@ -45,7 +51,6 @@ import {
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
-  type CrossContextDecoration,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
@@ -54,8 +59,6 @@ import {
   cancelTerminalSourceReplyDelivery,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
-
-export { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 
 const log = createSubsystemLogger("outbound/message-action");
 
@@ -68,6 +71,26 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
+export function withMessageActionEffectAuthority<T>(
+  input: MessageActionInput,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prepare = input.messageActionAuthorization?.scheduled?.prepareUse;
+  return withEffectPreparation(
+    prepare
+      ? () =>
+          prepare(
+            isFencedProviderReadAction(input.action) || isScheduledMessageWriteAction(input.action),
+            () => {
+              input.abortSignal?.throwIfAborted();
+              input.assertDirectAdapterHandoff?.();
+            },
+          )
+      : undefined,
+    run,
+  );
+}
 
 export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
   throwIfAborted(input.abortSignal);
@@ -220,35 +243,6 @@ async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Prom
   return randomIdempotencyKey();
 }
 
-function applyCrossContextMessageDecoration({
-  params,
-  message,
-  decoration,
-  preferPresentation,
-}: {
-  params: Record<string, unknown>;
-  message: string;
-  decoration: CrossContextDecoration;
-  preferPresentation: boolean;
-}): string {
-  const applied = applyCrossContextDecoration({
-    message,
-    decoration,
-    preferPresentation,
-  });
-  params.message = applied.message;
-  if (applied.presentation) {
-    const existing = normalizeMessagePresentation(params.presentation);
-    params.presentation = existing
-      ? {
-          ...existing,
-          blocks: [...applied.presentation.blocks, ...existing.blocks],
-        }
-      : applied.presentation;
-  }
-  return applied.message;
-}
-
 export async function applyMessageCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -275,12 +269,22 @@ export async function applyMessageCrossContextMarker(params: {
   if (!decoration) {
     return params.message;
   }
-  return applyCrossContextMessageDecoration({
-    params: params.args,
+  const applied = applyCrossContextDecoration({
     message: params.message,
     decoration,
     preferPresentation: params.preferPresentation,
   });
+  params.args.message = applied.message;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.args.presentation);
+    params.args.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
+  }
+  return applied.message;
 }
 
 export async function executeGatewayAction(
@@ -420,28 +424,21 @@ export async function executeGatewayAction(
     return result;
   }
   const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
-  if (result.kind === "send") {
+  if (result.kind === "send" || result.kind === "poll") {
     return {
       ...result,
       handledBy: "core",
       ...(partialDelivery
         ? {}
-        : {
-            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
-            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
-          }),
-    };
-  }
-  if (result.kind === "poll") {
-    return {
-      ...result,
-      handledBy: "core",
-      ...(partialDelivery
-        ? {}
-        : {
-            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
-            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
-          }),
+        : result.kind === "send"
+          ? {
+              // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+              sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+            }
+          : {
+              // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+              pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+            }),
     };
   }
   return result;
@@ -596,7 +593,7 @@ export async function executeMessagePlugin(
   }
 
   if (!channelPlugin?.actions?.handleAction) {
-    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
 
   // Plugin actions bypass buildSendPayloadParts, so model-authored text here
@@ -641,6 +638,17 @@ export async function executeMessagePlugin(
     return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
+  const finishPluginAction = (payload: unknown, toolResult?: AgentToolResult<unknown>) =>
+    annotateSourceDelivery(
+      {
+        ...actionResult,
+        handledBy: "plugin",
+        payload,
+        ...(toolResult ? { toolResult } : {}),
+      },
+      ctx,
+      replyToIsExplicit,
+    );
   const authorization = input.messageActionAuthorization;
   let handled;
   try {
@@ -665,29 +673,12 @@ export async function executeMessagePlugin(
       ? projectMessageActionPartialDelivery(error)
       : undefined;
     if (partialDelivery) {
-      return await annotateSourceDelivery(
-        {
-          ...actionResult,
-          handledBy: "plugin",
-          payload: partialDelivery,
-        },
-        ctx,
-        replyToIsExplicit,
-      );
+      return await finishPluginAction(partialDelivery);
     }
     throw error;
   }
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return await annotateSourceDelivery(
-    {
-      ...actionResult,
-      handledBy: "plugin",
-      payload: extractToolPayload(handled),
-      toolResult: handled,
-    },
-    ctx,
-    replyToIsExplicit,
-  );
+  return await finishPluginAction(extractToolPayload(handled), handled);
 }

@@ -219,11 +219,16 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
               ).not.toThrow();
             }
           }
-          for (const agentId of ["main", "research"]) {
-            const reopened = openOpenClawAgentDatabase({ agentId, env: state.env });
-            expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-              OPENCLAW_AGENT_SCHEMA_VERSION,
-            );
+          // A refusal before schema convergence restores the captured service,
+          // whose prior runtime already served this state. Other cases prove that
+          // the candidate can reopen every migrated database before health passes.
+          if (outcome !== "repair-failed" && outcome !== "config-refused") {
+            for (const agentId of ["main", "research"]) {
+              const reopened = openOpenClawAgentDatabase({ agentId, env: state.env });
+              expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+                OPENCLAW_AGENT_SCHEMA_VERSION,
+              );
+            }
           }
           running = true;
           return { outcome: "completed" as const };
@@ -394,7 +399,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
             expect(runtime.log).toHaveBeenCalledWith(
               expect.stringMatching(
-                /Gateway activation skipped.*inconclusive.*gateway status --deep/,
+                /Gateway activation skipped.*inconclusive.*gateway status --deep/s,
               ),
             );
             expectProcessOwnerReleased();
@@ -413,7 +418,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
           } else if (outcome === "config-refused") {
-            await expect(run).rejects.toThrow("persisted repair state is not ready");
+            await run;
             expect(runtime.exit).toHaveBeenCalledWith(1);
           } else if (outcome === "store-close-failed") {
             await expect(run).rejects.toThrow("synthetic database close failure");
@@ -439,9 +444,14 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           const shouldRestart =
             outcome === "ready" ||
             archiveVerification ||
+            outcome === "repair-failed" ||
+            outcome === "store-close-failed" ||
+            outcome === "config-refused" ||
+            outcome === "workspace-cleanup-failed" ||
             outcome === "restart-unhealthy" ||
             outcome === "clean-stopped-repair" ||
             outcome === "clean-force-repair" ||
+            approvalsBlocked ||
             outcome === "approvals-migrated" ||
             outcome === "update-legacy";
           expect(events).toEqual(

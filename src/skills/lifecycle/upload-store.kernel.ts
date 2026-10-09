@@ -25,30 +25,10 @@ import {
   selectSkillUploadMetadata,
   SKILL_UPLOAD_LEASE_SCOPE,
   type SkillUploadDatabase,
-  type SkillUploadMetadataRow,
 } from "./upload-store.sqlite.js";
 
 type Options = OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 const MAX_ACTIVE_SKILL_UPLOADS = 32;
-
-function matchesBegin(
-  row: SkillUploadMetadataRow,
-  params: {
-    kind: "skill-archive";
-    slug: string;
-    force: boolean;
-    sizeBytes: number;
-    sha256?: string;
-  },
-): boolean {
-  return (
-    row.kind === params.kind &&
-    row.slug === params.slug &&
-    row.force === (params.force ? 1 : 0) &&
-    row.size_bytes === params.sizeBytes &&
-    (row.sha256 ?? undefined) === params.sha256
-  );
-}
 
 export function beginSkillUploadInDatabase(
   params: {
@@ -78,7 +58,13 @@ export function beginSkillUploadInDatabase(
         selectSkillUploadMetadata(kysely).where("idempotency_key_hash", "=", keyHash),
       );
       if (existing) {
-        if (!matchesBegin(existing, { kind: params.kind, slug, force, sizeBytes, sha256 })) {
+        if (
+          existing.kind !== params.kind ||
+          existing.slug !== slug ||
+          existing.force !== (force ? 1 : 0) ||
+          existing.size_bytes !== sizeBytes ||
+          (existing.sha256 ?? undefined) !== sha256
+        ) {
           throw new SkillUploadRequestError("idempotencyKey conflicts with a different upload");
         }
         if (isFutureDateTimestampMs(existing.expires_at, { nowMs: createdAt })) {
@@ -155,8 +141,7 @@ export function appendSkillUploadChunkInDatabase(
     if (!row) {
       throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
     }
-    const validNow = asDateTimestampMs(Date.now());
-    if (validNow === undefined || !isFutureDateTimestampMs(row.expires_at, { nowMs: validNow })) {
+    if (!isFutureDateTimestampMs(row.expires_at)) {
       throw new SkillUploadRequestError("upload has expired");
     }
     if (row.committed === 1) {
@@ -212,11 +197,7 @@ export function claimSkillUploadInDatabase(
       throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
     }
     const currentTime = Date.now();
-    const validNow = asDateTimestampMs(currentTime);
-    if (
-      validNow === undefined ||
-      !isFutureDateTimestampMs(current.expires_at, { nowMs: validNow })
-    ) {
+    if (!isFutureDateTimestampMs(current.expires_at, { nowMs: currentTime })) {
       throw new SkillUploadRequestError("upload has expired");
     }
     if (current.committed !== 1) {

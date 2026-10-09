@@ -94,25 +94,18 @@ export type DurableMessageBatchSendResult =
 export function durableMessageBatchMayHaveReachedRecipient(
   result: DurableMessageBatchSendResult,
 ): boolean {
-  if (result.status === "sent" || result.status === "partial_failed") {
-    return true;
-  }
-  if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
-    return true;
-  }
-  if (
-    result.status === "failed" &&
-    isOutboundDeliveryError(result.error) &&
-    result.error.sentBeforeError
-  ) {
-    return true;
-  }
-  return (
+  return Boolean(
+    result.status === "sent" ||
+    result.status === "partial_failed" ||
+    (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") ||
+    (result.status === "failed" &&
+      isOutboundDeliveryError(result.error) &&
+      result.error.sentBeforeError) ||
     result.payloadOutcomes?.some((outcome) =>
       outcome.status === "failed"
         ? outcome.sentBeforeError
         : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
-    ) === true
+    ),
   );
 }
 
@@ -170,20 +163,6 @@ export function serializeDurableMessagePayloadOutcomes(
 }
 
 const neverAbortedSignal = new AbortController().signal;
-
-function toDurableMessageIntent(
-  intent: OutboundDeliveryIntent,
-  renderedBatch: RenderedMessageBatch<ReplyPayload>,
-): DurableMessageSendIntent<ReplyPayload> {
-  return {
-    id: intent.id,
-    channel: intent.channel,
-    to: intent.to,
-    ...(intent.accountId ? { accountId: intent.accountId } : {}),
-    durability: intent.queuePolicy === "required" ? "required" : "best_effort",
-    renderedBatch,
-  };
-}
 
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
@@ -311,7 +290,14 @@ async function withMessageSendContext<T>(
           },
           onDeliveryIntent: (intent) => {
             deliveryIntent = intent;
-            const durableIntent = toDurableMessageIntent(intent, rendered);
+            const durableIntent: DurableMessageSendIntent<ReplyPayload> = {
+              id: intent.id,
+              channel: intent.channel,
+              to: intent.to,
+              ...(intent.accountId ? { accountId: intent.accountId } : {}),
+              durability: intent.queuePolicy === "required" ? "required" : "best_effort",
+              renderedBatch: rendered,
+            };
             ctx.intent = durableIntent;
             onDeliveryIntent?.(durableIntent);
           },

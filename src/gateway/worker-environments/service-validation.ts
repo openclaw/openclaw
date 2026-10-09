@@ -19,12 +19,10 @@ import {
 } from "../../plugins/types.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { normalizeWorkerSshEndpoint } from "./store-validation.js";
 
-export function requireWorkerProfile(
-  value: unknown,
-  serviceError: (code: "invalid_profile", message: string) => Error,
-): WorkerProfile {
+export function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateProviderSettings(value, "Worker profile");
   if (error) {
     throw serviceError("invalid_profile", error);
@@ -38,7 +36,6 @@ export function requireInheritedWorkerProfileAuthorization(
   providerId: string,
   settings: unknown,
   configuredProviderId: string | undefined,
-  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
 ): void {
   if (
     providerId === DEVICE_WORKER_PROVIDER_ID &&

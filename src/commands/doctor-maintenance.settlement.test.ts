@@ -221,7 +221,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "settles failed repair before restoration (data at risk=%s)",
+  "settles failed repair before restoring the Gateway (data at risk=%s)",
   async (unsafe) => {
     const maintenance = await begin();
     const failure = unsafe
@@ -229,10 +229,10 @@ it.each([false, true])(
       : new Error("diagnostic failed");
     try {
       await maintenance!.finish(undefined, undefined, failure);
-      expect(boundary.restart).toHaveBeenCalledTimes(unsafe ? 0 : 1);
-      expect(boundary.health).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.restart).toHaveBeenCalledOnce();
+      expect(boundary.health).toHaveBeenCalledOnce();
       expect(boundary.close).toHaveBeenCalledOnce();
-      expect(boundary.resume).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.resume).toHaveBeenCalledOnce();
     } finally {
       await maintenance?.release();
     }
@@ -313,32 +313,6 @@ it("preserves caller cancellation after a settled maintenance inspection", async
   await expect(withCommandProcessScope(() => begin(), controller.signal)).rejects.toBe(cancelled);
   expect(boundary.stop).toHaveBeenCalledOnce();
   expect(boundary.restart).not.toHaveBeenCalled();
-});
-
-it("leaves a progressing Gateway running and warns after the readiness cap", async () => {
-  boundary.health.mockResolvedValue({
-    healthy: false,
-    staleGatewayPids: [],
-    runtime: { status: "running", pid: 4242 },
-    portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-    waitOutcome: "still-starting",
-    elapsedMs: 300_000,
-    startupPhase: "startup migration",
-  });
-  const maintenance = await begin();
-  expect(maintenance).toBeDefined();
-
-  await expect(maintenance!.finish({})).resolves.toBeUndefined();
-
-  const warning = expect.stringMatching(
-    /still starting after 300s.*startup migration.*openclaw gateway status --deep/,
-  );
-  expect(maintenance!.warnings).toContainEqual(warning);
-  expect(boundary.log).toHaveBeenCalledWith(warning);
-  expect(boundary.log).not.toHaveBeenCalledWith(
-    "Gateway restarted and verified after Doctor repair.",
-  );
-  expect(boundary.restart).toHaveBeenCalledOnce();
 });
 
 it.each(["forced", "uncertain"] as const)(

@@ -10,6 +10,7 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isTelegramReadOnlyControlLaneText } from "./sequential-key.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 import {
@@ -49,41 +50,24 @@ function isTelegramCommandTargetedAtBot(commandText: string, botUsername?: strin
 
 /** True when the update carries a bot_command entity addressed to this bot. */
 function updateHasBotCommandEntityForBot(update: unknown, botUsername?: string): boolean {
-  if (!update || typeof update !== "object") {
+  const root = asOptionalObjectRecord(update);
+  if (!root) {
     return false;
   }
-  const root = update as Record<string, unknown>;
   for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
-    const msg = root[key];
-    if (!msg || typeof msg !== "object") {
+    const message = asOptionalObjectRecord(root[key]);
+    if (!message) {
       continue;
     }
-    const message = msg as {
-      text?: unknown;
-      caption?: unknown;
-      entities?: unknown;
-      caption_entities?: unknown;
-    };
-    const body =
-      typeof message.text === "string"
-        ? message.text
-        : typeof message.caption === "string"
-          ? message.caption
-          : "";
+    const body = readStringField(message, "text") ?? readStringField(message, "caption") ?? "";
     for (const entities of [message.entities, message.caption_entities]) {
       if (!Array.isArray(entities)) {
         continue;
       }
       for (const entity of entities) {
-        if (!entity || typeof entity !== "object") {
-          continue;
-        }
-        const ent = entity as { type?: unknown; offset?: unknown; length?: unknown };
-        if (ent.type !== "bot_command") {
-          continue;
-        }
+        const ent = asOptionalObjectRecord(entity);
         // Telegram command handlers only accept entities at the start of a message.
-        if (ent.offset !== 0 || typeof ent.length !== "number") {
+        if (ent?.type !== "bot_command" || ent.offset !== 0 || typeof ent.length !== "number") {
           continue;
         }
         const commandText = body.slice(ent.offset, ent.offset + ent.length);
@@ -97,31 +81,18 @@ function updateHasBotCommandEntityForBot(update: unknown, botUsername?: string):
 }
 
 function extractUpdateText(update: unknown): string {
-  if (!update || typeof update !== "object") {
+  const root = asOptionalObjectRecord(update);
+  if (!root) {
     return "";
   }
-  const root = update as Record<string, unknown>;
   for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
-    const msg = root[key];
-    if (msg && typeof msg === "object") {
-      const text = (msg as { text?: unknown; caption?: unknown }).text;
-      if (typeof text === "string") {
-        return text;
-      }
-      const caption = (msg as { caption?: unknown }).caption;
-      if (typeof caption === "string") {
-        return caption;
-      }
+    const msg = asOptionalObjectRecord(root[key]);
+    const text = readStringField(msg, "text") ?? readStringField(msg, "caption");
+    if (text !== undefined) {
+      return text;
     }
   }
-  const callback = root.callback_query;
-  if (callback && typeof callback === "object") {
-    const data = (callback as { data?: unknown }).data;
-    if (typeof data === "string") {
-      return data;
-    }
-  }
-  return "";
+  return readStringField(asOptionalObjectRecord(root.callback_query), "data") ?? "";
 }
 
 /**

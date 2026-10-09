@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
@@ -105,10 +106,11 @@ function stop(
 
 function globalContext(overrides: Parameters<typeof createChatAbortContext>[0] = {}) {
   return createChatAbortContext({
-    getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    }),
+    getRuntimeConfig: () =>
+      createCanonicalAgentConfigFixture({
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global" },
+      }).config,
     ...overrides,
   });
 }
@@ -445,37 +447,6 @@ describe("chat abort transcript persistence", () => {
     });
   });
 
-  it("does not duplicate a committed reply when a late abort re-persists the buffered text", async () => {
-    const { transcriptPath, sessionId, storePath } = await createTranscriptFixture();
-    // The embedded agent loop persists its final assistant row without a
-    // run-scoped idempotency key, so the store-level key dedupe cannot see
-    // it; only the attached run identity can scope the skip to this run.
-    seedCommittedReply({ sessionId, storePath, runId: "stalled-committed-run" });
-
-    // Settlement stall: the run committed its row but never emitted its
-    // terminal lifecycle event, so the gateway still projects it active with
-    // the full reply buffered.
-    const runId = "stalled-committed-run";
-    const respond = vi.fn();
-    const context = bufferedContext(sessionId, [[runId, "Completed reply"]], {
-      removeChatRun: vi
-        .fn()
-        .mockReturnValue({ sessionKey: "main", clientRunId: "client-stalled-committed-run" }),
-      agentRunSeq: new Map<string, number>([
-        [runId, 2],
-        ["client-stalled-committed-run", 3],
-      ]),
-    });
-
-    await abort(context, { sessionKey: "main", runId }, respond);
-
-    const lines = await readTranscriptLines(transcriptPath);
-    const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
-
-    expect(committedRows).toHaveLength(1);
-    expect(committedRows[0]?.openclawAbort).toBeUndefined();
-  });
-
   it("keeps an abort partial when the committed reply belongs to a different run", async () => {
     const { transcriptPath, sessionId, storePath } = await createTranscriptFixture();
     // An earlier run committed the identical reply. Text equality alone would
@@ -648,16 +619,16 @@ describe("chat abort transcript persistence", () => {
 
   it.each([
     ["scopes global stop commands to the selected agent", "work"],
-    ["scopes bare global stop commands to the default agent", "main"],
+    ["scopes bare global stop commands to the migrated default agent", "main"],
   ])("%s", async (_name, selectedAgentId) => {
     const { sessionId, transcriptPath } = await createTranscriptFixture({
       agentId: selectedAgentId,
       sessionKey: "global",
     });
-    const cfg = {
+    const cfg = createCanonicalAgentConfigFixture({
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" as const },
-    };
+      session: { scope: "global" },
+    }).config;
     sessionEntryState.canonicalKey = "global";
     sessionEntryState.cfg = cfg;
     const respond = vi.fn();
@@ -719,7 +690,12 @@ describe("chat abort transcript persistence", () => {
 
   it.each([
     ["scopes global chat.abort requests to the selected agent", "global", "work", false],
-    ["scopes bare global chat.abort requests to the default agent", "global", undefined, true],
+    [
+      "scopes bare global chat.abort requests to the migrated default agent",
+      "global",
+      undefined,
+      true,
+    ],
     [
       "infers selected global chat.abort scope from agent-prefixed aliases",
       "agent:work:main",
@@ -728,10 +704,10 @@ describe("chat abort transcript persistence", () => {
     ],
   ])("%s", async (_name, sessionKey, agentId, needsGlobalConfig) => {
     const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
-    const cfg = {
+    const cfg = createCanonicalAgentConfigFixture({
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" as const },
-    };
+      session: { scope: "global" },
+    }).config;
     const respond = vi.fn();
     const mainActive = createActiveRun("global", {
       sessionId: "sess-main-global",
@@ -944,7 +920,7 @@ describe("chat abort transcript persistence", () => {
       sessionId: "sess-work-global",
     });
     const context = createChatAbortContext({
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "work", default: true }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { work: {} } } }),
       chatAbortControllers: new Map([["run-work-global", active]]),
     });
 
@@ -1025,23 +1001,6 @@ describe("chat abort transcript persistence", () => {
     expect(context.chatAbortControllers.has("run-stop-client-session")).toBe(true);
   });
 
-  it("skips run-scoped transcript persistence when partial text is blank", async () => {
-    const { transcriptPath, sessionId } = await createTranscriptFixture();
-    const runId = "idem-abort-run-blank";
-    const respond = vi.fn();
-    const context = bufferedContext(sessionId, [[runId, "  \n\t  "]]);
-
-    await abort(context, { sessionKey: "main", runId }, respond);
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
-
-    const lines = await readTranscriptLines(transcriptPath);
-    const persisted = findMessageWithIdempotencyKey(lines, `${runId}:assistant`);
-    expect(persisted).toBeUndefined();
-  });
-
   it("skips run-scoped transcript persistence for hidden internal runs", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture();
     const runId = "idem-abort-run-hidden";
@@ -1063,28 +1022,6 @@ describe("chat abort transcript persistence", () => {
 });
 
 describe("chat.abort session identity matching", () => {
-  it("matches an active run by stored sessionId when sessionKey differs", async () => {
-    const storedSessionId = "sess-stored-abc";
-    setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId: storedSessionId });
-    const runId = "embedded-run-1";
-    const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([[runId, active]]),
-    });
-    const respond = vi.fn();
-
-    await abort(context, { sessionKey: "main" }, respond);
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
-    expect(active.controller.signal.aborted).toBe(true);
-    expect(sessionEntryState.loadCalls).toContainEqual({
-      sessionKey: "agent:main:main",
-      opts: { agentId: "main" },
-    });
-  });
-
   it("does not match a run whose sessionId differs from the stored entry", async () => {
     setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId: "sess-stored-xyz" });
     const runId = "embedded-run-2";

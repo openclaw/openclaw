@@ -14,6 +14,7 @@ import {
 import { BoardValidationError } from "./board-layout.js";
 import { createBoardWidgetPutSnapshot, type BoardStore } from "./board-store.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
+import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -370,7 +371,7 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   });
   const prepare = vi.spyOn(database.db, "prepare");
 
-  const prepared = await store.getSnapshotWithHtmlViewMetadata({ sessionKey });
+  const prepared = readBoardSnapshotWithHtmlViewMetadata(database, sessionKey);
 
   const widgetSelects = prepare.mock.calls
     .map(([sql]) => sql)
@@ -378,6 +379,7 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   expect(widgetSelects).toHaveLength(1);
   expect(widgetSelects[0]).toContain('"sha256"');
   expect(widgetSelects[0]).not.toContain('"html"');
-  expect(prepared.htmlViewMetadata.get("status")).not.toHaveProperty("html");
+  expect(prepared?.htmlViewMetadata.get("status")).not.toHaveProperty("html");
   prepare.mockRestore();
+  expect(await store.getSnapshotWithHtmlViewMetadata({ sessionKey })).toEqual(prepared);
 });

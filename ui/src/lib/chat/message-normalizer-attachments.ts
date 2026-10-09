@@ -6,7 +6,9 @@ function isAttachmentKind(kind: unknown): kind is "image" | "audio" | "video" | 
   return kind === "image" || kind === "audio" || kind === "video" || kind === "document";
 }
 
-export function normalizeAttachmentContentBlock(value: unknown): MessageContentItem[] | undefined {
+export function normalizeAttachmentContentBlock(
+  value: unknown,
+): Array<Extract<MessageContentItem, { type: "attachment" | "attachment_error" }>> | undefined {
   const item = asOptionalRecord(value);
   if (!item || (item.type !== "attachment" && item.type !== "attachment_error")) {
     return undefined;
@@ -20,7 +22,8 @@ export function normalizeAttachmentContentBlock(value: unknown): MessageContentI
     if (
       attachment.code !== "file-not-found" &&
       attachment.code !== "unsupported-format" &&
-      attachment.code !== "delivery-failed"
+      attachment.code !== "delivery-failed" &&
+      attachment.code !== "invalid-reference"
     ) {
       return [];
     }

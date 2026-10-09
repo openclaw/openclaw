@@ -3,15 +3,17 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 
-const CHILD_READY_TIMEOUT_MS = 45_000;
 const TEST_TIMEOUT_MS = 60_000;
-const CHILD_CLOSE_TIMEOUT_MS = 5_000;
 const RELEASE_DELAY_MS = 400;
 
 const tempDirs = createTempDirTracker();
@@ -28,11 +30,7 @@ async function cleanupFixtures() {
   for (const child of children.keys()) {
     child.kill("SIGKILL");
   }
-  const results = await withTestTimeout(
-    Promise.allSettled(children.values()),
-    CHILD_CLOSE_TIMEOUT_MS,
-    "direct-stop fixture children did not close; retaining their temporary directories",
-  );
+  const results = await Promise.allSettled(children.values());
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length) {
     throw new AggregateError(errors, "direct-stop fixture cleanup failed; retaining state");
@@ -153,34 +151,40 @@ function readTrace(tracePath: string): string[] {
 describe("runGatewayLoop direct-stop active work", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  posixIt("joins forced child cleanup before deleting its fixture directory", async () => {
-    const fixtureDir = tempDirs.make("openclaw-direct-stop-failure-");
-    const child = spawn(
-      process.execPath,
-      ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
-    const closed = ownChild(child);
-    let rootExistsAtClose = false;
-    child.once("close", () => {
-      rootExistsAtClose = fs.existsSync(fixtureDir);
-    });
-    await withTestTimeout(
-      once(child.stdout!, "data"),
-      CHILD_READY_TIMEOUT_MS,
-      "forced cleanup fixture did not start",
-    );
+  posixIt(
+    "joins forced child cleanup before deleting its fixture directory",
+    async ({ signal }) => {
+      const fixtureDir = tempDirs.make("openclaw-direct-stop-failure-");
+      const child = spawn(
+        process.execPath,
+        ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const closed = ownChild(child);
+      let rootExistsAtClose = false;
+      child.once("close", () => {
+        rootExistsAtClose = fs.existsSync(fixtureDir);
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          once(child.stdout!, "data"),
+          closed,
+          "forced cleanup fixture did not start",
+        ),
+        signal,
+      );
 
-    await cleanupFixtures();
+      await cleanupFixtures();
 
-    expect(await closed).toEqual([null, "SIGKILL"]);
-    expect(rootExistsAtClose).toBe(true);
-    expect(fs.existsSync(fixtureDir)).toBe(false);
-  });
+      expect(await closed).toEqual([null, "SIGKILL"]);
+      expect(rootExistsAtClose).toBe(true);
+      expect(fs.existsSync(fixtureDir)).toBe(false);
+    },
+  );
 
   posixIt(
     "reports and drains a rootless adopted channel run after OS SIGTERM",
-    async () => {
+    async ({ signal }) => {
       const fixtureDir = tempDirs.make("openclaw-direct-stop-active-work-");
       const stateDir = path.join(fixtureDir, "state");
       const homeDir = path.join(fixtureDir, "home");
@@ -210,21 +214,23 @@ describe("runGatewayLoop direct-stop active work", () => {
       const exited = ownChild(child);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
-      child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+      const ready = createDeferred();
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout.push(chunk);
+        if (Buffer.concat(stdout).toString("utf8").includes("process proof: gateway-ready\n")) {
+          ready.resolve();
+        }
+      });
       child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
-      await vi.waitFor(
-        () => {
-          expect(readTrace(tracePath), Buffer.concat(stderr).toString("utf8")).toContain(
-            "gateway-ready",
-          );
-        },
-        { timeout: CHILD_READY_TIMEOUT_MS, interval: 25 },
+      await withinTest(
+        awaitGateBeforeSettlement(ready.promise, exited, "gateway-ready trace was not produced"),
+        signal,
       );
       // The exit event can precede the final stdout data; close joins both streams.
       expect(child.kill("SIGTERM")).toBe(true);
 
-      const exit = await exited;
+      const exit = await withinTest(exited, signal);
       expect(
         exit,
         `${readTrace(tracePath).join(" -> ")}\n${Buffer.concat(stderr).toString("utf8")}`,

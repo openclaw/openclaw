@@ -195,11 +195,9 @@ describe("plugin npm child failure propagation", () => {
     expect(result.status).toBe(1);
     expect(result.dispatches).toHaveLength(0);
     expect(result.stderr).toContain("Plugin npm publish failed");
-    expect(result.outputs).toBe("cleanup\n");
-    expect(result.events).toEqual([
-      ...states.map(({ status }) => `observed 91 ${status}`),
-      "cleanup",
-    ]);
+    expect(result.outputs).toBe("");
+    expect(result.events).toEqual(states.map(({ status }) => `observed 91 ${status}`));
+    expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
   });
 
   it("records the successful original child before continuing publication", () => {

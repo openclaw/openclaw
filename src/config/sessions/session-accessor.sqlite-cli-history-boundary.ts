@@ -11,7 +11,7 @@ import type { InternalSessionEntry } from "./types.js";
 
 export type CliHistoryWriterFacts = Pick<
   CliHistoryWriter,
-  "runId" | "authFingerprint" | "lifecycleRevision" | "expectedWriterRunId"
+  "runId" | "authFingerprint" | "lifecycleRevision"
 >;
 
 /** Advance only a contiguous prefix written by the exact prepared CLI account's live owner. */
@@ -54,7 +54,7 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
     !isKnownCliHistoryBoundary(boundary) ||
     entry.sessionId !== scope.sessionId ||
     boundary.sessionId !== scope.sessionId ||
-    entry.activeWriterRunId !== writer.expectedWriterRunId ||
+    entry.activeWriterRunId !== writer.runId ||
     entry.lifecycleRevision !== writer.lifecycleRevision ||
     boundary.writerRunId !== writer.runId ||
     boundary.authFingerprint !== writer.authFingerprint ||

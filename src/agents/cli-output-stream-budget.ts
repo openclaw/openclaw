@@ -54,17 +54,38 @@ export function createCliStreamJsonTurnBudget(limits: CliStreamJsonOutputLimits)
       return false;
     },
     /**
-     * Records a line, classifies whether this turn pays for it, and returns
-     * false once the cumulative line budget is spent. An uncharged line still
+     * Records a line and classifies whether this turn pays for it (forwarded
+     * subagent traffic on the Claude path never does). An uncharged line still
      * counts as output seen, so a turn carrying only discarded traffic is not
      * mistaken for a stream that produced nothing.
+     *
+     * Non-Claude lines are chargeable by definition and count toward the line
+     * budget immediately. Chargeable Claude lines are NOT counted here: a line
+     * recognized as a partial-message delta (content_block_delta text/thinking/
+     * tool-input) is discarded as soon as it's assembled and must stay exempt
+     * from the line odometer too, but that classification needs the decoded
+     * record, which isn't available yet at this call site. Call `chargeLine()`
+     * once that's known, for every chargeable, non-partial-message Claude line.
      */
     observeLine(line: string, claudeStreamJson: boolean): boolean {
       observedLines += 1;
       chargeable = !claudeStreamJson || !isClaudeSubagentJsonlLine(line);
-      if (!chargeable) {
+      if (!chargeable || claudeStreamJson) {
         return true;
       }
+      chargedLines += 1;
+      if (chargedLines <= limits.maxTurnLines) {
+        return true;
+      }
+      spent ??= { kind: "lines", limit: limits.maxTurnLines };
+      return false;
+    },
+    /**
+     * Charges one line toward the cumulative line budget. Used only for a
+     * chargeable Claude line once partial-message exemption is known (see
+     * `observeLine`); non-Claude and subagent-forwarded lines never call this.
+     */
+    chargeLine(): boolean {
       chargedLines += 1;
       if (chargedLines <= limits.maxTurnLines) {
         return true;

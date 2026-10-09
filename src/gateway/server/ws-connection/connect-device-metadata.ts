@@ -1,4 +1,5 @@
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeDeviceMetadataForAuth } from "../../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -16,7 +17,6 @@ import {
 } from "../../../shared/device-bootstrap-profile.js";
 import { resolveGatewayClientPlatformIdentity } from "../../../shared/gateway-client-platform.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
-import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 
 export function resolvePairedAccessScopes(
   device: Pick<PairedDevice, "approvedScopes" | "scopes"> | null | undefined,

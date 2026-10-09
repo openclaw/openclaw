@@ -1,31 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { getRuntimeConfig } from "./config/config.js";
 import { resolveGatewayPort } from "./config/paths.js";
-import type { OpenClawConfig } from "./config/types.js";
 import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
 import { isMainModule } from "./infra/is-main.js";
 
-type DockerHealthcheckPortDeps = {
-  env: NodeJS.ProcessEnv;
-  getRuntimeConfig: () => OpenClawConfig;
-  readActiveGatewayLockPort: (opts: { env: NodeJS.ProcessEnv }) => Promise<number | undefined>;
-  resolveGatewayPort: (config: OpenClawConfig, env: NodeJS.ProcessEnv) => number;
-};
-
-type DockerHealthcheckDeps = Partial<DockerHealthcheckPortDeps> & {
-  fetch?: typeof globalThis.fetch;
-};
-
-async function resolveDockerHealthcheckPort(
-  deps: Partial<DockerHealthcheckPortDeps> = {},
-): Promise<number> {
-  const env = deps.env ?? process.env;
-  const readActivePort = deps.readActiveGatewayLockPort ?? readActiveGatewayLockPort;
-
+async function resolveDockerHealthcheckPort(): Promise<number> {
   try {
     // The live lock records CLI --port and is authoritative. Config/env only cover startup
     // before the Gateway has acquired its lock or platforms where the owner cannot be verified.
-    const activePort = await readActivePort({ env });
+    const activePort = await readActiveGatewayLockPort({ env: process.env });
     if (activePort !== undefined) {
       return activePort;
     }
@@ -33,22 +16,18 @@ async function resolveDockerHealthcheckPort(
     // A best-effort lock read must not hide a healthy Gateway on the configured port.
   }
 
-  const config = (
-    deps.getRuntimeConfig ??
-    (() =>
-      getRuntimeConfig({
-        pin: false,
-        skipPluginValidation: true,
-        skipShellEnvFallback: true,
-      }))
-  )();
-  return (deps.resolveGatewayPort ?? resolveGatewayPort)(config, env);
+  const config = getRuntimeConfig({
+    pin: false,
+    skipPluginValidation: true,
+    skipShellEnvFallback: true,
+  });
+  return resolveGatewayPort(config, process.env);
 }
 
-export async function probeDockerGatewayHealth(deps: DockerHealthcheckDeps = {}): Promise<boolean> {
+export async function probeDockerGatewayHealth(): Promise<boolean> {
   try {
-    const port = await resolveDockerHealthcheckPort(deps);
-    const response = await (deps.fetch ?? globalThis.fetch)(`http://127.0.0.1:${port}/healthz`);
+    const port = await resolveDockerHealthcheckPort();
+    const response = await globalThis.fetch(`http://127.0.0.1:${port}/healthz`);
     return response.ok;
   } catch {
     return false;

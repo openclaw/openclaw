@@ -138,7 +138,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
         runningCronJobIds: new Set(),
       });
       expect(mutation).toHaveBeenCalledOnce();
-      expect(result).toEqual({ beforeCount: 1, afterCount: 1, preservedRunning: 0, pruned: 0 });
+      expect(result).toEqual({ preservedRunning: 0, pruned: 0 });
       expect(loadSessionEntry(scope)).toEqual(changedEntry);
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
       expect(await listDeletedArchiveFiles(path.dirname(storePath))).toEqual([]);
@@ -161,8 +161,6 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     expect(result).toEqual({
-      beforeCount: 0,
-      afterCount: 0,
       preservedRunning: 0,
       pruned: 0,
     });
@@ -194,8 +192,6 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     expect(result).toEqual({
-      beforeCount: 1,
-      afterCount: 0,
       preservedRunning: 0,
       pruned: 1,
     });
@@ -208,7 +204,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([]);
   });
 
-  it("previews pruning without transferring or changing ordinary snapshots", async () => {
+  it("previews pruning without transferring or changing ordinary entries", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:done-job:run:old-run";
     const sessionId = "run-1";
@@ -246,11 +242,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       .spyOn(entryReadRuntime, "withSessionRegistryEntriesInWorker")
       .mockImplementation((scope, consume) =>
         readRegistry(scope, async (entries, assertCurrent) => {
-          const ordinary = entries.find(({ sessionKey: key }) => key === ordinaryKey)?.entry;
-          expect(ordinary?.sessionId).toBe("ordinary");
-          expect(ordinary).not.toHaveProperty("sessionDiffBaseline");
-          expect(ordinary).not.toHaveProperty("skillsSnapshot");
-          expect(ordinary).not.toHaveProperty("systemPromptReport");
+          expect(entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey]);
           return await consume(entries, assertCurrent);
         }),
       );
@@ -262,7 +254,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       storePath,
     }).finally(() => reader.mockRestore());
 
-    expect(result).toEqual({ beforeCount: 2, afterCount: 1, preservedRunning: 0, pruned: 1 });
+    expect(result).toEqual({ preservedRunning: 0, pruned: 1 });
     expect(loadSessionEntry({ sessionKey, storePath })).toEqual(
       sessionEntry(sessionId, now - 8 * DAY_MS),
     );
@@ -299,8 +291,6 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     expect(result).toEqual({
-      beforeCount: 6,
-      afterCount: 4,
       preservedRunning: 2,
       pruned: 2,
     });

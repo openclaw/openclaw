@@ -1,5 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,13 +8,14 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import {
   mutateConfigFileWithRetry,
-  readConfigFileSnapshotForWrite,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -28,11 +29,11 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import {
-  readAgentDeletionRecoveryHolds,
-  reconstructAgentDeletionJournal,
-} from "../state/agent-deletion-journal-recovery.js";
+  persistProviderAuthProfileBatch,
+  stageProviderAuthProfileBatch,
+} from "../plugins/provider-auth-persistence.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -42,6 +43,8 @@ import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
@@ -54,61 +57,17 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { nodeFilePath } from "../test-utils/node-file-path.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  installWorkspacePreparationPause,
+  prepareRecoveryHolds,
+} from "./agent-create.integration.test-support.js";
 import { createAgent } from "./agent-create.js";
 import { isAgentDeletionBlocked } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
-import {
-  DEFAULT_IDENTITY_FILENAME,
-  ensureAgentWorkspace,
-  isWorkspaceBootstrapPending,
-} from "./workspace.js";
-
-async function prepareRecoveryHolds(
-  state: OpenClawTestState,
-  agentId: string,
-  held = [
-    { agentId, path: path.join(state.agentDir(agentId), "openclaw-agent.sqlite") },
-    { agentId, path: state.path("parked", "openclaw-agent.sqlite") },
-    { agentId: "kept", path: path.join(state.agentDir("kept"), "openclaw-agent.sqlite") },
-  ],
-) {
-  for (const target of held) {
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(
-          database,
-          `agent:${target.agentId}:main`,
-          {
-            sessionId: `preserved-${target.agentId}`,
-            updatedAt: 1,
-          },
-          { previousEntry: null },
-        ),
-      { ...target, env: state.env },
-    );
-  }
-  closeOpenClawAgentDatabasesForTest();
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      database.db.exec("DROP TABLE agent_deletion_journal");
-      reconstructAgentDeletionJournal(database, held);
-    },
-    { env: state.env },
-  );
-  return {
-    held,
-    bytes: await Promise.all(held.map((target) => fs.readFile(target.path))),
-    readHolds: () => readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env })),
-  };
-}
 
 it("restores only the configured held store after explicit creation, never through bootstrap or retargeting", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-agent-restore" });
@@ -506,43 +465,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
-    const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
-    if (phase === "workspace-write") {
-      setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
-    }
-    const realAccess = fs.access.bind(fs);
-    const access = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      if (phase === "workspace" && file === path.join(workspace, "AGENTS.md")) {
-        await pause("workspace");
-      }
-      return await realAccess(file, mode);
-    });
-    const realOpen = fs.open.bind(fs);
-    const restoreWrites: Array<() => void> = [];
-    let writePaused = false;
-    const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
-      const filePath = nodeFilePath(file);
-      if (
-        phase === "workspace-write" &&
-        filePath &&
-        path.dirname(filePath) === workspace &&
-        typeof flags === "number" &&
-        (flags & fsConstants.O_EXCL) !== 0
-      ) {
-        const realWrite = handle.write.bind(handle);
-        const write = vi.spyOn(handle, "write").mockImplementation(async (...args) => {
-          const result = await realWrite(...args);
-          if (!writePaused) {
-            writePaused = true;
-            await pause("workspace-write");
-          }
-          return result;
-        });
-        restoreWrites.push(() => write.mockRestore());
-      }
-      return handle;
-    });
+    const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
     const prepareConfigCommit = vi.fn(async () => {
@@ -598,12 +521,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
     } finally {
       resume.resolve();
       await outcome;
-      open.mockRestore();
-      for (const restore of restoreWrites) {
-        restore();
-      }
-      access.mockRestore();
-      nativeModeEnv.restore();
+      restoreWorkspacePreparation();
       releaseAgentRunDelegatedAuthority(authority);
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();
@@ -666,109 +584,151 @@ it("finishes creation bookkeeping when delegated authority closes after successf
   }
 });
 
-it("preserves env references from guided staging when preparation changes the environment", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "minimal",
-    label: "guided-stage-env",
-  });
-  const oldToken = process.env.GUIDED_STAGE_TOKEN;
-  try {
-    process.env.GUIDED_STAGE_TOKEN = "synthetic-read-value";
-    const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-    await state.writeConfig({
-      ...config,
-      gateway: { ...config.gateway, auth: { mode: "token", token: "${GUIDED_STAGE_TOKEN}" } },
+it.each(["commit", "rollback", "close-failure"] as const)(
+  "stores staged auth for a recreated id inside the creation claim (%s)",
+  async (phase) => {
+    const state = await createOpenClawTestState({
+      scenario: "minimal",
+      label: `agent-create-recreated-auth-${phase}`,
     });
-    const writeSnapshot = await readConfigFileSnapshotForWrite();
-    const staged = writeSnapshot.snapshot.sourceConfig;
-    expect(staged.gateway?.auth?.token).toBe("synthetic-read-value");
-    await Promise.resolve();
-    process.env.GUIDED_STAGE_TOKEN = "synthetic-after-guided-await";
-    const created = await createAgent({
-      name: "guided",
-      workspace: state.path("guided-workspace"),
-      stagedConfig: { config: staged, writeSnapshot },
-      prepareConfigCommit: async () => {
-        await Promise.resolve();
-        process.env.GUIDED_STAGE_TOKEN = "synthetic-after-preparation";
-      },
+    const workspace = state.path("work-workspace");
+    const agentDir = state.agentDir("work");
+    const deletion = beginAgentDeletionJournal({
+      agentId: "work",
+      operationId: randomUUID(),
+      agentDir,
+      workspaceDir: workspace,
+      sessionsDir: state.sessionsDir("work"),
+      deleteFiles: false,
     });
-    expect(created).toMatchObject({ status: "created", agentId: "guided" });
-    const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-    expect(saved.gateway?.auth?.token).toBe("${GUIDED_STAGE_TOKEN}");
-    expect(saved.agents?.entries?.guided).toBeDefined();
-  } finally {
-    if (oldToken === undefined) {
-      delete process.env.GUIDED_STAGE_TOKEN;
-    } else {
-      process.env.GUIDED_STAGE_TOKEN = oldToken;
+    runOpenClawStateWriteTransaction((database) =>
+      completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+    );
+    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const readProfiles = () =>
+      ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles;
+    let staged = false;
+    let retainedCreation: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+    let restoreNativeClose: (() => void) | undefined;
+    const settlement: string[] = [];
+    // An ordinary writer outside the creation lifecycle, through the same wizard path.
+    const writeOutsideCreation = () =>
+      persistProviderAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "openai:after",
+            credential: { type: "api_key", provider: "openai", key: "sk-test-after" },
+          },
+        ],
+        config: {},
+        agentDir,
+      });
+    const isWorkDatabaseOpen = () =>
+      isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(agentDir));
+    try {
+      const creation = createAgent({
+        name: "work",
+        workspace,
+        beforePersistentApply: () => {
+          if (phase === "rollback" && staged) {
+            throw new Error("creation authority closed");
+          }
+        },
+        prepareConfigCommit: async () => {
+          // The guided wizard's staged auth write opens the recreated agent's own database.
+          const receipt = await stageProviderAuthProfileBatch({
+            profiles: [
+              {
+                profileId: "openai:default",
+                credential: { type: "api_key", provider: "openai", key: "sk-test-recreated" },
+              },
+            ],
+            config: {},
+            agentDir,
+          });
+          staged = true;
+          retainedCreation = AsyncLocalStorage.snapshot();
+          if (phase === "close-failure") {
+            const database = getOpenClawAgentDatabaseIfOpen({
+              agentId: "work",
+              path: resolveAuthProfileDatabasePath(agentDir),
+            });
+            if (!database) {
+              throw new Error("Staged auth did not retain its database");
+            }
+            const close = database.db.close.bind(database.db);
+            let failed = false;
+            const closeSpy = vi.spyOn(database.db, "close").mockImplementation(() => {
+              if (!failed) {
+                failed = true;
+                settlement.push("close-failed");
+                throw new Error("injected native close failure");
+              }
+              close();
+              settlement.push("close-retried");
+            });
+            restoreNativeClose = () => closeSpy.mockRestore();
+            return {
+              ...receipt,
+              rollback: async () => {
+                settlement.push("rollback");
+                await receipt.rollback();
+              },
+            };
+          }
+          return receipt;
+        },
+      });
+      if (phase === "commit") {
+        expect(await creation).toMatchObject({ status: "created", agentId: "work" });
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
+          "agents.entries.work",
+        );
+        expect(readAgentDeletionJournal("work")).toBeUndefined();
+        expect(readProfiles()["openai:default"]).toMatchObject({
+          type: "api_key",
+          provider: "openai",
+        });
+        // Creation owned its handles only until publication; ordinary writers reopen freely.
+        expect(isWorkDatabaseOpen()).toBe(false);
+        await writeOutsideCreation();
+        expect(readProfiles()["openai:after"]).toMatchObject({ type: "api_key" });
+      } else {
+        const error = await creation.then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+        expect(String(error)).toContain(
+          phase === "close-failure" ? "injected native close failure" : "creation authority closed",
+        );
+        expect(String(error)).not.toContain("staged config rollback failed");
+        if (phase === "close-failure") {
+          expect(settlement).toEqual(["close-failed", "close-retried", "rollback"]);
+        }
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+        expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
+        expect(readProfiles()["openai:default"]).toBeUndefined();
+        // The retained tombstone must fence the same process: no warm handle survives
+        // the failed creation, and a cold open is refused until creation claims the record.
+        await expect(writeOutsideCreation()).rejects.toThrow("agent work is deleted");
+        if (!retainedCreation) {
+          throw new Error("Auth staging did not capture its creation context");
+        }
+        await expect(retainedCreation(writeOutsideCreation)).rejects.toThrow(
+          "Agent creation claim is no longer active",
+        );
+        expect(isWorkDatabaseOpen()).toBe(false);
+        expect(readProfiles()["openai:after"]).toBeUndefined();
+        expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
+      }
+    } finally {
+      restoreNativeClose?.();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
     }
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
-it("keeps a fresh named workspace pending through the first run setup", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "minimal",
-    label: "named-agent-hatch",
-  });
-  const workspace = state.path("named-workspace");
-
-  try {
-    const created = await createAgent({ name: "Researcher", workspace });
-
-    expect(created).toMatchObject({ status: "created", bootstrapPending: true });
-    expect(await isWorkspaceBootstrapPending(workspace)).toBe(true);
-
-    const firstRunWorkspace = await ensureAgentWorkspace({
-      dir: workspace,
-      ensureBootstrapFiles: true,
-    });
-    expect(firstRunWorkspace.bootstrapPending).toBe(true);
-    expect(await isWorkspaceBootstrapPending(workspace)).toBe(true);
-    expect(
-      await fs.readFile(path.join(workspace, DEFAULT_IDENTITY_FILENAME), "utf8"),
-    ).not.toContain("Researcher");
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
-it("records operator and agent creation provenance after roster commits", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "empty",
-    label: "agent-creation-provenance",
-  });
-  try {
-    await createAgent({ name: "Operator Child", workspace: state.path("operator-child") });
-    await createAgent({
-      name: "Agent Child",
-      workspace: state.path("agent-child"),
-      provenance: { createdVia: "agent", creatorAgentId: "main" },
-    });
-
-    expect(readAgentProvenance("operator-child", { env: state.env })).toMatchObject({
-      agentId: "operator-child",
-      createdVia: "operator",
-      creatorAgentId: null,
-      createdAtMs: expect.any(Number),
-    });
-    expect(readAgentProvenance("agent-child", { env: state.env })).toMatchObject({
-      agentId: "agent-child",
-      createdVia: "agent",
-      creatorAgentId: "main",
-      createdAtMs: expect.any(Number),
-    });
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
+  },
+);
 
 describe("agent roster persistence", () => {
   async function addWorkerToConfig(config: unknown): Promise<OpenClawConfig> {
@@ -802,15 +762,21 @@ describe("agent roster persistence", () => {
     );
   });
 
-  it("replaces a legacy list with the complete keyed roster", async () => {
-    const persisted = await addWorkerToConfig({
+  it("extends the complete keyed roster after Doctor migrates a legacy list", async () => {
+    const legacy: OpenClawConfigWithLegacyRoster = {
       agents: {
         list: [
           { id: "main", default: true },
           { id: "ops", workspace: "/srv/ops" },
         ],
       },
-    });
+    };
+    const migrated = migrateLegacyConfig(legacy, { sourceConfigBeforeMigrations: legacy });
+    expect(migrated.config).not.toBeNull();
+    if (!migrated.config) {
+      throw new Error("Doctor did not migrate the legacy roster");
+    }
+    const persisted = await addWorkerToConfig(migrated.config);
 
     expect(persisted.agents).not.toHaveProperty("list");
     expect(persisted.agents?.entries?.main).toMatchObject({ workspace: expect.any(String) });
@@ -820,7 +786,7 @@ describe("agent roster persistence", () => {
     });
   });
 
-  it("preserves a legacy list byte-for-byte during a non-roster mutation", async () => {
+  it("refuses a non-roster mutation without changing an unmigrated legacy list", async () => {
     const state = await createOpenClawTestState({
       layout: "state-only",
       scenario: "empty",
@@ -830,18 +796,28 @@ describe("agent roster persistence", () => {
       { id: "main", default: true },
       { id: "ops", workspace: "/srv/ops" },
     ];
+    const legacy: OpenClawConfigWithLegacyRoster = {
+      agents: { list },
+      gateway: { port: 18789 },
+    };
     try {
-      await state.writeConfig({ agents: { list }, gateway: { port: 18789 } });
-      await mutateConfigFileWithRetry({
-        mutate: (config) => {
-          config.gateway = { ...config.gateway, port: 19001 };
-        },
-      });
+      await state.writeConfig(legacy);
+      const original = await fs.readFile(state.configPath, "utf8");
+      await expect(
+        mutateConfigFileWithRetry({
+          mutate: (config) => {
+            config.gateway = { ...config.gateway, port: 19001 };
+          },
+        }),
+      ).rejects.toThrow("doctor --fix");
 
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+      const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(
+        await fs.readFile(state.configPath, "utf8"),
+      );
+      expect(persisted.agents).toEqual({ list });
       expect(persisted.agents).not.toHaveProperty("entries");
-      expect(persisted.gateway?.port).toBe(19001);
+      expect(persisted.gateway).toEqual({ port: 18789 });
     } finally {
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

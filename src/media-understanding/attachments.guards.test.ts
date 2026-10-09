@@ -1,30 +1,29 @@
-// Attachment selection guard tests cover malformed attachment containers and
-// invalid entry shapes.
 import { describe, expect, it } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { selectAttachments } from "./attachments.js";
+import { normalizeAttachments } from "./attachments.normalize.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
-  it("returns no selections when attachments is not an array", () => {
+  it("returns no selections when incoming media is not an array", () => {
+    const context = { media: { malformed: true } } as unknown as MsgContext;
     expect(
       selectAttachments({
         capability: "audio",
-        attachments: { malformed: true } as unknown as MediaAttachment[],
+        attachments: normalizeAttachments(context),
         policy: { prefer: "url" },
       }),
     ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
-  it("returns no selections for malformed attachment entries", () => {
+  it("returns no selections for malformed incoming media entries", () => {
+    const context = {
+      media: [null, { path: 123 }, { url: true }, { contentType: { nope: true } }],
+    } as unknown as MsgContext;
     expect(
       selectAttachments({
         capability: "audio",
-        attachments: [
-          null,
-          { index: 1, path: 123 },
-          { index: 2, url: true },
-          { index: 3, mime: { nope: true } },
-        ] as unknown as MediaAttachment[],
+        attachments: normalizeAttachments(context),
         policy: { prefer: "path" },
       }),
     ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });

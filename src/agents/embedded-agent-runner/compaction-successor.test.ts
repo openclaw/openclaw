@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveSessionArtifactDirectory } from "../../config/sessions/paths.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../../plugins/session-end-transcript.test-support.js";
@@ -202,8 +203,10 @@ async function withAcceptanceFixture(
           writeLegacyArtifact: async () => {
             // Named tagged-upgrade artifact contract: session_end may identify a
             // still-existing legacy export, while live state remains canonical SQLite.
-            const artifact = path.join(state.agentDir(), `${target.sessionId}.jsonl`);
+            const artifactDir = resolveSessionArtifactDirectory(target.storePath);
+            const artifact = path.join(artifactDir, `${target.sessionId}.jsonl`);
             const events = await loadTranscriptEvents(target);
+            await fs.mkdir(artifactDir, { recursive: true });
             await fs.writeFile(
               artifact,
               `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
@@ -407,6 +410,21 @@ describe("acceptCompactionSuccessor", () => {
       const before = fixture.loadEntry();
       await expect(fixture.accept()).rejects.toThrow("session writer claim changed");
       expect(fixture.loadEntry()).toEqual(before);
+      expect(fixture.facts).toEqual([]);
+    });
+  });
+
+  it("does not recreate a removed predecessor store during successor validation", async () => {
+    await withAcceptanceFixture({}, async (fixture) => {
+      const { closeOpenClawAgentDatabaseByPathAsync } =
+        await import("../../state/openclaw-agent-db.js");
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.target.storePath);
+      await fs.rm(fixture.target.storePath);
+
+      await expect(fixture.accept({ result: { ok: true, compacted: true } })).rejects.toThrow(
+        "session writer claim changed",
+      );
+      await expect(fs.access(fixture.target.storePath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(fixture.facts).toEqual([]);
     });
   });

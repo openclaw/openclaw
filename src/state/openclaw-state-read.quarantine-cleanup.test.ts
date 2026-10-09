@@ -15,7 +15,7 @@ type FakeDatabase = {
   close: () => void;
 };
 const mock = vi.hoisted(() => ({
-  handler: vi.fn<(input: unknown) => OpenClawStateReadReply>(),
+  handler: vi.fn<(input: unknown) => Promise<OpenClawStateReadReply>>(),
   open: vi.fn<(location: string) => FakeDatabase>(),
   read: vi.fn<(sql: string) => unknown>(),
   close: vi.fn<() => void>(),
@@ -23,8 +23,9 @@ const mock = vi.hoisted(() => ({
   claimAgentLease: vi.fn(() => "quarantine-test-lease"),
   databases: [] as FakeDatabase[],
 }));
-vi.mock("../infra/worker-task-server.js", () => ({
-  serveOwnedWorkerTasks: (handler: (input: unknown) => OpenClawStateReadReply) => {
+vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
+  serveOwnedWorkerTasks: (handler: (input: unknown) => Promise<OpenClawStateReadReply>) => {
     mock.handler.mockImplementation(handler);
   },
 }));
@@ -32,9 +33,9 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/node-sqlite.js")>()),
   openNodeSqliteDatabase: mock.open,
 }));
-vi.mock("../fleet/registry.kernel.js", () => ({
-  listFleetCellsInDatabase: mock.query,
-  getFleetCellInDatabase: () => undefined,
+vi.mock("./backup-run-records.kernel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
+  readBackupRunsInDatabase: mock.query,
 }));
 vi.mock("./openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-agent-db-lease.js")>()),
@@ -94,7 +95,7 @@ function request(): OpenClawStateReadRequest {
     databasePath,
     location: databasePath,
     checkFreshAdmission: true,
-    command: { type: "fleet.list" },
+    command: { type: "backup.runs" },
   };
 }
 
@@ -108,31 +109,51 @@ function knownQuarantine(kind: "state" | "agent") {
   return reason;
 }
 
-it.each([false, true])(
-  "refuses a validated quarantine before source admission (reader close fails=%s)",
-  (closeFails) => {
+it.each([
+  { known: true, readFails: false, closeFails: false },
+  { known: true, readFails: false, closeFails: true },
+  { known: false, readFails: false, closeFails: true },
+  { known: false, readFails: true, closeFails: true },
+  { known: false, readFails: true, closeFails: false },
+])(
+  "preserves quarantine decisions and cleanup facts (%j)",
+  async ({ known, readFails, closeFails }) => {
     const input = request();
-    const reason = knownQuarantine("state");
-    const closeFailure = new Error("quarantine reader close failed after a valid decision");
+    const reason = known ? knownQuarantine("state") : undefined;
+    const readFailure = new Error("quarantine metadata read failed");
+    const closeFailure = new Error("quarantine native reader close failed");
+    if (readFails) {
+      mock.read.mockImplementationOnce(() => {
+        throw readFailure;
+      });
+    }
     if (closeFails) {
       mock.close.mockImplementationOnce(() => {
         throw closeFailure;
       });
     }
-
-    const reply = mock.handler(input);
-    expect(reply).toMatchObject({ ok: false, message: expect.stringContaining(reason) });
-    expect(reply).not.toHaveProperty("sourceAdmitted", true);
-    expect(mock.query).not.toHaveBeenCalled();
-    expect(mock.close).toHaveBeenCalledOnce();
-    expect(mock.databases[0]?.isOpen).toBe(closeFails);
+    const reply = await mock.handler(input);
+    if (known) {
+      expect(reply).toMatchObject({ ok: false, message: expect.stringContaining(reason!) });
+      expect(reply).not.toHaveProperty("sourceAdmitted", true);
+    } else if (closeFails) {
+      expect(reply).toMatchObject({ ok: true, type: "backup.runs", runs: [] });
+    } else {
+      expect(reply).toEqual({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] });
+    }
     if (closeFails) {
       expect(reply.nativeCleanupFailure?.error?.nodes).toEqual(
-        expect.arrayContaining([expect.objectContaining({ message: closeFailure.message })]),
+        expect.arrayContaining([
+          expect.objectContaining({ message: closeFailure.message }),
+          ...(readFails ? [expect.objectContaining({ message: readFailure.message })] : []),
+        ]),
       );
     } else {
       expect(reply.nativeCleanupFailure).toBeUndefined();
     }
+    expect(mock.query).toHaveBeenCalledTimes(known ? 0 : 1);
+    expect(mock.close).toHaveBeenCalledOnce();
+    expect(mock.databases[0]?.isOpen).toBe(closeFails);
   },
 );
 
@@ -201,51 +222,3 @@ it.each([false, true])(
     expect(mock.claimAgentLease).not.toHaveBeenCalled();
   },
 );
-
-it.each([false, true])(
-  "reports unsettled quarantine cleanup without changing the best-effort read result (read also fails=%s)",
-  (readFails) => {
-    const readFailure = new Error("quarantine metadata read failed");
-    const closeFailure = new Error("quarantine native reader close failed");
-    if (readFails) {
-      mock.read.mockImplementationOnce(() => {
-        throw readFailure;
-      });
-    }
-    mock.close.mockImplementationOnce(() => {
-      throw closeFailure;
-    });
-    const reply = mock.handler(request());
-    expect(reply).toMatchObject({
-      ok: true,
-      type: "fleet.list",
-      cells: [],
-      nativeCleanupFailure: {
-        error: {
-          nodes: expect.arrayContaining([
-            expect.objectContaining({ message: closeFailure.message }),
-            ...(readFails ? [expect.objectContaining({ message: readFailure.message })] : []),
-          ]),
-        },
-      },
-    });
-    expect(mock.query).toHaveBeenCalledOnce();
-    expect(mock.close).toHaveBeenCalledOnce();
-    expect(mock.databases[0]?.isOpen).toBe(true);
-  },
-);
-
-it("keeps ordinary quarantine metadata failures best effort after a successful native close", () => {
-  mock.read.mockImplementationOnce(() => {
-    throw new Error("quarantine metadata unavailable");
-  });
-  expect(mock.handler(request())).toEqual({
-    ok: true,
-    type: "fleet.list",
-    sourceAdmitted: true,
-    cells: [],
-  });
-  expect(mock.query).toHaveBeenCalledOnce();
-  expect(mock.close).toHaveBeenCalledOnce();
-  expect(mock.databases[0]?.isOpen).toBe(false);
-});
