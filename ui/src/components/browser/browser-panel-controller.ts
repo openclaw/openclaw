@@ -324,21 +324,23 @@ export class BrowserPanelController implements ReactiveController {
       this.reportError(t("browser.tabUnavailable"));
       return;
     }
+    const client = this.operations.captureClient();
     if (
       hasNativeBrowserBridge() &&
-      (options.native || options.newTab || this.native.activeTab || !this.activeTargetId)
+      (options.native || !client || (!options.newTab && this.native.activeTab))
     ) {
       await this.native.open(url, options.newTab || !this.native.activeTab);
       return;
     }
-    const client = this.operations.captureClient();
     if (!client) {
       return;
+    }
+    if (options.newTab) {
+      this.native.cancelPendingActivation();
     }
     const invocation = this.operations.beginMutation(client);
     this.setState("loading", true);
     this.setState("errorText", null);
-    this.setState("pendingNewTab", false);
     let previousNavigationQueued = false;
     try {
       if (options.newTab || !this.activeTargetId) {
@@ -351,6 +353,7 @@ export class BrowserPanelController implements ReactiveController {
           );
           return;
         }
+        this.setState("pendingNewTab", false);
         const nextTargetId = tab?.id ?? this.activeTargetId;
         if (nextTargetId !== this.activeTargetId) {
           this.invalidateViewOperations();
@@ -360,6 +363,7 @@ export class BrowserPanelController implements ReactiveController {
         }
         this.setState("activeTargetId", nextTargetId);
       } else {
+        this.setState("pendingNewTab", false);
         // Keep the stable alias as the active handle; navigate may swap the
         // raw target underneath and the alias migrates server-side.
         this.invalidateViewOperations();
@@ -434,6 +438,7 @@ export class BrowserPanelController implements ReactiveController {
       return;
     }
     this.native.cancelPendingActivation(targetId);
+    this.setState("pendingNewTab", false);
     const nativeTab = this.native.tabs.find((tab) => tab.id === targetId);
     if (nativeTab) {
       this.invalidateViewOperations();
@@ -625,10 +630,11 @@ export class BrowserPanelController implements ReactiveController {
     if (this.host.fixedTab) {
       return;
     }
-    if (hasNativeBrowserBridge()) {
+    if (hasNativeBrowserBridge() && !this.operations.captureClient()) {
       void this.native.beginNewTab();
       return;
     }
+    this.native.cancelPendingActivation();
     this.setState("pendingNewTab", true);
     this.setState("urlDraft", "");
     const epoch = this.operations.epoch;
