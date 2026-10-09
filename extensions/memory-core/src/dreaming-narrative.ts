@@ -196,6 +196,8 @@ export type DreamNarrativeOutcome =
   | { status: "completed" | "pending" | "skipped" }
   | { status: "degraded"; error: string };
 
+export type PreparedDreamNarrative = Pick<DreamNarrativeRequest, "data" | "model" | "timezone">;
+
 async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
 ): Promise<DreamNarrativeOutcome> {
