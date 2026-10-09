@@ -309,7 +309,7 @@ describeControlUiE2e("Plugin overview", () => {
       ]);
       await page.getByRole("button", { name: /calendar_search/ }).click();
       await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
-      expect(await page.locator(".plugin-tool-preview p").textContent()).toBe(description);
+      expect(await page.locator(".plugin-capability-preview p").textContent()).toBe(description);
       const inputs = page.locator(".plugin-tool-preview__parameters");
       expect(await inputs.locator("dt code").allTextContents()).toEqual(["query", "limit"]);
       expect(await inputs.locator("dt span").allTextContents()).toEqual([
@@ -324,14 +324,14 @@ describeControlUiE2e("Plugin overview", () => {
       ]);
       await captureScreenshot(page, "overview-tool.png", "viewport");
       await page.setViewportSize({ width: 393, height: 852 });
-      const modalBounds = await page.locator(".plugin-tool-preview").boundingBox();
+      const modalBounds = await page.locator(".plugin-capability-preview").boundingBox();
       expect(modalBounds!.height).toBeLessThanOrEqual(804);
       await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
-      await page.locator(".plugin-tool-preview__body").evaluate((element) => {
+      await page.locator(".plugin-capability-preview__body").evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
       expect(
-        await page.locator(".plugin-tool-preview__body").evaluate((element) => {
+        await page.locator(".plugin-capability-preview__body").evaluate((element) => {
           const paragraph = element.querySelector("p");
           if (!paragraph) {
             return false;
@@ -345,6 +345,15 @@ describeControlUiE2e("Plugin overview", () => {
       ).toBe(true);
       await captureScreenshot(page, "overview-tool-mobile-tail.png", "viewport");
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: "calendar-mcp", exact: true }).click();
+      const mcpDialog = page.getByRole("dialog", { name: "calendar-mcp", exact: true });
+      await mcpDialog.waitFor();
+      expect(await page.locator(".plugin-capability-preview__body").textContent()).toContain(
+        "Connection details are not included in this plugin’s catalog metadata.",
+      );
+      await page.keyboard.press("Escape");
+      await mcpDialog.waitFor({ state: "detached" });
+      expect(await page.getByRole("heading", { name: "README", exact: true }).count()).toBe(0);
       for (const width of [1440, 900, 393]) {
         await page.setViewportSize({ width, height: 1000 });
         expect(

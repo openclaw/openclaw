@@ -16,6 +16,7 @@ import { renderPluginCatalogDetail } from "./catalog-detail.ts";
 import { renderPluginCatalogResults } from "./catalog-results.ts";
 import { renderPluginConsentDialog } from "./consent-dialog.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
+import type { PluginMcpPreview } from "./mcp-preview.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import type { PluginHelpController } from "./plugin-help-controller.ts";
 import {
@@ -51,6 +52,7 @@ import {
 } from "./skill-preview.ts";
 
 type PluginsPageViewActions = {
+  openMcp: (server: PluginMcpPreview) => void;
   startMcpLogin: (serverName: string) => void;
   openTool: (name: string) => void;
   openSkill: (request: PluginsSkillsReadParams) => void;
@@ -192,6 +194,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       renderCredential: model.renderCredential,
       tools: detail?.tools,
       onOpenTool: actions.openTool,
+      onOpenMcp: actions.openMcp,
       skillsSection: skills.length
         ? renderPluginSkillsSection(skills, (skillName) =>
             actions.openSkill({ source: "installed", pluginId, skillName }),
@@ -254,6 +257,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         onAskPlugin,
                         connected: model.connected,
                         skillsSection: catalogSkillsSection,
+                        onOpenMcp: actions.openMcp,
                         result: catalogDetail.result,
                         error: catalogDetail.error,
                         backHref: pathForRoute("plugins", context.basePath),

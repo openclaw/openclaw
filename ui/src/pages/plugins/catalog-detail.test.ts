@@ -18,6 +18,7 @@ function mount(
       error: null,
       backHref: "/plugins",
       onBack: vi.fn(),
+      onOpenMcp: vi.fn(),
       onRetry: vi.fn(),
       canInstall: true,
       installBlockedReason: null,
@@ -43,7 +44,7 @@ describe("catalog README", () => {
     expect(container.textContent).toContain(tail);
     expect(
       container.querySelector(".plugin-catalog-detail__readme-section > h2")?.textContent,
-    ).toBe("README");
+    ).toBeUndefined();
   });
 });
 
@@ -109,7 +110,7 @@ it.each([false, true])(
     result.detail.mcpServers = mixed ? ["media-server"] : [];
     const container = mount(result);
     const sections = [...container.querySelectorAll(".plugin-capabilities")];
-    expect(container.querySelector(".plugin-capabilities button")).toBeNull();
+    expect(sections[0]?.querySelector("button")).toBeNull();
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
       "Capabilities3",
       ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),

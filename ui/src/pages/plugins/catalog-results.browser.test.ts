@@ -6,6 +6,7 @@ import { renderPluginCatalogResults, type PluginCatalogResultsProps } from "./ca
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { showPluginMcpPreview } from "./mcp-preview.ts";
 import { renderPluginMcpServers } from "./overview.ts";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
@@ -31,7 +32,9 @@ const entry = {
 } satisfies PluginDiscoveryEntry;
 let container: HTMLDivElement;
 let styles: HTMLStyleElement;
+let previewAbort: AbortController;
 beforeEach(async () => {
+  previewAbort = new AbortController();
   await page.viewport(1440, 900);
   styles = document.createElement("style");
   styles.textContent = [baseStyles, componentStyles, settingsStyles, pluginStyles].join("\n");
@@ -40,6 +43,7 @@ beforeEach(async () => {
   document.body.append(container);
 });
 afterEach(() => {
+  previewAbort.abort();
   render(nothing, container);
   container.remove();
   styles.remove();
@@ -247,7 +251,7 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
 });
 
 it.each([390, 768, 1366, 1440])(
-  "keeps the README close to expandable MCP servers beside a tall sidebar at %ipx",
+  "keeps the README close while MCP details open in a dialog beside a tall sidebar at %ipx",
   async (width) => {
     await page.viewport(width, 900);
     render(
@@ -270,6 +274,7 @@ it.each([390, 768, 1366, 1440])(
               setup: "Connect your workspace in OpenClaw.",
             },
           ],
+          (server) => void showPluginMcpPreview(server, previewAbort.signal),
         ),
         sidebar: html`<div style="min-height: 900px">Release and security metadata</div>`,
         readme: html`<p>Use the workspace integration to read your documents.</p>`,
@@ -285,27 +290,42 @@ it.each([390, 768, 1366, 1440])(
     await expect
       .element(page.getByRole("heading", { name: /MCP Servers\s*2/, exact: true }))
       .toBeVisible();
-    const server = page.getByText("workspace", { exact: true });
+    const server = page.getByRole("button", { name: "workspace", exact: true });
     await server.click();
+    const dialog = page.getByRole("dialog", { name: "workspace", exact: true });
+    await expect.element(dialog).toBeVisible();
+    await expect
+      .element(page.getByRole("heading", { name: "README", exact: true }))
+      .not.toBeInTheDocument();
     await expect.element(page.getByText("OAuth", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Connect your workspace in OpenClaw.")).toBeVisible();
     expect(gap()).toBeLessThanOrEqual(32);
-    const authLabel = [...container.querySelectorAll("dt")].find(
+    const authLabel = [...document.querySelectorAll(".plugin-mcp-details dt")].find(
       (label) => label.textContent === "Authentication",
     )!;
     expect(authLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
       Number.parseFloat(getComputedStyle(authLabel).lineHeight) + 1,
     );
     expect(container.scrollWidth).toBeLessThanOrEqual(width);
-    const summary = container.querySelector<HTMLElement>("summary")!;
-    summary.focus();
+    const preview = document.querySelector<HTMLElement>(".plugin-capability-preview")!;
+    expect(preview.getBoundingClientRect().width).toBeLessThanOrEqual(width - 24);
+    expect(preview.scrollWidth).toBeLessThanOrEqual(preview.clientWidth);
+    await userEvent.keyboard("{Escape}");
+    await expect.element(dialog).not.toBeInTheDocument();
+    await expect.element(server).toHaveFocus();
     await userEvent.keyboard("{Enter}");
-    expect(container.querySelector("details")?.open).toBe(false);
+    await expect.element(dialog).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await expect.element(dialog).not.toBeInTheDocument();
     await page.getByText("local", { exact: true }).click();
     await expect
       .element(
         page.getByText("Connection details are not included in this plugin’s catalog metadata."),
       )
       .toBeVisible();
+    previewAbort.abort();
+    await expect
+      .element(page.getByRole("dialog", { name: "local", exact: true }))
+      .not.toBeInTheDocument();
   },
 );

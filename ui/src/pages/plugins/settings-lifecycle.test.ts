@@ -36,6 +36,7 @@ function mount(overrides: Partial<DetailProps>) {
     backLabel: "Plugins",
     tab: "readme",
     onBack: vi.fn(),
+    onOpenMcp: vi.fn(),
     onRetryInspection: vi.fn(),
     onTabChange: vi.fn(),
     onIconError: vi.fn(),

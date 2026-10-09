@@ -673,6 +673,7 @@ class PluginsPage extends OpenClawLightDomElement {
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
         installCatalogEntry: (id) => void this.installCatalogEntry(id),
         openSkill: (request) => void this.skillPreview.open(request),
+        openMcp: (server) => this.skillPreview.openMcp(server),
         openTool: (name) =>
           this.skillPreview.openTool(
             this.detail?.tools?.find((entry) => entry.name === name) ?? { name },

@@ -22,6 +22,7 @@ import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import type { PluginMcpPreview } from "./mcp-preview.ts";
 import {
   renderPluginCapabilitySection,
   renderPluginDeclaredCapabilities,
@@ -82,6 +83,7 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
     onAskPlugin?: () => void;
+    onOpenMcp: (server: PluginMcpPreview) => void;
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
@@ -498,7 +500,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         })),
         icons.wrench,
       )}
-      ${renderPluginMcpServers(components?.mcpServers ?? catalog?.detail.mcpServers ?? [], catalog?.detail.mcpServerDetails)}`,
+      ${renderPluginMcpServers(components?.mcpServers ?? catalog?.detail.mcpServers ?? [], catalog?.detail.mcpServerDetails, props.onOpenMcp)}`,
       readme:
         props.inspection?.overview?.readme || catalog?.detail.readme
           ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)

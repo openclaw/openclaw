@@ -11,6 +11,7 @@ import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.t
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import { showPluginMcpPreview, type PluginMcpPreview } from "./mcp-preview.ts";
 import { renderPluginCapabilitySection } from "./overview.ts";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.ts";
 import "./skill-preview.css";
@@ -30,7 +31,7 @@ export type PluginSkillPreviewState = {
 
 export class PluginPreviewController {
   state: PluginSkillPreviewState | null = null;
-  private toolAbort = new AbortController();
+  private capabilityAbort = new AbortController();
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -81,7 +82,12 @@ export class PluginPreviewController {
 
   openTool(tool: PluginToolPreview): void {
     this.close();
-    void showPluginToolPreview(tool, this.toolAbort.signal);
+    void showPluginToolPreview(tool, this.capabilityAbort.signal);
+  }
+
+  openMcp(server: PluginMcpPreview): void {
+    this.close();
+    void showPluginMcpPreview(server, this.capabilityAbort.signal);
   }
 
   retry(): void {
@@ -151,8 +157,8 @@ export class PluginPreviewController {
   }
   /** Dismissal, route changes and connection changes retire outstanding reads. */
   close(): void {
-    this.toolAbort.abort();
-    this.toolAbort = new AbortController();
+    this.capabilityAbort.abort();
+    this.capabilityAbort = new AbortController();
     this.state = null;
     this.host.requestUpdate();
   }

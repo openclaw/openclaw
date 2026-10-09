@@ -1216,18 +1216,14 @@ openclaw-plugins-page
 .plugin-capabilities {
   margin-bottom: 28px;
 }
-.plugin-capabilities h2,
-.plugin-catalog-detail__readme-section > h2 {
+.plugin-capabilities h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 12px;
+  margin: 0;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
   font-size: var(--control-ui-text-lg);
-}
-.plugin-capabilities h2 {
-  margin-bottom: 0;
 }
 .plugin-capabilities h2 > span {
   display: inline-grid;
@@ -1246,7 +1242,6 @@ openclaw-plugins-page
   border-bottom: 1px solid var(--border);
 }
 .plugin-capability > button,
-.plugin-capability__disclosure > summary,
 .plugin-capability__static {
   display: flex;
   align-items: center;
@@ -1260,39 +1255,18 @@ openclaw-plugins-page
   text-align: left;
   font: inherit;
 }
-.plugin-capability > button,
-.plugin-capability__disclosure > summary {
+.plugin-capability > button {
   cursor: var(--cursor-action);
 }
-.plugin-capability > button:hover,
-.plugin-capability__disclosure > summary:hover {
+.plugin-capability > button:hover {
   background: var(--bg-elevated);
 }
-.plugin-capability > button:focus-visible,
-.plugin-capability__disclosure > summary:focus-visible {
+.plugin-capability > button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.plugin-capability__disclosure > summary {
-  list-style: none;
-}
-.plugin-capability__disclosure > summary::-webkit-details-marker {
-  display: none;
-}
 .plugin-capability__chevron {
   display: inline-flex;
-}
-.plugin-capability__disclosure[open] .plugin-capability__chevron {
-  transform: rotate(90deg);
-}
-.plugin-capability__details {
-  padding: 0 12px 12px;
-  overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-sm);
-}
-.plugin-capability__details p {
-  margin: 12px 0 0;
-  color: var(--muted);
 }
 .plugin-mcp-details {
   display: grid;
@@ -1304,6 +1278,7 @@ openclaw-plugins-page
   color: var(--muted);
 }
 .plugin-mcp-details dd {
+  overflow-wrap: anywhere;
   margin: 0;
 }
 .plugin-capability__icon {
@@ -1343,10 +1318,10 @@ openclaw-plugins-page
 .plugin-catalog-detail__readme-section {
   min-width: 0;
 }
-.plugin-tool-dialog {
+.plugin-capability-dialog {
   --openclaw-modal-width: 760px;
 }
-.plugin-tool-preview {
+.plugin-capability-preview {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
@@ -1356,21 +1331,23 @@ openclaw-plugins-page
   border-radius: 12px;
   background: var(--bg);
 }
-.plugin-tool-preview header {
+.plugin-capability-preview header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
 }
-.plugin-tool-preview h2 {
+.plugin-capability-preview h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: var(--control-ui-text-lg);
 }
-.plugin-tool-preview__body {
+.plugin-capability-preview__body {
   overflow: auto;
   min-height: 0;
 }
-.plugin-tool-preview p {
+.plugin-capability-preview p {
   margin: 20px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

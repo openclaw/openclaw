@@ -10,9 +10,10 @@ import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { renderArtTile } from "./consent-dialog.ts";
-import "../../styles/sidebar-markdown.css";
 import { renderPluginDetailShell } from "./detail-shell.ts";
+import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import type { PluginMcpPreview } from "./mcp-preview.ts";
 import {
   renderPluginCapabilitySection,
   renderPluginDeclaredCapabilities,
@@ -25,6 +26,7 @@ import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-mess
 
 export type PluginCatalogDetailProps = {
   onAskPlugin?: () => void;
+  onOpenMcp: (server: PluginMcpPreview) => void;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
   message?: PluginRowMessage;
@@ -107,7 +109,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
       (detail.contracts?.tools ?? []).map((name) => ({ name })),
       icons.wrench,
     )}
-    ${renderPluginMcpServers(detail.mcpServers, detail.mcpServerDetails)}`,
+    ${renderPluginMcpServers(detail.mcpServers, detail.mcpServerDetails, props.onOpenMcp)}`,
     readme: detail.readme ? renderPluginReadme(detail.readme) : undefined,
   });
 }
