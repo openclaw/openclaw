@@ -3,8 +3,23 @@ import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildTurnSendTargetKey } from "./turn-send-ledger.js";
+
+// Collapse a raw target candidate to the same canonical form the delivery path (and the
+// ledger key via buildTurnSendTargetKey) resolves it to: case-fold, plugin prefix strip,
+// phone normalization. Equivalent spellings of one destination ("TG:12345" vs "12345",
+// or "target" and a plugin delivery alias that name the same peer) must collapse to one
+// entry in the distinct-target set below instead of looking like two targets and forcing
+// the multi-target bail that silently drops the send out of the budget. Provider-bound and
+// idempotent, so reapplying it where buildTurnSendTargetKey normalizes again is a no-op;
+// genuinely different destinations normalize differently and stay distinct. Falls back to
+// the coerced input when the normalizer cannot parse it, so a candidate still compares by
+// its own value rather than vanishing.
+function canonicalizeRouteTarget(channel: string, raw: string): string {
+  return normalizeTargetForProvider(channel, raw) ?? raw;
+}
 
 // Canonical, stable route string for one outbound action: `${channel}\0${account}\0${target}`,
 // with the current source resolved to its concrete target and multi-target sends bailing to
@@ -36,15 +51,16 @@ export function resolveOutboundActionRoute(params: {
   const targets = ["target", "to", "channelId"]
     .map((key) => normalizeOptionalStringifiedId(params.args[key]))
     .concat(deliveryAliasTarget ?? [])
-    .filter((value): value is string => Boolean(value));
+    .filter((value): value is string => Boolean(value))
+    .map((value) => canonicalizeRouteTarget(channel, value));
   if (new Set(targets).size > 1) {
     return undefined;
   }
   const target = targets[0];
   const currentTargets = new Set(
-    [params.currentMessagingTarget, params.currentChannelId].filter((value): value is string =>
-      Boolean(value),
-    ),
+    [params.currentMessagingTarget, params.currentChannelId]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => canonicalizeRouteTarget(channel, value)),
   );
   // Plugin-declared aliases keep owner-specific target fields out of core. A no-target
   // or current-source send resolves to the concrete current target so it shares one
