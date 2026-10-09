@@ -72,6 +72,18 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return cleaned ? FOLLOWUP_QUEUES.get(cleaned) : undefined;
 }
 
+/** Read the live steering reservation owned by this exact source cancellation identity. */
+export function hasFollowupSteeringReservation(key: string, signal: AbortSignal): boolean {
+  // Dispatch may copy lifecycle objects, but preserves the source-owned abort signal.
+  return (
+    !signal.aborted &&
+    (getExistingFollowupQueue(key)?.items.some(
+      (item) => item.turnAdoptionLifecycle?.abortSignal === signal && Boolean(item.steerPending),
+    ) ??
+      false)
+  );
+}
+
 export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);

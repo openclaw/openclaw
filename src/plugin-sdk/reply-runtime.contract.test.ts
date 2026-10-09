@@ -26,7 +26,12 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionEnd"];
 
 describe("reply runtime public progress contracts", () => {
-  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+  it("retains released lifecycle callback arguments and synchronous completion acknowledgment", () => {
+    type Deferral = NonNullable<
+      NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>["onDeferred"]
+    >;
+    expectTypeOf<Parameters<Deferral>>().toEqualTypeOf<[]>();
+    expectTypeOf<ReturnType<Deferral>>().toEqualTypeOf<boolean | void>();
     type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
     type LegacyAgentRunStart = (
       runId: string,

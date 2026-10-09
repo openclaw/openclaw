@@ -3,7 +3,11 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import { createQueueSettings, createQueueTestRun } from "../queue.test-helpers.js";
 import { enqueueFollowupRun, parkSteerCandidate } from "./enqueue.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./state.js";
+import {
+  clearFollowupQueue,
+  getExistingFollowupQueue,
+  hasFollowupSteeringReservation,
+} from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 const keys = new Set<string>();
@@ -16,6 +20,47 @@ afterEach(() => {
 });
 
 describe("parked steering admission", () => {
+  it.each(["accepted", "rejected", "cancelled"] as const)(
+    "projects %s steering from the canonical reservation across lifecycle copies",
+    async (outcome) => {
+      const key = "steer-observation-" + outcome;
+      keys.add(key);
+      const controller = new AbortController();
+      const lifecycle = { abortSignal: controller.signal, onAdopted: vi.fn(), onDeferred: vi.fn() };
+      const run = {
+        ...createQueueTestRun({ prompt: "correction" }),
+        abortSignal: controller.signal,
+        turnAdoptionLifecycle: { ...lifecycle, onAdopted: async () => lifecycle.onAdopted() },
+      };
+      const observesSteering = () => hasFollowupSteeringReservation(key, controller.signal);
+      expect(observesSteering()).toBe(false);
+      const reservation = parkSteerCandidate(
+        key,
+        run,
+        createQueueSettings({ mode: "steer" }),
+        vi.fn(),
+      )!;
+      expect(lifecycle.onDeferred).toHaveBeenCalledExactlyOnceWith();
+      expect(observesSteering()).toBe(true);
+      expect(hasFollowupSteeringReservation(key, new AbortController().signal)).toBe(false);
+      expect(hasFollowupSteeringReservation(key + "-other", controller.signal)).toBe(false);
+      await expect(reservation.admit()).resolves.toBe("steer");
+      if (outcome === "accepted") {
+        reservation.accepted(true);
+        // Acceptance keeps cancellation custody until the source transcript commits.
+        expect(observesSteering()).toBe(true);
+        reservation.consume("consumed");
+      } else if (outcome === "rejected") {
+        reservation.fallback();
+      } else {
+        controller.abort();
+      }
+      expect(observesSteering()).toBe(false);
+      clearFollowupQueue(key);
+      expect(observesSteering()).toBe(false);
+    },
+  );
+
   it.each(["accepted", "rejected"] as const)(
     "tries newer input after an earlier steer rejects and drains %s fallback in order",
     async (outcome) => {

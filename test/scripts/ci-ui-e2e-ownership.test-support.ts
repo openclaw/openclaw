@@ -118,6 +118,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",

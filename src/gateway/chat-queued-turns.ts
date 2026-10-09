@@ -9,6 +9,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { hasFollowupSteeringReservation } from "../auto-reply/reply/queue/state.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
   resolveChatAbortDiagnosticReason,
@@ -46,6 +47,19 @@ export function isQueuedChatTurnForSession(
     queued.agentId === scope.agentId &&
     queued.abortable !== false &&
     !queued.controller.signal.aborted,
+  );
+}
+
+/** Project follow-up placement without changing parked steering cancellation ownership. */
+export function isQueuedFollowupChatTurnForSession(
+  turns: QueuedChatTurnMap | undefined,
+  runId: string,
+  scope: Pick<QueuedChatTurnEntry, "sessionId" | "sessionKey" | "agentId">,
+): boolean {
+  const entry = turns?.get(runId);
+  return (
+    isQueuedChatTurnForSession(turns, runId, scope) &&
+    Boolean(entry && !hasFollowupSteeringReservation(entry.sessionKey, entry.controller.signal))
   );
 }
 

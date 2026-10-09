@@ -120,6 +120,7 @@ const realGatewayFiles = [
   "chat-flow.catalog-bootstrap",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-steer-deferred-custody.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
@@ -619,6 +620,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

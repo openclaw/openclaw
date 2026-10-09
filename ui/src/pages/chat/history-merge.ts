@@ -490,17 +490,18 @@ export function reconcileChatInputCustody(
       .filter((runId) => typeof runId === "string"),
   );
   retireChatSubmissionDisplay(owner, acceptedRunIds, { awaitTranscriptReceipt: true });
-  const stoppedRunIds = new Set(
+  // Deferred custody supersedes optimistic steering; acceptance alone does not.
+  const retiredDisplayRunIds = new Set(
     [
       ...(page?.items ?? [])
-        .filter((input) => input.state !== "queued")
+        .filter((input) => input.state !== "queued" || input.queued)
         .map((input) => input.runId),
       ...receipts
-        .filter((receipt) => receipt.state === "pending" && receipt.cancelled)
+        .filter((receipt) => receipt.state === "pending" && (receipt.cancelled || receipt.queued))
         .map((receipt) => receipt.runId),
     ].filter((runId) => typeof runId === "string"),
   );
-  retireChatSubmissionDisplay(owner, stoppedRunIds);
+  retireChatSubmissionDisplay(owner, retiredDisplayRunIds);
   return {
     acceptedRunIds,
     page: page ?? { items: [], total: 0 },
@@ -580,8 +581,12 @@ export function admitChatSubmission(
   // A pane can receive custody before the sender hands off its local display.
   if (
     submission &&
-    ((pendingInputs?.some((input) => input.runId === submission.pendingRunId) &&
-      !(submission.kind === "delivered" && persistedSteerTargetRunId(submission.message))) ||
+    (pendingInputs?.some(
+      (input) =>
+        input.runId === submission.pendingRunId &&
+        (input.queued ||
+          !(submission.kind === "delivered" && persistedSteerTargetRunId(submission.message))),
+    ) ||
       (submission.kind === "initial" &&
         owner.chatMessages.some((message) =>
           isInitialSubmissionReceipt(submission, readSessionMessageIdentity(message)),

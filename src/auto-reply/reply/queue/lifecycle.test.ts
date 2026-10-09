@@ -9,6 +9,17 @@ import {
 afterEach(() => vi.useRealTimers());
 
 describe("followup lifecycle heartbeat", () => {
+  it("keeps the public deferral callback free of internal observation arguments", () => {
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn() };
+    const run = { turnAdoptionLifecycle: lifecycle };
+    try {
+      expect(markFollowupRunEnqueued(run)).toBe(true);
+      expect(lifecycle.onDeferred).toHaveBeenCalledExactlyOnceWith();
+    } finally {
+      completeFollowupRunLifecycle(run);
+    }
+  });
+
   it("preserves a steer error while joining the already-started admission before settlement", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
