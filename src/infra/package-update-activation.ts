@@ -283,7 +283,8 @@ export async function settlePendingPackageActivation(
   const replacementIdentity = packageActivationIdentity(installKey, true);
   const externalPublication =
     replacementIdentity === initial.descriptor.candidate.identity &&
-    (initial.phase === "publishing" ||
+    (initial.phase === "prepared" ||
+      initial.phase === "publishing" ||
       initial.phase === "publication-complete" ||
       (initial.phase === "superseded" &&
         initial.intent?.kind === "publication-settled-external-change"));
