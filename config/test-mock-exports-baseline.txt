@@ -1177,7 +1177,6 @@
 ["extensions/msteams/src/monitor-handler/message-handler.authz.test.ts","../team-identity.js","0382db0c391093c9a77a54f51f70da2f8ad16a357ed5b5d6386896822d7bc295",1]
 ["extensions/msteams/src/monitor-handler/message-handler.bot-threads.test.ts","../graph-thread.js","878d57d761110f146607eaa5b86fd93580765c75312a6d4feaf5fecb7fac182a",1]
 ["extensions/msteams/src/monitor-handler/message-handler.bot-threads.test.ts","../team-identity.js","43a5c5f406829b41b5a675fcb351a6d8f0421997ecf774b5471e0cd03716d131",1]
-["extensions/msteams/src/monitor-handler/message-handler.thread-parent.test.ts","../team-identity.js","022728fd3f355f23aad8141b6c24930e29ab5103446aea874413e84356ceaa39",1]
 ["extensions/msteams/src/monitor-ingress-mock.test-support.ts","./msteams-ingress.js","73d3d56fa39e6f035a52720e58a1224989ef5da806232ce6a99e9e592808c144",1]
 ["extensions/msteams/src/monitor-lifecycle.test-support.ts","./file-consent-invoke.js","4dfc5732da12fd200ab895d7af426f823cdc35f371c3a1e628b9f9b43aeae67a",1]
 ["extensions/msteams/src/monitor-lifecycle.test-support.ts","./monitor-handler.js","2eced9eed3be70832162ca89d4c0ca42d275e88f41f1161dd6d9df9948791f2f",1]
