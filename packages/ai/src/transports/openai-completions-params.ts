@@ -421,7 +421,11 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const reasoning = resolveOpenAIRequestReasoning(
+    model,
+    requestedEffort,
+    compat.reasoningEffortForOff,
+  );
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
