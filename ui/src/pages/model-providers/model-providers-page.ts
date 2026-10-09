@@ -573,9 +573,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const configObject = currentConfigObject(this.context.runtimeConfig.state);
     const config = readModelProviderConfig(configObject);
-    const catalog = modelCatalog.readAgentModelCatalog(
+    const catalog = modelCatalog.readModelCatalog(
       gatewaySnapshot.client,
-      this.selectedAgentId,
+      this.selectedAgentId ? { agentId: this.selectedAgentId } : null,
     );
     const configuredDefaults = {
       ...config.defaults,

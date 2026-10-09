@@ -17,6 +17,7 @@ const CONFIG_SECTION_KEYS_BY_PAGE = {
 } as const satisfies Record<string, readonly string[] | undefined>;
 
 export type ConfigPageId = keyof typeof CONFIG_SECTION_KEYS_BY_PAGE;
+export const CONFIG_PAGE_IDS = Object.keys(CONFIG_SECTION_KEYS_BY_PAGE) as ConfigPageId[];
 
 // Search and page rendering must agree on section ownership, or a result can
 // open a page whose editor rejects the section it promised to reveal.

@@ -361,18 +361,11 @@ const DREAMING_RESOURCES: {
   },
 };
 
-export function loadDreamingResource(
-  state: DreamingState,
-  key: DreamingResourceKey,
-): Promise<void> {
-  return loadDreamingResourceSpec(state, key, DREAMING_RESOURCES[key]);
-}
-
-async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
+export async function loadDreamingResource<Key extends DreamingResourceKey>(
   state: DreamingState,
   key: Key,
-  spec: (typeof DREAMING_RESOURCES)[Key],
 ): Promise<void> {
+  const spec = DREAMING_RESOURCES[key];
   const agentId = resolveSelectedAgentId(state);
   const loadingKey: `${Key}Loading` = `${key}Loading`;
   const errorKey: `${Key}Error` = `${key}Error`;

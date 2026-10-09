@@ -136,6 +136,14 @@ function pruneChatMediaSubscriber(subscriber: () => void, state: ChatMediaSubscr
   }
 }
 
+function removeChatMediaSubscriberChild(owner: () => void, subscriber: () => void): void {
+  const state = chatMediaSubscribers.get(owner);
+  if (state) {
+    state.children.delete(subscriber);
+    pruneChatMediaSubscriber(owner, state);
+  }
+}
+
 function detachChatMediaResourceSubscriber(
   resource: ChatMediaResource<unknown>,
   subscriber: () => void,
@@ -159,7 +167,9 @@ function detachChatMediaResourceSubscriber(
       !resource.pending
     ) {
       chatMediaResources.set(resourceKey, resource);
-      trimIdleChatMediaResources();
+      trimChatMediaResources(
+        (entry) => entry.retainUntil !== undefined && entry.subscribers.size === 0,
+      );
     }
   }
   resource.abortController?.abort();
@@ -240,10 +250,8 @@ export function observeChatMediaResource<Value>(
   return resource;
 }
 
-function trimIdleChatMediaResources() {
-  const retained = [...chatMediaResources.entries()].filter(
-    ([, resource]) => resource.retainUntil !== undefined && resource.subscribers.size === 0,
-  );
+function trimChatMediaResources(matches: (resource: ChatMediaResource<unknown>) => boolean) {
+  const retained = [...chatMediaResources.entries()].filter(([, resource]) => matches(resource));
   for (const [resourceKey] of retained.slice(0, -CHAT_MEDIA_CACHE_MAX_ENTRIES)) {
     chatMediaResources.delete(resourceKey);
   }
@@ -314,12 +322,7 @@ export function observeChatMediaResourceSubscriber(owner: () => void, subscriber
     return;
   }
   if (state.owner) {
-    const previousOwner = state.owner;
-    const previous = chatMediaSubscribers.get(previousOwner);
-    if (previous) {
-      previous.children.delete(subscriber);
-      pruneChatMediaSubscriber(previousOwner, previous);
-    }
+    removeChatMediaSubscriberChild(state.owner, subscriber);
   }
   getChatMediaSubscriber(owner).children.add(subscriber);
   state.owner = owner;
@@ -335,11 +338,7 @@ export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | un
     releaseChatMediaResourceSubscriber(child);
   }
   if (state.owner) {
-    const owner = chatMediaSubscribers.get(state.owner);
-    if (owner) {
-      owner.children.delete(subscriber);
-      pruneChatMediaSubscriber(state.owner, owner);
-    }
+    removeChatMediaSubscriberChild(state.owner, subscriber);
   }
   for (const resource of new Set(state.resources.values())) {
     detachChatMediaResourceSubscriber(resource, subscriber);
@@ -347,16 +346,13 @@ export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | un
 }
 
 export function trimManagedImageMissResources() {
-  const misses = [...chatMediaResources.entries()].filter(
-    ([, resource]) =>
+  trimChatMediaResources(
+    (resource) =>
       resource.kind === "managed-image" &&
       resource.value === null &&
       resource.subscribers.size === 0 &&
       !resource.pending,
   );
-  for (const [resourceKey] of misses.slice(0, -CHAT_MEDIA_CACHE_MAX_ENTRIES)) {
-    chatMediaResources.delete(resourceKey);
-  }
 }
 
 export function readManagedImageBlobUrl(cacheKey: string): string | undefined {

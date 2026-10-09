@@ -266,11 +266,8 @@ export function sessionProgressCardsForGateway(
     gateway.snapshot.phase === "connected" && gateway.snapshot.client !== null;
 
   const queueRefresh = (entry: ProgressCardEntry, revision: number | null) => {
-    if (entry.pendingRefreshRevision === null || revision === null) {
-      entry.pendingRefreshRevision = null;
-      return;
-    }
-    if (entry.pendingRefreshRevision === undefined || revision > entry.pendingRefreshRevision) {
+    const pending = entry.pendingRefreshRevision;
+    if (pending !== null && (revision === null || pending === undefined || revision > pending)) {
       entry.pendingRefreshRevision = revision;
     }
   };

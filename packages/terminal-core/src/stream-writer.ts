@@ -33,16 +33,14 @@ export function createSafeStreamWriter(
     if (closed) {
       return false;
     }
+    let errorStream = process.stderr;
     try {
       clearActiveProgressLine();
-    } catch (err) {
-      return handleError(err, process.stderr);
-    }
-    try {
+      errorStream = stream;
       stream.write(text);
       return !closed;
     } catch (err) {
-      return handleError(err, stream);
+      return handleError(err, errorStream);
     }
   };
 
