@@ -1260,7 +1260,7 @@ src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	1
 src/agents/cron-creator-authority-context.ts	1
-src/agents/custom-api-registry.ts	2
+src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
@@ -1523,7 +1523,7 @@ src/agents/tools/web-search-provider-common.ts	1
 src/agents/tools/web-search-provider-config.ts	1
 src/agents/transcript-policy.ts	1
 src/agents/transcript-redact-replay.ts	1
-src/agents/transcript-redact.ts	2
+src/agents/transcript-redact.ts	1
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
