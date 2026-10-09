@@ -1,19 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
-import {
-  markMemoryTargetArchiveFilesDirty,
-  runMemoryTargetedSessionSync,
-} from "./manager-targeted-sync.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+
+function createTargetedSyncOwner(sessionsDirtyFiles: Set<string>) {
+  return {
+    sources: new Set(["sessions"]),
+    sessionsDirtyFiles,
+    sessionsDirty: false,
+    sessionsFullRetryDirty: false,
+    sessionsReconcileDirty: false,
+    syncOutcomes: { recordActiveFailure: vi.fn() },
+    endSyncProviderGeneration: vi.fn(),
+    syncArchiveFiles: vi.fn(async () => {}),
+    activateFallbackProvider: vi.fn(async (_reason: string) => false),
+  };
+}
 
 describe("memory targeted session sync", () => {
   it("marks target sessions dirty while identity sync is paused", () => {
     const targetSessionPath = "/tmp/paused-target.jsonl";
     const sessionsDirtyFiles = new Set(["/tmp/other-dirty.jsonl"]);
 
-    const sessionsDirty = markMemoryTargetArchiveFilesDirty({
-      sessionsDirtyFiles,
-      targetArchiveFiles: [targetSessionPath],
-    });
+    const sessionsDirty = MemoryManagerSyncOps.prototype["markTargetArchiveFilesDirty"].call(
+      createTargetedSyncOwner(sessionsDirtyFiles),
+      [targetSessionPath],
+    );
 
     expect(sessionsDirty).toBe(true);
     expect(sessionsDirtyFiles.has(targetSessionPath)).toBe(true);
@@ -33,14 +44,15 @@ describe("memory targeted session sync", () => {
       .mockResolvedValueOnce(undefined);
     const sessionsDirtyFiles = new Set(["/tmp/targeted-fallback.jsonl", "/tmp/other-dirty.jsonl"]);
 
-    const result = await runMemoryTargetedSessionSync({
-      hasSessionSource: true,
-      targetArchiveFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
-      progress: undefined,
-      sessionsDirtyFiles,
+    const owner = {
+      ...createTargetedSyncOwner(sessionsDirtyFiles),
       syncArchiveFiles,
       activateFallbackProvider,
-    });
+    };
+    const result = await MemoryManagerSyncOps.prototype["syncTargetedSessions"].call(
+      owner,
+      new Set(["/tmp/targeted-fallback.jsonl"]),
+    );
 
     expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
     expect(syncArchiveFiles).toHaveBeenCalledTimes(1);
@@ -48,12 +60,13 @@ describe("memory targeted session sync", () => {
       needsFullReindex: false,
       targetArchiveFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
+      corpusEntries: undefined,
     });
-    expect(result).toEqual({
-      handled: true,
-      sessionsDirty: true,
-      failure: { error: expect.objectContaining({ message: "embedding backend failed" }) },
-    });
+    expect(result).toBe(true);
+    expect(owner.sessionsDirty).toBe(true);
+    expect(owner.syncOutcomes.recordActiveFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "embedding backend failed" }),
+    );
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
@@ -63,17 +76,15 @@ describe("memory targeted session sync", () => {
     { marker: "source reconciliation", dirtyState: { sessionsReconcileDirty: true } },
   ])("preserves the $marker dirty marker after targeted cleanup", async ({ dirtyState }) => {
     const sessionsDirtyFiles = new Set(["/tmp/targeted-cleanup.jsonl"]);
-    const result = await runMemoryTargetedSessionSync({
-      hasSessionSource: true,
-      targetArchiveFiles: new Set(sessionsDirtyFiles),
-      progress: undefined,
-      ...dirtyState,
-      sessionsDirtyFiles,
-      syncArchiveFiles: async () => undefined,
-      activateFallbackProvider: async () => false,
-    });
+    const owner = { ...createTargetedSyncOwner(sessionsDirtyFiles), ...dirtyState };
+    const result = await MemoryManagerSyncOps.prototype["syncTargetedSessions"].call(
+      owner,
+      new Set(sessionsDirtyFiles),
+    );
 
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(result).toBe(true);
+    expect(owner.sessionsDirty).toBe(true);
+    expect(owner.syncOutcomes.recordActiveFailure).not.toHaveBeenCalled();
     expect(sessionsDirtyFiles.size).toBe(0);
   });
 });

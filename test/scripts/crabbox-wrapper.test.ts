@@ -952,9 +952,11 @@ if (entry === ${JSON.stringify(implementationPath)}) {
           scripts: { "crabbox:run": "node scripts/crabbox-wrapper.mjs run" },
         }),
       );
+      // Match the repository policy: pnpm run must not reconcile borrowed dependencies.
+      writeFileSync(path.join(producer, "pnpm-workspace.yaml"), "verifyDepsBeforeRun: false\n");
       writeFileSync(
         path.join(producer, ".gitignore"),
-        "scripts/\nnode_modules/\npackage.json\npnpm-lock.yaml\n.crabbox/\n",
+        "scripts/\nnode_modules/\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\n.crabbox/\n",
       );
       writeFileSync(path.join(producer, "fixture.txt"), "original source\n");
       git("init", "-q", "-b", "main");

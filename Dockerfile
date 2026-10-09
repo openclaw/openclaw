@@ -30,8 +30,9 @@ ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-# Stage every workspace manifest for frozen-lockfile validation. Production
-# install filters keep optional plugin dependencies limited to the selected runtime.
+# Frozen installs validate every lockfile importer's manifest, including unselected plugins.
+# Stage all workspace manifests, then filter dependency installation separately.
+# Manifest-only bundled plugins remain valid selections but need no workspace metadata.
 # Use COPY because build-context bind mounts are unreliable across supported
 # Podman/Buildah hosts. Full trees stay in this disposable stage; later stages
 # receive only extracted manifests.
@@ -44,9 +45,9 @@ COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 RUN mkdir -p /out/packages /out/examples "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
     for manifest in /tmp/packages/*/package.json /tmp/examples/*/package.json "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}"/*/package.json; do \
       [ -f "$manifest" ] || continue; \
-      relative="${manifest#/tmp/}"; \
-      mkdir -p "/out/${relative%/package.json}" && \
-      cp "$manifest" "/out/$relative"; \
+      manifest_path="${manifest#/tmp/}"; \
+      mkdir -p "/out/${manifest_path%/package.json}" && \
+      cp "$manifest" "/out/$manifest_path"; \
     done && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
       > /out/openclaw-selected-plugin-dirs && \
@@ -88,16 +89,18 @@ COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addon
 COPY --from=workspace-deps /out/packages/ ./packages/
 COPY --from=workspace-deps /out/examples/ ./examples/
 COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-workspace-plugin-dirs /tmp/openclaw-workspace-plugin-dirs
 COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
 COPY --from=workspace-deps /out/openclaw-required-platform-packages /tmp/openclaw-required-platform-packages
-COPY --from=workspace-deps /out/openclaw-workspace-plugin-dirs /tmp/openclaw-workspace-plugin-dirs
 
 # ── Production dependencies ────────────────────────────────────
 FROM dependency-inputs AS production-deps
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    set -- --filter . --filter ./ui --filter './packages/*'; \
-    while IFS= read -r ext; do set -- "$@" --filter "./${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; done < /tmp/openclaw-workspace-plugin-dirs; \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm "$@" install --frozen-lockfile --prod \
+    set -eu; set -- --filter . --filter ./ui --filter './packages/*'; \
+    while IFS= read -r ext; do \
+      set -- "$@" --filter "./${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
+    done < /tmp/openclaw-workspace-plugin-dirs; \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod "$@" \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc
@@ -117,6 +120,8 @@ COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
+# Source asset preparation builds external plugins before runtime pruning.
+# Its build dependencies stay in this disposable stage; production remains filtered.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
       --config.supportedArchitectures.os=linux \

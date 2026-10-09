@@ -109,8 +109,8 @@ const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
       }
       return query(key);
     },
-    canonical: (key: string, projection: SessionEntryProjection) => {
-      const shape = `${JSON.stringify(projection)}:${hasSqliteSessionOwnerColumns(database)}`;
+    canonical: (key: string, projection: SessionEntryProjection, includeOwner = true) => {
+      const shape = `${JSON.stringify(projection)}:${includeOwner}:${includeOwner && hasSqliteSessionOwnerColumns(database)}`;
       let query = canonicalQueries.get(shape);
       if (!query) {
         query = cacheSessionEntryQuery(
@@ -119,7 +119,8 @@ const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
             string,
             CanonicalSessionValidationRow & ResolvedSessionEntryRow["row"]
           >(database, (parameter) =>
-            canonicalSessionValidationQuery({ db: database }, { metadata: true })
+            canonicalSessionValidationQuery({ db: database }, { metadata: includeOwner })
+              .$if(!includeOwner, (builder) => builder.select("session_nodes.updated_at"))
               .select(sessionEntrySnapshotColumnsForKeys(undefined, projection))
               .where(
                 "session_nodes.session_key",
@@ -391,6 +392,22 @@ export function readSessionChildEntriesInDatabase(
     childRows.filter((row) => !isInternalSessionEffectsKey(row.session_key)),
     projection,
   );
+}
+
+/** Final generation guards reuse an admitted native handle without freshness or schema queries. */
+export function readSessionEntryGenerationInDatabase(
+  database: OpenClawAgentDatabaseReader,
+  sessionKey: string,
+):
+  | Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode" | "toolOverrides">
+  | undefined {
+  const row = getExactSessionEntryQueries(database.db).canonical(sessionKey, "list", false);
+  const entry = row && parseReadableSessionEntryData(database, row, "list");
+  if (!entry) {
+    return undefined;
+  }
+  const { sessionId, lifecycleRevision, permissionMode, toolOverrides } = entry;
+  return { sessionId, lifecycleRevision, permissionMode, toolOverrides };
 }
 
 export function readExactSessionEntryRow(

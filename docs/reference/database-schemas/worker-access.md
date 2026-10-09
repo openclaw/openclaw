@@ -82,15 +82,77 @@ evidence stays unknown. A confirmed identity mutation still notifies lifecycle
 observers when native settlement is unknown; retained read facts remain fenced.
 Unknown writes are never automatically repeated.
 
-This is a scoped completeness contract, not global writer certification. Session
-transcript/context coverage, conversation and plugin-state writers, approvals,
+This is a scoped completeness contract, not global writer certification. Conversation
+and plugin-state writers, approvals,
 placement and workspace writers, raw SQLite handles, and foreign-process refresh
 retain their existing guards until their own coverage is complete. Unmanaged raw
 transactions are not covered by managed savepoint publication. A receipt grants
 neither current permission nor cross-store exclusion through destination commit.
-This foundation adds no SQL, schema validation, persistent storage, SDK
+Receipt installation itself adds no SQL, schema validation, persistent storage, SDK
 deprecation, or migration. Admission continues to own validation; receipt
 installation consumes the physical facts already captured by that owner.
+
+### Session authority projections
+
+Typed session writers publish through the existing entry and transcript owners.
+Entry replacement and patch receipts carry the committed lifecycle, permission,
+sharing, membership, owner, and category facts. Partial owner, member, category,
+and participant writes preserve unrelated fields. Pending worker writes fence
+their affected facts; a committed receipt installs before the ordinary reply and
+survives its loss. A delayed receipt cannot overwrite a newer native publication.
+Profile and runtime notifications do not supersede stored entry or transcript
+facts; their authorization and display owners still receive those notifications.
+Deletion remains an explicit tombstone, and a lifecycle change cannot revive a
+previously revoked captured generation.
+
+Transcript mutations capture their context generation, sequence, mutation clock,
+and active-path projection in the existing mutation statement. Those private
+facts join the same commit installation phases without sending duplicate
+presentation notifications, while advancing the existing freshness fence for
+transcript-derived projections. Native compatibility calls install before returning;
+worker callers install from the native commit receipt before completion. A nested
+savepoint cannot publish facts that its outer transaction may still roll back.
+Received worker facts have their own installation frame even when a native caller
+is waiting for, or already owns, a different transaction on its host handle.
+
+The projection is not a complete list of valid anchors. Exact anchor membership,
+CLI-writer ownership, and accepted-input custody retain their existing validators.
+The model-context reader uses committed destructive changes to permanently refuse
+an overlapping read; it still validates its exact context at acceptance.
+
+| Writer family                                                                                 | Publication boundary                                                                                                                  |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Entry creation, replacement, patch, reset, and deletion                                       | Existing entry publisher, worker replacement receipts, and lifecycle tombstones.                                                      |
+| Owner assignment, membership, category, and participant changes                               | Field postimages through the same entry owner; worker commit evidence is separate from reply delivery.                                |
+| SessionManager append, metadata, compaction, reset, leaf, branch, suffix, and rewrite methods | Shared transcript mutation kernels and committed context facts; synchronous methods preserve their current completion contract.       |
+| SDK entry and transcript adapters, including opaque callbacks                                 | The same native or worker producer selected before execution; a Promise signature alone does not make a native callback worker-owned. |
+| Cold transcript materialization and derived projection repair                                 | Existing content-preserving owners and exact context/anchor validation; presentation readiness is not mutation authority.             |
+| Alias moves, canonical repair, artifact-copy repair, and legacy ACP provenance                | Offline or repair custody and conservative invalidation; these paths do not certify complete runtime postimages.                      |
+
+Prepared delivery-generation checks retain a narrow native guard for an existing
+managed handle that has changed since preparation. That slow path reuses the
+canonical indexed row reader to check identity and execution settings, without
+opening another connection or querying schema or freshness metadata. An observed
+committed revocation remains permanent even if a later raw write restores the old bytes.
+Unchanged uses perform no SQL, and ordinary typed metadata writes remain valid.
+Inside an owned native transaction, unchanged authority remains usable; tentative
+mismatches refuse use without permanently revoking the committed generation if
+the transaction rolls back.
+
+This guard does not certify arbitrary raw batches, callbacks, unfinished
+iterators, unobserved raw revoke-and-restore sequences, or foreign writers.
+Other processes must write through the Gateway owner or while the Gateway is
+stopped. Complete raw write-set settlement remains separate work; native
+final-authority guards stay in place until that contract and the next Plugin
+SDK major's raw-writer removal permit retirement. Conversation
+catalogue and link mutations performed by entry writes also retain their own
+publication and final-authority guards. Session receipts grant no cross-store
+exclusion through another database's commit.
+
+No persistent schema, stored-byte, permission, retention, or upgrade contract
+changes. Existing published updaters need no migration for these process-local
+receipts, and no synchronous SDK method is removed or given an asynchronous
+completion contract.
 
 ### Conversation and plugin-state receipt coverage
 

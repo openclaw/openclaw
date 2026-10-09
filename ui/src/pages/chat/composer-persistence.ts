@@ -47,7 +47,6 @@ import {
   type ChatComposerPersistOptions,
   type ChatComposerPersistResult,
   type ChatComposerPersistStatus,
-  type StoredChatComposerSnapshot,
   type StoredChatQueueReplacement,
 } from "./composer-persistence-state.ts";
 import {
@@ -105,37 +104,15 @@ export function captureChatComposerReplacement(
   );
 }
 
-export function loadChatComposerDraftRevision(
+export function loadChatComposerState(
   state: ChatComposerScope,
   sessionKey: string,
   agentIdOverride?: string,
-): number {
+) {
   return loadCapturedChatComposerState(
     state,
     resolveUiConversationIdentity(state, sessionKey, agentIdOverride),
-  ).revisions.latestAttempt;
-}
-
-export function loadChatComposerCommittedDraftRevision(
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-): number {
-  return loadCapturedChatComposerState(
-    state,
-    resolveUiConversationIdentity(state, sessionKey, agentIdOverride),
-  ).revisions.committed;
-}
-
-export function loadChatComposerSnapshot(
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-): StoredChatComposerSnapshot | null {
-  return loadCapturedChatComposerState(
-    state,
-    resolveUiConversationIdentity(state, sessionKey, agentIdOverride),
-  ).snapshot;
+  );
 }
 
 function persistChatComposerStateResult(
@@ -468,7 +445,7 @@ export function restoreChatComposerState(
 ): boolean {
   state.chatMessage = normalizeChatComposerDraft(state.chatMessage);
   const sessionKey = options.sessionKey ?? state.sessionKey;
-  const snapshot = loadChatComposerSnapshot(state, sessionKey);
+  const snapshot = loadChatComposerState(state, sessionKey).snapshot;
   if (!snapshot) {
     return false;
   }

@@ -616,6 +616,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.projections.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.orphan.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.sessions-yield.test.ts",

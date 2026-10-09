@@ -4,7 +4,6 @@ import type {
   DevicePairSetupCodeParams,
   DevicePairSetupCodeResult,
   DevicePairSetupCompletedEvent,
-  DevicePairSetupDeliveryUncertainEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -22,38 +21,19 @@ export type DevicePairSetupAccess = "full" | "limited" | "node";
 type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" | "access"> & {
   deviceName?: string;
 };
-type DevicePairSetupDeliveryUncertain = Pick<
-  DevicePairSetupDeliveryUncertainEvent,
-  "setupId" | "access"
->;
+type DevicePairSetupDeliveryUncertain = Pick<DevicePairSetupCompletion, "setupId" | "access">;
 
-export type DevicePairSetupLifecycle =
-  | { phase: "selection"; access: DevicePairSetupAccess }
-  | { phase: "loading"; access: DevicePairSetupAccess }
-  | { phase: "waiting"; access: DevicePairSetupAccess; setup: DevicePairSetup }
-  | {
-      phase: "reconciling";
-      access: DevicePairSetupAccess;
-      setupId: string;
-    }
-  | { phase: "error"; source: "create"; access: DevicePairSetupAccess; message: string }
-  | {
-      phase: "error";
-      source: "status";
-      access: DevicePairSetupAccess;
-      setupId: string;
-      message: string;
-    }
-  | {
-      phase: "success";
-      access: DevicePairSetupCompletion["access"];
-      deviceName?: string;
-    }
-  | {
-      phase: "delivery-uncertain";
-      access: DevicePairSetupDeliveryUncertain["access"];
-    }
-  | { phase: "expired"; access: DevicePairSetupAccess };
+export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
+  | { phase: "selection" }
+  | { phase: "loading" }
+  | { phase: "waiting"; setup: DevicePairSetup }
+  | { phase: "reconciling"; setupId: string }
+  | { phase: "error"; source: "create"; message: string }
+  | { phase: "error"; source: "status"; setupId: string; message: string }
+  | { phase: "success"; deviceName?: string }
+  | { phase: "delivery-uncertain" }
+  | { phase: "expired" }
+);
 
 function requestDevicePairSetup(client: GatewayRequestClient, params: DevicePairSetupCodeParams) {
   return client.request<DevicePairSetup>("device.pair.setupCode", params, {

@@ -611,7 +611,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         placementReclaimDisabledReason: placement.reclaimDisabledReason,
         placementRecoveryDisabledReason: placement.recoveryDisabledReason,
         onPlacementMove: () => row && void this.changeHeaderPlacement(row, "move"),
-        onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
+        onPlacementReclaim: () => row && void this.changeHeaderPlacement(row, "reclaim"),
         onPlacementRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
       }),
       sessionMenuAction:
