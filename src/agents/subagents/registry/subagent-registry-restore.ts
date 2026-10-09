@@ -286,7 +286,7 @@ export function createSubagentRegistryRestorer(config: {
         assertCurrent();
       }
       let selectedOwner = getCurrentSubagentRunOwner(runs, snapshot);
-      let sessionEntry;
+      let sessionEntry: Awaited<ReturnType<typeof loadSubagentSessionEntry>>;
       while (selectedOwner && selectedOwner.runId === runId) {
         // Restart recovery retains exclusive custody of these source rows.
         if (
