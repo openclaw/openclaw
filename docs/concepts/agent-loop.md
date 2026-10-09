@@ -202,6 +202,11 @@ A yielded end while the parent task is waiting does not commit a terminal outcom
 If dispatch then fails, the Gateway still publishes and retains that failure for
 chat replay and conversation history.
 
+Chat errors wait for terminal session persistence, including any failure notice,
+so an immediate history reload includes the recorded failure. Successful and
+aborted chat terminals do not wait for this write. If persistence fails, the
+Gateway logs the write failure and still delivers the live chat error.
+
 History keeps a run active while its terminal session write is pending. Once
 that write succeeds, history and session activity show the recorded end time
 and duration without waiting for retry grace.

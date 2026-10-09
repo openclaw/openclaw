@@ -27,6 +27,7 @@ import {
   interruptSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
+import * as sessionRunError from "../sessions/session-run-error.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
 import {
@@ -571,7 +572,9 @@ describe("gateway WebSocket chat abort ownership", () => {
     },
   );
 
-  test("publishes one runtime-loss terminal and retains its failure after commentary for another client", async () => {
+  test("publishes one runtime-loss terminal and retains its failure after commentary for another client", async ({
+    signal,
+  }) => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-runtime-loss-");
     const storePath = path.join(sessionDirectory, "sessions.json");
     testState.sessionStorePath = storePath;
@@ -591,6 +594,17 @@ describe("gateway WebSocket chat abort ownership", () => {
     const terminalStates = trackChatTerminalStates(socket, runId);
     const commentaryPersisted = createDeferred();
     const dispatchRelease = createDeferred();
+    const failureEntered = createDeferred();
+    const failureRelease = createDeferred();
+    const recordFailure = sessionRunError.recordGatewaySessionRunFailure;
+    let failureWork: Promise<void> | undefined;
+    const failureSpy = vi
+      .spyOn(sessionRunError, "recordGatewaySessionRunFailure")
+      .mockImplementation((...args) => {
+        failureEntered.resolve();
+        failureWork = failureRelease.promise.then(() => recordFailure(...args));
+        return failureWork;
+      });
     let admissionRelease: Promise<void> | undefined;
     let startedAt = Date.now();
     dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
@@ -655,6 +669,14 @@ describe("gateway WebSocket chat abort ownership", () => {
           frame.payload?.runId === runId &&
           frame.payload?.state === "error",
       );
+      const lifecycle = onceMessage(
+        socket,
+        (frame) =>
+          frame.event === "agent" &&
+          frame.payload?.runId === runId &&
+          frame.payload?.stream === "lifecycle" &&
+          asOptionalRecord(frame.payload?.data)?.phase === "error",
+      );
       expect(
         emitAgentEventIfCurrent({
           ...scope,
@@ -663,12 +685,21 @@ describe("gateway WebSocket chat abort ownership", () => {
           data: { phase: "error", startedAt, endedAt: Date.now(), error, executionSettled: true },
         }),
       ).toBe(true);
+      await withinTest(failureEntered.promise, signal);
+      await lifecycle;
+      // The same-socket response fences delivered events while the notice commit is held.
+      const heldHistory = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
+        sessionKey: scope.sessionKey,
+      });
+      expect(heldHistory.ok).toBe(true);
+      expect(heldHistory.payload?.messages).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ customType: "run-failed-before-reply" }),
+        ]),
+      );
+      expect.soft(terminalStates).toEqual([]);
+      failureRelease.resolve();
       const terminalFrame = await terminal;
-      dispatchRelease.resolve();
-      await admissionRelease;
-      const replay = await rpcReq(socket, "chat.send", sendParameters);
-      expect(replay.ok).toBe(false);
-      expect(replay.payload).toMatchObject({ runId, status: "error", summary: warning });
       expect.soft(terminalStates).toEqual(["error"]);
       expect.soft(terminalFrame.payload?.errorMessage).toBe(warning);
       expect(loadSessionEntry(scope)).toMatchObject({ status: "failed", lastRunId: runId });
@@ -701,9 +732,18 @@ describe("gateway WebSocket chat abort ownership", () => {
         ]),
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    } finally {
       dispatchRelease.resolve();
       await admissionRelease;
+      const replay = await rpcReq(socket, "chat.send", sendParameters);
+      expect(replay.ok).toBe(false);
+      expect(replay.payload).toMatchObject({ runId, status: "error", summary: warning });
+      expect(terminalStates).toEqual(["error"]);
+    } finally {
+      failureRelease.resolve();
+      dispatchRelease.resolve();
+      await failureWork;
+      await admissionRelease;
+      failureSpy.mockRestore();
       socket.close();
       reader.close();
     }

@@ -447,7 +447,22 @@ export function createAgentEventHandler({
       return;
     }
     clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
-    let terminalPersistence: Promise<void> | undefined;
+    const terminalPersistence =
+      sessionKey && !suppressRestartRecoveryProjection && projectSessionLifecycle
+        ? persistGatewaySessionLifecycleEventForEvent({
+            sessionKey,
+            agentId: sessionAgentId,
+            event: {
+              ...evt,
+              ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
+              ...(clientRunId !== evt.runId ? { clientRunId } : {}),
+              ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
+              ...(evt.mainSessionRestartRecovery === true
+                ? { mainSessionRestartRecovery: true as const }
+                : {}),
+            },
+          })
+        : undefined;
     // Completion retires the registration even when no visible terminal is published.
     // The peeked head is still current in this synchronous frame; delivery-owned runs wait.
     const finished =
@@ -512,6 +527,9 @@ export function createAgentEventHandler({
               assistantTranscriptIdempotencyKey: readStringValue(
                 evt.data?.assistantTranscriptIdempotencyKey,
               ),
+              terminalPersistence,
+              isCurrent: () =>
+                shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration),
             },
           );
         }
@@ -532,28 +550,14 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
-      if (!suppressRestartRecoveryProjection && projectSessionLifecycle) {
+      if (terminalPersistence) {
         const projection = getSessionRowProjection?.();
-        const persistence = persistGatewaySessionLifecycleEventForEvent({
-          sessionKey,
-          agentId: sessionAgentId,
-          event: {
-            ...evt,
-            ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
-            ...(clientRunId !== evt.runId ? { clientRunId } : {}),
-            ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
-            ...(evt.mainSessionRestartRecovery === true
-              ? { mainSessionRestartRecovery: true as const }
-              : {}),
-          },
-        });
-        terminalPersistence = persistence;
         trackTrackedRunTerminalPersistence?.({
           runId: evt.runId,
           clientRunId,
           sessionKey,
           sessionId: evt.sessionId,
-          persistence,
+          persistence: terminalPersistence,
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) =>
           withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) => {
@@ -594,7 +598,7 @@ export function createAgentEventHandler({
           });
         // Terminal writes serialize with restart markers. Reload only after the
         // write so subscribers see the canonical post-race session state.
-        void persistence
+        void terminalPersistence
           .then(
             async () => {
               await broadcastSessionChange();
@@ -903,6 +907,8 @@ export function createAgentEventHandler({
       errorObservation?: unknown;
       assistantTranscriptIdempotencyKey?: string;
       isHeartbeat?: boolean;
+      terminalPersistence?: Promise<void>;
+      isCurrent?: () => boolean;
     },
   ) => {
     const terminalBuffer = chatRunState.resolveBuffer(clientRunId, { final: true });
@@ -1004,7 +1010,22 @@ export function createAgentEventHandler({
       ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
-    sendLivePayload("chat", sessionKey, payload, opts);
+    const publish = () => {
+      if (opts?.isCurrent?.() !== false) {
+        sendLivePayload("chat", sessionKey, payload, opts);
+      }
+    };
+    // A terminal error must not outrun its durable failure notice. Other finals
+    // keep their synchronous delivery; a failed write still exposes the run error.
+    if (opts?.terminalPersistence) {
+      void opts.terminalPersistence.then(publish, publish).catch((publicationError: unknown) => {
+        logError(
+          `gateway: terminal chat publication failed: ${formatErrorMessage(publicationError)}`,
+        );
+      });
+    } else {
+      publish();
+    }
     chatRunState.clearRun(clientRunId);
   };
 
