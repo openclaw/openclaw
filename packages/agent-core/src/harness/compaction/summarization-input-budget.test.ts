@@ -97,7 +97,7 @@ function createLongSession(turns: number): AgentMessage[] {
       role: "toolResult",
       toolCallId: `call-${turn}`,
       toolName: "exec",
-      content: [{ type: "text", text: "output ".repeat(1_500) }],
+      content: [{ type: "text", text: `result-${turn} ${"output ".repeat(1_500)}` }],
       isError: false,
       timestamp: turn,
     });
@@ -164,6 +164,18 @@ describe("summary request input budget", () => {
       .filter((part) => /^\[(User|Assistant|Assistant tool calls|Tool result)/u.test(part));
     const omitted = gaps.reduce((sum, gap) => sum + Number(gap[1]), 0);
     expect(kept.length + omitted).toBe(1_250 * 4);
+    // A tool result names neither its tool nor its call, so every kept result
+    // follows its own call with no gap in between.
+    const results = [...conversation.matchAll(/\[Tool result\]: result-(\d+) /gu)];
+    expect(results.length).toBeGreaterThan(3);
+    for (const result of results) {
+      const call = conversation.lastIndexOf(
+        `[Assistant tool calls]: exec(cmd="run ${result[1]}")`,
+        result.index,
+      );
+      expect(call).toBeGreaterThanOrEqual(0);
+      expect(conversation.slice(call, result.index)).not.toContain("omitted from this summary");
+    }
     // The summarizer is told about the gaps, and the previous summary stays outside the budget.
     expect(prompt).toContain("Do not guess what they said.");
     expect(prompt).toContain("<previous-summary>\nPREVIOUS-SUMMARY-FACT\n</previous-summary>");

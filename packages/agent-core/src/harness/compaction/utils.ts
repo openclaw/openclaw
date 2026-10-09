@@ -288,13 +288,18 @@ export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): st
 
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
-  return serializeConversationEntries(messages).join(ENTRY_SEPARATOR);
+  return serializeConversationEntries(messages).entries.join(ENTRY_SEPARATOR);
 }
 
 const ENTRY_SEPARATOR = "\n\n";
 
-function serializeConversationEntries(messages: Message[]): string[] {
+function serializeConversationEntries(messages: Message[]): {
+  entries: string[];
+  /** Tool-result entries, which name neither the tool nor its call. */
+  toolResultEntries: Set<number>;
+} {
   const parts: string[] = [];
+  const toolResultEntries = new Set<number>();
   let omissionMessages = 0;
 
   for (const msg of messages) {
@@ -319,6 +324,9 @@ function serializeConversationEntries(messages: Message[]): string[] {
       if (content) {
         const speaker =
           msg.role === "toolResult" ? "Tool result" : `User${formatPersistedSenderSuffix(msg)}`;
+        if (msg.role === "toolResult") {
+          toolResultEntries.add(parts.length);
+        }
         parts.push(`[${speaker}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
@@ -345,7 +353,7 @@ function serializeConversationEntries(messages: Message[]): string[] {
     }
   }
 
-  return parts;
+  return { entries: parts, toolResultEntries };
 }
 
 /**
@@ -417,13 +425,15 @@ export interface BoundedConversation {
  * verbatim (half the budget), the oldest entries (a tenth), and eight evenly
  * spaced runs of the span between them. Sampled entries are trimmed to 6,000
  * characters, and every gap is marked with its entry count, so the summarizer
- * knows what it did not see. The transcript itself is not changed.
+ * knows what it did not see. No run starts with a tool result, because its
+ * entry names neither the tool nor the call that produced it. The transcript
+ * itself is not changed.
  */
 export function serializeConversationWithinBudget(
   messages: Message[],
   maxChars: number,
 ): BoundedConversation {
-  const entries = serializeConversationEntries(messages);
+  const { entries, toolResultEntries } = serializeConversationEntries(messages);
   const weights = entries.map((entry) => estimateStringChars(entry));
   const separatorChars = ENTRY_SEPARATOR.length;
   const totalChars =
@@ -434,7 +444,7 @@ export function serializeConversationWithinBudget(
   }
 
   const budget = Math.max(0, maxChars - OMISSION_MARKER_RESERVE_CHARS);
-  const selected = new Map<number, string>();
+  const selected = new Map<number, { text: string; chars: number }>();
   let trimmedEntries = 0;
   let usedChars = 0;
 
@@ -458,7 +468,7 @@ export function serializeConversationWithinBudget(
     if (kept.text !== entries[index]) {
       trimmedEntries += 1;
     }
-    selected.set(index, kept.text);
+    selected.set(index, kept);
     usedChars += kept.chars;
     return true;
   };
@@ -478,7 +488,13 @@ export function serializeConversationWithinBudget(
     }
     tailStart = index;
   }
-
+  // A newest run that starts inside a tool batch drops its leading results; the
+  // middle sampling may still show them with their call.
+  while (toolResultEntries.has(tailStart) && tailStart < entries.length - 1) {
+    usedChars -= selected.get(tailStart)?.chars ?? 0;
+    selected.delete(tailStart);
+    tailStart += 1;
+  }
   // The oldest entries usually state the goal and the constraints of the session.
   let headEnd = 0;
   const headLimit = usedChars + Math.floor(budget * SUMMARY_INPUT_HEAD_SHARE);
@@ -496,6 +512,15 @@ export function serializeConversationWithinBudget(
         nextFree,
         headEnd + Math.floor((slice * middleCount) / SUMMARY_INPUT_MIDDLE_SLICES),
       );
+      // Start at the tool call that produced a result, or past results whose call is out of reach.
+      while (index > nextFree && toolResultEntries.has(index)) {
+        index -= 1;
+      }
+      if (!selected.has(index - 1)) {
+        while (index < tailStart && toolResultEntries.has(index)) {
+          index += 1;
+        }
+      }
       const sliceEnd = usedChars + sliceLimit;
       while (index < tailStart && take(index, sliceEnd - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
         index += 1;
@@ -509,7 +534,7 @@ export function serializeConversationWithinBudget(
   let gap = 0;
   // The extra iteration flushes a trailing gap.
   for (let index = 0; index <= entries.length; index += 1) {
-    const text = selected.get(index);
+    const text = selected.get(index)?.text;
     if (text === undefined && index < entries.length) {
       gap += 1;
       continue;
