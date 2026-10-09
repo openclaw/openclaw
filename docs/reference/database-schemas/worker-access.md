@@ -102,6 +102,54 @@ Receipt installation itself adds no SQL, schema validation, persistent storage, 
 deprecation, or migration. Admission continues to own validation; receipt
 installation consumes the physical facts already captured by that owner.
 
+### Managed raw handle settlement and write-set coverage
+
+The shared native observer owns execution custody for `exec`, retained prepared
+`run`/`get`/`all` statements, and `iterate`. Custody begins before native execution,
+including a `SELECT` that invokes a JavaScript function. A stepped cursor retains
+custody until exhaustion, return, reset, finalization, or successful connection
+close. Binding errors stay synchronous; failed native calls preserve their result
+or original error. A failed close does not settle a live cursor. Recoverable
+row-conversion errors retain the native cursor; ambiguous step errors keep custody
+until explicit return, reset, finalization, or close. Statement reuse and stale
+iterator calls retain the runtime's native behavior.
+
+Prepared session delivery refuses authority while that native interval is open,
+before comparing row revisions. A callback cannot authorize delivery using a
+half-executed raw batch, and a suspended `RETURNING` cursor cannot certify its own
+commit. Between native calls, explicit owner transaction callbacks retain their
+existing transaction-local checks. After settlement, the existing indexed native
+row guard still checks changed handles; this change does not remove that guard.
+The observer adds no SQL, schema checks, freshness probes, or stored state.
+
+Execution settlement is **not committed write-set certification**. S1 receipts
+still describe exact owner-supplied keys, and `unknown` remains structurally valid
+but cannot certify a postimage or absence. The following ledger is the shared
+part of raw-handle coverage; every raw authority domain remains incomplete:
+
+| Writer surface                                                                                             | Execution custody                            | Committed authority write-set coverage                                                                  |
+| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Typed owner transaction and worker receipts                                                                | Existing transaction/receipt owner           | Exact named keys and projections only; nested rollback and facts-before-observers stay with that owner. |
+| `exec`, prepared `run`/`get`/`all`, retained `iterate`                                                     | Shared native observer                       | Incomplete: successful return or an error does not identify all committed keys.                         |
+| Raw savepoints, implicit rollback, trigger/cascade and REPLACE effects                                     | Enclosing native operation retains custody   | Incomplete: SQL classification is an invalidation hint, never a committed write-set collector.          |
+| A batch that commits, opens another transaction, then fails                                                | Entire native call is fenced                 | Incomplete: the current handle can show a tentative tail; it cannot supply a committed-prefix receipt.  |
+| Raw revoke/restore across intermediate commits                                                             | Entire native call is fenced                 | Incomplete: final equal bytes do not prove that captured authority survived every commit.               |
+| Tag-store statements, changeset application, deserialization, extension/native writes and prototype bypass | Outside this observer's certified method set | Incomplete; existing domain guards and owner lifetime checks remain required.                           |
+
+The supported Node and Bun interfaces do not expose a commit/update/rollback hook
+that certifies opaque batch prefixes. Backend-specific work must combine a tested
+native settlement boundary with the complete affected-key collector and each
+domain's existing projection codec. It must preserve native results/errors,
+rollback and iterator semantics, permanently observed revocations, and all-facts-
+before-observers ordering. Until then, neither a TEMP changed-key list nor a
+connection mutation counter may advertise complete raw writer coverage. No guard
+cutover is authorized by this shared observer alone.
+
+The Gateway remains the single runtime database owner. Other processes write
+through it or while it is stopped; this coverage gap does not introduce foreign
+freshness probing. Schemas, persistent bytes, synchronous SDK completion, and
+update behavior are unchanged; there is no migration or SDK export change.
+
 ### Session authority projections
 
 Typed session writers publish through the existing entry and transcript owners.
