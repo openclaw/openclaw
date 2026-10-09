@@ -106,6 +106,8 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     readSource?: CapturedSessionEntryReadSource;
     assertEntryCurrent?: (entry: SessionEntry | undefined) => void;
     reader?: SessionEntryCohortReader;
+    /** Select a full-entry consumer for the admitted reader's final synchronous phase. */
+    prepareEntryConsumer?: (result: T) => ((entry: SessionEntry | undefined) => void) | undefined;
   },
   consume: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => Promise<T>,
 ): Promise<T> {
@@ -162,10 +164,14 @@ export async function withSandboxRuntimeStatusInWorker<T>(
   if (reader) {
     const key = assertSessionEntryCohortScope(reader, scope);
     const withClassification = <R>(
-      consumeCurrent: (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) => R,
+      consumeCurrent: (
+        sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>,
+        entry: SessionEntry | undefined,
+      ) => R,
+      includeSnapshots = false,
     ) =>
       reader.withRead(
-        { sessionKeys: [key], snapshotFields: [] },
+        { sessionKeys: [key], snapshotFields: includeSnapshots ? undefined : [] },
         assertCurrent,
         (read, assertPrepared) => {
           assertPrepared();
@@ -176,6 +182,7 @@ export async function withSandboxRuntimeStatusInWorker<T>(
               { ...params, preparedSessionEntry: entry ?? null },
               classification,
             ),
+            entry,
           );
         },
       );
@@ -183,14 +190,16 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     assertCurrent();
     reader.assertCurrent();
     const result = await consume(sandbox);
+    const consumeEntry = source.prepareEntryConsumer?.(result);
     // Preparation may await approvals or skills. Publish its result only under
     // a new phase's witness, with the same policy predicates it prepared against.
-    return withClassification((current) => {
+    return withClassification((current, entry) => {
       if (!isDeepStrictEqual(current, sandbox)) {
         throw new SessionEntryChangedDuringReadError();
       }
+      consumeEntry?.(entry);
       return result;
-    });
+    }, consumeEntry !== undefined);
   }
   if (isNativeSessionEntryRead(scope, scope.agentId)) {
     return withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => {

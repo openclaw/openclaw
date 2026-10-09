@@ -1375,6 +1375,9 @@ src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
+src/plugins/plugin-instance-background.ts
+src/plugins/legacy-sdk-resource-host.ts
+src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts

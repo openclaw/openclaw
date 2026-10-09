@@ -1084,7 +1084,6 @@
 ["extensions/mattermost/src/setup.test.ts","./mattermost/accounts.js","9e2a1986e25f786da4d4caadd6d685799106b6098ce34f1ba340b09659d23006",1]
 ["extensions/mattermost/src/setup.test.ts","./mattermost/client.js","20bb8db44ef1c8e113480b7cbde65071f20029e844610ed3ce7be8459fe1b5b4",1]
 ["extensions/memory-core/cli-metadata.test.ts","./src/cli.js","8d45a34eb2a366163cee4892b4f5ae7aba6eca35df349f71d0a69457e36739ad",1]
-["extensions/memory-core/index.test.ts","./src/runtime-provider.js","e7b785a1c096f8ed353377020bb96a7b8e3914d3cddf9bfcd867977765f56a7c",1]
 ["extensions/memory-core/src/cli.memory-slot.test.ts","./memory/index.js","ac3e6b8e43e7508e6a4435382878c047264ea00616ba8223ae8d325a8523939f",1]
 ["extensions/memory-core/src/cli.test.ts","./memory-forget.js","cdadbed546ed6e9e4864b97e6a6159f106c0de2ac6f99c3e5c4303056e7803ee",1]
 ["extensions/memory-core/src/cli.test.ts","./memory/index.js","ac3e6b8e43e7508e6a4435382878c047264ea00616ba8223ae8d325a8523939f",1]

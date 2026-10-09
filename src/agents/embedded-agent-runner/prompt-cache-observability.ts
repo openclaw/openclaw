@@ -32,6 +32,25 @@ type PromptCacheToolDescriptor = {
   readonly parameters?: object;
 };
 
+const PROMPT_SECTION_NAMES = [
+  "Skills",
+  "Tooling",
+  "Project Context",
+  "Memory Recall",
+  "Temporal Context",
+  "Runtime",
+  "Runtime Context",
+  "Conversation Context",
+  "Subagent Context",
+  "Model Aliases",
+  "Other",
+] as const;
+type PromptSectionName = (typeof PROMPT_SECTION_NAMES)[number];
+type PromptSectionDigests = Partial<Record<PromptSectionName, string>>;
+const promptSectionHeadings = new Map<string, PromptSectionName>(
+  PROMPT_SECTION_NAMES.map((name) => [`${name === "Project Context" ? "#" : "##"} ${name}`, name]),
+);
+
 type PromptCacheSnapshot = {
   provider: string;
   modelId: string;
@@ -40,8 +59,10 @@ type PromptCacheSnapshot = {
   streamStrategy: string;
   transport?: string;
   systemPromptDigest: string;
+  systemPromptSections?: PromptSectionDigests;
   /** Digest of the volatile suffix below the cache boundary; undefined when the prompt has none. */
   systemPromptSuffixDigest?: string;
+  systemPromptSuffixSections?: PromptSectionDigests;
   toolDigest: string;
   toolCount: number;
   tools: readonly PromptCacheToolSnapshot[];
@@ -181,6 +202,39 @@ function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSna
   return details.join("; ");
 }
 
+function fingerprintPromptSections(
+  prompt: string,
+  digest: string,
+  previousDigest?: string,
+  previousSections?: PromptSectionDigests,
+): PromptSectionDigests | undefined {
+  if (digest === previousDigest) {
+    return previousSections;
+  }
+  if (!/^#{1,2} /m.test(prompt)) {
+    return undefined;
+  }
+  const sections: PromptSectionDigests = {};
+  let name: PromptSectionName = "Other";
+  let start = 0;
+  const append = (end: number) => {
+    if (end > start) {
+      sections[name] = sha256Hex(`${sections[name] ?? ""}${prompt.slice(start, end)}`);
+    }
+  };
+  for (const heading of prompt.matchAll(/^#{1,2} [^\n]*(?:\n|$)/gm)) {
+    append(heading.index);
+    start = heading.index;
+    name = promptSectionHeadings.get(heading[0].trimEnd()) ?? "Other";
+    // Injected files own the rest of the stable prefix, including their headings.
+    if (name === "Project Context") {
+      break;
+    }
+  }
+  append(prompt.length);
+  return sections;
+}
+
 function diffSnapshots(
   previous: PromptCacheSnapshot,
   next: PromptCacheSnapshot,
@@ -213,7 +267,16 @@ function diffSnapshots(
     ["systemPromptSuffix", "system prompt suffix digest changed"],
   ] as const) {
     if (previous[`${code}Digest`] !== next[`${code}Digest`]) {
-      changes.push({ code, detail });
+      const before = previous[`${code}Sections`];
+      const after = next[`${code}Sections`];
+      const changed = PROMPT_SECTION_NAMES.filter((name) => before?.[name] !== after?.[name]);
+      changes.push({
+        code,
+        detail:
+          before || after
+            ? `${detail} (sections: ${changed.length ? changed.join(", ") : "Other"})`
+            : detail,
+      });
     }
   }
   if (previous.toolDigest !== next.toolDigest) {
@@ -270,8 +333,15 @@ export function beginPromptCacheObservation(
   },
 ) {
   const key = buildTrackerKey(params);
+  const cached = trackers.get(key);
+  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
   const tools = sortPromptCacheToolsByName(params.tools);
   const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
+  const prefix = splitSystemPrompt?.stablePrefix ?? params.systemPrompt;
+  const systemPromptDigest = sha256Hex(prefix);
+  const systemPromptSuffixDigest = splitSystemPrompt
+    ? sha256Hex(splitSystemPrompt.dynamicSuffix)
+    : undefined;
   const snapshot: PromptCacheSnapshot = {
     provider: params.provider,
     modelId: params.modelId,
@@ -279,16 +349,28 @@ export function beginPromptCacheObservation(
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: sha256Hex(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
+    systemPromptDigest,
+    systemPromptSections: fingerprintPromptSections(
+      prefix,
+      systemPromptDigest,
+      previous?.snapshot.systemPromptDigest,
+      previous?.snapshot.systemPromptSections,
+    ),
     ...(splitSystemPrompt
-      ? { systemPromptSuffixDigest: sha256Hex(splitSystemPrompt.dynamicSuffix) }
+      ? {
+          systemPromptSuffixDigest,
+          systemPromptSuffixSections: fingerprintPromptSections(
+            splitSystemPrompt.dynamicSuffix,
+            systemPromptSuffixDigest!,
+            previous?.snapshot.systemPromptSuffixDigest,
+            previous?.snapshot.systemPromptSuffixSections,
+          ),
+        }
       : {}),
     toolDigest: sha256Hex(stableStringify(tools)),
     toolCount: tools.length,
     tools,
   };
-  const cached = trackers.get(key);
-  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );

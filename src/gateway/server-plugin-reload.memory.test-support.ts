@@ -15,7 +15,11 @@ import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundle
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { createPluginReloadRecoveryFixture } from "./server-plugin-reload.recovery.test-support.js";
 
-const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
+const { createMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>(
   resolveRelativeBundledPluginPublicModuleId({
     fromModuleUrl: import.meta.url,
     pluginId: "memory-core",
@@ -80,7 +84,12 @@ export async function verifyGatewayMemoryReplacement(
       if (owner === "sibling") {
         record.kind = "memory";
         record.memorySlotSelected = true;
-        api.registerMemoryCapability({ runtime: memoryRuntime });
+        assert(api.lifecycle.runInBackgroundContext);
+        api.registerMemoryCapability({
+          runtime: createMemoryRuntime({
+            runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+          }),
+        });
       } else {
         record.contracts = { ...record.contracts, embeddingProviders: [providerId] };
         const generation = ++generations;
@@ -113,7 +122,12 @@ export async function verifyGatewayMemoryReplacement(
   otherRecord.contracts = { embeddingProviders: [providerId] };
   independent.registry.plugins.push(otherRecord);
   const otherApi = independent.createApi(otherRecord, { config });
-  otherApi.registerMemoryCapability({ runtime: memoryRuntime });
+  assert(otherApi.lifecycle.runInBackgroundContext);
+  otherApi.registerMemoryCapability({
+    runtime: createMemoryRuntime({
+      runInBackgroundContext: otherApi.lifecycle.runInBackgroundContext,
+    }),
+  });
   const otherClose = vi.fn(async () => {});
   otherApi.registerEmbeddingProvider({
     id: providerId,
