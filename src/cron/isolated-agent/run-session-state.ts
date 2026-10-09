@@ -1,7 +1,8 @@
-/** Mutates and persists isolated cron session state around one run. */
+/** Owns admission and persistence for isolated cron sessions. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
+import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -15,9 +16,14 @@ import {
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { toErrorObject } from "../../infra/errors.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import {
   beginSessionWorkAdmission,
+  getCompetingSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
   isSessionWorkAdmissionActive,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -35,7 +41,76 @@ import type {
   CronToolsAllowExecTargetRequirement,
 } from "../scheduled-tool-policy.js";
 import { setSessionRuntimeModel } from "./run.runtime.js";
+import type { CronLaneWaitCallback } from "./run.types.js";
 import { loadCronSessionEntryLatest, type resolveCronSession } from "./session.js";
+
+const CRON_SESSION_PREPARATION_OWNER = Symbol.for("openclaw.cronSessionPreparation");
+
+/** Preserve cron FIFO while waiting for full session settlement outside the execution lane. */
+export async function withCronSessionPreparation<T>(
+  params: {
+    storePath: string;
+    sessionKey: string;
+    signal?: AbortSignal;
+    onInterrupt: () => void;
+    onLaneWait?: CronLaneWaitCallback;
+  },
+  prepare: () => Promise<T>,
+): Promise<T> {
+  const target = {
+    scope: params.storePath,
+    identities: [params.sessionKey],
+    owner: CRON_SESSION_PREPARATION_OWNER,
+  };
+  if (getSessionWorkAdmissionOwnerRelease(target)) {
+    params.onLaneWait?.({ waiting: true });
+  }
+  const admission = await beginSessionWorkAdmission({
+    ...target,
+    serializeOwner: true,
+    signal: params.signal,
+    onInterrupt: params.onInterrupt,
+    assertAllowed: (signal) => signal.throwIfAborted(),
+  });
+  try {
+    return await admission.run(async () => {
+      for (;;) {
+        const result = await enqueueCommandInLane(
+          resolveSessionLane(params.sessionKey),
+          async () => {
+            const release = getCompetingSessionWorkAdmissionRelease({
+              scope: params.storePath,
+              identities: [params.sessionKey],
+              // Later preparation reservations depend on this one and cannot write yet.
+              excludePendingOwner: CRON_SESSION_PREPARATION_OWNER,
+            });
+            if (release) {
+              return { kind: "waiting" as const, release };
+            }
+            params.onLaneWait?.({ waiting: false });
+            return { kind: "prepared" as const, value: await prepare() };
+          },
+          {
+            abortSignal: params.signal,
+            priority: "background",
+            taskIdentity: { taskKind: "cron", sessionKey: params.sessionKey },
+            onQueued: () => params.onLaneWait?.({ waiting: true }),
+          },
+        );
+        if (result.kind === "prepared") {
+          return result.value;
+        }
+        // Queued owners may need this lane. Await their settlement only after releasing it.
+        params.onLaneWait?.({ waiting: true });
+        await racePromiseWithAbortSignal(result.release, params.signal, (signal) =>
+          toErrorObject(signal.reason, "Queued command aborted"),
+        );
+      }
+    });
+  } finally {
+    admission.release();
+  }
+}
 
 function clearCronContextOwnerState(entry: SessionEntry) {
   delete entry.contextTokens;

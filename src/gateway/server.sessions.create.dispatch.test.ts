@@ -846,79 +846,172 @@ test("sessions.create sends selected global initial tasks to the requested agent
   ws.close();
 });
 
-test("sessions.create resolves an agent-qualified fork from the parent store", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  const workDir = path.dirname(workStorePath);
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "per-sender" };
-  testState.agentsConfig = { entries: { main: {}, work: {} } };
-  try {
-    await fs.mkdir(workDir, { recursive: true });
-    const parent = await createCompactedSessionFixture(workDir);
-    await writeSessionStore({
-      storePath: workStorePath,
-      agentId: "work",
-      entries: {
-        main: sessionStoreEntry(parent.sessionId, { sessionFile: parent.sessionFile }),
-      },
-    });
-    await seedSessionTranscript({
-      agentId: "work",
-      sessionId: parent.sessionId,
-      sessionKey: "agent:work:main",
-      storePath: workStorePath,
-      messages: [
-        { role: "user", content: "before compaction" },
-        { role: "assistant", content: [{ type: "text", text: "working on it" }] },
-      ],
-    });
+test.each([
+  {
+    name: "legacy explicit target",
+    explicit: false,
+    defaultAgent: false,
+    agentId: "main",
+    key: undefined,
+    expectedAgent: "main",
+  },
+  {
+    name: "legacy ambient target",
+    explicit: false,
+    defaultAgent: false,
+    agentId: undefined,
+    key: undefined,
+    expectedAgent: "main",
+  },
+  {
+    name: "explicit fleet without default",
+    fork: false,
+    explicit: true,
+    defaultAgent: false,
+    agentId: undefined,
+    key: undefined,
+    expectedAgent: "work",
+  },
+  {
+    name: "explicit fleet with another default",
+    fork: false,
+    explicit: true,
+    defaultAgent: true,
+    agentId: undefined,
+    key: undefined,
+    expectedAgent: "work",
+  },
+  {
+    name: "explicit cross-agent target",
+    explicit: true,
+    defaultAgent: false,
+    agentId: "main",
+    key: undefined,
+    expectedAgent: "main",
+  },
+  {
+    name: "explicit child key",
+    explicit: true,
+    defaultAgent: false,
+    agentId: undefined,
+    key: "agent:main:dashboard:child-target",
+    expectedAgent: "main",
+  },
+])(
+  "sessions.create resolves an agent-qualified parent from its own store: $name",
+  async ({ explicit, defaultAgent, agentId, key, expectedAgent, fork = true }) => {
+    const { dir } = await createSessionStoreDir();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    const mainStorePath = storeTemplate.replace("{agentId}", "main");
+    const workStorePath = storeTemplate.replace("{agentId}", "work");
+    const workDir = path.dirname(workStorePath);
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = { scope: "per-sender" };
+    testState.agentsConfig = {
+      ownership: explicit ? "explicit" : undefined,
+      entries: { main: explicit ? {} : { default: true }, work: {} },
+    };
+    testState.agentConfig = defaultAgent ? { systemAgent: { agentId: "main" } } : undefined;
+    const { ws } = await openClient();
+    try {
+      await fs.mkdir(workDir, { recursive: true });
+      const parent = await createCompactedSessionFixture(workDir);
+      await writeSessionStore({
+        storePath: workStorePath,
+        agentId: "work",
+        entries: {
+          main: sessionStoreEntry(parent.sessionId, { sessionFile: parent.sessionFile }),
+        },
+      });
+      await seedSessionTranscript({
+        agentId: "work",
+        sessionId: parent.sessionId,
+        sessionKey: "agent:work:main",
+        storePath: workStorePath,
+        messages: [
+          { role: "user", content: "before compaction" },
+          { role: "assistant", content: [{ type: "text", text: "working on it" }] },
+        ],
+      });
 
-    const created = await directSessionReq<{
-      key?: string;
-      sessionId?: string;
-      entry?: {
-        parentSessionKey?: string;
-        sessionFile?: string;
-        forkSource?: { sessionKey: string; sessionId: string };
-        forkedFromParent?: boolean;
-      };
-    }>("sessions.create", {
-      agentId: "main",
-      parentSessionKey: "agent:work:main",
-      fork: true,
-    });
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-    expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
-    expect(created.payload?.entry?.forkSource).toEqual({
-      sessionKey: "agent:work:main",
-      sessionId: parent.sessionId,
-    });
-    expect(created.payload?.entry?.forkedFromParent).toBe(true);
-    expect(created.payload?.entry).not.toHaveProperty("sessionFile");
-    await expect(
-      loadTranscriptEvents({
-        sessionId: requireNonEmptyString(
-          created.payload?.sessionId,
-          "agent-qualified forked session id",
-        ),
-        sessionKey: created.payload?.key ?? "",
-        storePath: mainStorePath,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "before compaction" }),
-          type: "message",
+      const created = await rpcReq<{
+        key?: string;
+        sessionId?: string;
+        entry?: {
+          parentSessionKey?: string;
+          sessionFile?: string;
+          forkSource?: { sessionKey: string; sessionId: string };
+          forkedFromParent?: boolean;
+        };
+      }>(ws, "sessions.create", {
+        ...(agentId ? { agentId } : {}),
+        ...(key ? { key } : {}),
+        parentSessionKey: "agent:work:main",
+        ...(fork ? { fork: true } : {}),
+      });
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.key).toMatch(new RegExp(`^agent:${expectedAgent}:dashboard:`));
+      if (key) {
+        expect(created.payload?.key).toBe(key);
+      }
+      const childKey = requireNonEmptyString(created.payload?.key, "created child key");
+      const described = await rpcReq<{ session: { key: string; agentId: string } }>(
+        ws,
+        "sessions.describe",
+        { key: childKey },
+      );
+      expect(described.ok, JSON.stringify(described.error)).toBe(true);
+      expect(described.payload?.session).toMatchObject({ key: childKey, agentId: expectedAgent });
+      expect(
+        loadSessionEntry({
+          agentId: expectedAgent,
+          sessionKey: childKey,
+          storePath: expectedAgent === "work" ? workStorePath : mainStorePath,
         }),
-      ]),
-    );
-  } finally {
-    testState.sessionStorePath = undefined;
-    testState.sessionConfig = undefined;
-    testState.agentsConfig = undefined;
-  }
-});
+      ).toMatchObject({ sessionId: created.payload?.sessionId });
+      expect(
+        loadSessionEntry({
+          agentId: expectedAgent === "work" ? "main" : "work",
+          sessionKey: childKey,
+          storePath: expectedAgent === "work" ? mainStorePath : workStorePath,
+        }),
+      ).toBeUndefined();
+      expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
+      expect(created.payload?.entry).not.toHaveProperty("sessionFile");
+      if (!fork) {
+        expect(created.payload?.entry).not.toHaveProperty("forkSource");
+        expect(created.payload?.entry).not.toHaveProperty("forkedFromParent");
+        return;
+      }
+      expect(created.payload?.entry?.forkSource).toEqual({
+        sessionKey: "agent:work:main",
+        sessionId: parent.sessionId,
+      });
+      expect(created.payload?.entry?.forkedFromParent).toBe(true);
+      await expect(
+        loadTranscriptEvents({
+          sessionId: requireNonEmptyString(
+            created.payload?.sessionId,
+            "agent-qualified forked session id",
+          ),
+          sessionKey: created.payload?.key ?? "",
+          agentId: expectedAgent,
+          storePath: expectedAgent === "work" ? workStorePath : mainStorePath,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.objectContaining({ content: "before compaction" }),
+            type: "message",
+          }),
+        ]),
+      );
+    } finally {
+      await closeGatewayTestWebSocket(ws);
+      testState.agentConfig = undefined;
+      testState.sessionStorePath = undefined;
+      testState.sessionConfig = undefined;
+      testState.agentsConfig = undefined;
+    }
+  },
+);

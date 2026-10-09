@@ -1,4 +1,3 @@
-/** systemd unit publication, installation, staging, and uninstall. */
 import fs from "node:fs/promises";
 import { resolveStateDir } from "../config/paths.js";
 import {

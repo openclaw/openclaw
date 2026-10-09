@@ -1,8 +1,14 @@
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
+  getSqliteReadScopeRevision,
+  readSqliteNativeMutationRevision,
+} from "../../infra/sqlite-schema-facts.js";
+import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptScope,
@@ -13,54 +19,106 @@ import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.j
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
-/** Reads one active message identity from the caller's current SQLite transaction. */
-export function readActiveTranscriptEntryAnchorInTransaction(params: {
+type TranscriptEntryRead = {
   database: Pick<OpenClawAgentDatabase, "db" | "path">;
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
-}): TranscriptEntryAnchor | undefined {
+};
+
+/** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
+export function readActiveTranscriptEntryAnchorFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string,
+  message?: unknown,
+): TranscriptEntryAnchor | undefined {
+  assertTransactionUsable(projection.database.db);
+  const sessionKey = projection.resolved.sessionKey;
+  if (!projection.database.db.isTransaction || !sessionKey) {
+    throw new Error("Transcript anchor projection requires its selected session snapshot");
+  }
+  const params = {
+    database: projection.database,
+    resolved: { ...projection.resolved, sessionKey },
+    entryId,
+    message,
+  };
+  return createTranscriptEntryAnchor({
+    ...params,
+    row: readActiveTranscriptEntryFacts(params, projection),
+  });
+}
+
+function readActiveTranscriptEntryFacts(
+  params: TranscriptEntryRead,
+  projection?: CurrentTranscriptProjection,
+) {
   const db = getSessionKysely(params.database.db);
+  const query = db
+    .selectFrom("transcript_event_identities as identity")
+    .innerJoin("session_transcript_active_events as active", (join) =>
+      join
+        .onRef("active.session_id", "=", "identity.session_id")
+        .onRef("active.event_seq", "=", "identity.seq"),
+    )
+    .select([
+      "identity.seq",
+      "identity.parent_id",
+      "identity.message_idempotency_key",
+      "active.message_position",
+    ])
+    .where("identity.session_id", "=", params.resolved.sessionId)
+    .where("identity.event_id", "=", params.entryId)
+    .limit(1);
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-        join.onRef("rewrite.session_id", "=", "identity.session_id"),
-      )
-      .select([
-        "identity.seq",
-        "identity.parent_id",
-        "identity.message_idempotency_key",
-        "active.message_position",
-        "rewrite.generation",
-      ])
-      .where("identity.session_id", "=", params.resolved.sessionId)
-      .where("identity.event_id", "=", params.entryId)
-      // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
-      .where((eb) =>
-        eb.not(
-          eb.exists(
-            eb
-              .selectFrom(
-                selectSessionTranscriptIndexStatus(
-                  params.database.db,
-                  params.resolved.sessionId,
-                ).as("status"),
-              )
-              .select("needs_reconcile")
-              .where("needs_reconcile", "=", 1),
+    query.$if(!projection, (selected) =>
+      selected
+        .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.onRef("rewrite.session_id", "=", "identity.session_id"),
+        )
+        .leftJoin(
+          selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
+            "status",
           ),
-        ),
-      )
-      .limit(1),
+          (join) => join.onTrue(),
+        )
+        .select(["rewrite.generation", "status.latestSeq"])
+        // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
+        .where("status.needs_reconcile", "is not", 1),
+    ),
   );
-  return createTranscriptEntryAnchor({ ...params, row });
+  return row
+    ? {
+        ...row,
+        generation: (projection ? projection.generation : row.generation) ?? null,
+        latestSeq: projection ? projection.state.indexedSeq : row.latestSeq,
+      }
+    : undefined;
+}
+
+/** Reads one active message identity from the caller's current SQLite transaction. */
+export function readActiveTranscriptEntryAnchorInTransaction(
+  params: TranscriptEntryRead,
+): TranscriptEntryAnchor | undefined {
+  return createTranscriptEntryAnchor({ ...params, row: readActiveTranscriptEntryFacts(params) });
+}
+
+/** The append receipt shares its anchor read with the subsequent visible-tail consumer. */
+export function readTranscriptMessageAppendMetadataInTransaction(params: TranscriptEntryRead) {
+  const revision = getSqliteReadScopeRevision(params.database.db)?.mutationRevision;
+  const row = readActiveTranscriptEntryFacts(params);
+  const anchor = createTranscriptEntryAnchor({ ...params, row });
+  return {
+    anchor,
+    visibleTailEntryId:
+      anchor &&
+      row?.seq === row?.latestSeq &&
+      revision !== undefined &&
+      readSqliteNativeMutationRevision(params.database.db) === revision
+        ? params.entryId
+        : undefined,
+  };
 }
 
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */

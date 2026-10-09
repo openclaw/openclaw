@@ -28,6 +28,23 @@ the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
 
+## Command-owner target kinds
+
+Doctor preserves `commands.ownerAllowFrom` target kinds declared by channel plugins.
+For example, `discord:user:123456789012345678` stays a direct-user target;
+rewriting it to `discord:123456789012345678` would leave heartbeat delivery unable
+to prove a direct route. Command authorization still compares the channel's native
+sender identity.
+
+For an active owner-targeted heartbeat, Doctor checks ambiguous owners against the
+existing `.bak` through `.bak.4` config history. It restores a recorded `user:` kind
+only while the entire owner list still matches the old migration's output. It
+does not search past changed owners, unreadable history, or historical includes.
+Without that evidence, Doctor leaves the entry unchanged and reports the exact
+replacement to use after confirming the ID belongs to the intended user. This
+warning does not block updates. Repairs use Doctor's normal config backup and
+write path, so update rollback can restore the previous config.
+
 ## Retention policy
 
 OpenClaw supports migrations from formats written by shipped releases on or after

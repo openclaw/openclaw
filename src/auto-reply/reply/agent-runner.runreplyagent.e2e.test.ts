@@ -388,6 +388,7 @@ function createMinimalRun(params?: {
   bindActiveAuthority?: boolean;
   attachSteerBackend?: boolean;
   activeBackendRunId?: string;
+  runtimePolicySessionKey?: string;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -521,6 +522,7 @@ function createMinimalRun(params?: {
         sessionEntry: params?.sessionEntry,
         sessionStore: params?.sessionStore,
         sessionKey,
+        runtimePolicySessionKey: params?.runtimePolicySessionKey,
         storePath: params?.storePath,
         sessionCtx,
         defaultModel: "anthropic/claude-opus-4-6",
@@ -1371,12 +1373,12 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
 
     expect(onAdopted).toHaveBeenCalledOnce();
-    expect(state.activeBackendCancelMock).toHaveBeenCalledOnce();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(runState.messageInjectionAborted).toBe(true);
+    expect(state.activeBackendCancelMock).not.toHaveBeenCalled();
+    expect(runState.admission).toMatchObject({ reason: "question-response-indeterminate" });
+    expect(runState.messageInjectionAborted).toBeUndefined();
     expect(parkedSteer.consume).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -1384,7 +1386,7 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("unconfirmed steer commit aborts only the captured operation, never a same-key successor", async () => {
+  it("unconfirmed steer commit cancels neither the captured operation nor a same-key successor", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session-a",
@@ -1419,13 +1421,13 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
     if (!successor || !successorAbortByUser) {
       throw new Error("expected same-key successor operation");
     }
     try {
       expect(successorAbortByUser).not.toHaveBeenCalled();
-      expect(activeAbortByUser).toHaveBeenCalledOnce();
+      expect(activeAbortByUser).not.toHaveBeenCalled();
     } finally {
       successor.complete();
     }
@@ -2351,49 +2353,39 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("rejects canonical SQLite pending final delivery when its session is deleted", async () => {
+  it.each([
+    {
+      name: "rejects canonical SQLite pending final delivery when its session is deleted",
+      reset: false,
+    },
+    {
+      name: "does not persist canonical SQLite pending final delivery on a reset session",
+      reset: true,
+    },
+  ])("$name", async ({ reset }) => {
     const sessionKey = "agent:main:main";
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const operation = replyRunRegistry.get(sessionKey);
-      if (!operation) {
-        throw new Error("expected admitted reply operation");
+      if (reset) {
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          { sessionId: "session-after-reset", updatedAt: Date.now() },
+        );
+      } else {
+        const operation = replyRunRegistry.get(sessionKey);
+        if (!operation) {
+          throw new Error("expected admitted reply operation");
+        }
+        // Match the dispatcher's initiating context so the injected deletion reaches
+        // final-delivery persistence instead of the competing-work guard.
+        await runWithReplyOperationLifecycleAdmission(operation, () =>
+          applySessionEntryLifecycleMutation({
+            removals: [{ sessionKey }],
+            skipMaintenance: true,
+            storePath,
+          }),
+        );
       }
-      // Match the dispatcher's initiating context so the injected deletion reaches
-      // final-delivery persistence instead of the competing-work guard.
-      await runWithReplyOperationLifecycleAdmission(operation, () =>
-        applySessionEntryLifecycleMutation({
-          removals: [{ sessionKey }],
-          skipMaintenance: true,
-          storePath,
-        }),
-      );
-      return {
-        payloads: [{ text: "final from deleted session" }],
-        meta: {},
-      };
-    });
-
-    const { run } = createMinimalRun({
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
-
-    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not persist canonical SQLite pending final delivery on a reset session", async () => {
-    const sessionKey = "agent:main:main";
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        { sessionId: "session-after-reset", updatedAt: Date.now() },
-      );
       return {
         payloads: [{ text: "final from previous session" }],
         meta: {},
@@ -2405,13 +2397,18 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey,
       storePath,
+      // Explicitly disabled verbosity lets this case reach final-intent persistence.
+      runOverrides: { verboseLevelOverride: "off" },
     });
 
     await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId: "session-after-reset",
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+    const stored = loadSessionEntry({ sessionKey, storePath });
+    if (reset) {
+      expect(stored).toMatchObject({ sessionId: "session-after-reset" });
+      expect(stored?.pendingFinalDelivery).toBeUndefined();
+    } else {
+      expect(stored).toBeUndefined();
+    }
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 

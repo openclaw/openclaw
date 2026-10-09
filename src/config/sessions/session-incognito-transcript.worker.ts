@@ -191,7 +191,7 @@ export function createIncognitoTranscriptWorker(
                       },
                     },
                   );
-                  return ok({ append, projectionNeedsReconcile });
+                  return ok({ append: append?.result, projectionNeedsReconcile });
                 }),
               );
             case "session.turn.read": {

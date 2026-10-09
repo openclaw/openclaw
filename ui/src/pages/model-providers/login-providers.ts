@@ -68,29 +68,27 @@ export function buildLoginProviders({
       }
     }
   }
-  if (manualProviders) {
-    for (const option of manualProviders) {
-      const id = option.brandId ?? option.id;
-      if (choices.has(option.id) || (providers && !providers.includes(id))) {
-        continue;
-      }
-      const group = ensureGroup(id, id);
-      group.label ||= option.groupLabel?.trim() || option.label;
-      const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
-      group.choices.push({
-        ...option,
-        brandId: id,
-        kind: "setup-secret",
-        featured: false,
-        ...(duplicateLabel
-          ? {
-              label: t("modelSetup.manual.accessValueFor", { provider: option.label }),
-              hint: t("modelSetup.manual.accessValuePlaceholder"),
-            }
-          : {}),
-      });
-      choices.add(option.id);
+  for (const option of manualProviders ?? []) {
+    const id = option.brandId ?? option.id;
+    if (choices.has(option.id) || (providers && !providers.includes(id))) {
+      continue;
     }
+    const group = ensureGroup(id, id);
+    group.label ||= option.groupLabel?.trim() || option.label;
+    const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
+    group.choices.push({
+      ...option,
+      brandId: id,
+      kind: "setup-secret",
+      featured: false,
+      ...(duplicateLabel
+        ? {
+            label: t("modelSetup.manual.accessValueFor", { provider: option.label }),
+            hint: t("modelSetup.manual.accessValuePlaceholder"),
+          }
+        : {}),
+    });
+    choices.add(option.id);
   }
   for (const group of groups.values()) {
     group.label ||= providerDisplayLabel(group.id);

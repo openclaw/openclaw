@@ -194,6 +194,7 @@ describe("worker placement session evidence", () => {
         environments: { get: () => undefined },
         forceDestroyEnvironment,
         createSessionEvidenceResolver: createWorkerPlacementSessionEvidenceResolver,
+        reportChanges: (operation) => operation(),
         warn: vi.fn(),
       });
 

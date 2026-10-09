@@ -1,4 +1,3 @@
-// ClawHub lifecycle facade: public API plus install/update coordination.
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { downloadClawHubSkillArchive } from "../../infra/clawhub-artifacts.js";

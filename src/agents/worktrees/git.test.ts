@@ -218,36 +218,27 @@ describe("Git ref mutation ownership", () => {
     await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
   });
 
-  it.each(["fetch", "symbolic-ref"])(
-    "does not select a remote base after an interrupted %s result",
-    async (interrupted) => {
-      const root = await repository();
-      const localHead = await requireGit(root, ["rev-parse", "HEAD"]);
-      const run = processExec.runCommandWithTimeout;
-      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
-        const command = argv[argv.indexOf("-C") + 2];
-        if (command !== "fetch" && command !== "symbolic-ref") {
-          return run(argv, options);
-        }
-        return Promise.resolve({
-          stdout: command === "symbolic-ref" ? "origin/main\n" : "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: command === interrupted ? "signal" : "exit",
-        });
+  it("does not accept an interrupted cached remote HEAD", async () => {
+    const root = await repository();
+    const run = processExec.runCommandWithTimeout;
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
+      const command = argv[argv.indexOf("-C") + 2];
+      if (command !== "symbolic-ref") {
+        return run(argv, options);
+      }
+      return Promise.resolve({
+        stdout: "refs/remotes/origin/main\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "signal",
       });
-      await expect(resolveWorktreeBase(root)).resolves.toEqual({
-        commit: localHead,
-        gitOperand: "HEAD",
-        recordRef: "HEAD",
-        remote: false,
-      });
-    },
-  );
+    });
+    await expect(resolveWorktreeBase(root)).rejects.toThrow("Remote default branch is unavailable");
+  });
 
-  it("serializes configured fetch pruning during managed-worktree base resolution", async () => {
+  it("serializes bounded default-branch fetching without pruning unrelated refs", async () => {
     const root = await repository();
     const origin = await repository();
     const staleRef = "refs/remotes/origin/retired";
@@ -292,20 +283,29 @@ describe("Git ref mutation ownership", () => {
     await Promise.all(pending);
     await expect(resolved).resolves.toEqual({
       commit: originHead,
-      gitOperand: "origin/main",
+      gitOperand: "refs/remotes/origin/main",
       recordRef: "origin/main",
-      remote: true,
+      fetchSucceeded: true,
     });
     expect(
       vi
         .mocked(processExec.runCommandWithTimeout)
         .mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))
         .filter((args) => args[0] === "fetch"),
-    ).toEqual([["fetch", "--no-auto-maintenance", "origin"]]);
+    ).toEqual([
+      [
+        "fetch",
+        "--no-auto-maintenance",
+        "--no-recurse-submodules",
+        "--no-tags",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main",
+      ],
+    ]);
     await expect(
       runGit(root, ["show-ref", "--verify", "--quiet", staleRef]),
     ).resolves.toMatchObject({
-      code: 1,
+      code: 0,
     });
   });
 

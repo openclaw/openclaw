@@ -28,6 +28,7 @@ import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-sour
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/index.js";
+import { buildCompactionFailureResult } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
@@ -263,6 +264,12 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Fire before_compaction / after_compaction hooks here so plugin subscribers
       // are notified regardless of which engine is active.
       const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+      if (engineOwnsCompaction || contextEngine.info.id !== "legacy") {
+        // Plugin compaction and hooks can use the released synchronous transcript reader.
+        const { restoreSessionColdTranscript } =
+          await import("../../config/sessions/session-cold-storage.js");
+        await restoreSessionColdTranscript(runtimeTarget, assertCallerActive);
+      }
       await assertActive();
       const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
       const hookSessionKey = runtimeTarget.sessionKey;
@@ -383,11 +390,7 @@ export async function executeQueuedContextEngineCompaction(input: {
             : "context-engine compaction failed",
           { errorMessage: formatErrorMessage(compactErr) },
         );
-        result = {
-          ok: false,
-          compacted: false,
-          reason: formatErrorMessage(compactErr),
-        };
+        result = buildCompactionFailureResult(formatErrorMessage(compactErr));
       }
       if (committedCompaction && (!result.ok || !result.compacted)) {
         // The stock writer committed before a hook or cancellation failed. Retain
@@ -602,11 +605,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               );
             }
           } catch (err) {
-            secondaryNativeHarnessCompaction = {
-              ok: false,
-              compacted: false,
-              reason: formatErrorMessage(err),
-            };
+            secondaryNativeHarnessCompaction = buildCompactionFailureResult(
+              formatErrorMessage(err),
+            );
             log.warn("secondary native harness compaction threw after context-engine compaction", {
               errorMessage: formatErrorMessage(err),
             });

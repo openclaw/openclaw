@@ -1,6 +1,40 @@
 import path from "node:path";
+import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
+import type { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayLockOptions } from "../infra/gateway-lock.js";
+
+export async function settleGatewayAgentRequest(params: {
+  response: Pick<
+    Parameters<GatewayPendingRequests["handleResponse"]>[0],
+    "ok" | "payload" | "error"
+  >;
+  accepted?: unknown;
+  onAccepted?: (payload: unknown) => void;
+  requestError?: GatewayProtocolRequestError;
+}) {
+  const requestError = params.requestError;
+  const pending = new GatewayPendingRequests({
+    createRequestId: () => "request",
+    nowMs: Date.now,
+    createRequestError: requestError ? () => requestError : undefined,
+  });
+  const result = pending.request(
+    { send: () => {} },
+    "agent",
+    {},
+    { expectFinal: true, onAccepted: params.onAccepted },
+  );
+  if (params.accepted) {
+    pending.handleResponse({ type: "res", id: "1:request", ok: true, payload: params.accepted });
+  }
+  pending.handleResponse({ type: "res", id: "1:request", ...params.response });
+  if (requestError) {
+    // Bound negative accepted-shaped frames without a wall-clock timeout.
+    pending.flush(requestError);
+  }
+  return await result;
+}
 
 export function createLocalGatewayLockOptions(
   stateDir: string,

@@ -27,10 +27,12 @@ import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-eve
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
-  subagentRunRecordVersion,
 } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
+import {
+  subagentRunRowVersion,
+  type SubagentRunSqliteRow,
+} from "../registry/subagent-registry.store.row.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
@@ -74,7 +76,7 @@ export function decodeSubagentCompletionRecord(
   );
   return {
     subagent,
-    version: expectDefined(subagentRunRecordVersion(subagent), "subagent completion row version"),
+    version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
     cleanupHandled,
   };
 }

@@ -338,8 +338,10 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
           @click=${(event: MouseEvent) => {
             if (active) {
               event.preventDefault();
+              // The controller owns hold suppression: releasing a latched hold
+              // also clicks this button, and that click must not mean Stop.
               if (!finalizing) {
-                void props.dictation?.finishActive();
+                props.dictation?.handleClick(event);
               }
               return;
             }

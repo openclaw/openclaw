@@ -30,6 +30,8 @@ import {
 } from "./deliver.js";
 import type { ConversationDeliveryTarget } from "./delivery-completion.js";
 import {
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
@@ -47,12 +49,6 @@ const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
 const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
-);
-
-// Keep config/runtime loading lazy so importing message helpers does not
-// bootstrap plugin registries or gateway clients.
-const loadMessageGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
 );
 
 type MessageSendParams = Pick<
@@ -234,21 +230,32 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   return getRuntimeConfig();
 }
 
-async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
+function resolveDirectMessageTarget(
+  params: Pick<MessageSendParams, "to" | "accountId">,
+  cfg: OpenClawConfig,
+  channel: ChannelPlugin["id"],
+  plugin: ChannelPlugin,
+) {
+  const target = resolveOutboundTarget({
+    channel,
+    plugin,
+    to: params.to,
+    cfg,
+    accountId: params.accountId,
+    mode: "explicit",
+  });
+  if (!target.ok) {
+    throw target.error;
   }
-  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
-  return randomIdempotencyKey();
+  return target;
 }
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
-  const prepared = params.preparedPlugin
+  const { channel, plugin } = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
     (source): source is string => Boolean(source),
@@ -288,17 +295,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
+    const resolvedTarget = resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     const outboundSession = buildOutboundSessionContext({
       cfg,
@@ -468,10 +465,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const prepared = params.preparedPlugin
+  const { channel, plugin } = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
 
   const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
@@ -508,17 +504,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
+    const resolvedTarget = resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({

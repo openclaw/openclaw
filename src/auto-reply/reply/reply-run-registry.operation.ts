@@ -129,7 +129,8 @@ export function createReplyOperation(params: {
     },
   });
   const ownerSettlement = createDeferredCore();
-  const producerCompletion = createDeferredCore();
+  const producerCompletion = createDeferredCore<unknown>();
+  let producerError: unknown;
   let backendReady = createDeferredCore();
   const notifyBackendReady = () => {
     if (phase === "running" && getAttachedBackend(operation)) {
@@ -234,6 +235,30 @@ export function createReplyOperation(params: {
       return;
     }
     terminalSettleTimer.scheduleOnce(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+  };
+
+  const complete = (
+    barrier?: PromiseLike<unknown>,
+    timeoutMs?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
+  ) => {
+    producerCompletion.resolve(producerError);
+    if (barrier) {
+      // Admission may time out to free a slot; the old writer settles only when
+      // its actual delivery/persistence barriers finish, including repeated complete().
+      const completed = Promise.resolve(barrier).then(
+        () => {},
+        () => {},
+      );
+      ownerCompletionBarrier = ownerCompletionBarrier
+        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
+        : completed;
+    }
+    if (!result) {
+      setResult({ kind: "completed" });
+    }
+    clearState(barrier, timeoutMs);
+    // Stale expiry can clear the slot before the old owner's durable work settles.
+    settleOwner();
   };
 
   const abortOperation = (
@@ -417,7 +442,6 @@ export function createReplyOperation(params: {
       ownedSessionIds.add(currentSessionId);
       updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
-      replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
       replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
       notifyGatewayWorkMetricsChanged();
@@ -436,13 +460,11 @@ export function createReplyOperation(params: {
       }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
-      replyRunState.activeSessionIdsByKey.delete(previousKey);
       currentSessionKey = update.sessionKey;
       backendReady.resolve();
       backendReady = createDeferredCore();
       backendReadyByOperation.set(operation, backendReady.promise);
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
-      replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
       // Wait/abort lookups resolve keys via owned session IDs; move them so
       // waitForReplyRunEndBySessionId keeps finding this operation.
@@ -492,35 +514,12 @@ export function createReplyOperation(params: {
     },
     ownerSettlement: ownerSettlement.promise,
     complete() {
-      producerCompletion.resolve();
-      if (!result) {
-        setResult({ kind: "completed" });
-      }
-      clearState();
-      settleOwner();
+      complete();
     },
-    completeWithAfterClearBarrier(barrier, timeoutMs) {
-      // Producer work is done; delivery may still need a successor operation.
-      producerCompletion.resolve();
-      // Admission may time out to free a slot; the old writer settles only when
-      // its actual delivery/persistence barrier finishes, including repeated complete().
-      const completed = Promise.resolve(barrier).then(
-        () => {},
-        () => {},
-      );
-      ownerCompletionBarrier = ownerCompletionBarrier
-        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
-        : completed;
-      if (!result) {
-        setResult({ kind: "completed" });
-      }
-      clearState(barrier, timeoutMs);
-      // This barrier owns dispatch delivery and terminal persistence. Stale
-      // expiry may have already cleared the slot, but recovery must still wait
-      // for that old owner's durable work before admitting a queued turn.
-      settleOwner();
-    },
+    completeWithAfterClearBarrier: complete,
     fail(code, cause) {
+      // Cancellation can win the outcome before the producer rejects its buffered output.
+      producerError ??= cause;
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
       finalizationLease.clear();
@@ -666,7 +665,6 @@ export function createReplyOperation(params: {
   });
 
   replyRunState.activeRunsByKey.set(sessionKey, operation);
-  replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   replyRunState.waitKeysBySessionId.set(currentSessionId, sessionKey);
   notifyGatewayWorkMetricsChanged();

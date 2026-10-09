@@ -119,16 +119,14 @@ async function readImmutableService(
     );
   }
   const entry = resolveServiceEntrypoint(command);
+  const generationEntry = path.join(generationPath, "dist", "index.js");
   if (
     !executable ||
     !path.isAbsolute(executable) ||
     (await fs.realpath(executable)) !== runtimePath ||
     !entry ||
-    ![
-      path.join(generationPath, "dist", "index.js"),
-      path.join(root, "current", "dist", "index.js"),
-    ].includes(entry) ||
-    (await fs.realpath(entry)) !== path.join(generationPath, "dist", "index.js")
+    ![generationEntry, path.join(root, "current", "dist", "index.js")].includes(entry) ||
+    (await fs.realpath(entry)) !== generationEntry
   ) {
     throw new Error(
       "The systemd Gateway command must use the adopted Node executable and current immutable generation.",

@@ -1,3 +1,4 @@
+import { threadId } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
@@ -93,9 +94,46 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "transcript-search") {
+        if (!channel) {
+          throw new Error("Transcript search requires its host status channel");
+        }
+        const { searchSessionTranscriptsReadOnlySync, isSessionTranscriptSearchCurrentSync } =
+          await import("./session-transcript-search.js");
+        const options = {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
+        };
+        const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
+          request.params,
+          options,
+        );
+        let indexing = false;
+        if (found) {
+          // Keep the connection in this task while the host checks its writer's status.
+          // A second pool request can run on another connection with an unrelated revision.
+          const status = await channel.request("transcript-index-status");
+          try {
+            if (typeof status.input !== "boolean") {
+              throw new Error("Invalid transcript search index status");
+            }
+            indexing =
+              status.input ||
+              revision === undefined ||
+              !isSessionTranscriptSearchCurrentSync(revision, options);
+          } finally {
+            status.consumed();
+          }
+        }
+        return { kind: request.kind, result: { ...result, indexing } };
+      }
       if (isSessionHistoryReadOperation(request)) {
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();
+      }
+      if (request.kind === "session-cleanup") {
+        const { readSessionCleanupSnapshot } = await import("./cleanup-service-read.worker.js");
+        return readSessionCleanupSnapshot(request);
       }
       if (request.kind === "lifecycle-artifact-plan") {
         const { readSessionLifecycleArtifactCleanup } =
@@ -266,6 +304,21 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-row-facts") {
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return readSessionRowDatabaseFacts(request);
+      }
+      if (request.kind === "session-maintenance-read") {
+        const { readSessionMaintenanceInWorker } =
+          await import("./session-accessor.sqlite-maintenance-transaction.js");
+        return {
+          kind: "session-maintenance-read" as const,
+          result: readSessionMaintenanceInWorker({
+            ...request.plan,
+            databaseOptions: {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+          }),
+          workerThreadId: threadId,
+        };
       }
       if (request.kind === "session-entry-current") {
         const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");

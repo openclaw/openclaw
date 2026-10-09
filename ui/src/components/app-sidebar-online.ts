@@ -119,7 +119,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   aria-expanded=${String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
                   @click=${(event: MouseEvent) => {
                     if (event.currentTarget instanceof HTMLElement) {
-                      host.sidebarMenus.togglePeopleFilterMenu(event.currentTarget);
+                      host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
                     }
                   }}
                 >

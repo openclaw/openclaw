@@ -3387,7 +3387,7 @@ jobs:
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
-          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && '1' || '0' }}
+          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: ${{ ((github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw') || (github.event_name == 'workflow_dispatch' && startsWith(matrix.check_name, 'checks-node-release-packed-'))) && '1' || '0' }}
         shell: bash
         run: |
           set -euo pipefail

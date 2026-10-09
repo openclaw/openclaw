@@ -499,5 +499,6 @@ it("refuses a captured actor belonging to another physical store", async () => {
       },
       { authorId: "alice", text: "Must not be rerouted" },
     ),
-  ).rejects.toThrow("Collaboration target differs from its captured incognito actor");
+  ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
+  expect(await listSessionSuggestions(scope)).toEqual([]);
 });

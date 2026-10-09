@@ -11,8 +11,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { rebindDurableAcpSessionMetaAfterReset } from "../acp/runtime/session-meta-reset.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
@@ -70,7 +69,11 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  isSubagentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
 import {
   isModelSelectionLocked,
@@ -108,7 +111,7 @@ import {
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
-import { invalidSessionRequest } from "./session-request-error.js";
+import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
@@ -224,17 +227,18 @@ async function ensureSessionRuntimeCleanup(params: {
       : undefined,
     assertCurrent: params.assertCurrent,
   });
+  const queueKeys = [
+    ...params.target.storeKeys,
+    params.target.canonicalKey,
+    params.sessionId,
+  ].filter((key) => key !== undefined);
   const closeTrackedBrowserTabs = async () => {
     assertCurrent();
-    const closeKeys = new Set<string>([
-      params.key,
-      params.target.canonicalKey,
-      ...params.target.storeKeys,
-      params.sessionId ?? "",
-    ]);
     await cleanupBrowserSessionsForLifecycleEnd({
       cfg: params.cfg,
-      sessionKeys: [...closeKeys],
+      sessionKeys: [...queueKeys, params.key].map((requestKey) =>
+        toAgentStoreSessionKey({ agentId: params.target.agentId, requestKey }),
+      ),
       onWarn: (message) => logVerbose(message),
     });
     assertCurrent();
@@ -257,11 +261,6 @@ async function ensureSessionRuntimeCleanup(params: {
   // Parent admissions are already drained. Reject stale or incomplete child cleanup
   // before discarding queues or interrupting a newly accepted reply operation.
   assertCurrent();
-  const queueKeys = [
-    ...params.target.storeKeys,
-    params.target.canonicalKey,
-    params.sessionId,
-  ].filter((key) => key !== undefined);
   // Process scopes may use the requested alias, canonical key, or session id.
   // Clear only completed records so reset/delete cannot erase another scope's
   // output or hide a background process whose owner has not confirmed exit.
@@ -573,10 +572,12 @@ export async function performGatewaySessionReset(params: {
     }
     logVerbose(`session lifecycle resource cleanup failed: ${String(error)}`);
   };
-  const initialResetEntry = loadSessionEntry(
-    params.key,
-    resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
-  ).entry;
+  const loadResetSession = () =>
+    loadSessionEntry(
+      params.key,
+      resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
+    );
+  const initialResetEntry = loadResetSession().entry;
   const expectedSessionMatches = (entry: SessionEntry | undefined): boolean =>
     params.expectedSessionId === undefined || entry?.sessionId === params.expectedSessionId;
   const sessionChangedError = () =>
@@ -610,6 +611,14 @@ export async function performGatewaySessionReset(params: {
       ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
       : undefined;
   };
+  const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
+    resolveFastModeSelectionError(entry) ??
+    resolvePluginSessionOwnershipError({
+      action: "reset",
+      entry,
+      key: canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
   const initialFastModeSelectionError = resolveFastModeSelectionError(initialResetEntry);
   if (initialFastModeSelectionError) {
     return { ok: false, error: initialFastModeSelectionError };
@@ -680,13 +689,9 @@ export async function performGatewaySessionReset(params: {
     "compaction",
   );
   if (activeLifecycleMutation && !activeCompaction) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `Session ${params.key} has another lifecycle mutation in progress; try again.`,
-      ),
-    };
+    return unavailableSessionRequest(
+      `Session ${params.key} has another lifecycle mutation in progress; try again.`,
+    );
   }
   let admittedWorkReleased = true;
   let resetPreparationError: ReturnType<typeof errorShape> | undefined;
@@ -701,10 +706,7 @@ export async function performGatewaySessionReset(params: {
     prepare: async () => {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadSessionEntry(
-        params.key,
-        resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
-      );
+      const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadResetSession();
       if (!expectedSessionMatches(currentEntry)) {
         resetPreparationError = sessionChangedError();
         return;
@@ -715,18 +717,12 @@ export async function performGatewaySessionReset(params: {
           return;
         }
       }
-      resetPreparationError = resolveFastModeSelectionError(currentEntry);
-      if (resetPreparationError) {
-        return;
-      }
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
-      resetPreparationError = resolvePluginSessionOwnershipError({
-        action: "reset",
-        entry: currentEntry,
-        key: resetTarget.target.canonicalKey,
-        pluginOwnerId: params.authorizedPluginId,
-      });
+      resetPreparationError = resolveResetEntryAccessError(
+        currentEntry,
+        resetTarget.target.canonicalKey,
+      );
       if (resetPreparationError) {
         return;
       }
@@ -766,51 +762,28 @@ export async function performGatewaySessionReset(params: {
       }
     },
     run: async () => {
-      const { cfg, target, storePath, requestedAgentId } = resetTarget;
+      const { cfg, target, storePath } = resetTarget;
       if (resetPreparationError) {
         return { ok: false, error: resetPreparationError };
       }
       if (!admittedWorkReleased) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Session ${params.key} is still active; try again in a moment.`,
-          ),
-        };
+        return unavailableSessionRequest(
+          `Session ${params.key} is still active; try again in a moment.`,
+        );
       }
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const { entry, legacyKey, canonicalKey } = loadSessionEntry(
-        params.key,
-        requestedAgentId ? { agentId: requestedAgentId } : undefined,
-      );
+      const { entry, legacyKey, canonicalKey } = loadResetSession();
       if (normalizeOptionalString(entry?.sessionId) !== preparedResetSessionId) {
-        return {
-          ok: false,
-          error:
-            params.expectedSessionId === undefined
-              ? errorShape(
-                  ErrorCodes.UNAVAILABLE,
-                  `Session ${params.key} changed before reset. Retry.`,
-                )
-              : sessionChangedError(),
-        };
+        return params.expectedSessionId === undefined
+          ? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`)
+          : { ok: false, error: sessionChangedError() };
       }
       // Admitted directives can finish persisting while reset drains them.
       // Recheck their final selection before retiring placement or running cleanup.
-      const currentFastModeSelectionError = resolveFastModeSelectionError(entry);
-      if (currentFastModeSelectionError) {
-        return { ok: false, error: currentFastModeSelectionError };
-      }
-      const currentOwnershipError = resolvePluginSessionOwnershipError({
-        action: "reset",
-        entry,
-        key: canonicalKey,
-        pluginOwnerId: params.authorizedPluginId,
-      });
-      if (currentOwnershipError) {
-        return { ok: false, error: currentOwnershipError };
+      const currentAccessError = resolveResetEntryAccessError(entry, canonicalKey);
+      if (currentAccessError) {
+        return { ok: false, error: currentAccessError };
       }
       const entryStateError = resolveResetEntryStateError(entry, canonicalKey);
       if (entryStateError) {
@@ -1065,10 +1038,7 @@ export async function performGatewaySessionReset(params: {
 
       let createdNewEntry = false;
       assertCompletionAuthorized?.();
-      const boundaryEntry = loadSessionEntry(
-        params.key,
-        requestedAgentId ? { agentId: requestedAgentId } : undefined,
-      ).entry;
+      const boundaryEntry = loadResetSession().entry;
       if (boundaryEntry?.sessionId !== entry?.sessionId) {
         params.assertCurrent?.();
         throw new Error(`Session ${params.key} changed before reset boundary append.`);
@@ -1271,7 +1241,7 @@ export async function performGatewaySessionReset(params: {
           }
           return nextEntry;
         },
-        afterEntryMutation: async (mutation) => {
+        afterEntryMutation: async (mutation, committedSource) => {
           if (resetSkipped) {
             return;
           }
@@ -1366,19 +1336,18 @@ export async function performGatewaySessionReset(params: {
             });
           }
           if (deferredAcpResetState) {
-            const resetState = {
-              sessionKey: target.canonicalKey,
-              meta: buildPendingAcpMeta(deferredAcpResetState.meta, Date.now()),
-            };
+            const meta = buildPendingAcpMeta(deferredAcpResetState.meta, Date.now());
             // Bind the captured ACP shell to the committed canonical entry, including
             // fallback/legacy metadata. Never recreate a consumed alias.
-            writeAcpSessionMetaForMigration({
-              sessionKey: buildAcpDatabaseSessionKey(target.canonicalKey, agentId),
-              sessionId: mutation.nextEntry.sessionId,
-              lifecycleRevision: mutation.nextEntry.lifecycleRevision,
-              meta: resetState.meta,
+            await rebindDurableAcpSessionMetaAfterReset({
+              sessionKey: target.canonicalKey,
+              agentId,
+              context: committedSource,
+              entry: mutation.nextEntry,
+              meta,
+              assertCurrent: assertCompletionAuthorized,
             });
-            committedAcpResetState = resetState;
+            committedAcpResetState = { sessionKey: target.canonicalKey, meta };
           }
           params.onCommitted?.({
             key: target.canonicalKey,

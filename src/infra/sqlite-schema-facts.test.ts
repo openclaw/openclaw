@@ -201,7 +201,7 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
-  it("retains table and column facts across 100 foreign data commits", () => {
+  it("retains table and column facts with one statement per foreign data commit", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
     const reader = openDatabase(
       "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
@@ -230,9 +230,7 @@ describe("admitted SQLite schema facts", () => {
       expect(
         observation.queries.filter((sql) => /sqlite_schema|pragma_table_info/iu.test(sql)),
       ).toHaveLength(0);
-      expect(
-        observation.queries.filter((sql) => /PRAGMA schema_version/iu.test(sql)).length,
-      ).toBeLessThanOrEqual(100);
+      expect(observation.queries).toHaveLength(100);
       expect(schemaMutation).not.toHaveBeenCalled();
     } finally {
       observation.restore();
@@ -269,6 +267,18 @@ describe("admitted SQLite schema facts", () => {
     expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
   });
+  it.each(["data_version", "schema_version", "user_version"])(
+    "refuses a table shadowing the native %s observation",
+    (name) => {
+      const database = openDatabase(
+        `CREATE TABLE original (id); CREATE TABLE pragma_${name} (${name} INTEGER);
+         INSERT INTO pragma_${name} VALUES (999); PRAGMA user_version = 1;`,
+      );
+      expect(() =>
+        runSqliteReadOperationSync(database, () => tableExists(database, "original")),
+      ).toThrow(/not a function/iu);
+    },
+  );
 
   it.each(["transaction", "implicit snapshot"])(
     "observes foreign commits on the next read while preserving an active %s",
@@ -369,6 +379,8 @@ describe("admitted SQLite schema facts", () => {
     databases.push(writer);
     readSqliteDataVersion(reader);
     readSqliteDataVersion(reader);
+    readSqliteCacheDataVersion(reader);
+    readSqliteCacheDataVersion(reader);
     const prepare = vi.spyOn(reader, "prepare");
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
@@ -383,12 +395,10 @@ describe("admitted SQLite schema facts", () => {
         expect(readSqliteDataVersion(reader)).toBe(committedVersion);
       });
       expect(readSqliteCacheDataVersion(reader)).toBe(committedVersion);
-      expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
-        4,
-      );
-      expect(
-        prepare.mock.calls.filter(([sql]) => /^PRAGMA data_version$/iu.test(sql)),
-      ).toHaveLength(0);
+      const isVersionProbe = (sql: string) =>
+        /^PRAGMA data_version$|\bpragma_data_version\(\)/iu.test(sql);
+      expect(observation.queries.filter(isVersionProbe)).toHaveLength(4);
+      expect(prepare.mock.calls.filter(([sql]) => isVersionProbe(sql))).toHaveLength(0);
     } finally {
       observation.restore();
       prepare.mockRestore();

@@ -3,6 +3,10 @@
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
+  type AgentAssistantSourceReceipt,
+  bindAgentAssistantSource,
+} from "../infra/agent-events.js";
+import {
   handleAgentEnd,
   handleAgentStart,
   handleCompactionEnd,
@@ -12,12 +16,11 @@ import {
   handleMessageStart,
   handleMessageEnd,
 } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-  handleToolExecutionUpdate,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { handleToolExecutionUpdate } from "./embedded-agent-subscribe.handlers.tools.progress.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";
@@ -25,7 +28,11 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
+  let assistantSource: AgentAssistantSourceReceipt | undefined;
   const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
+    const onError = (err: unknown) => {
+      ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+    };
     // Tool-result delivery must settle before later assistant or terminal events;
     // suppression flags would discard those events instead of preserving order.
     const run = () => {
@@ -35,7 +42,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         }
         return handler();
       } catch (err) {
-        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+        onError(err);
         return undefined;
       }
     };
@@ -46,12 +53,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     }
 
     const task = Promise.resolve(result)
-      .then(
-        () => {},
-        (err: unknown) => {
-          ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-        },
-      )
+      .then(() => {}, onError)
       .finally(() => {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
@@ -62,6 +64,18 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   };
 
   return (evt: AgentSessionEvent) => {
+    if (
+      (evt.type === "message_start" ||
+        evt.type === "message_update" ||
+        evt.type === "message_end") &&
+      evt.message.role === "assistant" &&
+      !isSubscribeTranscriptOnlyOpenClawAssistantMessage(evt.message)
+    ) {
+      if (evt.type === "message_start" || !assistantSource) {
+        assistantSource = {};
+      }
+      bindAgentAssistantSource(evt.message, assistantSource);
+    }
     // Model facts advance before persistence, independently of queued reply delivery.
     ctx.captureModelEvent(evt);
     // Capture tool facts before reply delivery can delay their lifecycle handlers.

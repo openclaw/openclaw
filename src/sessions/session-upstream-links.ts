@@ -1,9 +1,6 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -15,7 +12,7 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
-  rowToSessionUpstreamLink,
+  readSessionUpstreamLinkInDatabase,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -24,15 +21,7 @@ import type { SessionUpstreamLinkCurrentCheck } from "./session-upstream-links.w
 
 export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
-type SessionUpstreamDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "session_upstream_links" | "session_watch_cursors"
->;
 const log = createSubsystemLogger("sessions/upstream-links");
-
-function getSessionUpstreamKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<SessionUpstreamDatabase>(db);
-}
 
 /** @deprecated Use upsertSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
 export function upsertSessionUpstreamLink(
@@ -68,15 +57,7 @@ export function readSessionUpstreamLink(
 ): SessionUpstreamLink | undefined {
   try {
     const { db } = openOpenClawStateDatabase(options);
-    const row = executeSqliteQuerySync(
-      db,
-      getSessionUpstreamKysely(db)
-        .selectFrom("session_upstream_links")
-        .selectAll()
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId),
-    ).rows[0];
-    return row ? rowToSessionUpstreamLink(row) : undefined;
+    return readSessionUpstreamLinkInDatabase(db, sessionKey, agentId);
   } catch (error) {
     log.warn(`failed to read session upstream link: ${String(error)}`);
     return undefined;

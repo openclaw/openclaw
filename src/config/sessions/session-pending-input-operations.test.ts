@@ -16,6 +16,7 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -104,6 +105,80 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
     ).toEqual([{ run_id: "completed", succeeded: 1 }]);
   });
 });
+
+it.each(["cancelled", "consumed", "failed"] as const)(
+  "reports a withdrawn input only after confirmed cancellation: %s",
+  async (result) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = createFixture();
+      const recorder = createUserTurnTranscriptRecorder({
+        message: message(result),
+        target: {
+          ...scope,
+          storePath: fixture.database.path,
+          sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
+        },
+      });
+      await recorder.stageApproved?.({ runId: result, assertCurrent: () => {} });
+      const pending = expectDefined(
+        (await listSessionPendingInputs(scope)).items[0],
+        "Expected accepted input",
+      );
+      expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
+      if (result === "consumed") {
+        await recorder.persistApproved();
+        expect(recorder.isPendingInputConsumed?.()).toBe(true);
+      }
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      const spy = vi
+        .spyOn(admission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((callback, attachment) =>
+          createAdmission((request, grant) => {
+            const facts = request.facts;
+            if (
+              result === "failed" &&
+              request.stage === "commit" &&
+              isRecord(facts) &&
+              isRecord(facts.publication) &&
+              isRecord(facts.publication.receipt) &&
+              facts.publication.receipt.operation === "finish"
+            ) {
+              throw new Error("Synthetic cancellation commit refused");
+            }
+            callback(request, grant);
+          }, attachment),
+        );
+      try {
+        recorder.finishPendingInput?.("cancelled");
+        expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
+        if (result === "failed") {
+          await expect(recorder.waitForPendingInputSettlement?.()).rejects.toThrow(
+            "Synthetic cancellation commit refused",
+          );
+        } else {
+          await recorder.waitForPendingInputSettlement?.();
+        }
+        expect(readWithdrawnUserTurnInputId(recorder)).toBe(
+          result === "cancelled" ? pending.id : undefined,
+        );
+        expect(fixture.pending()).toEqual(
+          result === "consumed"
+            ? []
+            : [
+                expect.objectContaining({
+                  run_id: result,
+                  state: result === "failed" ? "queued" : "cancelled",
+                }),
+              ],
+        );
+      } finally {
+        spy.mockRestore();
+        recorder.finishPendingInput?.("interrupted");
+        await Promise.allSettled([recorder.waitForPendingInputSettlement?.()]);
+      }
+    });
+  },
+);
 
 it("retains cancellation disposition custody while accepted processing completion is waiting", async ({
   signal,

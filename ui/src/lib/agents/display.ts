@@ -86,12 +86,7 @@ export function normalizeAgentTargetLabel(
     hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
       ? normalizeOptionalString(hydratedIdentity.name)
       : undefined;
-  return (
-    resolvedName ??
-    normalizeOptionalString(agent.name) ??
-    normalizeOptionalString(agent.identity?.name) ??
-    agent.id
-  );
+  return resolvedName ?? normalizeAgentLabel(agent);
 }
 
 export function resolveAgentTextAvatar(

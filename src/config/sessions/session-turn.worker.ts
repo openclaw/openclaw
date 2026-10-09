@@ -11,7 +11,10 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readTranscriptContextStateInTransaction,
+  readTranscriptContextVersionInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
@@ -107,6 +110,19 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
       : !expectedEntry
         ? sqliteSessionTranscriptTurnRebound(selected, input.options.sessionFile)
         : undefined;
+  const transcriptState =
+    !result && input.options.messages.length
+      ? readTranscriptContextStateInTransaction(database, scope.sessionId)
+      : undefined;
+  if (input.prepareColdTranscript && transcriptState?.coldArchive) {
+    return {
+      result: undefined,
+      messages: [],
+      coldArchive: transcriptState.coldArchive,
+      version: undefined,
+      goalId: undefined,
+    };
+  }
   const messages = result
     ? []
     : inCustody(input, context, () =>
@@ -129,10 +145,8 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
   return {
     result,
     messages,
-    version:
-      !result && input.options.messages.length
-        ? readTranscriptContextVersionInTransaction(database, scope.sessionId)
-        : undefined,
+    coldArchive: undefined,
+    version: transcriptState?.version,
     goalId:
       mutation && !result && expectedEntry && input.options.messages.length
         ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id

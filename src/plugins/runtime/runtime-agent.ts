@@ -84,6 +84,11 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return listEntries({
+    ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
+    ...(params.includeParticipants !== undefined
+      ? { includeParticipants: params.includeParticipants }
+      : {}),
+    ...(params.captureSource ? { captureSource: params.captureSource } : {}),
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -95,6 +100,7 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
 
 const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
+    workerGuard: {},
     assertCommitAllowed: params.assertCommitAllowed,
     fallbackEntry: params.fallbackEntry,
     maintenanceConfig:

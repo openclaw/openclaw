@@ -264,7 +264,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/acp/runtime/session-meta.alias-lifecycle.test.ts",
     "src/commands/doctor-config-health-freshness.test.ts",
     "src/commands/doctor/shared/post-core-plugin-convergence.persistence.test.ts",
     "src/hooks/installs.test.ts",
@@ -1079,7 +1078,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/infra/sqlite-worker-transcripts.test.ts",
     "src/meeting-bot/transcripts-bridge.test.ts",
-    "src/transcripts/status.producer.shutdown.test.ts",
+    "src/transcripts/status.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -1496,6 +1495,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
     "src/config/sessions/session-accessor.sqlite-branches.test.ts",
     "src/gateway/session-message-events.test.ts",
     "src/gateway/worker-environments/worker-turn-execution.test.ts",
@@ -1996,7 +1996,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["ui/index.html", "ui/src/**/*.css", "ui/src/**/*.ts"],
   },
   ...[
-    "src/cron/service.stream-trigger.test.ts",
     "src/cron/service.stream-validation.test.ts",
     "src/cron/service/timer.timeout-watchdog.test.ts",
   ].map((testFile) => ({

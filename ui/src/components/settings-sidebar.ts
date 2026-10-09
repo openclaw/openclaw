@@ -148,26 +148,22 @@ function filterSettingsNavigationGroups(
   }
   const pageRoutes = [...directRoutes, ...groupRoutes];
   return [
-    ...(pageRoutes.length > 0
-      ? [
-          {
-            labelKey: null,
-            items: pageRoutes.map((routeId) => ({
-              routeId,
-              blocks: (blocksByRoute.get(routeId) ?? []).filter(
-                (block) => !isRedundantRouteBlock(routeId, block),
-              ),
-            })),
-          },
-        ]
-      : []),
+    {
+      labelKey: null,
+      items: pageRoutes.map((routeId) => ({
+        routeId,
+        blocks: (blocksByRoute.get(routeId) ?? []).filter(
+          (block) => !isRedundantRouteBlock(routeId, block),
+        ),
+      })),
+    },
     ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
         items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
       })),
-  ];
+  ].filter((group) => group.items.length > 0);
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId) {

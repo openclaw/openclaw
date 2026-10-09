@@ -224,7 +224,7 @@ it("rejects bindings and selections for another physical store or session", asyn
         { ...scope, env: { OPENCLAW_STATE_DIR: tempDirs.make("foreign-incognito-") } },
         () => ({ label: "foreign" }),
       ),
-    ).rejects.toThrow("another incognito actor");
+    ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
     await expect(
       patchSessionEntryTarget(
         {

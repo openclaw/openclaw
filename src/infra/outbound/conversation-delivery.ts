@@ -115,9 +115,10 @@ export async function sendGatewayConversationMessage(params: {
 }): Promise<ConversationMessageDeliveryResult> {
   const scope = params.scope;
   const conversationDeliveryTarget = captureConversationDeliveryTarget(scope);
-  const begun = params.operation
-    ? { created: false, record: params.operation }
-    : await beginConversationDeliveryOperation(
+  const record =
+    params.operation ??
+    (
+      await beginConversationDeliveryOperation(
         scope,
         {
           operationId: params.operationId,
@@ -131,15 +132,16 @@ export async function sendGatewayConversationMessage(params: {
           ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
         },
         params.assertCurrent,
-      );
+      )
+    ).record;
   params.assertCurrent();
-  const existing = resultFromExistingOperation(begun.record);
+  const existing = resultFromExistingOperation(record);
   if (existing) {
     return existing;
   }
 
   const readAuthoritativeOperation = async () =>
-    (await getConversationDeliveryOperation(scope, begun.record.operationId)) ?? begun.record;
+    (await getConversationDeliveryOperation(scope, record.operationId)) ?? record;
   try {
     const action = await runMessageAction({
       cfg: params.context.config,
@@ -163,20 +165,18 @@ export async function sendGatewayConversationMessage(params: {
       requireQueuePersistence: true,
       deliveryIntentId: buildConversationDeliveryIntentId(
         params.context.agentId,
-        begun.record.operationId,
+        record.operationId,
       ),
       deliveryCompletion: {
         kind: "conversation",
         agentId: scope.agentId,
-        operationId: begun.record.operationId,
+        operationId: record.operationId,
         storePath: scope.storePath,
         routeFingerprint: params.routeFingerprint,
       },
       conversationDeliveryTarget,
       withDirectAdapterHandoff: params.withDirectAdapterHandoff,
-      ...(begun.record.preparedMessageId
-        ? { preparedMessageId: begun.record.preparedMessageId }
-        : {}),
+      ...(record.preparedMessageId ? { preparedMessageId: record.preparedMessageId } : {}),
       ...(params.signal ? { abortSignal: params.signal } : {}),
     });
     if (action.kind !== "send") {
@@ -190,7 +190,7 @@ export async function sendGatewayConversationMessage(params: {
     }
     const messageId = readMessageIdFromActionResult(action);
     if (action.sendResult.deliveryStatus === "suppressed") {
-      const operation = await markConversationDeliverySuppressed(scope, begun.record.operationId);
+      const operation = await markConversationDeliverySuppressed(scope, record.operationId);
       return { deliveryStatus: "suppressed", operation };
     }
     if (action.sendResult.deliveryStatus !== "sent") {
@@ -198,11 +198,7 @@ export async function sendGatewayConversationMessage(params: {
         `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
       );
     }
-    const operation = await markConversationDeliverySent(
-      scope,
-      begun.record.operationId,
-      messageId,
-    );
+    const operation = await markConversationDeliverySent(scope, record.operationId, messageId);
     const confirmedMessageId =
       messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
     return {

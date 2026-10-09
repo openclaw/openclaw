@@ -874,6 +874,50 @@ describe("video-generation runtime", () => {
     expect(result.normalization).toBeUndefined();
   });
 
+  it("reports unparseable video sizes as ignored instead of dropping them silently", async () => {
+    const requests = useCapturingProvider({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+          sizes: ["1280x720", "1920x1080"],
+        },
+      },
+    });
+    const result = await runGenerateVideo({
+      cfg: videoConfig({ primary: "minimax/MiniMax-Hailuo-2.3" }),
+      prompt: "animate a lobster",
+      size: "4k",
+    });
+    expect(requests[0]?.size).toBeUndefined();
+    expect(result.ignoredOverrides).toEqual([{ key: "size", value: "4k" }]);
+    expect(result.normalization).toBeUndefined();
+  });
+
+  it("keeps supported video sizes while reporting only unrecognized overrides", async () => {
+    const requests = useCapturingProvider({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+          sizes: ["1280x720", "1920x1080"],
+          supportsAspectRatio: true,
+          aspectRatios: ["16:9"],
+        },
+      },
+    });
+    const result = await runGenerateVideo({
+      cfg: videoConfig({ primary: "minimax/MiniMax-Hailuo-2.3" }),
+      prompt: "animate a lobster",
+      size: "1600x900",
+      aspectRatio: "16:9",
+    });
+    expect(requests[0]).toMatchObject({ size: "1920x1080", aspectRatio: "16:9" });
+    expect(result.ignoredOverrides).toStrictEqual([]);
+    expect(result.normalization?.size?.requested).toBe("1600x900");
+    expect(result.normalization?.size?.applied).toBe("1920x1080");
+  });
+
   it("uses mode-specific capabilities for image-to-video requests", async () => {
     const requests = useCapturingProvider({
       id: "runway",

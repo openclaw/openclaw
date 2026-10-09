@@ -31,26 +31,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("refreshes a personal credential with no caller-thread data SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("personal-refresh@example.test");
-    const credential: OAuthCredential = {
-      type: "oauth",
-      provider: "synthetic",
-      access: "synthetic-old-access",
-      refresh: "synthetic-old-refresh",
-      expires: 1,
-      accountId: "synthetic-account",
-    };
-    const { authProfileId: profileId } = connectUserModelAccount({
-      ownerProfileId: owner.id,
-      credential,
-      assertCurrent() {},
-    });
-    const refreshed = {
-      ...credential,
-      access: "synthetic-new-access",
-      refresh: "synthetic-new-refresh",
-      expires: Date.now() + 600_000,
-    };
+    const { profileId, credential, replacement: refreshed } = fixture();
     const manager = createOAuthManager({
       buildApiKey: async (_provider, value) => value.access,
       canRefreshCredential: async () => true,

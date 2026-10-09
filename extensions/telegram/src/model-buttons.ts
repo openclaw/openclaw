@@ -177,6 +177,20 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   return rows;
 }
 
+export function buildPaginationRow(
+  currentPage: number,
+  totalPages: number,
+  callbackData: (page: number | null) => string,
+): ButtonRow {
+  return [
+    { page: currentPage - 1, text: "◀ Prev", show: currentPage > 1 },
+    { page: null, text: `${currentPage}/${totalPages}`, show: true },
+    { page: currentPage + 1, text: "Next ▶", show: currentPage < totalPages },
+  ]
+    .filter(({ show }) => show)
+    .map(({ page, text }) => ({ text, callback_data: callbackData(page) }));
+}
+
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
   const currentSelection = currentModel?.trim() ?? "";
@@ -211,18 +225,10 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   }
 
   if (totalPages > 1) {
-    const pages = [
-      { page: currentPage - 1, text: "◀ Prev", show: currentPage > 1 },
-      { page: currentPage, text: `${currentPage}/${totalPages}`, show: true },
-      { page: currentPage + 1, text: "Next ▶", show: currentPage < totalPages },
-    ];
     rows.push(
-      pages
-        .filter(({ show }) => show)
-        .map(({ page, text }) => ({
-          text,
-          callback_data: buildProviderListCallbackData(provider, page),
-        })),
+      buildPaginationRow(currentPage, totalPages, (page) =>
+        buildProviderListCallbackData(provider, page ?? currentPage),
+      ),
     );
   }
 
