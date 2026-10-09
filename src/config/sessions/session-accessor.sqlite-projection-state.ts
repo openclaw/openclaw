@@ -170,6 +170,8 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       allowStoredAliases: options.allowCanonicalRepair === true,
       preserveNodeSuggestions: options.allowCanonicalRepair === true,
       previousEntry: expectedCurrentEntry ?? null,
+      // Reset appends can change entry metadata after the authoritative read above.
+      ...(!resetBoundary ? { canonicalPreviousEntry: currentEntry ?? null } : {}),
       ...(routeContext !== undefined ? { routeContext } : {}),
     });
     const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {

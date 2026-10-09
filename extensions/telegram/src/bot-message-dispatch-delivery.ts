@@ -392,35 +392,6 @@ export function registerTelegramQuestionDeliveryForMessage(
   });
 }
 
-async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
-  const block = turn.activeAnswerBlockDelivery;
-  const lane = turn.answerLane;
-  if (
-    !block ||
-    !lane.stream ||
-    !lane.hasStreamedMessage ||
-    lane.finalized ||
-    turn.activeAnswerDraftIsToolProgressOnly
-  ) {
-    return;
-  }
-  const text = lane.lastPartialText || turn.lastAnswerPartialText || block.text;
-  if (!text?.trim()) {
-    return;
-  }
-  const result = await turn.deliverLaneText({
-    laneName: "answer",
-    text,
-    payload: block.payload,
-    infoKind: "block",
-    buttons: block.buttons,
-    finalizePreview: true,
-    durable: false,
-  });
-  turn.activeAnswerBlockDelivery = undefined;
-  await handlePreviewFinalizedResult(turn, result);
-}
-
 function recoverFinalPayload(
   turn: Turn,
   payload: ReplyPayload,
@@ -680,8 +651,35 @@ export function createDeliveryState(
     deliverLaneText,
     // Draft's rotate path calls this through the turn record: a direct import
     // from draft.ts would recreate the draft<->delivery runtime import cycle.
-    materializeAnswerLaneBeforeRotation: async () =>
-      await materializeAnswerLaneBeforeRotation(getTurn()),
+    materializeAnswerLaneBeforeRotation: async () => {
+      const turn = getTurn();
+      const block = turn.activeAnswerBlockDelivery;
+      const lane = turn.answerLane;
+      if (
+        !block ||
+        !lane.stream ||
+        !lane.hasStreamedMessage ||
+        lane.finalized ||
+        turn.activeAnswerDraftIsToolProgressOnly
+      ) {
+        return;
+      }
+      const text = lane.lastPartialText || turn.lastAnswerPartialText || block.text;
+      if (!text?.trim()) {
+        return;
+      }
+      const result = await turn.deliverLaneText({
+        laneName: "answer",
+        text,
+        payload: block.payload,
+        infoKind: "block",
+        buttons: block.buttons,
+        finalizePreview: true,
+        durable: false,
+      });
+      turn.activeAnswerBlockDelivery = undefined;
+      await handlePreviewFinalizedResult(turn, result);
+    },
     resolveCurrentTurnTranscriptFinal: context.ctxPayload.GroupThread
       ? async () => undefined
       : createCurrentTurnTranscriptFinalResolver({

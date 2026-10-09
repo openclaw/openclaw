@@ -161,17 +161,15 @@ export async function assertSupportedRuntime(
   recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
   const details = providedDetails ?? (await detectRuntime());
+  const writeNotice = (message: string) =>
+    providedRuntime ? providedRuntime.error(message) : process.stderr.write(`${message}\n`);
   if (runtimeSatisfies(details)) {
     const note =
       details.kind === "node" && details.sqliteProbe
         ? nodeRuntimeNote(details.version, details.sqliteProbe)
         : null;
     if (note) {
-      if (providedRuntime) {
-        providedRuntime.error(note);
-      } else {
-        process.stderr.write(`${note}\n`);
-      }
+      writeNotice(note);
     }
     return;
   }
@@ -188,11 +186,7 @@ export async function assertSupportedRuntime(
   ) {
     if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
       const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
-      if (providedRuntime) {
-        providedRuntime.error(warning);
-      } else {
-        process.stderr.write(`${warning}\n`);
-      }
+      writeNotice(warning);
       diagnosticWarningPrinted = true;
     }
     return;

@@ -212,7 +212,6 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }
@@ -659,13 +658,14 @@ export function acquireSessionRowEntry(params: {
       row.entry.lifecycleRevision === entry.lifecycleRevision)
       ? row.generation
       : Symbol("row");
+  const retainedDatabaseFacts =
+    row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined;
   let next: Row = {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    retainedDatabaseFacts:
-      row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined,
-    databaseFactsRevision: row.databaseFactsRevision + 1,
+    retainedDatabaseFacts,
+    databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
     ...lineage,
     sharingEntry: storedEntry,
     generation,

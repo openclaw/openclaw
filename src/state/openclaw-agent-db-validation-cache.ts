@@ -13,6 +13,7 @@ import {
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError,
@@ -45,6 +46,7 @@ export type OpenClawAgentDatabaseValidation = {
   /** Canonical admission, separately revoked by local DDL without discarding integrity proof. */
   schema?: { facts: SqliteSchemaFacts; valid: SharedArrayBuffer };
 };
+export type OpenClawAgentDatabaseReadValidation = Omit<OpenClawAgentDatabaseValidation, "schema">;
 type ValidationDatabase = { db: DatabaseSync; path: string; agentId: string };
 type CanonicalValidationDatabase = { db: DatabaseSync; path?: string; agentId: string };
 type ValidationEntry = {
@@ -256,6 +258,39 @@ export function getOpenClawAgentDatabaseValidationForTransfer(
     return undefined;
   }
   return entry.validation;
+}
+
+/** Readers borrow physical/canonical proof without copying the schema catalog or opening a host handle. */
+export function captureOpenClawAgentDatabaseReadValidation(
+  database: Pick<ValidationDatabase, "agentId" | "path">,
+) {
+  const current = getOpenClawAgentDatabaseValidationForTransfer(database);
+  if (!current) {
+    return undefined;
+  }
+  const capturedIdentity = readDatabasePathIdentitySync(database.path);
+  if (capturedIdentity.key !== `file:${current.identity}`) {
+    // A retained pathname receipt cannot admit its replacement file.
+    return undefined;
+  }
+  const { agentId, identity, receiptId, valid, canonicalReady } = current;
+  const validation: OpenClawAgentDatabaseReadValidation = {
+    agentId,
+    identity,
+    receiptId,
+    valid,
+    canonicalReady,
+  };
+  return {
+    validation,
+    inputBytes:
+      JSON.stringify(validation).length * 2 + valid.byteLength + canonicalReady.byteLength,
+    assertCurrent() {
+      if (getOpenClawAgentDatabaseValidationForTransfer(database) !== current) {
+        throw new Error("Session reader validation is no longer current");
+      }
+    },
+  };
 }
 
 /** Retire a replaced file's proof before capturing its successor's publication guard. */

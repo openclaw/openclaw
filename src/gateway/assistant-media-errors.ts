@@ -31,14 +31,9 @@ export function classifyAssistantMediaError(err: unknown): AssistantMediaAvailab
       case "symlink":
         return { available: false, code: "invalid-file", reason: "Invalid file" };
       default:
-        return {
-          available: false,
-          code: "attachment-unavailable",
-          reason: "Attachment unavailable",
-        };
+        break;
     }
-  }
-  if (err instanceof Error && "code" in err) {
+  } else if (err instanceof Error && "code" in err) {
     const errorCode = err.code;
     switch (typeof errorCode === "string" ? errorCode : "") {
       case "unsupported-media-type":

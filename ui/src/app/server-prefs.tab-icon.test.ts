@@ -19,7 +19,7 @@ import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.t
 
 const scope = "ws://tab-icon-prefs";
 const profileId = "profile-icon";
-const tabIcon = "lobster:crimson";
+const tabIcon = "agent:circle";
 const pendingKey = `openclaw.control.serverPrefs.pending.v1:${scope}:profile:${profileId}`;
 
 beforeEach(() => {
@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 describe("tab icon preference ownership", () => {
-  it.each(["default", "agent", "lobster:crimson"] as const)(
+  it.each(["default", "agent", "agent:rounded", "agent:circle", "lobster:crimson"] as const)(
     "preserves %s on theme selection and removes the preference on reset",
     (choice) => {
       patchSettings({ tabIcon: choice });

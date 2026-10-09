@@ -220,7 +220,8 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
   From the history you can compare an earlier version with today's, restore it,
   or undo a change. **Archive** and **Restore** switch a skill between the
   Active and Archived lists. The page header holds the learning mode switch and
-  **Learn from history**.
+  **Learn from history**. If the learning configuration cannot be loaded, the
+  page shows the error and a **Retry** button while keeping the skill library available.
 - **CLI:** `openclaw skills workshop list | changes | show | archive | restore`.
   See [Skills CLI](/cli/skills#skill-workshop).
 - **Plugins:** the [`skill_changed`](/plugins/hooks/reference#skill-lifecycle)

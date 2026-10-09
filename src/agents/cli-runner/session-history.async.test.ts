@@ -10,6 +10,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -65,7 +66,12 @@ it("reads CLI presence after an earlier admitted transcript write settles", asyn
     const writing = admit({ agentId: target.agentId, path: target.storePath }, async () => {
       entered.resolve();
       await withinTest(resume.promise, signal);
-      await createRecorder(target, "Earlier admitted user turn").persistApproved();
+      const appended = appendTranscriptMessageSync(target, {
+        eventId: "earlier-admitted-user-turn",
+        parentId: null,
+        message: { role: "user", content: "Earlier admitted user turn" },
+      });
+      expect(appended.ok).toBe(true);
     });
     let reading: Promise<boolean> | undefined;
     let restore = () => {};

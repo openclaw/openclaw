@@ -165,7 +165,6 @@ export function renderStreamGroupPart(
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
   const { assistant } = opts;
-  const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
@@ -176,12 +175,12 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part unless the presentation opts out.
-  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const sourcePart = parts.find((part) => part.kind === "stream");
+  const workingOnly = !sourcePart;
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
       : renderChatAvatar("assistant", assistant);
-  const sourcePart = parts.find((part) => part.kind === "stream");
   const replyLine = resolveGroupReplyLine(
     {
       role: "assistant",
@@ -209,7 +208,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
             : html`
                 <div class="chat-group-footer">
                   <div class="chat-group-footer__meta">
-                    <span class="chat-sender-name">${name}</span>
+                    <span class="chat-sender-name">${assistant?.name ?? "Assistant"}</span>
                     ${renderChatTimestamp(footerStartedAt)}
                   </div>
                 </div>

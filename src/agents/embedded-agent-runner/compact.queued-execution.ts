@@ -6,6 +6,10 @@ import {
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import {
   withOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptWriteContext,
 } from "../../config/sessions/transcript-write-context.js";
@@ -65,7 +69,7 @@ type QueuedCompactionHostCommit = {
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
 export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
   sourceAuthority: AgentHarnessCompactionSourceAuthority;
-  assertActive?: () => void;
+  assertActive?: SessionSourceAssertion;
   transcriptBytePreflightHarness?: "codex";
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
@@ -195,13 +199,16 @@ export async function executeQueuedContextEngineCompaction(input: {
   let expected = { ...expectedEntry };
   return await enqueueCompactionInLanes(params, async () => {
     let closed = false;
-    const assertCallerActive = () => {
-      params.abortSignal?.throwIfAborted();
-      if (closed) {
-        throw new Error("queued compaction is no longer active");
-      }
-      host.assertActive?.();
-    };
+    const assertCallerActive = composeSessionSourceAssertion(
+      [host.assertActive],
+      (assertSource) => {
+        params.abortSignal?.throwIfAborted();
+        if (closed) {
+          throw new Error("queued compaction is no longer active");
+        }
+        assertSource();
+      },
+    );
     const assertActive = async (target = runtimeTarget, owner = expected) => {
       await withSessionEntryReadOnlyInWorker(
         { ...target, readConsistency: "latest" },
@@ -229,10 +236,13 @@ export async function executeQueuedContextEngineCompaction(input: {
           activeWriterRunId: capturedOwner.activeWriterRunId,
         },
       };
-      const assertCommitAllowed = () => {
-        signal?.throwIfAborted();
-        assertCallerActive();
-      };
+      const assertCommitAllowed = composeSessionSourceAssertion(
+        [assertCallerActive],
+        (assertSource) => {
+          signal?.throwIfAborted();
+          assertSource();
+        },
+      );
       // The worker rechecks the captured writer fence in its locked transaction;
       // commit admission must only consult live host authority, never host SQLite.
       await assertActive(sessionTarget, capturedOwner);

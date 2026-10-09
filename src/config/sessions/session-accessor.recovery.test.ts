@@ -7,6 +7,7 @@ import {
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -266,18 +267,13 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     "rolls back the entire clone when host authority is revoked at %s admission",
     async (stage) => {
       const fixture = await createFixture();
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let current = true;
-      using intercepted = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              current = false;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      using intercepted = probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === stage) {
+          current = false;
+        }
+        callback(request, grant);
+      });
       const published = vi.fn();
       const stop = onSessionIdentityMutation(published);
       try {

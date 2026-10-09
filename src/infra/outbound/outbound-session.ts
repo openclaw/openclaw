@@ -27,6 +27,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntryPatchGuard } from "../../config/sessions/session-entry-patch.types.js";
 import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -231,7 +232,7 @@ type OutboundSessionEntryParams = {
   creation?: MsgContext["SessionCreation"];
   sourceSessionKey?: string;
   /** Revalidates caller-owned route authority at the final persistence boundary. */
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   workerGuard?: SessionEntryPatchGuard;
 };
 

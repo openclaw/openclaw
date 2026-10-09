@@ -178,6 +178,7 @@ export function runWorktreeRunEndCommand(
               input: { ...captured.input, predicates, leases: leases?.identities },
             }),
           {
+            signal: authority.signal,
             assertCurrent: leases?.assertCurrent ?? assertCurrent,
             createAdmission(operation) {
               settled = operation.settled;

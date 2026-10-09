@@ -35,7 +35,7 @@ import {
   resetConfigEphemeralState,
   toggleSensitivePathReveal,
 } from "./view-state.ts";
-import type { ConfigProps } from "./view-types.ts";
+import type { ConfigDiffEntry, ConfigProps } from "./view-types.ts";
 
 registerSettingsEnglish();
 
@@ -222,6 +222,9 @@ export function renderConfig(props: ConfigProps) {
     props.activeSection === null &&
     Boolean(include?.has("__appearance__"));
 
+  const renderDiffValue = (change: ConfigDiffEntry, side: "from" | "to") =>
+    renderRawDiffValue(change.path, change[side], props.uiHints, viewState.rawRevealed);
+
   const rawDiffPanel = hasRawChanges
     ? html`<details
         class="config-diff"
@@ -257,23 +260,9 @@ export function renderConfig(props: ConfigProps) {
                   (change) => html`<div class="config-diff__item">
                     <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
                     <div class="config-diff__values">
-                      <span class="config-diff__from"
-                        >${renderRawDiffValue(
-                          change.path,
-                          change.from,
-                          props.uiHints,
-                          viewState.rawRevealed,
-                        )}</span
-                      >
+                      <span class="config-diff__from">${renderDiffValue(change, "from")}</span>
                       <span class="config-diff__arrow">→</span>
-                      <span class="config-diff__to"
-                        >${renderRawDiffValue(
-                          change.path,
-                          change.to,
-                          props.uiHints,
-                          viewState.rawRevealed,
-                        )}</span
-                      >
+                      <span class="config-diff__to">${renderDiffValue(change, "to")}</span>
                     </div>
                   </div>`,
                 )

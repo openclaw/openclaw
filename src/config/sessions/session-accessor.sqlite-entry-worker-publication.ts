@@ -1,11 +1,15 @@
-import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  type SessionRowChange,
+  type SessionRowFacts,
+} from "../../sessions/session-row-changes.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   applyPendingSessionEntryOwnerChanges,
   isSessionEntryReplacementIdentityCurrent,
   pendingSessionEntryPublications,
-  prepareSessionEntryReplacementChanges,
+  prepareSessionEntryPublicationFacts,
   preparedSharingReads,
   publishRetainedSessionEntryChange,
   recordCommittedSessionMetadataPublication,
@@ -367,6 +371,7 @@ export function retainSessionEntryWorkerPublication(params: {
         ]);
         return undefined;
       }
+      const foldedOwnerChanges = new Map(owner.ownerChanges);
       let unknown = outcomeUnknown;
       let replacement = receipt?.kind === "session-entry-replacements" ? receipt : undefined;
       if (
@@ -380,7 +385,7 @@ export function retainSessionEntryWorkerPublication(params: {
         ...transcriptChanges,
         ...transcript.settle(Boolean(receipt), unknown, receipt?.transcriptPublication),
       ];
-      replacement = applyPendingSessionEntryOwnerChanges(replacement, owner.ownerChanges);
+      replacement = applyPendingSessionEntryOwnerChanges(replacement, foldedOwnerChanges);
       const initialization =
         receipt?.kind === "session-transcript-initialized" ? receipt : undefined;
       const current = (sessionKey: string) => !owner.superseded.has(sessionKey);
@@ -420,19 +425,16 @@ export function retainSessionEntryWorkerPublication(params: {
       const changes: SessionRowChange[] = [];
       const sharingUnchanged = new Set(replacement?.sharingUnchangedKeys);
       const generationUnchanged = new Set(replacement?.generationUnchangedKeys);
-      const transcriptUnchanged = transcriptVersion === readSessionTranscriptUpdateVersion();
-      const prepared =
-        !unknown && replacement
-          ? prepareSessionEntryReplacementChanges(
-              owner,
-              replacement,
-              params.databaseIdentity,
-              transcriptUnchanged,
-            )
-          : undefined;
+      const { prepared, currentMetadata, readCurrent } = prepareSessionEntryPublicationFacts({
+        replacement,
+        owner,
+        foldedOwnerChanges,
+        databaseIdentity: params.databaseIdentity,
+        unknown,
+        transcriptVersion,
+      });
       for (const sessionKey of changed) {
         const entry = replacement?.current.get(sessionKey);
-        const projection = prepared?.projection?.get(sessionKey);
         // A later transcript append retires its display watermark, not committed sharing facts.
         const sharingProjection =
           prepared && readCurrentSessionEntryProjection(owner, replacement, sessionKey);
@@ -450,7 +452,11 @@ export function retainSessionEntryWorkerPublication(params: {
           if (placeholder) {
             revokePreparedSessionEntryPredicate(read);
           } else if (current(sessionKey) && !owner.metadataSuperseded.has(sessionKey)) {
-            publishRetainedSessionEntryPredicate(read, entry, known(sessionKey));
+            publishRetainedSessionEntryPredicate(
+              read,
+              entry,
+              known(sessionKey) && !replacement?.unavailableParticipantKeys?.includes(sessionKey),
+            );
           }
           recordAcquiringSessionEntry(
             read.acquisition,
@@ -478,23 +484,33 @@ export function retainSessionEntryWorkerPublication(params: {
                   }
                 : undefined;
         }
+        // Synchronous listeners can publish newer facts before the next listener consumes this one.
+        const currentFacts = (): SessionRowFacts | undefined => {
+          if (!known(sessionKey) || !currentMetadata(sessionKey)) {
+            return undefined;
+          }
+          if (replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)) {
+            return { kind: "removed" };
+          }
+          const currentProjection = readCurrent(sessionKey)?.projection;
+          return currentProjection
+            ? {
+                kind: "replacement",
+                membership: currentProjection.membership,
+                lifecycleChanged: !generationUnchanged.has(sessionKey),
+              }
+            : undefined;
+        };
         const change: SessionRowChange = {
           agentId: params.agentId,
           storePath: ownsCreation ? creationSource.path : params.storePath,
           sessionKey,
-          ...(known(sessionKey) &&
-          replacement?.previous.has(sessionKey) &&
-          !replacement.current.has(sessionKey)
-            ? { facts: { kind: "removed" } as const }
-            : projection
-              ? {
-                  facts: {
-                    kind: "replacement",
-                    membership: projection.membership,
-                    lifecycleChanged: !generationUnchanged.has(sessionKey),
-                  } as const,
-                }
-              : { factsInvalidated: true as const }),
+          get facts() {
+            return currentFacts();
+          },
+          get factsInvalidated() {
+            return currentFacts() ? undefined : true;
+          },
           ...(receipt && !unknown ? { scope: "session-entry" as const } : {}),
         };
         if (receipt) {
@@ -525,7 +541,8 @@ export function retainSessionEntryWorkerPublication(params: {
                     kind: "metadata",
                     sharingChange,
                     prepared,
-                    ...(!unknown &&
+                    readCurrent,
+                    ...(known(sessionKey) &&
                     ownsCreation &&
                     current(sessionKey) &&
                     sharingEntry &&

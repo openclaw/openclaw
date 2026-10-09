@@ -8,7 +8,10 @@ import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import {
   getSqliteWorkerStateContext,
   withSqliteWorkerExistingDatabase,
@@ -164,24 +167,43 @@ function createSharedStateWorkerBackend(
       env: getSqliteWorkerStateContext().environment,
     });
   // The transaction owner validates schema and write authority after BEGIN.
-  const write: WorkerWriteOperationContext["write"] = (operation, transactionOptions) =>
+  const write = <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    transactionOptions?: Parameters<WorkerWriteOperationContext["write"]>[1],
+    database = retainedDatabase(),
+    env: NodeJS.ProcessEnv = getSqliteWorkerStateContext().environment,
+  ): T =>
     runOpenClawStateWriteTransaction(
       operation,
       {
-        database: retainedDatabase(),
+        database,
         path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
+        env,
       },
       transactionOptions,
     );
-  const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (operation, options) => {
-    open();
-    return write((database) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = operation(database);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return result;
-    }, options);
+  const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (
+    operation,
+    { receipt, transactionEnvironment, ...options } = {},
+  ) => {
+    const openedDatabase = open();
+    return write(
+      (database) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result = operation(database);
+        requestSqliteWorkerOperationAdmission({
+          stage: "commit",
+          facts: receipt === "result" ? result : undefined,
+        });
+        if (receipt === "result") {
+          deferSqliteWorkerCommitReceipt(database.db, result);
+        }
+        return result;
+      },
+      options,
+      openedDatabase,
+      transactionEnvironment === "process" ? process.env : undefined,
+    );
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {

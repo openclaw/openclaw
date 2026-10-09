@@ -7,7 +7,11 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
-import { readSystemdBusOwner, readSystemdUnitObjectPath } from "./systemd-bus-query.js";
+import {
+  readSystemdBusOwner,
+  readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
+} from "./systemd-bus-query.js";
 import {
   execBusctlSystem,
   execSystemctl,
@@ -160,19 +164,7 @@ async function inspectLoadedSystemOwnership(
     }
     const owner = await readOwner();
     const readLoaded = async () => {
-      const value = await query(
-        [
-          "call",
-          owner,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnit",
-          "s",
-          unitName,
-        ],
-        "o",
-        true,
-      );
+      const value = await query(systemdUnitCallArgs(owner, unitName, "GetUnit"), "o", true);
       if (value === missingUnit) {
         return false;
       }

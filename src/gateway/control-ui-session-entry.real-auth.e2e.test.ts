@@ -265,6 +265,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
           getResolvedAuth: () => auth,
           getRuntimeConfig: () => cfg,
           getGatewayRequestContext: () => context,
+          httpRequestLifetime: context,
           isTerminalEnabled: () => false,
         }),
     });

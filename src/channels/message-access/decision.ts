@@ -23,21 +23,6 @@ import type {
   RedactedIngressMatch,
 } from "./types.js";
 
-function decisiveDecision(params: {
-  admission: ChannelIngressDecision["admission"];
-  decision: ChannelIngressDecision["decision"];
-  gate: AccessGraphGate;
-  gates: AccessGraphGate[];
-}): ChannelIngressDecision {
-  return {
-    admission: params.admission,
-    decision: params.decision,
-    decisiveGateId: params.gate.id,
-    reasonCode: params.gate.reasonCode,
-    graph: { gates: params.gates },
-  };
-}
-
 function routeGates(state: NormalizedIngressState): AccessGraphGate[] {
   // Route gates run first because a matched route can block dispatch before sender,
   // command, or mention policy needs to evaluate.
@@ -289,13 +274,24 @@ export function decideChannelIngress(
   policy: ChannelIngressPolicyInput,
 ): ChannelIngressDecision {
   const gates: AccessGraphGate[] = routeGates(state);
+  const decide = (
+    gate: AccessGraphGate,
+    admission: ChannelIngressDecision["admission"],
+    decision: ChannelIngressDecision["decision"],
+  ): ChannelIngressDecision => ({
+    admission,
+    decision,
+    decisiveGateId: gate.id,
+    reasonCode: gate.reasonCode,
+    graph: { gates },
+  });
   const emptyRouteSenderGate = routeSenderEmptyGate(state);
   if (emptyRouteSenderGate) {
     gates.push(emptyRouteSenderGate);
   }
   const routeBlock = gates.find((entry) => entry.effect === "block-dispatch");
   if (routeBlock) {
-    return decisiveDecision({ admission: "drop", decision: "block", gate: routeBlock, gates });
+    return decide(routeBlock, "drop", "block");
   }
 
   // Some channels want mention gating before sender checks so unmentioned room chatter can
@@ -311,12 +307,7 @@ export function decideChannelIngress(
   if (activationBeforeSender) {
     gates.push(activationBeforeSender);
     if (activationBeforeSender.effect === "skip") {
-      return decisiveDecision({
-        admission: "skip",
-        decision: "allow",
-        gate: activationBeforeSender,
-        gates,
-      });
+      return decide(activationBeforeSender, "skip", "allow");
     }
   }
 
@@ -332,19 +323,19 @@ export function decideChannelIngress(
       eventModeSender.reasonCode === "dm_policy_pairing_required" ? "pairing-required" : "drop";
     const decision =
       eventModeSender.reasonCode === "dm_policy_pairing_required" ? "pairing" : "block";
-    return decisiveDecision({ admission, decision, gate: eventModeSender, gates });
+    return decide(eventModeSender, admission, decision);
   }
 
   const command = commandGate({ state, policy });
   gates.push(command);
   if (command.effect === "block-command") {
-    return decisiveDecision({ admission: "drop", decision: "block", gate: command, gates });
+    return decide(command, "drop", "block");
   }
 
   const event = eventGate({ state, policy, senderGate: eventModeSender, commandGate: command });
   gates.push(event);
   if (!event.allowed) {
-    return decisiveDecision({ admission: "drop", decision: "block", gate: event, gates });
+    return decide(event, "drop", "block");
   }
 
   const activation =
@@ -353,7 +344,7 @@ export function decideChannelIngress(
     gates.push(activation);
   }
   if (activation.effect === "skip") {
-    return decisiveDecision({ admission: "skip", decision: "allow", gate: activation, gates });
+    return decide(activation, "skip", "allow");
   }
-  return decisiveDecision({ admission: "dispatch", decision: "allow", gate: activation, gates });
+  return decide(activation, "dispatch", "allow");
 }

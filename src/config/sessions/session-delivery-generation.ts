@@ -40,7 +40,12 @@ import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
+import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import {
   captureSessionStoreReadCandidates,
@@ -103,7 +108,7 @@ async function prepareSessionGenerationLease(
   input: SessionGenerationFacts,
   onRevoked?: (reason: unknown) => void,
 ): Promise<{
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
   readSessionSettings: () => Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">;
   prepareRead: () => Promise<void> | undefined;
@@ -268,6 +273,7 @@ async function prepareSessionGenerationLease(
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => SessionGenerationEntry | null;
+    let workerSource: SessionSourceAssertion | undefined;
     let prepareRead: () => Promise<void> | undefined = () => {
       assertActive();
       return undefined;
@@ -525,6 +531,22 @@ async function prepareSessionGenerationLease(
         assertSourceCurrent();
         return retained?.prepareRead()?.then(assertSourceCurrent);
       };
+      if (generation.sessionId !== null && source) {
+        workerSource = captureSessionEntrySourceAssertion({
+          scope: { ...generation, storePath: source.path },
+          expected: {
+            sessionId: generation.sessionId,
+            lifecycleRevision: generation.lifecycleRevision ?? undefined,
+          },
+          fields: ["sessionId", "lifecycleRevision"],
+          assertCurrent: () => readCurrent(),
+          assertHostCurrent: assertSourceCurrent,
+          refuse: () => {
+            revoked = true;
+            throw new SessionDeliveryGenerationRevokedError();
+          },
+        });
+      }
     }
     const assertCurrent = (delivery = false) => {
       try {
@@ -575,7 +597,22 @@ async function prepareSessionGenerationLease(
       );
     }
     return {
-      assertCurrent,
+      assertCurrent: workerSource
+        ? composeSessionSourceAssertion([workerSource], (assertSource) => {
+            try {
+              assertActive();
+              assertSource();
+            } catch (error) {
+              const failure =
+                isSessionDeliveryGenerationRevokedError(error) ||
+                isSessionDeliveryGenerationUnavailableError(error)
+                  ? error
+                  : new SessionDeliveryGenerationUnavailableError({ cause: error });
+              onRevoked?.(failure);
+              throw failure;
+            }
+          })
+        : assertCurrent,
       assertDeliveryCurrent: () => assertCurrent(true),
       readSessionSettings: () => {
         const current = assertCurrent();

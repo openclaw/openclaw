@@ -26,7 +26,6 @@ import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-h
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import {
   loadTranscriptReadSnapshotSync,
-  hasSessionTranscriptMessageInDatabase,
   readTranscriptExportSnapshotReadOnlySync,
 } from "./session-accessor.sqlite-read.js";
 import {
@@ -34,6 +33,7 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import { hasSessionTranscriptMessageInDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import {

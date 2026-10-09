@@ -130,12 +130,19 @@ export type SessionEntryProjectionFacts = {
   activitySummaryWatermark: SessionTranscriptWatermark | undefined;
 };
 
+export type SessionEntryReplacementPostimage = { entry: SessionEntry } & (
+  | { projection: SessionEntryProjectionFacts; participantProjectionUnavailable?: never }
+  | { projection?: never; participantProjectionUnavailable: true }
+);
+
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
   transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  /** Canonical metadata is committed, but these entries lack a valid display projection. */
+  unavailableParticipantKeys?: readonly string[];
   ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
   projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
@@ -145,7 +152,7 @@ export type SessionEntryReplacementPublication = {
   generationUnchangedKeys: string[];
   /** Scoped receipt; raw writers and other session domains remain incomplete. */
   receipt?: import("../../infra/sqlite-commit-receipt.js").SqliteCommitReceipt<
-    { entry: SessionEntry; projection: SessionEntryProjectionFacts },
+    SessionEntryReplacementPostimage,
     SessionEntryPublicationSource
   >;
 };
@@ -198,6 +205,14 @@ export type SessionEntryPublicationRecord = {
       sharingChange: "changed" | "unchanged";
       previous?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
       prepared: PreparedSessionEntryChanges;
+      /** Row delivery rechecks and folds synchronous writes made by earlier listeners. */
+      readCurrent?: (sessionKey: string) =>
+        | {
+            entry?: SessionEntry;
+            sharing?: SessionSharingEntry;
+            projection?: SessionEntryProjectionFacts;
+          }
+        | undefined;
       creation?: CreatedSessionEntryReceipt;
     }
   | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt }

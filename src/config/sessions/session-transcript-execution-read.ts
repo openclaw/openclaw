@@ -233,13 +233,18 @@ export function createPreparedSessionTranscriptReads(params: {
           ),
         signal,
       ),
-    readColdMetadata: async (input) => ({
+    readColdMetadata: async (input, signal) => ({
       kind: "cold-metadata",
-      archive: await read((worker) =>
-        worker.execute({
-          type: "session.transcript.coldMetadata.read",
-          input: { sessionId: input.sessionId, expectedIdentity },
-        }),
+      archive: await read(
+        (worker) =>
+          worker.execute(
+            {
+              type: "session.transcript.coldMetadata.read",
+              input: { sessionId: input.sessionId, expectedIdentity },
+            },
+            { signal },
+          ),
+        signal,
       ),
     }),
   };

@@ -1,6 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   cancelProviderLoginFlow,
@@ -124,7 +129,7 @@ async function switchLoginSessionProfile(params: {
   loginProvider: string;
   nextProfileId: string;
   signal: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
@@ -176,10 +181,12 @@ async function switchLoginSessionProfile(params: {
           return persistedDecision.status === "patch" ? persistedDecision.patch : null;
         },
         {
-          assertCommitAllowed: () => {
-            params.signal.throwIfAborted();
-            params.assertCurrent();
-          },
+          ...sessionEntryCommitGuardOptions(
+            composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
+              params.signal.throwIfAborted();
+              assertSource();
+            }),
+          ),
           requireWriteSuccess: true,
           skipMaintenance: true,
         },

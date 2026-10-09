@@ -244,10 +244,8 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
       currentText().push(node);
       stack.push({ span: item, text: container });
     }
-    if (end > start) {
-      // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
-    }
+    // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
+    currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
   }
 
   return normalizeRichText(root);
@@ -285,21 +283,17 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function renderTableBlock(table: MarkdownTableMeta): {
-  block: InputRichBlock;
-  degradation?: TelegramRichBlocksDegradationReason;
-} {
+function renderTableBlock(
+  table: MarkdownTableMeta,
+  degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+): InputRichBlock {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
-    return {
-      block: {
-        type: "pre",
-        text: renderTelegramMonospaceGrid([table.headers, ...table.rows], {
-          headerSeparator: true,
-        }),
-      },
-      degradation: "table-ascii",
-    };
+    const text = renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+      headerSeparator: true,
+    });
+    degradationReasons.add("table-ascii");
+    return { type: "pre", text };
   }
   const renderCell = (
     cell: MarkdownTableCell | undefined,
@@ -320,12 +314,10 @@ function renderTableBlock(table: MarkdownTableMeta): {
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {
-    block: {
-      type: "table",
-      cells,
-      is_bordered: true,
-      is_striped: true,
-    },
+    type: "table",
+    cells,
+    is_bordered: true,
+    is_striped: true,
   };
 }
 
@@ -546,11 +538,7 @@ function emitSegments(
         break;
       }
       case "table": {
-        const rendered = renderTableBlock(segment.table);
-        if (rendered.degradation) {
-          degradationReasons.add(rendered.degradation);
-        }
-        blocks.push(rendered.block);
+        blocks.push(renderTableBlock(segment.table, degradationReasons));
         break;
       }
     }

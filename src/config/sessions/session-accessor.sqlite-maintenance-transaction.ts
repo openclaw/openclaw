@@ -283,28 +283,36 @@ export function reclaimSessionMaintenanceInTransaction(
   return runSqliteSessionDeletionTransaction(
     (database) => {
       callbacks.beforeMutation?.();
-      const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
-      const archivedTranscripts = deleteMaterializedSessionStatePlans(
-        database,
-        plan.materializedPlans,
-        undefined,
-        new Set(partition.unchanged.map((entry) => entry.sessionKey)),
-      );
-      deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
-      const result: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> = {
-        kind: plan.kind,
-        value: {
-          archivedTranscripts,
-          changedEntries: partition.changed,
-          committedEntries: partition.unchanged,
-        },
-      };
+      const result = finalizeSessionMaintenanceInDatabase(database, plan);
       callbacks.onCommit?.(database, result);
       return result;
     },
     plan.databaseOptions,
     { operationLabel: "session.maintenance.finalize" },
   );
+}
+
+/** The native adapter and canonical executor share the same optimistic removal partition. */
+export function finalizeSessionMaintenanceInDatabase(
+  database: OpenClawAgentDatabase,
+  plan: Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }>,
+): Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> {
+  const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
+  const archivedTranscripts = deleteMaterializedSessionStatePlans(
+    database,
+    plan.materializedPlans,
+    undefined,
+    new Set(partition.unchanged.map((entry) => entry.sessionKey)),
+  );
+  deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
+  return {
+    kind: plan.kind,
+    value: {
+      archivedTranscripts,
+      changedEntries: partition.changed,
+      committedEntries: partition.unchanged,
+    },
+  };
 }
 
 export function runSessionMaintenanceMetadataInTransaction(

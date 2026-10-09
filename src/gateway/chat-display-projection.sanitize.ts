@@ -245,10 +245,7 @@ export function sanitizeChatHistoryContentBlock(
   return { block: changed ? entry : block, changed, truncated };
 }
 
-function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
-  content: unknown[];
-  changed: boolean;
-} {
+function sanitizeAssistantPhasedContentBlocks(content: unknown[]): unknown[] {
   const hasExplicitPhasedText = content.some((block) => {
     const entry = readObjectRecord(block);
     return (
@@ -256,7 +253,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
     );
   });
   if (!hasExplicitPhasedText) {
-    return { content, changed: false };
+    return content;
   }
   const filtered = content.filter((block) => {
     const entry = readObjectRecord(block);
@@ -266,10 +263,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       parseAssistantTextSignature(entry)?.phase === "final_answer"
     );
   });
-  return {
-    content: filtered,
-    changed: filtered.length !== content.length,
-  };
+  return filtered.length === content.length ? content : filtered;
 }
 
 function projectAssistantMixedToolContent(content: unknown[], maxChars: number): unknown[] | null {
@@ -555,8 +549,8 @@ export function sanitizeChatHistoryMessage(
         changed = true;
       } else {
         const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
-        if (sanitizedPhases.changed) {
-          entry.content = sanitizedPhases.content;
+        if (sanitizedPhases !== entry.content) {
+          entry.content = sanitizedPhases;
           changed = true;
         }
       }

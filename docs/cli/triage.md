@@ -79,6 +79,15 @@ Plain `triage --run` validates update history through the resolution owner, even
 
 An explicit `--update-result` artifact or pending notification without a run identity or recorded target remains **unrepaired**, including Doctor/config failures. Triage reports that it cannot establish the update target and directs you to inspect `openclaw update status --json`, then run `openclaw update repair`. It never falls back to a healthy Doctor verdict for an uncorrelated update failure. An intentionally stopped or unmanaged Gateway cannot supply managed-service verification. When the initial checks prove resolution, the human output says **already resolved**; after a repair turn, it says **repaired** only when the same checks pass. The worker protocol retains its existing `repaired` and `unrepaired` statuses. An agent's successful exit or claim that it fixed the problem is not evidence of resolution.
 
+Pending package activation also prevents triage from reporting resolution, even
+when Doctor passes, the last run succeeded, and no recovery sets are listed.
+For a missing or changed handoff lease database after a reboot, triage directs you
+to `openclaw update repair` before retrying the update. Run repair from a CLI
+containing the [lease recovery fix](/cli/update/repair-and-recovery#update-repair);
+an older blocked CLI may need the manual installation hop described there.
+If triage has no resolution predicate for a recorded failure, it says so and names
+`openclaw update repair` as the next step.
+
 Post-turn Doctor checks run only after the executor confirms cleanup. If cleanup fails or times out, repair reports failure, retains execution state, and refuses another repair in that CLI process. Inspect the diagnostics and stop any remaining work before retrying from a new process.
 
 The operator owns the update or the explicit `--run` request. Embedded repair therefore replaces interactive exec approval with a prompt-free run, scoped to the installation or staged candidate root (`fs.workspaceOnly: true`). It preserves safe-bin and tool allowlists. It never overrides explicit exec or repair-tool denies. It refuses configured sandbox, node, and remote execution routes instead of redirecting them onto the host, and does not launch external coding-agent CLIs. An explicit deny reports `exec-denied-by-policy`. Use `openclaw triage` for an external handoff. The saved execution policy is unchanged.

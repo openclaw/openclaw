@@ -16,12 +16,14 @@ export function combineExecutedToolBatches(
   const terminate =
     batches.every((batch) => batch.terminate) ||
     config.completesToolTurn?.({ message, toolResults: messages }) === true;
+  const terminatingBatch = batches.find((batch) => batch.terminateRun);
   return {
     messages,
     steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],
     terminate,
-    terminateRun: batches.some((batch) => batch.terminateRun),
-    intervention: batches.find((batch) => batch.intervention)?.intervention,
+    terminateRun: terminatingBatch !== undefined,
+    intervention:
+      terminatingBatch?.intervention ?? batches.find((batch) => batch.intervention)?.intervention,
     fatal: batches.find((batch) => batch.fatal)?.fatal,
   };
 }

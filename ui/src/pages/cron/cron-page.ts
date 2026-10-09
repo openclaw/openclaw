@@ -434,13 +434,17 @@ class CronPage extends OpenClawLightDomElement {
       void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
     }
     void this.runCronTask(async (cronState) => {
-      updateCronRunsFilter(cronState, { cronRunsScope: "job" });
       // Claim the run pane before awaiting: loadCronRuns drops responses whose
       // job no longer matches, so a slower earlier selection cannot overwrite
       // this task's history.
-      cronState.cronRunsJobId = job.id;
-      await loadCronRuns(cronState);
+      await this.refreshRunsScope(cronState, job.id);
     });
+  }
+
+  private refreshRunsScope(cronState: CronState, jobId: string | null) {
+    updateCronRunsFilter(cronState, { cronRunsScope: jobId === null ? "all" : "job" });
+    cronState.cronRunsJobId = jobId;
+    return loadCronRuns(cronState);
   }
 
   private clearHeartbeatScratch() {
@@ -572,8 +576,7 @@ class CronPage extends OpenClawLightDomElement {
       // Removing the selected task drops the panel back to overview;
       // the runs scope must follow or recent activity stays empty.
       if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
-        updateCronRunsFilter(current, { cronRunsScope: "all" });
-        await loadCronRuns(current);
+        await this.refreshRunsScope(current, null);
       }
     });
   }
@@ -582,9 +585,7 @@ class CronPage extends OpenClawLightDomElement {
     this.resetEditor(false);
     this.requestCronUpdate();
     void this.runCronTask(async (cronState) => {
-      updateCronRunsFilter(cronState, { cronRunsScope: "all" });
-      cronState.cronRunsJobId = null;
-      await loadCronRuns(cronState);
+      await this.refreshRunsScope(cronState, null);
     });
   }
 
@@ -620,9 +621,7 @@ class CronPage extends OpenClawLightDomElement {
       // Creating from a selected task drops back to overview; recent activity
       // must cover all tasks again, not the previously selected job.
       if (cronState.cronRunsScope === "job") {
-        updateCronRunsFilter(cronState, { cronRunsScope: "all" });
-        cronState.cronRunsJobId = null;
-        await loadCronRuns(cronState);
+        await this.refreshRunsScope(cronState, null);
       }
     });
   }

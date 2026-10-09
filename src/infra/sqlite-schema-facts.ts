@@ -216,7 +216,7 @@ function callStatement<Result>(
     (...parameters: SQLInputValue[]): Result;
     (named: Record<string, SQLInputValue>, ...parameters: SQLInputValue[]): Result;
   },
-  [first, ...remaining]: [] | [SQLInputValue | Record<string, SQLInputValue>, ...SQLInputValue[]],
+  [first, ...remaining]: [(SQLInputValue | Record<string, SQLInputValue>)?, ...SQLInputValue[]],
 ): Result {
   if (first === undefined) {
     return method();
@@ -355,27 +355,13 @@ function trackSchemaChanges(
       const iterate = Object.hasOwn(statement, "iterate")
         ? statement.iterate.bind(statement)
         : undefined;
-      statement.run = (...bindings) =>
-        execute(
-          () => callStatement(run ?? native.StatementSync.prototype.run.bind(statement), bindings),
-          schemaChange,
-          control,
-          dataChange,
-        );
-      statement.get = (...bindings) =>
-        execute(
-          () => callStatement(get ?? native.StatementSync.prototype.get.bind(statement), bindings),
-          schemaChange,
-          control,
-          dataChange,
-        );
-      statement.all = (...bindings) =>
-        execute(
-          () => callStatement(all ?? native.StatementSync.prototype.all.bind(statement), bindings),
-          schemaChange,
-          control,
-          dataChange,
-        );
+      const wrap =
+        <Result>(resolve: () => Parameters<typeof callStatement<Result>>[0]) =>
+        (...bindings: Parameters<typeof callStatement<Result>>[1]): Result =>
+          execute(() => callStatement(resolve(), bindings), schemaChange, control, dataChange);
+      statement.run = wrap(() => run ?? native.StatementSync.prototype.run.bind(statement));
+      statement.get = wrap(() => get ?? native.StatementSync.prototype.get.bind(statement));
+      statement.all = wrap(() => all ?? native.StatementSync.prototype.all.bind(statement));
       statement.iterate = function* (...bindings) {
         const finish = beginMutation(schemaChange, control, dataChange);
         let succeeded = false;
@@ -442,6 +428,15 @@ export type SqliteReadScopeRevision = Readonly<
 /** Local mutation witness only; foreign writers still require their owning admission fence. */
 export function readSqliteNativeMutationRevision(database: DatabaseSync): number | undefined {
   return owners.get(database)?.mutationRevision;
+}
+
+/** SQL-free witness for a dedicated, unpinned foreign-commit observer. */
+export function readSqliteForeignObservationRevision(database: DatabaseSync): number | undefined {
+  const owner = owners.get(database);
+  if (!owner || owner.authorizerActive || owner.mutationDepth !== 0) {
+    return undefined;
+  }
+  return owner.mutationRevision;
 }
 
 /** Reuse schema only through unchanged synchronous transaction work, never as write authority. */

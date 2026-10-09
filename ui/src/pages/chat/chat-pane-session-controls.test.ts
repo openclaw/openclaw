@@ -26,12 +26,12 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";

@@ -109,7 +109,7 @@ describe("favicon presentation ownership", () => {
     vi.restoreAllMocks();
   });
 
-  it("fits decoded artwork without cropping and keeps its colors under every status dot", async () => {
+  it("keeps personal artwork SVG-preferred without cropping or changing its status colors", async () => {
     const artwork = new Image();
     artwork.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>')}`;
     await artwork.decode();
@@ -121,7 +121,10 @@ describe("favicon presentation ownership", () => {
     });
     await Promise.resolve();
     const idleHref = svgIcon.href;
-    expect(idleHref).toMatch(/^data:image\/png;/u);
+    // Firefox prefers any queued SVG candidate over a newer PNG, including a
+    // default restored briefly while personal artwork is being decoded.
+    expect(idleHref).toMatch(/^data:image\/svg\+xml,/u);
+    expect([svgIcon.type, pngIcon.type]).toEqual(["image/svg+xml", "image/svg+xml"]);
     expect(decode).not.toHaveBeenCalled();
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 32;
@@ -159,6 +162,45 @@ describe("favicon presentation ownership", () => {
     applyControlUiFaviconImage(null);
     expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
     applyControlUiPresentation({ environment: null });
+    expectOriginals();
+  });
+
+  it("clips avatar shapes without clipping status dots and replaces same-image shapes", async () => {
+    const artwork = new Image();
+    artwork.src =
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>',
+      );
+    await artwork.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const drawing = canvas.getContext("2d")!;
+    const pixels = async () => {
+      await Promise.resolve();
+      const result = new Image();
+      result.src = svgIcon.href;
+      await result.decode();
+      drawing.clearRect(0, 0, 32, 32);
+      drawing.drawImage(result, 0, 0);
+      expect(pngIcon.href).toBe(svgIcon.href);
+      return (x: number, y: number) => [...drawing.getImageData(x, y, 1, 1).data];
+    };
+    for (const shape of ["rounded", "circle", "square"] as const) {
+      applyControlUiFaviconImage(artwork, shape);
+      applyControlUiFaviconStatus("idle");
+      const pixel = await pixels();
+      expect(pixel(16, 16)).toEqual([180, 40, 110, 255]);
+      expect(pixel(0, 0)[3]).toBe(0);
+      expect(pixel(16, 1)[3]).toBe(shape === "square" ? 0 : 255);
+      expect(pixel(3, 3)[3]).toBe(shape === "rounded" ? 255 : 0);
+      applyControlUiFaviconStatus("working");
+      const activePixel = await pixels();
+      expect(activePixel(25, 25)).toEqual([80, 120, 160, 255]);
+      expect(activePixel(27, 27)).toEqual([80, 120, 160, 255]);
+    }
+    applyControlUiFaviconImage(null);
+    applyControlUiFaviconStatus("idle");
     expectOriginals();
   });
 

@@ -2,7 +2,6 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   decodeMemoryEmbedding,
   encodeMemoryEmbedding,
-  type MemoryChunk,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   compileSqliteQueryBindings,
@@ -257,25 +256,18 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
   }
 }
 
-export function collectMemoryCachedEmbeddings<T extends Pick<MemoryChunk, "hash">>(params: {
-  chunks: T[];
+export function collectMemoryCachedEmbeddings(params: {
+  hashes: string[];
   cached: Map<string, number[]>;
-}): {
-  embeddings: number[][];
-  missing: Array<{ index: number; chunk: T }>;
-} {
-  const embeddings: number[][] = Array.from({ length: params.chunks.length }, () => []);
-  const missing: Array<{ index: number; chunk: T }> = [];
-
-  for (let index = 0; index < params.chunks.length; index += 1) {
-    const chunk = params.chunks[index];
-    const hit = chunk?.hash ? params.cached.get(chunk.hash) : undefined;
+}): { embeddings: number[][]; missing: number[] } {
+  const missing: number[] = [];
+  const embeddings = params.hashes.map((hash, index) => {
+    const hit = hash ? params.cached.get(hash) : undefined;
     if (hit && hit.length > 0) {
-      embeddings[index] = hit;
-    } else if (chunk) {
-      missing.push({ index, chunk });
+      return hit;
     }
-  }
-
+    missing.push(index);
+    return [];
+  });
   return { embeddings, missing };
 }

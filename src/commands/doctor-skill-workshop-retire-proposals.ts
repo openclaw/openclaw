@@ -140,17 +140,7 @@ function parseUnfinishedApply(
   return { proposalId, skillFile, previousContent, supportFiles };
 }
 
-function readDatabaseProposals(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): {
-  proposals: RetiredProposal[];
-  unfinishedApplies: UnfinishedApply[];
-  /** Every proposal id with a row, whatever its status; their bundles need no sidecar. */
-  recordedIds: Set<string>;
-  failures: string[];
-  hasTables: boolean;
-} {
+function readDatabaseProposals(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
   const hasTables = [
     "skill_workshop_proposals",
@@ -158,14 +148,14 @@ function readDatabaseProposals(
     "skill_workshop_proposal_rollbacks",
     "skill_workshop_collection_reviews",
   ].some((table) => tableExists(db, table));
+  const proposals: RetiredProposal[] = [];
+  const unfinishedApplies: UnfinishedApply[] = [];
+  // Every proposal id with a row, whatever its status; their bundles need no sidecar.
+  const recordedIds = new Set<string>();
+  const failures: string[] = [];
+  const result = { proposals, unfinishedApplies, recordedIds, failures, hasTables };
   if (!tableExists(db, "skill_workshop_proposals")) {
-    return {
-      proposals: [],
-      unfinishedApplies: [],
-      recordedIds: new Set(),
-      failures: [],
-      hasTables,
-    };
+    return result;
   }
   const rows = db // sqlite-allow-raw -- Retired table has no generated Kysely type; Doctor reads it once before dropping it.
     .prepare(
@@ -173,9 +163,6 @@ function readDatabaseProposals(
         ORDER BY proposal_id`,
     )
     .all();
-  const proposals: RetiredProposal[] = [];
-  const recordedIds = new Set<string>();
-  const failures: string[] = [];
   for (const row of rows) {
     const id = String(row.proposal_id);
     recordedIds.add(id);
@@ -214,7 +201,6 @@ function readDatabaseProposals(
         )
         .all()
     : [];
-  const unfinishedApplies: UnfinishedApply[] = [];
   for (const row of rollbackRows) {
     const id = String(row.proposal_id);
     try {
@@ -232,7 +218,7 @@ function readDatabaseProposals(
       );
     }
   }
-  return { proposals, unfinishedApplies, recordedIds, failures, hasTables };
+  return result;
 }
 
 /**

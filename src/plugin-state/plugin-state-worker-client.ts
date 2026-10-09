@@ -30,6 +30,7 @@ type HostAdmission = {
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
 };
 type Input<Key extends keyof PluginStateWorkerOperations> =
@@ -39,7 +40,7 @@ type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
 ) => boolean;
 
 async function execute<Key extends keyof PluginStateWorkerOperations>(
-  { env, assertActive, sessionEntryCurrent, context: capturedContext }: HostAdmission,
+  { env, assertActive, sessionEntryCurrent, context: capturedContext, signal }: HostAdmission,
   command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   checks: {
@@ -100,6 +101,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     };
     if (missing) {
       const result = await runOpenClawStateWorkerOperation(context, operation, {
+        signal,
         existingOnly: true,
         assertCurrent: assertAdmission,
       });
@@ -135,6 +137,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     // Writable operations, including comparison observations, must share the
     // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
+      signal,
       assertCurrent: assertAdmission,
       createAdmission,
       existingOnly: existingOnly !== undefined,
@@ -167,16 +170,22 @@ function createOperation<
   return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
     // Host authority stays in the broker admission; only data crosses to the worker.
     const input = { ...params };
-    const { env, assertActive, assertCurrent, sessionEntryCurrent, context } = input;
+    const { env, assertActive, assertCurrent, sessionEntryCurrent, context, signal } = input;
     delete input.context;
     delete input.env;
     delete input.assertActive;
     delete input.assertCurrent;
     delete input.sessionEntryCurrent;
-    return execute({ env, assertActive, sessionEntryCurrent, context }, { type, input }, missing, {
-      assertCurrent,
-      isObservation,
-    });
+    delete input.signal;
+    return execute(
+      { env, assertActive, sessionEntryCurrent, context, signal },
+      { type, input },
+      missing,
+      {
+        assertCurrent,
+        isObservation,
+      },
+    );
   };
 }
 
@@ -206,13 +215,13 @@ export const lookupPluginStateInWorker = createOperation("pluginState.lookup", (
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
-  const { env, assertActive, sessionEntryCurrent, context, ...input } = params;
+  const { env, assertActive, sessionEntryCurrent, context, signal, ...input } = params;
   params.assertActive?.();
   if (input.keys.length === 0) {
     return [];
   }
   const results = await execute(
-    { env, assertActive, sessionEntryCurrent, context },
+    { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
   );
@@ -231,9 +240,10 @@ export const clearPluginStateInWorker = createOperation("pluginState.clear");
 export function clearRuntimeHealthInWorker(
   params: Input<"pluginState.clearRuntimeHealth"> & { assertCurrent?: () => void },
 ): Promise<void> {
-  const { env, assertActive, assertCurrent, sessionEntryCurrent, context, ...input } = params;
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, context, signal, ...input } =
+    params;
   return execute(
-    { env, assertActive, sessionEntryCurrent, context },
+    { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.clearRuntimeHealth", input },
     undefined,
     { assertCurrent, existingOnly: { missing: () => undefined } },
