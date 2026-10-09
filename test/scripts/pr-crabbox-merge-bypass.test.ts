@@ -36,6 +36,8 @@ type WorkflowStep = {
 function input() {
   return {
     actor: { login: "maintainer" },
+    finalMainComparison: undefined,
+    mainAdvanceComparison: undefined,
     checkRuns: {
       check_runs: [
         {

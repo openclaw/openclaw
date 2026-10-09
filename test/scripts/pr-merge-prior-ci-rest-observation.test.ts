@@ -46,19 +46,25 @@ describePosix("prior-CI whole REST observation fallback", () => {
     "within read",
     "stability",
     "final authority",
+    "recalculated status",
   ])("lands the pinned head after complete REST admission: %s", (stage) => {
     const f = unknownGraphqlCandidate();
     const state = f.state();
     if (stage === "missing REST commit") {
       state.restMergeCommit = "missing";
     }
-    const recalculating = stage === "stability" || stage === "final authority";
+    const recalculating = ["stability", "final authority", "recalculated status"].includes(stage);
     const main = recalculating ? f.commit(f.tree("before\n", "advanced\n"), [f.base]) : f.base;
     if (recalculating) {
       state.restObservations = [
-        ...Array.from({ length: stage === "stability" ? 1 : 3 }, () => ({})),
+        ...Array.from({ length: stage === "final authority" ? 3 : 1 }, () => ({})),
         { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+        {
+          pr: {
+            mergeable: "MERGEABLE",
+            mergeStateStatus: stage === "recalculated status" ? "CLEAN" : "BLOCKED",
+          },
+        },
       ];
     } else if (stage === "continuing main") {
       state.restObservations = [{}, {}, {}, { advanceMain: true }, { advanceMain: true }];
@@ -223,7 +229,6 @@ describePosix("prior-CI whole REST observation fallback", () => {
     ["same main", false],
     ["persistent", false],
     ["conflict", false],
-    ["known status", false],
     ["policy", false],
     ["head", false],
     ["rewind", false],
@@ -267,12 +272,7 @@ describePosix("prior-CI whole REST observation fallback", () => {
                   ...(fault === "rewind" ? { main: f.base } : {}),
                   pr: {
                     mergeable: fault === "conflict" ? "CONFLICTING" : "MERGEABLE",
-                    mergeStateStatus:
-                      fault === "conflict"
-                        ? "DIRTY"
-                        : fault === "known status"
-                          ? "CLEAN"
-                          : "BLOCKED",
+                    mergeStateStatus: fault === "conflict" ? "DIRTY" : "BLOCKED",
                     ...(fault === "head" ? { headRefOid: f.base } : {}),
                   },
                   ...(fault === "policy" ? { priorCi: { reviewCount: 2 } } : {}),
