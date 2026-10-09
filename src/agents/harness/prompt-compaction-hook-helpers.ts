@@ -1,5 +1,6 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -113,9 +114,14 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
 
   const promptBuildResult =
     hookRunner && hasPromptBuildHooks
-      ? await hookRunner
-          .runBeforePromptBuild(promptEvent, hookCtx)
-          .catch(warnHookFailure("before_prompt_build"))
+      ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
+          log.warn(`before_prompt_build hook failed: ${String(error)}`);
+          // The contribution is gone; say so in the prompt rather than handing
+          // the agent a context that only looks complete (openclaw-beads-201).
+          // The error stays in the warn above: the marker carries a bounded reason
+          // code, never error-derived text.
+          return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
+        })
       : undefined;
   const developerInstructions = resolveDeveloperInstructions(
     params.developerInstructions,
@@ -131,7 +137,18 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
             activeToolNames: toolAuthority.activeToolNames(),
             assertHostActive: toolAuthority.assertActive,
           })
-          .catch(warnHookFailure("authorized before_prompt_build"))
+          .catch((error: unknown) => {
+            log.warn(`authorized before_prompt_build hook failed: ${String(error)}`);
+            // Same contract as the ordinary phase above: this prompt continues,
+            // so the lost contribution must be visible in it. A rejection here is
+            // dispatch-level (event isolation, the authority boundary assertion)
+            // and never reaches runAuthorizedPromptBuild's per-handler drop
+            // collector, so the marker has to be built at this boundary.
+            // Only the dispatch sits inside this catch: `activeToolNames()` is
+            // evaluated as an argument, so a preparation failure still throws
+            // rather than being reported as a dropped contribution.
+            return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
+          })
       : undefined;
   const systemPrompt =
     typeof promptBuildResult?.systemPrompt === "string"
