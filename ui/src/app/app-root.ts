@@ -505,12 +505,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ${
             terminal
               ? html`<openclaw-terminal-panel
-                  .client=${gatewayConnected ? gatewaySnapshot.client : null}
-                  .available=${available}
-                  .agentId=${owner ? normalizeAgentId(owner) : null}
-                  .themeMode=${context.theme.resolvedMode}
-                  fullscreen
-                ></openclaw-terminal-panel>`
+                    .client=${gatewayConnected ? gatewaySnapshot.client : null}
+                    .available=${available}
+                    .agentId=${owner ? normalizeAgentId(owner) : null}
+                    .themeMode=${context.theme.resolvedMode}
+                    fullscreen
+                  ></openclaw-terminal-panel>
+                  <openclaw-toast-host></openclaw-toast-host>`
               : html`<openclaw-desktop-panel
                   .client=${gatewayConnected ? gatewaySnapshot.client : null}
                   .sessions=${context.sessions}

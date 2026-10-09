@@ -230,7 +230,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
               );
             }
           }
-          running = true;
+          // An unhealthy restart leaves the service down; a running service with
+          // unverified readiness is a warning, covered by the readiness tests.
+          running = outcome !== "restart-unhealthy";
           return { outcome: "completed" as const };
         });
         const start = vi.fn(async () => {

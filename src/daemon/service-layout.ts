@@ -1,4 +1,3 @@
-/** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -14,8 +13,8 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
 } from "./service-types.js";
+import { isSystemdManagerUid } from "./systemd-bus-query.js";
 
-/** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
   execStart: string;
   sourcePath?: string;
@@ -50,11 +49,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     isBunRuntime(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
-    (process.platform === "linux" &&
-      (managerUid === undefined ||
-        !Number.isInteger(managerUid) ||
-        managerUid < 0 ||
-        managerUid >= 0xffffffff)) ||
+    (process.platform === "linux" && !isSystemdManagerUid(managerUid)) ||
     (state.definitionMutationCapability?.kind ?? "writable") !== "writable" ||
     hasGatewayServiceLauncherOverride(command) ||
     resolveManagedGatewayServiceProcessEnv(command, state.env) === null ||

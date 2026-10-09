@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
@@ -6,7 +5,7 @@ import type {
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
-import { i18n, t } from "./i18n/index.ts";
+import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
@@ -150,41 +149,6 @@ export type SettingsSearchBlock = {
   hash: string;
 };
 
-let settingsSearchSegmenterLocale = "";
-let settingsSearchSegmenter: Intl.Segmenter | null = null;
-
-function settingsSearchHasWordPrefix(value: string, query: string): boolean {
-  const locale = i18n.getLocale();
-  if (settingsSearchSegmenterLocale !== locale) {
-    settingsSearchSegmenterLocale = locale;
-    settingsSearchSegmenter =
-      typeof Intl !== "undefined" && "Segmenter" in Intl
-        ? new Intl.Segmenter(locale, { granularity: "word" })
-        : null;
-  }
-  if (!settingsSearchSegmenter) {
-    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
-  }
-  for (const segment of settingsSearchSegmenter.segment(value)) {
-    if (segment.isWordLike !== false && segment.segment.startsWith(query)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
-  if (!normalizedQuery) {
-    return false;
-  }
-  if (normalizedQuery.length > 2) {
-    return candidate.includes(normalizedQuery);
-  }
-  return settingsSearchHasWordPrefix(candidate, normalizedQuery);
-}
-
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
 // by user attention: personal/look-and-feel first, system plumbing last.
 // Management surfaces (sessions, worktrees, activity, memory import) are
@@ -310,12 +274,6 @@ const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
   "lobsterdex",
 ];
 export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
-const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
-  Readonly<Record<NavigationRouteId, NavigationRouteId>>
-> = {
-  "ai-agents": "agents",
-  "model-setup": "model-providers",
-};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -393,60 +351,8 @@ export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
   return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
-export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
-  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
-}
-
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
-}
-
-export function scheduleRoutePreload<TRouteId extends string>(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  routeId: TRouteId,
-  event: Event,
-  preload: ((routeId: TRouteId) => Promise<void> | void) | undefined,
-  disabled = false,
-  immediate = false,
-) {
-  if (disabled || !preload) {
-    return;
-  }
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const start = () => {
-    timers.delete(target);
-    try {
-      void Promise.resolve(preload(routeId)).catch(() => undefined);
-    } catch {
-      // Preloading is opportunistic; navigation still handles real route errors.
-    }
-  };
-  if (immediate) {
-    cancelRoutePreload(timers, event);
-    start();
-    return;
-  }
-  if (!timers.has(target)) {
-    timers.set(target, globalThis.setTimeout(start, 50));
-  }
-}
-
-export function cancelRoutePreload(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  event: Event,
-) {
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const timer = timers.get(target);
-  if (timer !== undefined) {
-    globalThis.clearTimeout(timer);
-    timers.delete(target);
-  }
 }
 
 export function titleForRoute(routeId: NavigationRouteId): string {
@@ -473,19 +379,6 @@ export function formatDocumentTitle(options: {
     return `(${options.attentionCount}) ${base}`;
   }
   return base;
-}
-
-export function settingsNavigationLabelForRoute(
-  routeId: NavigationRouteId,
-  snapshot?: NativeDeviceSettingsSnapshot | null,
-): string {
-  if (routeId === "device" && snapshot) {
-    return t(deviceSettingsGroupLabelKey(snapshot));
-  }
-  if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
-  }
-  return titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

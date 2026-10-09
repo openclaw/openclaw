@@ -7,6 +7,7 @@ import {
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
@@ -109,18 +110,13 @@ it.each(["transaction", "commit"] as const)(
       });
       let current = true;
       let revoked = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      const observe = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          create((request, grant) => {
-            if (request.stage === stage) {
-              current = false;
-              revoked = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const observe = probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === stage) {
+          current = false;
+          revoked = true;
+        }
+        callback(request, grant);
+      });
       try {
         const result = await updateSessionProfileInvolvementAsync(f.scope, {
           ...f.params,
@@ -146,19 +142,14 @@ it("rejects a profile alias merge between involvement preparation and commit", a
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createFixture();
     const before = f.read();
-    const create = admission.createSqliteWorkerOperationAdmission;
     let merged = false;
-    const observe = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        create((request, grant) => {
-          if (request.stage === "commit" && !merged) {
-            merged = true;
-            linkEmail(f.previousEmail, f.profile.id);
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const observe = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit" && !merged) {
+        merged = true;
+        linkEmail(f.previousEmail, f.profile.id);
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         updateSessionProfileInvolvementAsync(f.scope, {

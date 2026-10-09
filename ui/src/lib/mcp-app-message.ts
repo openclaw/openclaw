@@ -66,8 +66,8 @@ export function mcpAppMessageInput(
     );
   try {
     for (const block of content) {
+      const title = block._meta?.["openai/title"];
       if (block.type === "text") {
-        const title = block._meta?.["openai/title"];
         if (typeof title === "string" && title.trim()) {
           attachText(block.text, title.trim());
         }
@@ -75,7 +75,6 @@ export function mcpAppMessageInput(
         // Keep the resource descriptor as user-supplied data, not prose instructions.
         attachText(JSON.stringify(block, null, 2), block.title?.trim() || block.name);
       } else if (block.type === "resource" && "text" in block.resource) {
-        const title = block._meta?.["openai/title"];
         attachText(
           JSON.stringify(block.resource, null, 2),
           typeof title === "string" && title.trim() ? title.trim() : block.resource.uri,
@@ -83,7 +82,6 @@ export function mcpAppMessageInput(
       } else if (block.type === "resource" && "blob" in block.resource) {
         const resource = block.resource;
         const binary = Uint8Array.from(atob(resource.blob), (character) => character.charCodeAt(0));
-        const title = block._meta?.["openai/title"];
         const file = new File(
           [binary],
           typeof title === "string"
@@ -93,7 +91,6 @@ export function mcpAppMessageInput(
         );
         attachFile(file, () => `data:${file.type};base64,${resource.blob}`, file.name);
       } else if (block.type === "image") {
-        const title = block._meta?.["openai/title"];
         const attachment = chatAttachmentFromDataUrl(
           `data:${block.mimeType};base64,${block.data}`,
           typeof title === "string" ? title : t("mcpApp.imageContent"),

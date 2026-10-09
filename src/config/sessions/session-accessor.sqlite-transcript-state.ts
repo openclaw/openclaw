@@ -19,6 +19,7 @@ import {
 import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
 import {
   assertSessionTranscriptHot,
+  readSessionColdTranscript,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 import {
@@ -80,6 +81,17 @@ export function readTranscriptContextVersionInTransaction(
   sessionId: string,
 ) {
   return transcriptContextVersionQuery(database.db)(sessionId)!;
+}
+
+/** Preparation consumes cold presence and the matching version from one read phase. */
+export function readTranscriptContextStateInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
+  return {
+    coldArchive: readSessionColdTranscript(database.db, sessionId),
+    version: readTranscriptContextVersionInTransaction(database, sessionId),
+  };
 }
 
 function createTranscriptGeneration(): string {

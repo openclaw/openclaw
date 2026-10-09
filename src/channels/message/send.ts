@@ -229,6 +229,12 @@ async function withMessageSendContext<T>(
   const effectiveSignal = signal ?? abortSignal;
   const queuePolicy = durability === "best_effort" ? "best_effort" : "required";
   let liveState = preview ?? createLiveMessageState<ReplyPayload>();
+  const receiptFor = (results: OutboundDeliveryResult[]) =>
+    createMessageReceiptFromOutboundResults({
+      results,
+      threadId: params.threadId == null ? undefined : String(params.threadId),
+      replyToId,
+    });
   const ctx: DurableMessageSendContext = {
     id: `${params.channel}:${params.to}`,
     channel: params.channel,
@@ -265,11 +271,7 @@ async function withMessageSendContext<T>(
               ...failure,
               status: "partial_failed",
               results,
-              receipt: createMessageReceiptFromOutboundResults({
-                results,
-                threadId: params.threadId == null ? undefined : String(params.threadId),
-                replyToId,
-              }),
+              receipt: receiptFor(results),
               sentBeforeError: true,
               ...(deliveryIntent ? { deliveryIntent } : {}),
             }
@@ -307,11 +309,7 @@ async function withMessageSendContext<T>(
           return failed(failedOutcome.error, failedOutcome.stage, results, payloadOutcomes);
         }
         const delivered = {
-          receipt: createMessageReceiptFromOutboundResults({
-            results,
-            threadId: params.threadId == null ? undefined : String(params.threadId),
-            replyToId,
-          }),
+          receipt: receiptFor(results),
           ...(deliveryIntent ? { deliveryIntent } : {}),
           ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
         };

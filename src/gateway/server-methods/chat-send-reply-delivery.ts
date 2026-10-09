@@ -2,7 +2,7 @@ import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { PreparedReplyTranscriptStart } from "../../auto-reply/get-reply-options.types.js";
 import type { SessionTranscriptWatermark } from "../../config/sessions/session-accessor.sqlite-transcript-watermark-read.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.sqlite-transcript-watermark.js";
-import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 
 /** Match prepared evidence to the current session without querying its transcript. */

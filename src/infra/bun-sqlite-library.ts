@@ -23,6 +23,7 @@ const WORKER_CAPABILITIES_KEY = "openclaw.sqliteRuntimeCapabilities";
 export const SQLITE_NATIVE_RUNTIME_ADMISSION_KEY = "openclaw.sqliteNativeRuntimeAdmission";
 export const SQLITE_CANONICAL_DEFINITIONS_KEY =
   "openclaw.agentCanonicalValidationSchemaDefinitions";
+export const SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY = "openclaw.sqliteExpectedSchemaContracts.v1";
 
 type SqliteCloseProbeResult = Awaited<ReturnType<typeof probeSqliteNativeClose>>;
 export type SqliteRuntimeCapabilities = SqliteCloseProbeResult & Readonly<{ decided: boolean }>;
@@ -324,6 +325,10 @@ export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
     // Opaque owner facts include absence, which clears a retained carrier's previous snapshot.
     [SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY)],
     [SQLITE_CANONICAL_DEFINITIONS_KEY, getEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY)],
+    [
+      SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
+      getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
+    ],
   ];
 }
 

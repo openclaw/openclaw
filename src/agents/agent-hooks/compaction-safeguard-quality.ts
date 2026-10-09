@@ -81,7 +81,10 @@ export function buildCompactionStructureInstructions(
     "Do not omit unresolved asks from the user.",
     "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
     "Use tool results to update task status: a check that ran and returned a failing result is completed, not an open TODO. Record its result under ## Decisions and keep only the remaining remediation in ## Open TODOs (e.g. failing tests -> fix the failures, not run the same tests again).",
-    "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
+    "Treat prior summaries as drafts to update: reconcile them with all supplied messages, including preserved turns and split-turn progress, and remove stale duplicate detail.",
+    "Apply explicit corrections and observed results in the main sections. Preserve unaffected facts; retain superseded values only as clearly labeled history, never as competing current decisions.",
+    "A factual correction is not a pending task unless the user requested work that remains undone. Distinguish requested, attempted, completed, and failed actions without inferring overall success from a completed check.",
+    "Before returning, check that all sections agree on current facts and status. Appending a correction in context is insufficient if the main summary still asserts the old state. If evidence does not resolve a conflict, record the uncertainty.",
   ].join("\n");
   const latestRequestBlock = latestUnresolvedUserRequest
     ? wrapUntrustedInstructionBlock("Latest unresolved user request", latestUnresolvedUserRequest)

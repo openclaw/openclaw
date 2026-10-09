@@ -6,6 +6,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
@@ -225,8 +226,18 @@ export type AgentCommandOpts = {
   onPostAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
-  /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
-  beforeTerminalDelivery?: () => Promise<void>;
+  /** Gateway owns final media projection and joins transcript writes before delivery or cleanup. */
+  beforeTerminalDelivery?: (
+    reply?: {
+      payloads: ReplyPayload[];
+      sessionId: string;
+      lifecycleRevision?: string;
+      storePath?: string;
+    },
+    producerError?: unknown,
+  ) => Promise<void>;
+  /** Exact Gateway execution outcome; terminal cleanup retains its session admission. */
+  isTerminalOutcomeObserved?: () => boolean;
   /** Gateway-owned preparation of runtime-appended assistant transcript messages. */
   prepareAssistantTranscriptMessage?: AgentRunTranscriptContext["prepareAssistantTranscriptMessage"];
   /** Called when the actual run model is selected, including fallback retries. */
@@ -270,6 +281,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   onAdmittedRunContext: undefined,
   onPostAdmittedRunContext: undefined,
   beforeTerminalDelivery: undefined,
+  isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
 } satisfies Partial<AgentCommandOpts>);

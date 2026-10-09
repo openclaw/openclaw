@@ -12,15 +12,31 @@ title: "Database schemas"
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
 Native SQLite initialization reads the loaded library's version and extension
-capability in one query before admitting real state databases. Quarantine
+capability in one query before admitting real state databases. Auth-profile
+readers install their lock-wait timeout at connection open.
+Non-mutating WAL observations reuse the loaded library's admitted capability;
+they still observe current WAL frames and read freshness on each use. Quarantine
 decision readers and writers set their existing lock-wait timeout at connection
-open; each decision still reads the current schema version and quarantine row
-and validates any recorded file generation. WAL safety, quarantine authority, and recovery
+open; each decision reads the current schema version and quarantine row in one
+SQLite snapshot and validates any recorded file generation. WAL safety, quarantine authority, and recovery
 behavior are unchanged.
+
+Managed writes publish committed facts before their public observers. Private
+receipts distinguish explicit absence from incomplete coverage and preserve known
+commits independently of reply delivery. See
+[committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+for ordering, rollback, and the writer families that still retain native guards.
 
 Schema-version, integrity, canonical-index, and table-existence checks belong to open/admission and the migration owner after migrations; runtime paths must carry admitted schema facts with the handle, never re-query them, and use fresh `PRAGMA data_version` checks to observe foreign commits on the next unpinned read while preserving active SQLite snapshots. Existing per-call checks are legacy and must be migrated when touched.
 
 Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Prepared-statement reuse alone does not retain query results. Read admission shares one freshness check within its synchronous operation; schema-fact lookups reuse the admitted handle without checking again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh checks always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.
+
+Shared-state content-version checks reuse their value at the admitted connection
+revision. Foreign commits, local writes, schema changes, and connection closure
+invalidate reuse. Native transactions, pinned snapshots, unadmitted handles, and
+dynamic authorizers continue reading the marker directly. Cold admission still
+checks freshness after catalog capture before validating the supported version.
+Schema versions, stored bytes, and upgrade or downgrade behavior are unchanged.
 
 New agent readers share the initial freshness probe with schema validation;
 subsequent unpinned uses still probe again. Shared-state worker reads keep admission
@@ -64,22 +80,25 @@ bytes, and update behavior are unchanged.
 
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
 
-Agent ownership metadata follows that admitted read revision as well. Unchanged
-reads reuse the handle's metadata; foreign commits, local mutations, and schema
-changes require a new ownership read. Managed transactions reuse metadata at
-their admitted revision; changed pinned snapshots and dynamic authorizers still
-query it. This changes no schema, stored bytes, or update behavior.
+Agent ownership metadata follows the admitted snapshot revision as well. Unchanged
+reads, including reads within one transaction or pinned snapshot, reuse the handle's
+metadata. Foreign commits on the next unpinned use, local mutations, rollback, and
+schema changes require a new ownership read. Dynamic authorizers keep querying
+the metadata. This changes no schema, stored bytes, or update behavior.
 
 The shared-state content-version marker uses the same admitted read revision.
 Unchanged reads reuse its successful result; foreign commits, local writes,
-rollback, schema changes, and connection disposal invalidate reuse. Transactions,
-pinned snapshots, and authorizer-controlled reads still query the marker. Version
-validation and upgrade or downgrade behavior are unchanged.
+rollback, schema changes, and connection disposal invalidate reuse. Transactions
+and pinned snapshots reuse the marker at their admitted revision;
+authorizer-controlled reads still query it. Version validation and upgrade or
+downgrade behavior are unchanged.
 
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
 shares one matcher across its agent stores; live deletion status and lifecycle
-commit guards still apply. Legacy watch-marker discovery uses an indexed prefix
+commit guards still apply. Cron registry retention validates the complete listing
+in its reader worker and returns only cron-run entries to the Gateway; ordinary
+session metadata stays in the worker. Legacy watch-marker discovery uses an indexed prefix
 range. Retention continues as rows age, even without writes; schema, upgrade, and
 retention policies are unchanged.
 
@@ -108,6 +127,11 @@ rollback, schema change, or observed foreign commit invalidates them. A new
 transaction probes freshness before reusing unchanged facts; nested savepoints
 share the transaction's probe. Unexpected transaction loss expires both facts
 and freshness.
+Session revision guards and maintenance snapshots share that admitted transaction's
+freshness probe while continuing to check the local mutation generation. Unpinned
+uses and transactions without an admitted probe still check foreign commits;
+transaction entry, rollback, and settlement retain their existing invalidation.
+No schema, stored bytes, permissions, or update behavior change.
 Returned entries and participant identities remain caller-owned. Transcript
 watermark reads select the hot generation and the retained cold or hot sequence
 in one statement; hot-only readers keep their existing meaning. These query

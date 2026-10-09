@@ -8,8 +8,7 @@ export function resolveWorkerComputeLimit(): number {
 
 /** Size once at pool creation; serial owners must never inherit host CPU fanout. */
 export function resolveWorkerPoolSize(kind: WorkerPoolClass): number {
-  // Small file reads saturate before additional isolates repay their heap/transfer cost.
-  const cap = kind === "reader" ? 8 : kind === "file-reader" ? 2 : kind === "compute" ? 4 : 1;
+  const cap = kind === "reader" || kind === "file-reader" ? 2 : kind === "compute" ? 4 : 1;
   return Math.min(cap, resolveWorkerComputeLimit());
 }
 

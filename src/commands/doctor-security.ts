@@ -77,8 +77,6 @@ function collectExecPolicyConflictWarnings(
   approvals: ExecApprovalsFile,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const defaultRequestedSecuritySource = "OpenClaw default (full)";
-  const defaultRequestedAskSource = "OpenClaw default (off)";
 
   const maybeWarn = (params: {
     scopeLabel: string;
@@ -89,12 +87,7 @@ function collectExecPolicyConflictWarnings(
     const scopeExecConfig = params.scopeExecConfig;
     const globalExecConfig = params.globalExecConfig;
     if (
-      !scopeExecConfig?.mode &&
-      !scopeExecConfig?.security &&
-      !scopeExecConfig?.ask &&
-      !globalExecConfig?.mode &&
-      !globalExecConfig?.security &&
-      !globalExecConfig?.ask
+      ![scopeExecConfig, globalExecConfig].some((exec) => exec?.mode || exec?.security || exec?.ask)
     ) {
       return;
     }
@@ -109,15 +102,6 @@ function collectExecPolicyConflictWarnings(
       scopeLabel: params.scopeLabel,
       agentId: params.agentId,
     });
-    const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
-    const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
-    const securityConflict =
-      securityConfigured && snapshot.security.requested !== snapshot.security.effective;
-    const askConflict = askConfigured && snapshot.ask.requested !== snapshot.ask.effective;
-    if (!securityConflict && !askConflict) {
-      return;
-    }
-
     const configParts: string[] = [];
     const hostParts: string[] = [];
     const canonicalModeSource =
@@ -128,17 +112,21 @@ function collectExecPolicyConflictWarnings(
     if (canonicalModeSource) {
       configParts.push(`${canonicalModeSource}="${snapshot.mode.requested}"`);
     }
-    if (securityConflict) {
-      if (!canonicalModeSource) {
-        configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+    for (const [key, defaultSource] of [
+      ["security", "OpenClaw default (full)"],
+      ["ask", "OpenClaw default (off)"],
+    ] as const) {
+      const policy = snapshot[key];
+      if (policy.requestedSource === defaultSource || policy.requested === policy.effective) {
+        continue;
       }
-      hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
+      if (!canonicalModeSource) {
+        configParts.push(`${policy.requestedSource}="${policy.requested}"`);
+      }
+      hostParts.push(`${policy.hostSource}="${policy.host}"`);
     }
-    if (askConflict) {
-      if (!canonicalModeSource) {
-        configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
-      }
-      hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
+    if (hostParts.length === 0) {
+      return;
     }
 
     findings.push({

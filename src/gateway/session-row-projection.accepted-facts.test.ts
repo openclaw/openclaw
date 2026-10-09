@@ -16,6 +16,7 @@ import {
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   persistSessionTranscriptTurn,
@@ -35,10 +36,15 @@ import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-regist
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  emitSessionsChanged,
+  flushPendingSessionsChangedEvents,
+} from "./server-methods/session-change-event.js";
+import {
   identifiedClient,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
 import * as projectionWork from "./session-projection-work.js";
@@ -55,12 +61,58 @@ import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("rematerializes activity state from accepted facts without reading the databases again", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
+    const revision = suffix.databaseFactsRevision;
+    const owner = Symbol("activity-state");
+    const target = { key: query.key, agentId: query.agentId };
+    const value = {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      storePath: resolveSessionStorePathCore(projection.state.cfg.session?.store, {
+        agentId: query.agentId,
+      }),
+      state: "updating" as const,
+    };
+    const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      setSessionActivitySummaryState(target, owner, value);
+      await resume();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("updating");
+      setSessionActivitySummaryState(target, owner, { ...value, state: "unavailable" });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("unavailable");
+      setSessionActivitySummaryState(target, owner);
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(reads).toHaveLength(1);
+      expect(sharedReads).not.toHaveBeenCalled();
+      expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
+
+      // An explicit storage uncertainty still wins over the presentation scope.
+      sessionChanges.emit({
+        sessionKey: query.key,
+        agentId: query.agentId,
+        storePath: suffix.storeTarget.storePath,
+        scope: "runtime",
+        factsInvalidated: true,
+      });
+      await projection.ensureMaterialized();
+      expect(reads.length).toBeGreaterThan(1);
+      expect(projection.snapshot(query).row?.label).toBe("accepted-1");
+    } finally {
+      setSessionActivitySummaryState(target, owner);
+    }
+  });
+});
+
 it.each([
   "ACP publication",
   "lifecycle reset",
   "worker legacy reset",
   "lifecycle adapter",
   "observer adapter",
+  "transcript publication",
 ] as const)("carries complete accepted ACP facts across a yield: %s", async (change) => {
   const initial: SessionAcpMeta = {
     backend: "accepted-acp-backend",
@@ -85,6 +137,7 @@ it.each([
         change === "worker legacy reset" ||
         change === "lifecycle adapter" ||
         change === "observer adapter";
+      const retainsFacts = workerReceipt || change === "transcript publication";
       if (change === "ACP publication") {
         expected = { ...initial, backend: "current-acp-backend", lastActivityAt: 2 };
         // Only the shared ACP row changes; agent entry and lifecycle stay fixed.
@@ -96,6 +149,14 @@ it.each([
       } else if (change === "lifecycle reset") {
         replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "replacement" });
         expected = null;
+      } else if (change === "transcript publication") {
+        await persistSessionTranscriptTurn(
+          { ...scope, sessionId: entry.sessionId, storePath: suffix.storeTarget.storePath },
+          {
+            messages: [{ message: { role: "assistant", content: "New transcript content" } }],
+            touchSessionEntry: false,
+          },
+        );
       } else if (change === "lifecycle adapter") {
         await persistGatewaySessionLifecycleEvent({
           ...scope,
@@ -157,12 +218,12 @@ it.each([
       try {
         await resume();
         const row = projection.snapshot(query).row;
-        expect(reads).toHaveLength(workerReceipt ? 1 : 2);
+        expect(reads).toHaveLength(retainsFacts ? 1 : 2);
         expect(
           metadataReads.mock.calls.filter(
             ([, command]) => command.type === "sessionRows.sharedFacts",
           ),
-        ).toHaveLength(!workerReceipt || change === "worker legacy reset" ? 1 : 0);
+        ).toHaveLength(!retainsFacts || change === "worker legacy reset" ? 1 : 0);
         expect(row?.runtimeSelectionLocked).toBe(expected !== null);
         if (expected) {
           expect(row?.agentRuntime).toMatchObject({
@@ -681,13 +742,28 @@ it.each(["runtime activity", "membership revocation"] as const)(
       async ({ projection, suffix, scope, query, entry, reads, viewerId, resume }) => {
         const runId = "accepted-suffix-current-run";
         const pending = suffix.pendingDatabaseFacts;
+        const context = bindSessionRowProjection(
+          requestContext(projection.state.cfg),
+          () => projection,
+        );
+        const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        const broadcast = vi.fn();
+        const publishSettled = () =>
+          emitSessionsChanged(
+            context,
+            { ...scope, reason: "agent.input.settled" },
+            { accessChanged: false, rowScope: "runtime" },
+          );
         if (change === "runtime activity") {
+          context.getSessionEventSubscriberConnIds = () => new Set(["activity-reader"]);
+          context.broadcastToConnIds = broadcast;
           registerAgentRunContext(runId, {
             agentId: query.agentId,
             sessionKey: query.key,
             sessionId: entry.sessionId,
             projectSessionActive: true,
           });
+          publishSettled();
         }
         try {
           if (change === "membership revocation") {
@@ -704,10 +780,7 @@ it.each(["runtime activity", "membership revocation"] as const)(
             expect(suffix.pendingDatabaseFacts).toBe(pending);
           }
           await resume();
-          const context = bindSessionRowProjection(
-            requestContext(projection.state.cfg),
-            () => projection,
-          );
+          await flushPendingSessionsChangedEvents(context);
           const result = await listSessions({
             client: identifiedClient(viewerId!),
             context,
@@ -721,6 +794,25 @@ it.each(["runtime activity", "membership revocation"] as const)(
               hasActiveRun: true,
               status: "running",
             });
+            expect(broadcast.mock.lastCall?.[1]).toMatchObject({
+              reason: "agent.input.settled",
+              session: { label: "accepted-1" },
+              hasActiveRun: true,
+            });
+            clearAgentRunContext(runId);
+            publishSettled();
+            await flushPendingSessionsChangedEvents(context);
+            expect(broadcast.mock.lastCall?.[1]).toMatchObject({
+              reason: "agent.input.settled",
+              session: { label: "accepted-1" },
+              hasActiveRun: false,
+            });
+            expect(reads).toHaveLength(1);
+            expect(
+              sharedReads.mock.calls.filter(
+                ([, command]) => command.type === "sessionRows.sharedFacts",
+              ),
+            ).toEqual([]);
           } else {
             expect(row?.sharingRole).toBe("viewer");
             expect(projection.describe(query)?.membership.has(viewerId!)).toBe(false);
@@ -728,6 +820,8 @@ it.each(["runtime activity", "membership revocation"] as const)(
         } finally {
           if (change === "runtime activity") {
             clearAgentRunContext(runId);
+            await resume();
+            await flushPendingSessionsChangedEvents(context);
           }
         }
       },

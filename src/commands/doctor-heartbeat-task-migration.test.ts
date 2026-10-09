@@ -608,7 +608,7 @@ tasks:
     fixture.cfg.session = {
       store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
     };
-    const suppliedEnv = { ...fixture.env, HOME: suppliedHome };
+    const suppliedEnv = { ...fixture.env, HOME: suppliedHome, OPENCLAW_HOME: undefined };
     const suppliedSession = await resolveHeartbeatSession(
       fixture.cfg,
       "main",

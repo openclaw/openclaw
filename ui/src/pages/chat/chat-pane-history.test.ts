@@ -586,7 +586,7 @@ describe("chat pane native history pagination", () => {
       limit: 1000,
       offset: 4,
     });
-    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+    await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
 
     const loadingDuringRender: boolean[] = [];
     (state.requestUpdate as ReturnType<typeof vi.fn>).mockImplementation(() => {
@@ -639,7 +639,7 @@ describe("chat pane native history pagination", () => {
     const { pane, state } = createStagedPrefetchPane(request);
 
     await pane.loadOlderMessages();
-    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+    await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
 
     // A tail reload rebased the cursor beneath the staged page.
     state.chatHistoryPagination = { hasMore: true, nextOffset: 5, totalMessages: 9 };
@@ -674,7 +674,7 @@ describe("chat pane native history pagination", () => {
     const { pane, state } = createStagedPrefetchPane(request);
 
     await pane.loadOlderMessages();
-    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+    await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
 
     resetChatHistoryProjection(state);
     // The replacement branch happens to resume at the identical cursor.
@@ -694,11 +694,11 @@ describe("chat pane native history pagination", () => {
     const { pane } = createStagedPrefetchPane(request);
 
     await pane.loadOlderMessages();
-    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+    await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
 
     pane.resetOlderMessagesViewport();
-    expect(pane.stagedOlderPage).toBeNull();
-    expect(pane.stagedOlderLoad).toBeNull();
+    expect(pane.stagedOlder.page).toBeNull();
+    expect(pane.stagedOlder.load).toBeNull();
 
     await expect(pane.loadOlderMessages()).resolves.toBe(true);
     const offsetFourCalls = request.mock.calls.filter(
@@ -726,7 +726,7 @@ describe("chat pane native history pagination", () => {
 
     await pane.loadOlderMessages();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(pane.stagedOlderLoad).toBeNull());
+    await vi.waitFor(() => expect(pane.stagedOlder.load).toBeNull());
 
     expect(state.lastError).toBeNull();
     await expect(pane.loadOlderMessages()).resolves.toBe(true);
@@ -775,7 +775,9 @@ describe("chat pane native history pagination", () => {
     const construct =
       vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
     class FakeIntersectionObserver {
-      constructor(callback: IntersectionObserverCallback) {
+      readonly root: IntersectionObserver["root"];
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        this.root = options?.root ?? null;
         construct(callback, this as unknown as IntersectionObserver);
       }
       disconnect() {

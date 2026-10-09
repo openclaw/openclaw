@@ -98,6 +98,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   const references = new Map<string, RecoveryArtifactReference[]>();
   const manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
+    artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
+  };
   let laterUpdateStartedAt = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
@@ -298,13 +301,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       if (references.has(filePath)) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: entry.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-recovery-original",
-      });
+      protectUnmanifested(
+        filePath,
+        entry.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-recovery-original",
+      );
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
@@ -328,13 +329,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       ) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: item.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-artifact",
-      });
+      protectUnmanifested(
+        filePath,
+        item.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-artifact",
+      );
     }
   }
   if (

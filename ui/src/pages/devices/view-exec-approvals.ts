@@ -48,17 +48,11 @@ const ASK_OPTIONS: Array<{ value: ExecAsk; labelKey: string }> = [
 ];
 
 function normalizeSecurity(value?: string): ExecSecurity {
-  if (value === "allowlist" || value === "full" || value === "deny") {
-    return value;
-  }
-  return "deny";
+  return SECURITY_OPTIONS.find((option) => option.value === value)?.value ?? "deny";
 }
 
 function normalizeAsk(value?: string): ExecAsk {
-  if (value === "always" || value === "off" || value === "on-miss") {
-    return value;
-  }
-  return "on-miss";
+  return ASK_OPTIONS.find((option) => option.value === value)?.value ?? "on-miss";
 }
 
 function resolveExecApprovalsDefaults(

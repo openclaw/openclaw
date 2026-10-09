@@ -1,6 +1,9 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseReplyDirectives,
@@ -45,13 +48,21 @@ export function isResponsesApiAssistantMessage(message: AgentMessage | undefined
   return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
-export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  return readAssistantMessageApi(message) === "anthropic-messages";
-}
-
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
   const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function isAssistantTextPhasePending(
+  message: AgentMessage | undefined,
+  eventType: string,
+): boolean {
+  const api = readAssistantMessageApi(message);
+  return (
+    api === "ollama" ||
+    isOpenAiCompletionsAssistantMessage(message) ||
+    (api === "anthropic-messages" && eventType !== "text_end")
+  );
 }
 
 export function extractStandaloneMessageToolText(
@@ -80,6 +91,10 @@ export function extractStandaloneMessageToolText(
   return normalizeOptionalString(args?.message);
 }
 
+function isAssistantTextBlock(value: unknown): value is { type: "text"; textSignature?: unknown } {
+  return asOptionalObjectRecord(value)?.type === "text";
+}
+
 export function resolveAssistantStreamItemId(params: {
   contentIndex?: unknown;
   message: AgentMessage | undefined;
@@ -90,24 +105,16 @@ export function resolveAssistantStreamItemId(params: {
   }
   const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
-  const indexedRecord =
-    indexedBlock && typeof indexedBlock === "object"
-      ? (indexedBlock as { type?: unknown })
-      : undefined;
-  const hasIndexedTextBlock = indexedRecord?.type === "text";
+  const hasIndexedTextBlock = isAssistantTextBlock(indexedBlock);
   const candidateStart =
     hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
   const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
   for (let index = candidateStart; index >= candidateEnd; index -= 1) {
     const block = content[index];
-    if (!block || typeof block !== "object") {
+    if (!isAssistantTextBlock(block)) {
       continue;
     }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
-      continue;
-    }
-    const signature = parseAssistantTextSignature(record);
+    const signature = parseAssistantTextSignature(block);
     if (signature?.id) {
       return signature.id;
     }
@@ -128,16 +135,13 @@ export function resolveAssistantStreamBlockIndex(
     return undefined;
   }
   const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
-  if (indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text") {
+  if (isAssistantTextBlock(indexedBlock)) {
     return contentIndex;
   }
   const index = itemId
     ? message.content.findLastIndex(
         (candidate) =>
-          candidate &&
-          typeof candidate === "object" &&
-          candidate.type === "text" &&
-          parseAssistantTextSignature(candidate)?.id === itemId,
+          isAssistantTextBlock(candidate) && parseAssistantTextSignature(candidate)?.id === itemId,
       )
     : -1;
   return index >= 0 ? index : undefined;
@@ -259,13 +263,7 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  if (accumulatedText.startsWith(content)) {
-    return "";
-  }
-  if (!accumulatedText.includes(content)) {
-    return content;
-  }
-  return "";
+  return accumulatedText.includes(content) ? "" : content;
 }
 
 export function resolveStreamingReply(params: {

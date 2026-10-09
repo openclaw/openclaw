@@ -3,6 +3,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { connectUserModelAccount } from "../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
@@ -10,6 +12,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./auth-profiles/runtime-snapshots.js";
+import * as personalCatalogReads from "./auth-profiles/sqlite-read.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
@@ -20,6 +23,7 @@ import {
 } from "./model-auth-availability.test-support.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "./model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -69,6 +73,49 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
 }
 
 describe("captured model decisions", () => {
+  it("does not start private reads after retained authority revokes during reader preparation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const owner = ensureProfileForEmail("catalog-authority@example.test");
+      const { authProfileId } = connectUserModelAccount({
+        ownerProfileId: owner.id,
+        credential: { type: "api_key", provider: "openai", key: "synthetic-private-key" },
+        assertCurrent() {},
+      });
+      const read = vi
+        .spyOn(personalCatalogReads, "readPersonalCatalogProfiles")
+        .mockRejectedValue(new Error("Private catalog read must not start"));
+      const revoked = new Error("Catalog read authority revoked");
+      let current = true;
+      const pending = prepareModelCatalogDecisions(
+        {
+          cfg: {},
+          agentId: "main",
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          snapshot: { entries: [entry], routeVariants: [entry] },
+          metadataSnapshot: metadata,
+          preparedAuthStore: { version: 1, profiles: {} },
+          preferredProfileId: authProfileId,
+        },
+        {
+          async withCurrent<T>(consume: () => T): Promise<Awaited<T>> {
+            if (!current) {
+              throw revoked;
+            }
+            return await consume();
+          },
+        },
+      );
+      current = false;
+      try {
+        await expect(pending).rejects.toBe(revoked);
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
   beforeEach(() => {
     // These cases describe prepared auth facts, not credentials from the host shell.
     for (const key of [
@@ -413,8 +460,8 @@ describe("captured model decisions", () => {
       isCurrent: () => true,
     });
     const assertCurrent = vi.fn();
-    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
-    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, { refresh: true });
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, {});
     expect(catalog).toHaveBeenCalledOnce();
     expect(assertCurrent).toHaveBeenCalled();
     expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
@@ -475,7 +522,7 @@ describe("captured model decisions", () => {
       isCurrent: () => current,
     });
     await expect(
-      prepared.prepareSelectedAccountCatalog(() => {}, { allowDiscovery: true }),
+      prepared.prepareSelectedAccountCatalog(() => {}, { refresh: true }),
     ).rejects.toThrow("changed");
     expect(prepared.snapshot.providerOutcomes).toEqual([]);
   });

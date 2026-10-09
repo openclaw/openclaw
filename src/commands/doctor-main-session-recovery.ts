@@ -83,13 +83,11 @@ export async function noteMainSessionRecoveryIntegrity(
       sessionKeys,
       storePath: params.storePath,
       update: (currentEntries) => {
-        const replacements = currentEntries.flatMap(({ sessionKey, entry }) => {
-          const transition = transitionMainSessionRecovery(entry, {
-            kind: "doctor_repair",
-            now: repairedAt,
-          });
-          return transition.kind === "doctor_repaired" ? [{ sessionKey, entry }] : [];
-        });
+        const replacements = currentEntries.filter(
+          ({ entry }) =>
+            transitionMainSessionRecovery(entry, { kind: "doctor_repair", now: repairedAt })
+              .kind === "doctor_repaired",
+        );
         return { replacements, result: replacements.length };
       },
     });

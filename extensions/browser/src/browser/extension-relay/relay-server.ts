@@ -17,6 +17,7 @@ import {
   type WebSocket,
 } from "openclaw/plugin-sdk/websocket-runtime";
 import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
+import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "../constants.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import {
   authenticateExtensionWebSocket,
@@ -39,7 +40,6 @@ import { attachRelayOwner } from "./owner-server.js";
 import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
-import { parseExtensionMessage } from "./relay-protocol.js";
 import {
   firstHeader,
   isAllowedExtensionOrigin,
@@ -53,7 +53,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 const INTERNAL_CDP_USERNAME = "openclaw-internal";
 const MAX_AUTH_BODY_BYTES = 8 * 1024;
 
-export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+export { EXTENSION_RELAY_MAX_PAYLOAD_BYTES };
 
 type HttpAuthGrant =
   | { stage: "challenged" | "authenticated"; flow: "cdp" | "json-list" }
@@ -172,26 +172,11 @@ function bindSocket(
 
 /** Wire an already-v2-authenticated extension socket to the bridge. */
 export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSocket): void {
-  const handlers = bridge.attachExtensionSocket(ws);
-  let helloSeen = false;
-  const helloTimer = setTimeout(() => {
+  const handlers = bridge.attachExtensionSocket(ws, () => {
     ws.close(4008, "extension hello timeout");
     ws.terminate();
-  }, BROWSER_RELAY_CHALLENGE_TTL_MS);
-  helloTimer.unref?.();
-  bindSocket(ws, {
-    onMessage: (raw) => {
-      if (!helloSeen && parseExtensionMessage(raw)?.type === "hello") {
-        helloSeen = true;
-        clearTimeout(helloTimer);
-      }
-      handlers.onMessage(raw);
-    },
-    onClose: () => {
-      clearTimeout(helloTimer);
-      handlers.onClose();
-    },
   });
+  bindSocket(ws, handlers);
 }
 
 export async function startExtensionRelayServer(params: {

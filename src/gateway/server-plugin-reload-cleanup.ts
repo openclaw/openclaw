@@ -346,12 +346,16 @@ export function createPluginReloadCleanup({
   return {
     attempt,
     drainRetainedWork,
-    stopPreviousServices: async (services: PluginServicesHandle | null, strict: boolean) => {
+    stopPreviousServices: async (
+      services: PluginServicesHandle | null,
+      strict: boolean,
+      pluginIds: ReadonlySet<string> = changedPluginIds,
+    ) => {
       try {
         await services?.stop({
           strict: true,
           deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
-          pluginIds: changedPluginIds,
+          pluginIds,
         });
       } catch (error) {
         pendingServiceCleanup = strict ? getPluginServiceCleanupSettlement(error) : undefined;

@@ -6,6 +6,10 @@ import {
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import {
   withOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptWriteContext,
 } from "../../config/sessions/transcript-write-context.js";
@@ -28,6 +32,7 @@ import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-sour
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/index.js";
+import { buildCompactionFailureResult } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
@@ -64,7 +69,7 @@ type QueuedCompactionHostCommit = {
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
 export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
   sourceAuthority: AgentHarnessCompactionSourceAuthority;
-  assertActive?: () => void;
+  assertActive?: SessionSourceAssertion;
   transcriptBytePreflightHarness?: "codex";
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
@@ -194,13 +199,16 @@ export async function executeQueuedContextEngineCompaction(input: {
   let expected = { ...expectedEntry };
   return await enqueueCompactionInLanes(params, async () => {
     let closed = false;
-    const assertCallerActive = () => {
-      params.abortSignal?.throwIfAborted();
-      if (closed) {
-        throw new Error("queued compaction is no longer active");
-      }
-      host.assertActive?.();
-    };
+    const assertCallerActive = composeSessionSourceAssertion(
+      [host.assertActive],
+      (assertSource) => {
+        params.abortSignal?.throwIfAborted();
+        if (closed) {
+          throw new Error("queued compaction is no longer active");
+        }
+        assertSource();
+      },
+    );
     const assertActive = async (target = runtimeTarget, owner = expected) => {
       await withSessionEntryReadOnlyInWorker(
         { ...target, readConsistency: "latest" },
@@ -228,10 +236,13 @@ export async function executeQueuedContextEngineCompaction(input: {
           activeWriterRunId: capturedOwner.activeWriterRunId,
         },
       };
-      const assertCommitAllowed = () => {
-        signal?.throwIfAborted();
-        assertCallerActive();
-      };
+      const assertCommitAllowed = composeSessionSourceAssertion(
+        [assertCallerActive],
+        (assertSource) => {
+          signal?.throwIfAborted();
+          assertSource();
+        },
+      );
       // The worker rechecks the captured writer fence in its locked transaction;
       // commit admission must only consult live host authority, never host SQLite.
       await assertActive(sessionTarget, capturedOwner);
@@ -263,6 +274,12 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Fire before_compaction / after_compaction hooks here so plugin subscribers
       // are notified regardless of which engine is active.
       const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+      if (engineOwnsCompaction || contextEngine.info.id !== "legacy") {
+        // Plugin compaction and hooks can use the released synchronous transcript reader.
+        const { restoreSessionColdTranscript } =
+          await import("../../config/sessions/session-cold-storage.js");
+        await restoreSessionColdTranscript(runtimeTarget, assertCallerActive);
+      }
       await assertActive();
       const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
       const hookSessionKey = runtimeTarget.sessionKey;
@@ -383,11 +400,7 @@ export async function executeQueuedContextEngineCompaction(input: {
             : "context-engine compaction failed",
           { errorMessage: formatErrorMessage(compactErr) },
         );
-        result = {
-          ok: false,
-          compacted: false,
-          reason: formatErrorMessage(compactErr),
-        };
+        result = buildCompactionFailureResult(formatErrorMessage(compactErr));
       }
       if (committedCompaction && (!result.ok || !result.compacted)) {
         // The stock writer committed before a hook or cancellation failed. Retain
@@ -602,11 +615,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               );
             }
           } catch (err) {
-            secondaryNativeHarnessCompaction = {
-              ok: false,
-              compacted: false,
-              reason: formatErrorMessage(err),
-            };
+            secondaryNativeHarnessCompaction = buildCompactionFailureResult(
+              formatErrorMessage(err),
+            );
             log.warn("secondary native harness compaction threw after context-engine compaction", {
               errorMessage: formatErrorMessage(err),
             });

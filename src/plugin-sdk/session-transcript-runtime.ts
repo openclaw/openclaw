@@ -32,6 +32,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -77,6 +78,8 @@ export {
 export {
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogGitHubLinker,
+  prepareSessionCatalogSourceActorProjector,
 } from "../gateway/session-catalog-identity.js";
 
 export {
@@ -100,6 +103,7 @@ export function composeSessionTranscriptWriteAssertion(
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
     // A plugin's wrapper remains opaque even when all of its children are prepared.
+    hasOpaqueCheck: check !== undefined,
     preparedCheck: (assertSources) => assertSources(),
   });
 }
@@ -371,7 +375,12 @@ export async function appendAssistantMirrorMessageByIdentity(
   const scope = bindSessionTranscriptStoreScope(params, params.config);
   return await withTranscriptWriteLock(scope, async (locked) => {
     params.signal?.throwIfAborted();
-    const currentEntry = await readSessionEntryReadOnlyInWorker(scope);
+    const currentEntry = await readSessionEntryReadOnlyInWorker(
+      scope,
+      undefined,
+      undefined,
+      targetDiscoveryLane,
+    );
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }
@@ -406,11 +415,16 @@ export async function appendAssistantMirrorMessageByIdentity(
       } else {
         let events: readonly SessionTranscriptEvent[];
         try {
-          const latest = await prepareSessionTranscriptHydration({
-            ...scope,
-            agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
-            sessionId: currentEntry.sessionId,
-          }).readLatestActiveMessage();
+          const latest = await prepareSessionTranscriptHydration(
+            {
+              ...scope,
+              agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+              sessionId: currentEntry.sessionId,
+            },
+            undefined,
+            params.signal,
+            targetDiscoveryLane,
+          ).readLatestActiveMessage();
           events = latest ? [latest.event] : [];
         } catch (error) {
           if (!isSessionTranscriptProjectionUnavailableError(error)) {

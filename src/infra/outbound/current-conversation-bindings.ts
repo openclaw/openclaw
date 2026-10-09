@@ -212,16 +212,14 @@ function supportsGenericCurrentConversationBinding(ref: SessionBindingScope): bo
     return true;
   }
   const bindingSupport = resolveChannelConversationBindingSupport(normalized);
-  if (
-    bindingSupport?.supportsCurrentConversationBinding !== true ||
-    bindingSupport.bindingStore === "adapter" ||
-    typeof bindingSupport.createManager === "function"
-  ) {
-    return false;
-  }
   return (
-    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: normalized.accountId }) ??
-    true
+    bindingSupport?.supportsCurrentConversationBinding === true &&
+    bindingSupport.bindingStore !== "adapter" &&
+    typeof bindingSupport.createManager !== "function" &&
+    (bindingSupport.isCurrentConversationBindingSupported?.({
+      accountId: normalized.accountId,
+    }) ??
+      true)
   );
 }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,9 +10,15 @@ import {
   validateTalkClientCreateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { assertSecretOwnerAvailable } from "../../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-control-shared.js";
+import { withClientVoiceSessionSettlement } from "../../../talk/client-voice-session-lifecycle.js";
+import {
+  captureClientVoiceSessionSource,
+  type ClientVoiceSessionSource,
+} from "../../../talk/client-voice-session-source.js";
 import {
   appendClientVoiceTranscript,
   closeClientVoiceSession,
@@ -145,10 +152,13 @@ export const createTalkClient: GatewayRequestHandler = async ({
     );
     replacement?.assertCurrent(target);
     const { agentId, sessionKey } = target;
-    const assertTargetCurrent = () => {
-      sessionMutationAuthorization?.assertCurrent();
-      replacement?.assertCurrent(target);
-    };
+    const assertTargetCurrent = composeSessionSourceAssertion(
+      [sessionMutationAuthorization?.assertCurrent],
+      (assertSources) => {
+        assertSources();
+        replacement?.assertCurrent(target);
+      },
+    );
     const sessionTarget = { agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
     assertSecretOwnerAvailable("capability", "talk:realtime");
     const resolution = resolveConfiguredRealtimeVoiceProvider({
@@ -215,17 +225,25 @@ export const createTalkClient: GatewayRequestHandler = async ({
           "Gateway-owned realtime sessions require a connected client",
         );
       }
+      let closingSource: ClientVoiceSessionSource | undefined;
+      let closingFailure: { error: unknown } | undefined;
       const closeLogicalSession = async () => {
         unregisterVoiceSession?.();
+        if (closingFailure) {
+          throw closingFailure.error;
+        }
         if (!logicalSessionCreated) {
           return;
         }
-        await closeClientVoiceSession({
-          agentId,
-          sessionKey,
-          voiceSessionId: activeVoiceSessionId!,
-          config: runtimeConfig,
-        });
+        await closeClientVoiceSession(
+          {
+            agentId,
+            sessionKey,
+            voiceSessionId: activeVoiceSessionId!,
+            config: runtimeConfig,
+          },
+          closingSource,
+        );
         if (ownerConnId) {
           forgetLegacyVoiceBinding(
             ownerConnId,
@@ -265,23 +283,61 @@ export const createTalkClient: GatewayRequestHandler = async ({
             getToolAuthorityOverlay: (source) =>
               consultRunner.getToolAuthorityOverlay(undefined, source),
             appendTranscript: ({ entryId, role, text, confirmation }) =>
-              appendClientVoiceTranscript({
-                agentId,
-                sessionKey,
-                sessionTarget,
-                voiceSessionId: activeVoiceSessionId!,
-                entryId,
-                role,
-                text,
-                confirmation,
-                config: runtimeConfig,
-              }),
+              closingFailure
+                ? Promise.reject(
+                    toErrorObject(closingFailure.error, "Voice session close admission failed"),
+                  )
+                : appendClientVoiceTranscript(
+                    {
+                      agentId,
+                      sessionKey,
+                      sessionTarget,
+                      voiceSessionId: activeVoiceSessionId!,
+                      entryId,
+                      role,
+                      text,
+                      confirmation,
+                      config: runtimeConfig,
+                    },
+                    closingSource,
+                  ),
             flushTranscript: () =>
               flushClientVoiceSessionWrites({
                 agentId,
                 voiceSessionId: activeVoiceSessionId!,
               }),
             closeLogicalSession,
+            withCloseSettlement: (run) => {
+              const close = async (admissionFailure?: { error: unknown }) => {
+                closingFailure = admissionFailure;
+                if (!closingFailure) {
+                  try {
+                    closingSource = captureClientVoiceSessionSource(agentId);
+                  } catch (error) {
+                    closingFailure = { error };
+                  }
+                }
+                try {
+                  await run();
+                  if (closingFailure) {
+                    throw closingFailure.error;
+                  }
+                } catch (error) {
+                  if (closingFailure && error !== closingFailure.error) {
+                    throw new AggregateError(
+                      [closingFailure.error, error],
+                      "Voice session close failed",
+                      { cause: error },
+                    );
+                  }
+                  throw error;
+                } finally {
+                  closingSource = undefined;
+                  closingFailure = undefined;
+                }
+              };
+              return withClientVoiceSessionSettlement(close, (error) => close({ error }));
+            },
           })
         : undefined;
       const gatewayControl = gatewayControlOwner
@@ -321,11 +377,13 @@ export const createTalkClient: GatewayRequestHandler = async ({
         ...(tools.length > 0 ? { tools } : {}),
         ...launchOptions,
       };
-      const assertCommitAllowed = () => {
-        sessionMutationCommitGuard?.();
-        assertTargetCurrent();
-        gatewayControlOwner?.assertOpen();
-      };
+      const assertCommitAllowed = composeSessionSourceAssertion(
+        [sessionMutationCommitGuard, assertTargetCurrent],
+        (assertSources) => {
+          assertSources();
+          gatewayControlOwner?.assertOpen();
+        },
+      );
       let session: Awaited<ReturnType<typeof resolution.provider.createBrowserSession>> | undefined;
       let delivered = false;
       try {

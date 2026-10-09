@@ -13,6 +13,13 @@ skills**. The agent saves a procedure after hard multi-step work and fixes a
 learned skill that misled it; skills nobody uses for 30 days are archived. Every
 change applies immediately, saves the previous version first, and can be undone.
 
+Learned skills are procedures, not memory: the method for a task the user
+repeats, so the agent does not work it out again each time. Facts about the
+user or the world belong in [memory](/concepts/memory). Knowledge about one
+codebase, such as its conventions, build commands, or architecture, belongs in
+that repository's docs or `AGENTS.md`, where every agent working there reads it,
+so the agent does not save it as a learned skill.
+
 Learned skills belong to one agent and are always visible to it: they bypass
 `agents.defaults.skills` and `agents.entries.<id>.skills` allowlists. To hide
 one, archive it.
@@ -33,7 +40,7 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
   anything worth keeping. See [Self-learning](/tools/self-learning).
 - **`/learn [request]`:** asks the agent to save a skill now, from the current
   conversation or from sources you name. See [`/learn`](#learn).
-- **Learn from past conversations:** the Control UI button opens a normal chat
+- **Learn from history:** the Control UI button opens a normal chat
   in which the agent reviews earlier conversations and saves what it finds.
 - **Unused-skill cleanup:** learned skills nobody used for 30 days are archived.
   See [Unused-skill cleanup](#unused-skill-cleanup).
@@ -56,7 +63,8 @@ Reply "undo" and the agent restores the previous version with `skill_workshop`.
 Nothing is posted when the review changed nothing. Channel-less Control UI
 sessions get the same line as a transcript entry.
 
-You can also undo from the Control UI (**Undo** next to a recent change) or the
+You can also undo from the Control UI (**Undo** on the skill's latest change or
+in its History tab) or the
 CLI:
 
 ```bash
@@ -134,8 +142,8 @@ change feed and the chat notice. Every change saves the previous version first.
 
 Writes are validated before they land:
 
-- Names use 1-63 lowercase letters, digits, or hyphens and start with a letter
-  or digit.
+- New names use 1-63 lowercase letters, digits, or hyphens and start with a letter
+  or digit. Longer names saved by earlier releases stay listed and manageable.
 - `SKILL.md` needs frontmatter whose `name` matches the skill directory and a
   `description` of 1-1024 bytes (aim for about 160). It must fit within `skills.workshop.maxSkillBytes`.
 - Support files go under `references/`, `templates/`, `scripts/`, or `assets/`,
@@ -204,10 +212,16 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
 
 ## Operator surfaces
 
-- **Control UI:** open **Plugins → Skill workshop** to see learned skills with
-  their use counts, recent changes with **Undo**, a file viewer with saved
-  versions, archive and restore, the learning mode switch, and
-  **Learn from past conversations**.
+- **Control UI:** open **Plugins → Skill workshop**. Learned skills are listed
+  most used first (or by recent activity or name), each with its latest change
+  and **Undo**; skills idle for two weeks are flagged, since
+  [unused-skill cleanup](#unused-skill-cleanup) may archive them at 30 days.
+  Selecting a skill shows its instructions, support files, and history.
+  From the history you can compare an earlier version with today's, restore it,
+  or undo a change. **Archive** and **Restore** switch a skill between the
+  Active and Archived lists. The page header holds the learning mode switch and
+  **Learn from history**. If the learning configuration cannot be loaded, the
+  page shows the error and a **Retry** button while keeping the skill library available.
 - **CLI:** `openclaw skills workshop list | changes | show | archive | restore`.
   See [Skills CLI](/cli/skills#skill-workshop).
 - **Plugins:** the [`skill_changed`](/plugins/hooks/reference#skill-lifecycle)

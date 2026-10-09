@@ -279,8 +279,13 @@ describe("durable inbound reply delivery", () => {
     expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBe(true);
   });
 
-  it("reports durable partial send failures as failed delivery", async () => {
-    const error = new Error("second chunk failed");
+  it.each([
+    new Error("second chunk failed"),
+    new PlatformMessageNotDispatchedError("second chunk rejected before dispatch", {
+      cause: new Error("local preflight rejected"),
+      retryable: false,
+    }),
+  ])("reports durable partial send failures as failed delivery (%s)", async (error) => {
     mocks.sendDurableMessageBatch.mockResolvedValueOnce({
       status: "partial_failed",
       results: [
@@ -352,22 +357,34 @@ describe("durable inbound reply delivery", () => {
       error: new PlatformMessageNotDispatchedError("offline before dispatch", {
         cause: new Error("offline"),
       }),
+      sentBeforeError: false,
     },
-    { label: "ambiguous first-send", error: new Error("socket closed") },
-  ])("keeps a $label failure non-visible and preserves its retry contract", async ({ error }) => {
-    mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "failed", error });
+    {
+      label: "ambiguous first-send",
+      error: new Error("socket closed"),
+      sentBeforeError: undefined,
+    },
+  ])(
+    "keeps a $label failure non-visible and preserves its retry contract",
+    async ({ error, sentBeforeError }) => {
+      mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "failed", error });
 
-    const result = await deliverInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "final" },
-      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
-    });
+      const result = await deliverInboundReplyWithMessageSendContextCore({
+        cfg: {},
+        channel: "telegram",
+        agentId: "main",
+        info: { kind: "final" },
+        payload: { text: "final" },
+        ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+      });
 
-    expect(result).toEqual({ status: "failed", error });
-    expect(error).not.toHaveProperty("visibleReplySent");
-    expect(error).not.toHaveProperty("sentBeforeError");
-  });
+      expect(result).toEqual({
+        status: "failed",
+        error,
+        ...(sentBeforeError === false ? { sentBeforeError } : {}),
+      });
+      expect(error).not.toHaveProperty("visibleReplySent");
+      expect(error).not.toHaveProperty("sentBeforeError");
+    },
+  );
 });

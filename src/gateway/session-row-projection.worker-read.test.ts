@@ -631,14 +631,13 @@ it.each([
   "membership revocation",
   "runtime stored facts",
   "invalidated presentation facts",
-  "unrelated stored row",
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
-    const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
+    const changesSibling = change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
     const owner = ensureProfileForEmail("projection-owner@example.test");

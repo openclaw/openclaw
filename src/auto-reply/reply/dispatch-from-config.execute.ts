@@ -387,7 +387,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   state.assertProgressCurrent();
                   if (shouldRouteToOriginating) {
-                    await sendPayloadAsync(deliveryPayload, undefined, false);
+                    await sendPayloadAsync(deliveryPayload);
                   } else {
                     const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
                     if (hasAskUserPayload(deliveryPayload)) {

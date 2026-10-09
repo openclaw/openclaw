@@ -19,10 +19,11 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
 import { commandReply, rejectNonOwnerCommand } from "./command-gates.js";
+import { buildPluginCommandContext } from "./commands-context.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
+  buildCommandExecApprovalDefaults,
   deliverPrivateCommandReply,
-  resolveCommandExecApprovalRoute,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -199,29 +200,14 @@ async function buildDiagnosticsReply(
   const { command, env } = buildGatewayDiagnosticsExportJsonRequest();
   try {
     const execTool = createExecTool({
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
+      ...buildCommandExecApprovalDefaults(params, options.privateApprovalTarget),
       trigger: "diagnostics",
       scopeKey: DIAGNOSTICS_EXEC_SCOPE_KEY,
       approvalWarningText: buildDiagnosticsApprovalWarning(codexDiagnostics.approvalText),
       approvalFollowup: codexDiagnostics.approvalFollowup,
       approvalFollowupMode: "direct",
-      allowBackground: true,
       timeoutSec,
-      cwd: params.workspaceDir,
       agentId,
-      sessionKey: params.sessionKey,
-      eventRouting: {
-        mainKey: params.cfg.session?.mainKey,
-        sessionScope: params.cfg.session?.scope,
-      },
-      ...resolveCommandExecApprovalRoute({
-        commandParams: params,
-        privateApprovalTarget: options.privateApprovalTarget,
-      }),
-      notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
-      notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
@@ -350,30 +336,11 @@ async function executeCodexDiagnosticsAddon(
   return await executePluginCommand({
     command: match.command,
     args: match.args,
-    senderId: params.command.senderId,
-    channel: params.command.channel,
-    channelId: params.command.channelId,
-    isAuthorizedSender: params.command.isAuthorizedSender,
-    senderIsOwner: params.command.senderIsOwner,
-    assertOwnerCurrent: params.command.assertOwnerCurrent,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+    ...buildPluginCommandContext(params),
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
-    config: params.cfg,
-    from: params.command.from,
-    to: params.command.to,
-    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
-    accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
-    threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
     ...(options.diagnosticsUploadApproved === undefined
       ? {}

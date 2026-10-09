@@ -29,7 +29,11 @@ import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
-import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import {
+  isGooglePromptCacheEligible,
+  resolveCacheRetention,
+  resolveExplicitCachedContent,
+} from "./prompt-cache-retention.js";
 import { prependRuntimeContextForModel } from "./run/runtime-context-prompt.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
@@ -81,19 +85,6 @@ type PrepareGooglePromptCacheStreamFnParams = {
   signal?: AbortSignal;
   streamFn: StreamFn | undefined;
 };
-
-function resolveExplicitCachedContent(
-  extraParams: Record<string, unknown> | undefined,
-): string | undefined {
-  const raw =
-    typeof extraParams?.cachedContent === "string"
-      ? extraParams.cachedContent
-      : typeof extraParams?.cached_content === "string"
-        ? extraParams.cached_content
-        : undefined;
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function stringifyGooglePromptCacheKeyPart(value: unknown): string {
   if (typeof value === "string") {

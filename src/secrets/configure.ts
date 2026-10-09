@@ -198,29 +198,37 @@ async function promptEnvNameCsv(params: {
   return normalizeCsvOrLooseStringList(raw);
 }
 
-async function promptOptionalPositiveInt(params: {
-  message: string;
-  initialValue?: number;
-  max: number;
-}): Promise<number | undefined> {
+const PROVIDER_LIMITS = {
+  timeoutMs: { label: "Timeout ms", max: 120000 },
+  noOutputTimeoutMs: { label: "No-output timeout ms", max: 120000 },
+  maxBytes: { label: "Max bytes", max: 20 * 1024 * 1024 },
+  maxOutputBytes: { label: "Max output bytes", max: 20 * 1024 * 1024 },
+};
+
+async function promptOptionalPositiveInt(
+  key: keyof typeof PROVIDER_LIMITS,
+  base?: Partial<Record<keyof typeof PROVIDER_LIMITS, number>>,
+): Promise<number | undefined> {
+  const { label, max } = PROVIDER_LIMITS[key];
+  const initialValue = base?.[key];
   const raw = assertNoCancel(
     await text({
-      message: params.message,
-      initialValue: params.initialValue === undefined ? "" : String(params.initialValue),
+      message: `${label} (blank for default)`,
+      initialValue: initialValue === undefined ? "" : String(initialValue),
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
         if (!trimmed) {
           return undefined;
         }
-        const parsed = parseOptionalPositiveInt(trimmed, params.max);
+        const parsed = parseOptionalPositiveInt(trimmed, max);
         if (parsed === undefined) {
-          return `Must be an integer between 1 and ${params.max}`;
+          return `Must be an integer between 1 and ${max}`;
         }
         return undefined;
       },
     }),
   );
-  return parseOptionalPositiveInt(raw, params.max);
+  return parseOptionalPositiveInt(raw, max);
 }
 
 function configureCandidateKey(
@@ -383,16 +391,8 @@ async function promptFileProvider(
     }),
   );
 
-  const timeoutMs = await promptOptionalPositiveInt({
-    message: "Timeout ms (blank for default)",
-    initialValue: base?.timeoutMs,
-    max: 120000,
-  });
-  const maxBytes = await promptOptionalPositiveInt({
-    message: "Max bytes (blank for default)",
-    initialValue: base?.maxBytes,
-    max: 20 * 1024 * 1024,
-  });
+  const timeoutMs = await promptOptionalPositiveInt("timeoutMs", base);
+  const maxBytes = await promptOptionalPositiveInt("maxBytes", base);
   return {
     source: "file",
     path: filePath,
@@ -450,23 +450,11 @@ async function promptExecProvider(
     }),
   );
 
-  const timeoutMs = await promptOptionalPositiveInt({
-    message: "Timeout ms (blank for default)",
-    initialValue: base?.timeoutMs,
-    max: 120000,
-  });
+  const timeoutMs = await promptOptionalPositiveInt("timeoutMs", base);
 
-  const noOutputTimeoutMs = await promptOptionalPositiveInt({
-    message: "No-output timeout ms (blank for default)",
-    initialValue: base?.noOutputTimeoutMs,
-    max: 120000,
-  });
+  const noOutputTimeoutMs = await promptOptionalPositiveInt("noOutputTimeoutMs", base);
 
-  const maxOutputBytes = await promptOptionalPositiveInt({
-    message: "Max output bytes (blank for default)",
-    initialValue: base?.maxOutputBytes,
-    max: 20 * 1024 * 1024,
-  });
+  const maxOutputBytes = await promptOptionalPositiveInt("maxOutputBytes", base);
 
   const jsonOnly = assertNoCancel(
     await confirm({

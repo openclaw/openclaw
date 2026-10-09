@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  normalizeAutomation,
-  normalizeDiagnosticAction,
-} from "./metadata-contract-normalization.ts";
+import { normalizeAutomation } from "./metadata-contract-normalization.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -15,7 +12,6 @@ import {
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
-  type WorkboardDiagnosticAction,
   type WorkboardEvent,
   type WorkboardExecution,
   type WorkboardMetadata,
@@ -52,6 +48,11 @@ function omitUndefinedFields<T extends Record<string, unknown>>(value: T): T {
 function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
   return z.object(shape).transform(omitUndefinedFields);
 }
+
+const diagnosticActionSchema = z.object({
+  kind: z.enum(["claim", "unblock", "promote", "reclaim", "reassign", "add_proof", "open_session"]),
+  label: z.string(),
+});
 
 const workboardExecutionSchema = z
   .object({
@@ -177,15 +178,7 @@ const diagnosticSchema = z
     firstSeenAt: optionalNumberSchema,
     lastSeenAt: optionalNumberSchema,
     count: optionalNumberSchema,
-    actions: z
-      .array(z.unknown())
-      .transform((actions) =>
-        actions
-          .map(normalizeDiagnosticAction)
-          .filter((action): action is WorkboardDiagnosticAction => action !== null),
-      )
-      .optional()
-      .catch(undefined),
+    actions: tolerantArray(diagnosticActionSchema),
   })
   .transform((value) => ({
     kind: value.kind,

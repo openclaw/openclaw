@@ -1,7 +1,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/failure-output.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -18,22 +18,12 @@ type AgentsBindingsListOptions = {
   json?: boolean;
 };
 
-type AgentsBindOptions = {
-  agent?: string;
-  bind?: string[];
-  json?: boolean;
-};
-
-type AgentsUnbindOptions = {
+type AgentsBindingsUpdateOptions = {
   agent?: string;
   bind?: string[];
   all?: boolean;
   json?: boolean;
 };
-
-function failAgentBinding(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
 
 function resolveTargetAgentId(params: {
   cfg: AgentConfig;
@@ -42,13 +32,13 @@ function resolveTargetAgentId(params: {
   const normalized =
     params.agentInput === undefined ? null : normalizeAgentIdStrict(params.agentInput);
   if (normalized && !normalized.ok) {
-    failAgentBinding(
+    throwExpectedCliError(
       `Agent "${params.agentInput}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
   }
   const agentId = normalized?.value ?? resolveAgentOperationAgentId(params.cfg);
   if (!listAgentIds(params.cfg).includes(agentId)) {
-    failAgentBinding(
+    throwExpectedCliError(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
   }
@@ -63,13 +53,13 @@ async function resolveParsedBindings(params: {
 }): Promise<AgentRouteBinding[]> {
   const specs = normalizeStringEntries(params.bindValues);
   if (specs.length === 0) {
-    failAgentBinding(params.emptyMessage);
+    throwExpectedCliError(params.emptyMessage);
   }
 
   const { parseBindingSpecs } = await import("./agents.bindings.js");
   const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
   if (parsed.errors.length > 0) {
-    failAgentBinding(parsed.errors.join("\n"));
+    throwExpectedCliError(parsed.errors.join("\n"));
   }
   return parsed.bindings;
 }
@@ -146,10 +136,10 @@ export async function agentsBindingsCommand(
   );
 }
 
-async function mutateAgentBindings(
+export async function agentsUpdateBindingsCommand(
   operation: "bind" | "unbind",
-  opts: AgentsUnbindOptions,
-  runtime: RuntimeEnv,
+  opts: AgentsBindingsUpdateOptions,
+  runtime: RuntimeEnv = defaultRuntime,
 ) {
   const resolved = await resolveConfigAndTargetAgentId({ runtime, agentInput: opts.agent });
   if (!resolved) {
@@ -157,7 +147,7 @@ async function mutateAgentBindings(
   }
   const { cfg, agentId, writeSnapshot } = resolved;
   if (operation === "unbind" && opts.all && (opts.bind?.length ?? 0) > 0) {
-    failAgentBinding("Use either --all or --bind, not both.");
+    throwExpectedCliError("Use either --all or --bind, not both.");
   }
 
   const removeAll = operation === "unbind" && opts.all;
@@ -260,18 +250,4 @@ async function mutateAgentBindings(
     }
     runtime.exit(1);
   }
-}
-
-export async function agentsBindCommand(
-  opts: AgentsBindOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  await mutateAgentBindings("bind", opts, runtime);
-}
-
-export async function agentsUnbindCommand(
-  opts: AgentsUnbindOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  await mutateAgentBindings("unbind", opts, runtime);
 }

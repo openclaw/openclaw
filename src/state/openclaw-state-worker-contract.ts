@@ -33,6 +33,7 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
+import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -40,6 +41,7 @@ import type {
 } from "../infra/sqlite-wal-write-admission.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerRuntimePreparation } from "../infra/sqlite-worker-runtime-preparation.types.js";
 import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
@@ -74,6 +76,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  RestartLifecycleWorkerOperations &
   SandboxRegistryOperations &
   WorktreeTemplateWorkerOperations &
   WorkspaceStateWorkerOperations &
@@ -162,6 +165,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "agentProvenance.record": { input: AgentProvenance; output: void };
     "secrets.write": {
       input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
         capturePrevious: boolean;
@@ -249,6 +253,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
       | "worktrees.reserveCapacity"
+      | keyof RestartLifecycleWorkerOperations
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
@@ -260,7 +265,9 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
+  runtimePreparation?: SqliteWorkerRuntimePreparation;
   existingOnly?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };

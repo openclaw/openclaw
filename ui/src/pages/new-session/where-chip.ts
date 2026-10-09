@@ -308,17 +308,14 @@ export function renderWhereChip(params: {
       for="new-session-where-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.target !== event.currentTarget) {
-          return;
-        }
+      @wa-show=${onOwnPopoverEvent((event) => {
         if (event.currentTarget instanceof WaPopover) {
           // Let the positioning owner recompute the scroll budget on open and resize.
           event.currentTarget.popup.autoSize = "vertical";
           event.currentTarget.popup.autoSizePadding = 8;
         }
         params.onPopoverShow();
-      }}
+      })}
       @wa-hide=${onOwnPopoverEvent(() => params.onPopoverHide())}
       @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >

@@ -464,6 +464,9 @@ it.each(["replaced", "removed", "expired", "malformed"] as const)(
               open: () => database,
               write: (operation, options) =>
                 runOpenClawStateWriteTransaction(operation, { database, env }, options),
+              writeAdmitted: () => {
+                throw new Error("Conversation bindings retain their custom admission");
+              },
               stateOptions: () => {
                 // This existing context callback runs after prefetch and before BEGIN.
                 expect(database.db.isTransaction).toBe(false);

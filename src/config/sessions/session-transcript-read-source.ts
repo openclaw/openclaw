@@ -30,12 +30,16 @@ import {
   createPreparedSessionTranscriptReads,
   type PreparedSessionTranscriptReads,
 } from "./session-transcript-execution-read.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  withSessionHistoryWorkerReadCandidates,
+  type SessionHistoryWorkerLane,
+} from "./session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
 export type SessionTranscriptWorkerReadSource = {
   scope: SessionTranscriptReadScope & {
@@ -56,6 +60,7 @@ export async function withSessionTranscriptReadSource<T>(
   readInProcess: (scope: SessionTranscriptReadScope) => T | Promise<T>,
   readInWorker: (source: SessionTranscriptWorkerReadSource) => Promise<T>,
   signal?: AbortSignal,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<T> {
   const captured = {
     ...scope,
@@ -78,6 +83,55 @@ export async function withSessionTranscriptReadSource<T>(
   }
   const storePath =
     captured.storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: captured.env });
+  const selected = getOwnedSessionTranscriptReader(captured);
+  if (selected) {
+    const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
+    const assertSource = () => {
+      signal?.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      selected.assertCurrent();
+    };
+    assertSource();
+    const identity = readDatabasePathIdentitySync(selected.database.path);
+    if (!identity.key.startsWith("file:")) {
+      throw new Error("Admitted transcript database is no longer available");
+    }
+    return withSessionHistoryWorkerDatabase(
+      { ...selected.database, requestedPaths: selected.storePaths },
+      async (owner) => {
+        const assertCurrent = () => {
+          assertSource();
+          owner.assertCurrent();
+        };
+        assertCurrent();
+        try {
+          return await readInWorker({
+            scope: {
+              ...captured,
+              agentId: selected.logicalAgentId,
+              storePath: selected.database.path,
+            },
+            resolved: {
+              agentId: selected.logicalAgentId,
+              databaseAgentId: selected.database.agentId,
+              path: selected.database.path,
+              ownerStorePath: storePath,
+              env: selected.database.env,
+              sessionKey: selected.sessionKey,
+              sessionId: captured.sessionId,
+            },
+            owner,
+            expectedIdentity: identity,
+            assertCurrent,
+          });
+        } finally {
+          assertCurrent();
+        }
+      },
+      lane,
+    );
+  }
   const candidates = captureSessionStoreReadCandidates(storePath);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
@@ -94,80 +148,87 @@ export async function withSessionTranscriptReadSource<T>(
   };
   try {
     const claim = execution?.capturePreparedGenerationClaim();
-    return await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-      try {
-        const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
-        const options = toDatabaseOptions(resolved);
-        const databasePath = resolveOpenClawAgentSqlitePath(options);
-        const identity = identities.get(assertSessionStoreReadCandidate(databasePath, candidates));
-        const selectedIdentity = identity ?? readDatabasePathIdentitySync(databasePath);
-        if (!identity && selectedIdentity.key.startsWith("file:")) {
-          throw new Error("Transcript read changed its captured database owner");
-        }
-        const assertSource = () => {
-          signal?.throwIfAborted();
-          context.maintenanceScope?.assertAdmission();
-          context.admission.assertCurrent();
-          discovery.assertCurrent();
-          assertSessionStoreReadCandidate(databasePath, candidates);
-          const current = readDatabasePathIdentitySync(databasePath);
-          if (
-            current.key !== selectedIdentity.key ||
-            current.birthtime !== selectedIdentity.birthtime
-          ) {
+    return await withSessionHistoryWorkerReadCandidates(
+      candidates,
+      async (discovery) => {
+        try {
+          const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
+          const options = toDatabaseOptions(resolved);
+          const databasePath = resolveOpenClawAgentSqlitePath(options);
+          const identity = identities.get(
+            assertSessionStoreReadCandidate(databasePath, candidates),
+          );
+          const selectedIdentity = identity ?? readDatabasePathIdentitySync(databasePath);
+          if (!identity && selectedIdentity.key.startsWith("file:")) {
             throw new Error("Transcript read changed its captured database owner");
           }
-        };
-        assertSource();
-        const result = await withSessionHistoryWorkerDatabase(
-          { ...options, requestedPaths: [storePath] },
-          async (owner) => {
-            const assertCurrent = () => {
-              assertSource();
-              owner.assertCurrent();
-              claim?.assertCurrent();
-            };
-            const expectedIdentity = selectedIdentity.key.startsWith("file:")
-              ? selectedIdentity
-              : undefined;
-            if (claim && (!expectedIdentity || execution?.agentId !== options.agentId)) {
-              throw new Error("Transcript discovery changed its prepared execution owner");
+          const assertSource = () => {
+            signal?.throwIfAborted();
+            context.maintenanceScope?.assertAdmission();
+            context.admission.assertCurrent();
+            discovery.assertCurrent();
+            assertSessionStoreReadCandidate(databasePath, candidates);
+            const current = readDatabasePathIdentitySync(databasePath);
+            if (
+              current.key !== selectedIdentity.key ||
+              current.birthtime !== selectedIdentity.birthtime
+            ) {
+              throw new Error("Transcript read changed its captured database owner");
             }
-            const preparedReads =
-              execution && claim && expectedIdentity
-                ? createPreparedSessionTranscriptReads({
-                    execution,
-                    claim,
-                    expectedIdentity,
-                    assertCurrent,
-                  })
+          };
+          assertSource();
+          const result = await withSessionHistoryWorkerDatabase(
+            { ...options, requestedPaths: [storePath] },
+            async (owner) => {
+              const assertCurrent = () => {
+                assertSource();
+                owner.assertCurrent();
+                claim?.assertCurrent();
+              };
+              const expectedIdentity = selectedIdentity.key.startsWith("file:")
+                ? selectedIdentity
                 : undefined;
-            try {
-              return await readInWorker({
-                scope: { ...captured, agentId: resolved.agentId, storePath: databasePath },
-                resolved: { ...resolved, path: databasePath },
-                owner,
-                preparedReads,
-                expectedIdentity,
-                assertCurrent,
-              });
-            } finally {
-              assertCurrent();
-            }
-          },
-        );
-        // Keep alias revocation registered until the borrowed execution has settled.
-        if (execution) {
-          await releaseExecution();
+              if (claim && (!expectedIdentity || execution?.agentId !== options.agentId)) {
+                throw new Error("Transcript discovery changed its prepared execution owner");
+              }
+              const preparedReads =
+                execution && claim && expectedIdentity
+                  ? createPreparedSessionTranscriptReads({
+                      execution,
+                      claim,
+                      expectedIdentity,
+                      assertCurrent,
+                    })
+                  : undefined;
+              try {
+                return await readInWorker({
+                  scope: { ...captured, agentId: resolved.agentId, storePath: databasePath },
+                  resolved: { ...resolved, path: databasePath },
+                  owner,
+                  preparedReads,
+                  expectedIdentity,
+                  assertCurrent,
+                });
+              } finally {
+                assertCurrent();
+              }
+            },
+            lane,
+          );
+          // Keep alias revocation registered until the borrowed execution has settled.
+          if (execution) {
+            await releaseExecution();
+          }
+          assertSource();
+          return result;
+        } finally {
+          if (execution && !releaseStarted) {
+            await releaseExecution();
+          }
         }
-        assertSource();
-        return result;
-      } finally {
-        if (execution && !releaseStarted) {
-          await releaseExecution();
-        }
-      }
-    });
+      },
+      lane,
+    );
   } finally {
     if (execution && !releaseStarted) {
       await releaseExecution();

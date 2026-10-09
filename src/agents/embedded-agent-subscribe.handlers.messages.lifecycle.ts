@@ -372,5 +372,4 @@ export function handleMessageEnd(
   }
 
   finalizeMessageEnd();
-  return undefined;
 }

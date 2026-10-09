@@ -17,6 +17,7 @@ import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveFollowupCurrentMessageId,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
 } from "./agent-runner-utils.js";
@@ -82,13 +83,6 @@ type FollowupAdmissionResult =
       reason: "aborted" | "lifecycle-invalidated";
       operation?: ReplyOperation;
     };
-
-function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
-  return queued.run.inputProvenance?.kind === "internal_system" &&
-    queued.run.inputProvenance.sourceTool === "restart-sentinel"
-    ? queued.originatingReplyToId
-    : queued.messageId;
-}
 
 function isSameSessionGeneration(
   left: SessionEntry | undefined,
@@ -320,10 +314,11 @@ export async function admitFollowupTurn(params: {
       | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
-      turn.sendPolicy === "allow" &&
-      queued.currentInboundEventKind !== "room_event" &&
-      shouldNotifyUserAboutCompaction(config)
+      turn.sendPolicy === "allow" && queued.currentInboundEventKind !== "room_event"
         ? async (phase: CompactionNoticePhase, text?: string) => {
+            if (phase !== "context_bounded" && !shouldNotifyUserAboutCompaction(config)) {
+              return;
+            }
             if (phase !== "start") {
               pendingTerminalCompactionNotice = { phase, text };
               return;
@@ -353,6 +348,7 @@ export async function admitFollowupTurn(params: {
     const preflightEntry = session.current();
     try {
       activeEntry = await runSessionCompactionIfNeeded({
+        replyOperation: operation,
         cfg: config,
         followupRun: turn.queued,
         pendingUserEntryId: readPendingUserTurnTranscriptAdmission(

@@ -156,6 +156,33 @@ export function buildSessionCreationStamp(params: {
   };
 }
 
+export function buildInboundSessionCreationStamp(
+  ctx:
+    | {
+        SessionCreation?: Parameters<typeof buildSessionCreationStamp>[0];
+        SenderId?: string;
+        SenderName?: string;
+      }
+    | undefined,
+) {
+  const senderId = ctx?.SenderId?.trim();
+  return buildSessionCreationStamp(
+    ctx?.SessionCreation ?? {
+      via: "channel",
+      ...(senderId
+        ? {
+            actor: {
+              type: "human",
+              source: "channel",
+              id: senderId,
+              label: ctx?.SenderName?.trim() || undefined,
+            },
+          }
+        : {}),
+    },
+  );
+}
+
 /** Logical nodes retain creation attribution and isolation across writes and rollovers. */
 export function preserveCreationStamp<
   T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,

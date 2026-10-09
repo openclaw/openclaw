@@ -7,6 +7,15 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../../../logging/diagnostic-run-activity.js";
+import {
   clearToolActivityRun,
   notifyToolActivity,
 } from "../../../shared/tool-activity-heartbeat.js";
@@ -69,6 +78,40 @@ describe("streamWithIdleTimeout", () => {
     await vi.advanceTimersByTimeAsync(500);
 
     expect(onIdleTimeout).not.toHaveBeenCalled();
+  });
+
+  it("records model progress only for content-bearing activity", async () => {
+    vi.useFakeTimers();
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const ref = { sessionId: TEST_RUN, runId: TEST_RUN };
+    markDiagnosticEmbeddedRunStarted(ref);
+    let requestSignal: AbortSignal | undefined;
+    const baseFn: StreamFn = (_model, _context, options) => {
+      requestSignal = options?.signal;
+      return createAssistantMessageEventStream();
+    };
+    const stream = await streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN })(
+      {} as Parameters<StreamFn>[0],
+      { messages: [] },
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+    try {
+      await vi.advanceTimersByTimeAsync(40);
+      notifyLlmRequestActivity(requestSignal, false);
+      expect(getDiagnosticSessionActivitySnapshot(ref).lastProgressReason).toBe(
+        "embedded_run:started",
+      );
+      notifyLlmRequestActivity(requestSignal, true);
+      expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+        lastProgressAgeMs: 0,
+        lastProgressReason: "model_call:stream_progress",
+      });
+    } finally {
+      await iterator.return?.();
+      resetDiagnosticRunActivityForTest();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+    }
   });
 
   it("resets idle timer on tool activity", async () => {

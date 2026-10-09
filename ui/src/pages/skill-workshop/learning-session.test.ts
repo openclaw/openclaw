@@ -23,7 +23,7 @@ async function mountLearningPage() {
   document.body.append(page);
   await page.updateComplete;
   const button = Array.from(page.querySelectorAll("button")).find(
-    (entry) => entry.textContent?.trim() === "Start",
+    (entry) => entry.textContent?.trim() === "Learn from history",
   );
   expect(button).toBeDefined();
   return { page, context, button: button! };

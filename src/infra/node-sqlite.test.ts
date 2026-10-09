@@ -206,11 +206,16 @@ describe("node SQLite safety", () => {
   it.each([0, 1])(
     "detects the loaded library's extension capability (omitted=%s)",
     async (omitted) => {
-      const { supportsNodeSqliteExtensionLoading } = await loadNodeSqliteWithVersion(
-        "3.51.3",
-        omitted,
-      );
+      const { captureSqliteNativeRuntimeAdmission, supportsNodeSqliteExtensionLoading, prepare } =
+        await loadNodeSqliteWithVersion("3.51.3", omitted);
+      expect(captureSqliteNativeRuntimeAdmission()).toBeUndefined();
+      expect(prepare).not.toHaveBeenCalled();
       expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
+      expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
+        version: "3.51.3",
+        extensionLoadingSupported: omitted === 0,
+      });
+      expect(prepare).toHaveBeenCalledOnce();
     },
   );
 
@@ -284,6 +289,7 @@ describe("node SQLite safety", () => {
     "nodeVersion",
     "bunVersion",
     "library",
+    "format",
     "malformed",
   ] as const)(
     "inherits admitted SQLite capabilities only for its original process and library (%s)",
@@ -301,25 +307,34 @@ describe("node SQLite safety", () => {
           ...value,
           ...(changed === "malformed"
             ? { extensionLoadingSupported: "yes" }
-            : {
-                runtime: {
-                  ...(runtime && typeof runtime === "object" ? runtime : {}),
-                  [changed]: {
-                    pid: process.pid + 1,
-                    executable: `${process.execPath}.other`,
-                    nodeVersion: "99.0.0",
-                    bunVersion: "1.0.0",
-                    library: {
-                      source: "discovered",
-                      path: "/other/sqlite.dylib",
-                      version: "3.53.4",
-                      extensionLoadingSupported: true,
-                    },
-                  }[changed],
-                },
-              }),
+            : changed === "format"
+              ? { format: 2 }
+              : {
+                  runtime: {
+                    ...(runtime && typeof runtime === "object" ? runtime : {}),
+                    [changed]: {
+                      pid: process.pid + 1,
+                      executable: `${process.execPath}.other`,
+                      nodeVersion: "99.0.0",
+                      bunVersion: "1.0.0",
+                      library: {
+                        source: "discovered",
+                        path: "/other/sqlite.dylib",
+                        version: "3.53.4",
+                        extensionLoadingSupported: true,
+                      },
+                    }[changed],
+                  },
+                }),
         });
       }
+      const forwarded = native.environment.get(receiptKey);
+      native.environment.delete(receiptKey);
+      parent.installSqliteNativeRuntimeAdmission(forwarded);
+      expect(native.environment.get(receiptKey)).toEqual(
+        changed === "unchanged" ? receipt : undefined,
+      );
+      native.environment.set(receiptKey, forwarded);
       native.mainThread = false;
       vi.resetModules();
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
@@ -341,10 +356,15 @@ describe("node SQLite safety", () => {
     parent.prepare.mockRestore();
     const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
     const receipt = native.environment.get(receiptKey);
-    native.environment.set(receiptKey, {
+    const unsafeAdmission = {
       ...(receipt && typeof receipt === "object" ? receipt : {}),
       version: "3.51.2",
-    });
+    };
+    native.environment.delete(receiptKey);
+    parent.installSqliteNativeRuntimeAdmission(unsafeAdmission);
+    expect(native.environment.has(receiptKey)).toBe(false);
+    native.environment.set(receiptKey, unsafeAdmission);
+    expect(parent.captureSqliteNativeRuntimeAdmission()).toBeUndefined();
     native.mainThread = false;
     vi.resetModules();
     const worker = await loadNodeSqliteWithVersion("3.53.4", 0);

@@ -68,12 +68,14 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
-function parseQaCliTcpPortOption(value: string, flag: string): number {
-  const parsed = parseQaCliPositiveIntegerOption(value, flag);
-  if (parsed > MAX_QA_CLI_TCP_PORT) {
-    throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
-  }
-  return parsed;
+function tcpPort(flag: string) {
+  return (value: string) => {
+    const parsed = parseQaCliPositiveIntegerOption(value, flag);
+    if (parsed > MAX_QA_CLI_TCP_PORT) {
+      throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
+    }
+    return parsed;
+  };
 }
 
 function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
@@ -147,12 +149,8 @@ function assertNoQaSubcommandCollision(qa: Command, commandName: string) {
 
 function addQaDockerRuntimeOptions(command: Command, imageDescription: string) {
   return command
-    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--gateway-port"),
-    )
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--qa-lab-port"),
-    )
+    .option("--gateway-port <port>", "Gateway host port", tcpPort("--gateway-port"))
+    .option("--qa-lab-port <port>", "QA lab host port", tcpPort("--qa-lab-port"))
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", imageDescription, "openclaw:qa-local-prebaked")
     .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
@@ -529,12 +527,12 @@ export function registerQaLabCli(program: Command) {
     .description("Start the private QA debugger UI and local QA bus")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--port"),
-    )
+    .option("--port <port>", "Bind port", tcpPort("--port"))
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
-    .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
-      parseQaCliTcpPortOption(value, "--advertise-port"),
+    .option(
+      "--advertise-port <port>",
+      "Optional public port to advertise",
+      tcpPort("--advertise-port"),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
     .option(
@@ -581,9 +579,7 @@ export function registerQaLabCli(program: Command) {
     qa.command(providerCommand.name)
       .description(providerCommand.description)
       .option("--host <host>", "Bind host", "127.0.0.1")
-      .option("--port <port>", "Bind port", (value: string) =>
-        parseQaCliTcpPortOption(value, "--port"),
-      )
+      .option("--port <port>", "Bind port", tcpPort("--port"))
       .action(async (opts: { host?: string; port?: number }) => {
         const runtime = await loadQaLabCliRuntime();
         await runtime.runQaProviderServerCommand(providerCommand.providerMode, opts);

@@ -227,16 +227,22 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogProviderFacts = {
+  source: string;
+  credentials: string;
+  expiresAt?: number;
+  /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
+  discoveryFailures?: number;
+  legacyRows?: ReadonlySet<string>;
+};
+
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;
   nativeSource: string;
-  providers: ReadonlyMap<
-    string,
-    { source: string; credentials: string; expiresAt?: number; legacyRows?: ReadonlySet<string> }
-  >;
+  providers: ReadonlyMap<string, PreparedModelCatalogProviderFacts>;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 
@@ -269,6 +275,13 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
+  /** Demand may recheck a failed catalog-worker replacement; scheduled demand gets one attempt. */
+  catalogRecovery?: {
+    error: Error;
+    scheduledAttempted: boolean;
+    retryAfter: number;
+    replacementGateId?: PreparedModelRuntimeReplacementGateId;
+  };
   /** The configured publication owner recovers when an idle Gateway lender retires. */
   onPluginGenerationRetired?: () => void;
   snapshot?: PreparedModelRuntimeSnapshot;

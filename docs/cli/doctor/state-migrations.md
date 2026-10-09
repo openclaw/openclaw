@@ -9,6 +9,14 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+For a named channel account no longer present in account discovery, Doctor moves
+its legacy `credentials/<channel>-<account>-allowFrom.json` file to the existing
+`.migrated` archive path (numbered if occupied), reports both paths as a warning,
+and continues later migrations. The original bytes remain available for recovery;
+they are not assigned to a surviving account. Malformed allowlists for configured
+accounts and ambiguous account identities still require repair before migration
+can continue. Update-time Doctor uses the same behavior.
+
 Matrix's one-time inbound dedupe scan applies only when Matrix is configured or
 legacy Matrix state needs inspection. A fresh installation with neither does not
 need a Matrix migration or exclusive Gateway maintenance. Completed scans keep a
@@ -363,8 +371,12 @@ complete package convergence and run Doctor again before it exits.
 Doctor can finish an installation-only deferral once the installed plugin's
 metadata confirms it has no state migration or inspection to run, including when
 its channel is disabled or it no longer has a config entry. This preserves the
-plugin's activation settings and saved configuration. Previously recorded state
-migration or inspection obligations still require the plugin to complete them.
+plugin's activation settings and saved configuration. An old inspection-only
+obligation also settles when the available package has no plugin migration
+contract. Doctor warns with the plugin ID and version and records that reason in
+the receipt; it does not claim a migration ran or change saved data. Explicit
+state-migration obligations and packages that still require inspection continue
+to require completion by the plugin.
 
 If the installed plugin still has not reported migration completion, run
 `openclaw doctor --fix`. If that cannot complete the migration, report the

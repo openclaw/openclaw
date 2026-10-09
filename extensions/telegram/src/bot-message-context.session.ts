@@ -96,7 +96,7 @@ function hasCompleteSessionRuntime(
   );
 }
 
-async function loadTelegramMessageContextSessionRuntime(
+export async function loadTelegramMessageContextSessionRuntime(
   runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
 ): Promise<TelegramMessageContextSessionRuntime> {
   if (hasCompleteSessionRuntime(runtime)) {
@@ -106,17 +106,6 @@ async function loadTelegramMessageContextSessionRuntime(
     ...(await import("./bot-message-context.session.runtime.js")),
     ...runtime,
   };
-}
-
-export async function resolveTelegramMessageContextStorePath(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
-}): Promise<string> {
-  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
-  return sessionRuntime.resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
 }
 
 function replyTargetToChainEntry(
@@ -151,17 +140,6 @@ function replyTargetToChainEntry(
       ? { forwardedDate: replyTarget.forwardedFrom.date * 1000 }
       : {}),
   };
-}
-
-function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReplyChainEntry {
-  const {
-    forwardedFrom: _forwardedFrom,
-    forwardedFromId: _forwardedFromId,
-    forwardedFromUsername: _forwardedFromUsername,
-    forwardedDate: _forwardedDate,
-    ...withoutForwarded
-  } = entry;
-  return withoutForwarded;
 }
 
 function formatTelegramForwardedMessageBody(params: {
@@ -199,21 +177,17 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
-const TELEGRAM_MEDIA_KINDS = new Set<TelegramMediaKind>([
+const TELEGRAM_MEDIA_KINDS: TelegramMediaKind[] = [
   "audio",
   "document",
   "image",
   "sticker",
   "video",
-]);
-
-function isTelegramMediaKind(value: string): value is TelegramMediaKind {
-  return TELEGRAM_MEDIA_KINDS.has(value as TelegramMediaKind);
-}
+];
 
 function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   const mediaType = entry.mediaType;
-  const nativeKind = mediaType && isTelegramMediaKind(mediaType) ? mediaType : undefined;
+  const nativeKind = TELEGRAM_MEDIA_KINDS.find((kind) => kind === mediaType);
   const kind = entry.mediaKind || nativeKind;
   return {
     ...(kind ? { kind } : {}),
@@ -410,7 +384,13 @@ export async function buildTelegramInboundContextPayload(params: {
     const includeForwarded =
       visibleEntry.forwardedFrom &&
       shouldIncludeGroupSupplementalContext("forwarded", visibleEntry.forwardedFromId);
-    return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
+    if (!includeForwarded) {
+      delete visibleEntry.forwardedFrom;
+      delete visibleEntry.forwardedFromId;
+      delete visibleEntry.forwardedFromUsername;
+      delete visibleEntry.forwardedDate;
+    }
+    return [visibleEntry];
   });
   const bufferedBodySegments = shouldRenderBufferedBody
     ? bufferedMessages.flatMap((bufferedMessage) => {
@@ -467,10 +447,9 @@ export async function buildTelegramInboundContextPayload(params: {
           .map(formatReplyChainEntry)
           .join("\n")}\n[/Reply chain]`
       : "";
-  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
-    ? (groupLabel ?? `group:${chatId}`)
+    ? buildGroupLabel(msg, chatId, resolvedThreadId)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
   const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {

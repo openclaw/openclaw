@@ -4,6 +4,7 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import type {
   PluginsListResult,
   SessionsCatalogListResult,
@@ -15,9 +16,10 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { selectThemeSettings } from "../../app/server-prefs-intent.ts";
+import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
 import { resetServerUiPref, resolveServerUiPrefState } from "../../app/server-prefs.ts";
 import {
@@ -62,7 +64,6 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
@@ -87,6 +88,7 @@ import {
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
 import "./session-storage.ts";
+import { TabIconSettingsController } from "./tab-icon-settings-controller.ts";
 import "./talk-page.ts";
 import { renderUpdatesPage } from "./updates-page.ts";
 import {
@@ -109,11 +111,10 @@ type SessionObserverModelsResult = {
 };
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
-function createMediaDeviceState(): {
-  devices: RealtimeTalkInputDevice[];
-  permissionRequired: boolean;
-  loading: boolean;
-  error: string | null;
+function createMediaDeviceState(): Omit<
+  NonNullable<ConfigProps["microphone"]>,
+  "selectedDeviceId"
+> & {
   loaded: boolean;
   requestsPermission: boolean;
 } {
@@ -240,6 +241,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     camera: createMediaDeviceState(),
   };
   private cameraSelectionRequest = 0;
+  private readonly tabIconSettings = new TabIconSettingsController(this, {
+    getContext: () => this.context,
+    isActive: () => this.pageId === "appearance",
+    getPreference: () => this.settings.tabIcon,
+    setPreference: (tabIcon) => this.applySettings({ tabIcon }),
+  });
   @state() private formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>> = {};
   @state() private selections: Partial<Record<ConfigPageId, ConfigSelection>> = {};
   @state() private customThemeImport = themeImport.INITIAL_CUSTOM_THEME_IMPORT_STATE;
@@ -398,6 +405,9 @@ export class ConfigPage extends OpenClawLightDomElement {
     .watchStore(() => this.context?.overlays)
     .watchStore(() => this.context?.config)
     .watchStore(() => this.context?.settingsAgentSelection)
+    .watchStore(() => (this.pageId === "appearance" ? this.context?.agentSelection : null))
+    .watchStore(() => (this.pageId === "appearance" ? this.context?.agents : null))
+    .watchStore(() => (this.pageId === "appearance" ? this.context?.agentIdentity : null))
     .watchStore(() => this.context?.nativeDeviceSettings ?? undefined)
     .watchStore(() => this.context?.nativeNotifications ?? undefined)
     .watchStore(() => this.context?.webPush)
@@ -709,7 +719,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.gateway.connection.gatewayUrl,
       this.settings,
       {
-        canSync: this.serverUiPrefsCanSync(appearance ? key : undefined),
+        canSync: canSyncAppearancePreference(this.context, appearance ? key : undefined),
         profileId: appearance ? this.context.gateway.snapshot?.selfUser?.id : undefined,
       },
     );
@@ -722,22 +732,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     } else {
       this.applySettings({ [key]: font });
     }
-  }
-
-  private serverUiPrefsCanSync(
-    key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
-  ): boolean | null {
-    const runtimeConfig = this.context.runtimeConfig;
-    if (!runtimeConfig.state.connected) {
-      return null;
-    }
-    const gateway = this.context.gateway.snapshot;
-    if ((key === "fontUi" || key === "fontChat") && !gateway?.selfUser) {
-      return false;
-    }
-    return key && gateway?.selfUser
-      ? hasOperatorWriteAccess(gateway.hello?.auth ?? null)
-      : runtimeConfig.canPatch !== false;
   }
 
   private resetSyncedPref(key: ResettableServerUiPrefKey) {
@@ -885,6 +879,18 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isUpdateBusy() ||
       this.context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+    const sectionTag =
+      this.pageId === "communications" && activeSection === "transcripts"
+        ? literal`openclaw-meeting-capture-settings`
+        : this.pageId === "ai-agents" && activeSection === "session"
+          ? literal`openclaw-session-storage-settings`
+          : undefined;
+    const withConfigMutation =
+      <Args extends unknown[]>(mutate: (...args: Args) => void) =>
+      (...args: Args) => {
+        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
+        mutate(...args);
+      };
     const props: ConfigProps = {
       onAppearanceChange: (patch) => this.applySettings(patch),
       raw: configState.configRaw,
@@ -911,22 +917,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       formValue: configState.configForm,
       activeSection,
       activeSubsection,
-      onRawChange: (next) => {
-        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
-        runtimeConfig.setRaw(next);
-      },
+      onRawChange: withConfigMutation((next) => runtimeConfig.setRaw(next)),
       onFormModeChange: (mode) => {
         this.formModes = { ...this.formModes, [this.pageId]: mode };
       },
       onViewStateChange: () => this.requestUpdate(),
-      onFormPatch: (path, value) => {
-        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
-        runtimeConfig.patchForm(path, value);
-      },
-      onFormRemove: (path) => {
-        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
-        runtimeConfig.removeFormValue(path);
-      },
+      onFormPatch: withConfigMutation((path, value) => runtimeConfig.patchForm(path, value)),
+      onFormRemove: withConfigMutation((path) => runtimeConfig.removeFormValue(path)),
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
       onSave: () => void runtimeConfig.save(),
@@ -975,6 +972,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onImportCustomTheme: () => void this.importCustomTheme(),
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.customThemeImportOwner.open(),
+      ...this.tabIconSettings.props,
       textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: this.settings.textScale !== undefined,
       setTextScale: (value) =>
@@ -1064,26 +1062,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : titleForRoute(this.pageId),
       showSectionDocs: this.pageId !== "communications",
-      renderSection:
-        this.pageId === "communications" && activeSection === "transcripts"
-          ? (editor) => html`<openclaw-meeting-capture-settings
+      renderSection: sectionTag
+        ? (editor) => staticHtml`<${sectionTag}
               .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
               .advancedExpanded=${
                 this.routeData?.advanced === true ||
-                this.routeData?.targetBlockId === "config-section-transcripts"
+                this.routeData?.targetBlockId === `config-section-${activeSection}`
               }
               .editor=${editor}
-            ></openclaw-meeting-capture-settings>`
-          : this.pageId === "ai-agents" && activeSection === "session"
-            ? (editor) => html`<openclaw-session-storage-settings
-                .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
-                .advancedExpanded=${
-                  this.routeData?.advanced === true ||
-                  this.routeData?.targetBlockId === "config-section-session"
-                }
-                .editor=${editor}
-              ></openclaw-session-storage-settings>`
-            : undefined,
+            ></${sectionTag}>`
+        : undefined,
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
           ? renderBrowserLinkPreferencesRow({
