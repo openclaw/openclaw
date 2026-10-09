@@ -265,4 +265,56 @@ describe("summary request input budget", () => {
     expect(estimateStringChars(bounded.text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
     expect(bounded.text.length).toBeLessThan(MAX_SUMMARY_INPUT_CHARS / 2);
   });
+
+  it("never shows a sampled tool result without its call, even after the image-omission note", () => {
+    const messages: AgentMessage[] = [];
+    for (let index = 0; index < 100; index += 1) {
+      messages.push({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: `c-${index}`,
+            name: "exec",
+            arguments: { cmd: `command-${index}` },
+          },
+        ],
+        api: "test-api",
+        provider: "test-provider",
+        model: "summary-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: index,
+      });
+      // The ninth image omission adds a standalone note before its result.
+      const image = index < 8 || index === 50;
+      messages.push({
+        role: "toolResult",
+        toolCallId: `c-${index}`,
+        toolName: "exec",
+        content: [
+          ...(image ? [{ type: "image" as const, data: "AA==", mimeType: "image/png" }] : []),
+          { type: "text", text: `RESULT-${index} ${"x".repeat(1_900)}` },
+        ],
+        isError: false,
+        timestamp: index,
+      });
+    }
+
+    for (let budget = 4_000; budget <= 60_000; budget += 1_000) {
+      const { text } = serializeConversationWithinBudget(convertToLlm(messages), budget);
+      for (const result of text.matchAll(/RESULT-(\d+) /gu)) {
+        const call = text.lastIndexOf(`exec(cmd="command-${result[1]}")`, result.index);
+        expect(call, `budget ${budget}, result ${result[1]}`).toBeGreaterThanOrEqual(0);
+        expect(text.slice(call, result.index)).not.toContain("omitted from this summary input");
+      }
+    }
+  });
 });

@@ -295,11 +295,14 @@ const ENTRY_SEPARATOR = "\n\n";
 
 function serializeConversationEntries(messages: Message[]): {
   entries: string[];
-  /** Tool-result entries, which name neither the tool nor its call. */
-  toolResultEntries: Set<number>;
+  /**
+   * Entries that cannot start a sampled run: tool results, which name neither
+   * the tool nor its call, and an omission note emitted just before one.
+   */
+  continuationEntries: Set<number>;
 } {
   const parts: string[] = [];
-  const toolResultEntries = new Set<number>();
+  const continuationEntries = new Set<number>();
   let omissionMessages = 0;
 
   for (const msg of messages) {
@@ -313,6 +316,9 @@ function serializeConversationEntries(messages: Message[]): {
       // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
       // Keep the aggregate outside truncation too; later omissions must never disappear silently.
       if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
+        if (msg.role === "toolResult") {
+          continuationEntries.add(parts.length);
+        }
         parts.push(OMISSION_OVERFLOW);
       }
       const content = [
@@ -325,7 +331,7 @@ function serializeConversationEntries(messages: Message[]): {
         const speaker =
           msg.role === "toolResult" ? "Tool result" : `User${formatPersistedSenderSuffix(msg)}`;
         if (msg.role === "toolResult") {
-          toolResultEntries.add(parts.length);
+          continuationEntries.add(parts.length);
         }
         parts.push(`[${speaker}]: ${content}`);
       }
@@ -353,7 +359,7 @@ function serializeConversationEntries(messages: Message[]): {
     }
   }
 
-  return { entries: parts, toolResultEntries };
+  return { entries: parts, continuationEntries };
 }
 
 /**
@@ -433,7 +439,7 @@ export function serializeConversationWithinBudget(
   messages: Message[],
   maxChars: number,
 ): BoundedConversation {
-  const { entries, toolResultEntries } = serializeConversationEntries(messages);
+  const { entries, continuationEntries } = serializeConversationEntries(messages);
   const weights = entries.map((entry) => estimateStringChars(entry));
   const separatorChars = ENTRY_SEPARATOR.length;
   const totalChars =
@@ -477,23 +483,39 @@ export function serializeConversationWithinBudget(
   // entry may be trimmed, when it alone exceeds the tail share.
   let tailStart = entries.length;
   const tailLimit = Math.floor(budget * SUMMARY_INPUT_TAIL_SHARE);
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const remaining = tailLimit - usedChars;
-    const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
-    if (!verbatim && tailStart !== entries.length) {
-      break;
-    }
-    if (!take(index, remaining)) {
-      break;
-    }
-    tailStart = index;
+  const newest = entries.length - 1;
+  let newestGroupStart = newest;
+  while (newestGroupStart > 0 && continuationEntries.has(newestGroupStart)) {
+    newestGroupStart -= 1;
   }
-  // A newest run that starts inside a tool batch drops its leading results; the
-  // middle sampling may still show them with their call.
-  while (toolResultEntries.has(tailStart) && tailStart < entries.length - 1) {
-    usedChars -= selected.get(tailStart)?.chars ?? 0;
-    selected.delete(tailStart);
-    tailStart += 1;
+  let newestGroupChars = 0;
+  for (let index = newestGroupStart; index <= newest; index += 1) {
+    newestGroupChars += (weights[index] ?? 0) + separatorChars;
+  }
+  if (newestGroupStart < newest && newestGroupChars > tailLimit) {
+    // The newest tool batch does not fit: keep its call, then an excerpt of the newest result.
+    take(newestGroupStart, tailLimit, MAX_SAMPLED_ENTRY_CHARS);
+    take(newest, tailLimit - usedChars);
+    tailStart = newestGroupStart;
+  } else {
+    for (let index = newest; index >= 0; index -= 1) {
+      const remaining = tailLimit - usedChars;
+      const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
+      if (!verbatim && tailStart !== entries.length) {
+        break;
+      }
+      if (!take(index, remaining)) {
+        break;
+      }
+      tailStart = index;
+    }
+    // A newest run that starts inside an earlier tool batch drops its leading
+    // results; the middle sampling may still show them with their call.
+    while (continuationEntries.has(tailStart)) {
+      usedChars -= selected.get(tailStart)?.chars ?? 0;
+      selected.delete(tailStart);
+      tailStart += 1;
+    }
   }
   // The oldest entries usually state the goal and the constraints of the session.
   let headEnd = 0;
@@ -513,11 +535,11 @@ export function serializeConversationWithinBudget(
         headEnd + Math.floor((slice * middleCount) / SUMMARY_INPUT_MIDDLE_SLICES),
       );
       // Start at the tool call that produced a result, or past results whose call is out of reach.
-      while (index > nextFree && toolResultEntries.has(index)) {
+      while (index > nextFree && continuationEntries.has(index)) {
         index -= 1;
       }
       if (!selected.has(index - 1)) {
-        while (index < tailStart && toolResultEntries.has(index)) {
+        while (index < tailStart && continuationEntries.has(index)) {
           index += 1;
         }
       }
