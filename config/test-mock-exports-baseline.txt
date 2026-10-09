@@ -146,7 +146,6 @@
 ["extensions/browser/src/browser/pw-tools-core.snapshot.test.ts","./cdp.js","ce64a100e656188b4be4237f081780d31df9ab6be15ea8edd808e48ab0d114b8",1]
 ["extensions/browser/src/browser/pw-tools-core.snapshot.test.ts","./pw-download-capture.js","e295beabe9fe47a70f92bd618615b011be2a9e751a2ed457e7aaead1697c2488",1]
 ["extensions/browser/src/browser/pw-tools-core.snapshot.test.ts","./pw-session.js","7fffa1d770e73807d12097b37d654258d3fd52ee014d83bb3dcd4268c2ce52eb",1]
-["extensions/browser/src/browser/pw-tools-core.snapshot.test.ts","./pw-session.page-cdp.js","6ede1087e1f43e5ce67f10838b9bc497c5dd534b94ac506928645fffb410fc26",1]
 ["extensions/browser/src/browser/pw-tools-core.state.test.ts","./playwright-core.runtime.js","7a889427aa847bb4d926a64eb6311544827e8b9a5343b6adeb0dbcbbdada7321",1]
 ["extensions/browser/src/browser/pw-tools-core.state.test.ts","./pw-session.js","51dfbc17a9eb684b7287038099fc27c99acdafc7ec4808e94dfab87705258c13",1]
 ["extensions/browser/src/browser/pw-tools-core.storage.cookies-many.test.ts","./pw-session.js","be0f01191cd1dbd9d68a0b1bd81d72a1a193f277b0e2490ed27639f9c92ac136",1]

@@ -2,7 +2,8 @@ import { expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { runExtensionRelayDaemon } from "./relay-daemon.js";
 
-vi.mock("./extension-relay/relay-auth.js", () => ({
+vi.mock("./extension-relay/relay-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./extension-relay/relay-auth.js")>()),
   readExtensionRelayToken: () => relayTestKey(1),
 }));
 

@@ -33,7 +33,8 @@ vi.mock("./pw-download-capture.js", () => ({
   createDownloadCaptureForPage,
 }));
 
-vi.mock("./pw-session.page-cdp.js", () => ({
+vi.mock("./pw-session.page-cdp.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session.page-cdp.js")>()),
   markBackendDomRefsOnPage,
   readDocumentIdentitiesForPage,
   withPageScopedCdpClient,

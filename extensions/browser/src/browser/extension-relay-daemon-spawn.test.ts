@@ -9,7 +9,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: vi.fn(),
 }));
-vi.mock("./extension-relay/relay-auth.js", () => ({ readExtensionRelayToken: vi.fn() }));
+vi.mock("./extension-relay/relay-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./extension-relay/relay-auth.js")>()),
+  readExtensionRelayToken: vi.fn(),
+}));
 
 afterEach(() => {
   vi.resetAllMocks();
