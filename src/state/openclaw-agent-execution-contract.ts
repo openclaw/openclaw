@@ -1,4 +1,3 @@
-import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
@@ -136,19 +135,6 @@ export type AgentDatabaseIncognitoOpen = {
 export type AgentDatabaseExecutionOpen =
   | AgentDatabaseFileExecutionOpen
   | AgentDatabaseIncognitoOpen;
-
-type AgentDatabaseIncognitoMemory = {
-  agentId: string;
-  /** SQLite page allocation only, excluding allocator, decoded results, and transport memory. */
-  databaseBytes: number;
-  pageCount: number;
-  pageSize: number;
-};
-
-/** Inactive actor operations; production routing changes only at the complete cutover. */
-export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
-  "database.incognito.memory": { input: undefined; output: AgentDatabaseIncognitoMemory };
-};
 
 export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
 

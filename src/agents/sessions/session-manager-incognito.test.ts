@@ -17,6 +17,7 @@ import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redact
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import { useIncognitoActorProbe } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
@@ -35,6 +36,7 @@ import {
 } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
@@ -215,12 +217,7 @@ it("retargets another session on its retained actor outside the opening scope", 
     { role: "user", content: "destination history" },
     { role: "user", content: "retained destination write" },
   ]);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = actor.run(authority, async () => {
-    entered.resolve();
-    await release.promise;
-  });
+  const { entered, release, held } = probe.hold(actor, authority);
   let reloading: Promise<void> | undefined;
   try {
     await entered.promise;
@@ -440,7 +437,7 @@ it("publishes model context before following work enters its actor", async () =>
     const forward: typeof history = async (grant, command, signal, onRead) => {
       const result = await history(grant, command, signal, onRead);
       if (onRead) {
-        await actor.run(authority, async () => {
+        await probe.read(actor, authority, () => {
           order.push("following actor work");
         });
       }
@@ -548,12 +545,7 @@ it("rolls back fresh-message refusal and fences queued authority before mutation
       }),
     ).rejects.toThrow("fresh grant revoked");
     expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     let current = true;
     const refused = withSessionManagerWriteAssertion(

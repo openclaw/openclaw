@@ -2719,7 +2719,7 @@ deprecated compatibility paths until the next Plugin SDK major. Schemas, stored
 data, retention, and update behavior are unchanged. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
-Gateway fork selection prepares its upstream link through the existing shared-state
+Gateway branch listing and fork selection prepare upstream links through the existing shared-state
 reader. Rewind and branch switch need no preliminary link lookup. Local history
 mutations check current link absence at transaction and commit; repository and
 native-harness preparation also retain their effect-boundary checks. These guards
@@ -2730,6 +2730,11 @@ foreign-process writers can change links without publishing complete revocation
 facts. Retiring them requires the next Plugin SDK major's writer cutover and
 complete source-revocation publication. Rollback and accepted-write settlement
 retain their original custody after forward authority is revoked.
+
+The reader connection retains one exact row or absence at the existing admitted
+read revision; foreign commits, local writes, schema changes, and close invalidate
+reuse. Transactions, pinned snapshots, and dynamic authorizers keep querying.
+Each result decodes into caller-owned values.
 
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher check and pruning. Producers await settlement and recheck

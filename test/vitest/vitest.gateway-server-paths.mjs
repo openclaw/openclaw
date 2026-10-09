@@ -279,6 +279,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/skill-library-authoring.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
+  "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/client-spoken-confirmation.test.ts",
   "src/gateway/talk/handlers/client-native-actions.test.ts",
