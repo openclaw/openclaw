@@ -363,9 +363,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       return;
     }
     this.configuredDefaults = options.configuredDefaults === true;
-    if (this.configuredDefaults) {
-      this.retireDraftSelection(true);
-    }
     const initialModel = options.initialModel;
     if (initialModel && initialModel !== this.initialModel) {
       this.resetSelection();
@@ -527,8 +524,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private applyPendingDraftSelection() {
     const selection = this.takeDraftSelection(
       this.agentId,
-      !this.configuredDefaults &&
-        this.pendingContext?.config?.current.newSessionModelDefaults === "configured",
+      this.pendingContext?.config?.current.newSessionModelDefaults === "configured",
       this.pendingPreference?.fastMode,
     );
     if (!selection) {
