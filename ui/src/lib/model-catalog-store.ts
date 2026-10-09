@@ -71,6 +71,13 @@ export function readModelCatalog(
   };
 }
 
+export function readAgentModelCatalog(
+  client: ModelCatalogClient | null | undefined,
+  agentId: string | null | undefined,
+): ModelCatalogPresentation {
+  return readModelCatalog(client, agentId ? { agentId } : null);
+}
+
 export function subscribeModelCatalogCache(
   client: ModelCatalogClient,
   listener: (update: ModelCatalogCacheUpdate) => void,

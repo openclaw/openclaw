@@ -33,7 +33,7 @@ export function createSafeStreamWriter(
     if (closed) {
       return false;
     }
-    let errorStream = process.stderr;
+    let errorStream: NodeJS.WriteStream = process.stderr;
     try {
       clearActiveProgressLine();
       errorStream = stream;

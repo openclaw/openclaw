@@ -50,7 +50,7 @@ import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
-  readModelCatalog,
+  readAgentModelCatalog,
   subscribeModelCatalogCache,
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
@@ -109,10 +109,7 @@ class AgentsPage
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
   get modelCatalog() {
-    return readModelCatalog(
-      this.connected ? this.client : null,
-      this.agentsSelectedId ? { agentId: this.agentsSelectedId } : null,
-    );
+    return readAgentModelCatalog(this.connected ? this.client : null, this.agentsSelectedId);
   }
   @state() chatModelCatalogStatus = createPanelRefreshStatus();
   private chatModelCatalogPending: Promise<unknown> | null = null;

@@ -3692,19 +3692,12 @@ describe("handleSendChat", () => {
         const reference = expectDefined(stored.attachmentPayload, "reconnect payload reference");
         markQueuedChatSendsWaitingForReconnect(source);
         if (retry) {
+          const unconfirmed: typeof stored = { ...stored, sendState: "unconfirmed" };
           expect(
             updateStoredChatComposerQueueItems(
               source,
               source.sessionKey,
-              [
-                {
-                  expected: stored,
-                  next: {
-                    ...stored,
-                    sendState: "unconfirmed",
-                  },
-                },
-              ],
+              [{ expected: stored, next: unconfirmed }],
               stored.agentId,
             ),
           ).toBe(true);
