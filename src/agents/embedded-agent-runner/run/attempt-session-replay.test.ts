@@ -1,12 +1,10 @@
 import fs from "node:fs";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { ImageContent } from "../../../llm/types.js";
@@ -155,124 +153,6 @@ describe("interrupted canonical user replay", () => {
         },
         { selectedOwner },
       );
-    },
-  );
-
-  it.each([
-    "unchanged",
-    "metadata-append",
-    "local-navigation",
-    "shared-store",
-    "mutable-message",
-    "wrong-hint",
-  ] as const)("consumes a fresh selected transcript after %s", async (change) => {
-    await withInterruptedTurn(
-      false,
-      async (fixture) => {
-        const reload = vi.spyOn(SessionManager.prototype, "reloadPersistedTranscriptAsync");
-        try {
-          const prepared = await fixture.prepare();
-          expect(reload).not.toHaveBeenCalled();
-          expect(fixture.attempt.userTurnTranscriptRecorder?.getAdmissionReceipt()).toMatchObject({
-            agentId: fixture.target.agentId,
-            storePath: fixture.target.storePath,
-          });
-          if (change === "metadata-append") {
-            await SessionManager.open(fixture.target).appendThinkingLevelChange("high");
-          } else if (change === "local-navigation") {
-            await prepared.sessionManager.resetLeafAsync();
-          } else if (change === "mutable-message" || change === "wrong-hint") {
-            const leaf = prepared.sessionManager.getLeafEntry()!;
-            if (
-              change === "mutable-message" &&
-              leaf.type === "message" &&
-              leaf.message.role === "user"
-            ) {
-              leaf.message = { ...leaf.message, content: "Unpersisted replacement" };
-            } else {
-              Object.assign(leaf, { type: "custom", customType: "untrusted-hint" });
-            }
-          }
-          const before = loadTranscriptEventsSync(fixture.target);
-          const consume = await prepared.prepareInitialUserTurnReplay?.();
-          expect(consume).toBeTypeOf("function");
-          const admitted = vi.fn();
-          await consume!(admitted);
-          expect(admitted).toHaveBeenCalledOnce();
-          expect(reload).toHaveBeenCalledTimes(
-            change === "wrong-hint" || change === "local-navigation" ? 1 : 0,
-          );
-          expect(
-            prepared.sessionManager
-              .getBranch()
-              .some(
-                (entry) =>
-                  entry.type === "message" &&
-                  entry.message.role === "user" &&
-                  entry.message.content === fixture.attempt.prompt,
-              ),
-          ).toBe(true);
-          expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
-        } finally {
-          reload.mockRestore();
-        }
-      },
-      { selectedOwner: true, interruptedTurn: false, sharedStore: change === "shared-store" },
-    );
-  });
-
-  it.each(["rewrite", "close", "revoke"] as const)(
-    "refuses replay after %s between worker validation and consumption",
-    async (change) => {
-      await withInterruptedTurn(false, async (fixture) => {
-        const prepared = await fixture.prepare();
-        const admit = await prepared.prepareInitialUserTurnReplay?.();
-        expect(admit).toBeTypeOf("function");
-        const original = SessionManager.open(fixture.target);
-        const validated = createDeferredCore();
-        const release = createDeferredCore();
-        const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
-        const spy = vi
-          .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
-          .mockImplementation((params) => {
-            const readers = createReaders(params);
-            return {
-              ...readers,
-              readAnchors: async (input, signal) => {
-                const facts = await readers.readAnchors(input, signal);
-                if (facts.replayValidated === "current") {
-                  validated.resolve();
-                  await release.promise;
-                }
-                return facts;
-              },
-            };
-          });
-        const consume = vi.fn();
-        const pending = admit!(consume);
-        let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-        try {
-          await awaitGateBeforeSettlement(
-            validated.promise,
-            pending,
-            "Replay validation was not reached",
-          );
-          if (change === "rewrite") {
-            expect(original.removeTrailingEntries(() => true)).toBeGreaterThan(0);
-          } else if (change === "close") {
-            closing = closeOpenClawAgentDatabaseByPathAsync(fixture.target.storePath!);
-          } else {
-            fixture.revoke();
-          }
-          release.resolve();
-          await expect(pending).rejects.toThrow(/replay|revoked|closed|current|admission/i);
-          expect(consume).not.toHaveBeenCalled();
-        } finally {
-          release.resolve();
-          await Promise.allSettled([pending, closing]);
-          spy.mockRestore();
-        }
-      });
     },
   );
 

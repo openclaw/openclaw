@@ -405,6 +405,24 @@ Tool-authority caller preparation retains its original source-selection plan;
 the consuming phase rereads current policy through that plan instead of repeating
 discovery. These changes preserve foreign-commit freshness and final effect checks.
 
+Initial manager hydration, persisted-user replay, and bootstrap message presence
+share one fresh history cohort. After hooks or compaction, replay acquires its
+next cohort at synchronous prompt admission. Bounded model context retains its separate
+payload projection and byte limits, with synchronous acceptance under the same
+FIFO and native mutation witness. That operation's snapshot is its serialization
+point; a foreign commit overlapping its reply is observed on the next unpinned
+read. Source replacement, live authority, and local native mutations are still
+checked before synchronous acceptance. Delivery reads candidate payloads and their
+current anchors in one history snapshot before deciding receipt coverage.
+Unbounded model-context reads prepare outside the writer FIFO and retain their
+subsequent fresh validation phase.
+Terminal consumers carry immutable append anchors as historical evidence;
+the context outbox and skill-review owners still validate those anchors before
+consuming history. Activity summaries consume the patch transaction's acknowledged
+watermark while retaining dirty notifications and fresh subsequent reads.
+Cold metadata joins initialization and turn preparation; restoration stays with
+the cold-storage owner, outside the writer FIFO and before message hooks run.
+
 ## Retained final-authority guards
 
 Preparation uses the existing worker owners. A synchronous guard immediately before
@@ -604,6 +622,19 @@ agent, shared-state database, or incognito owner still refuses admission. Schema
 stored bytes, and update behavior are unchanged.
 Queued session admission and writable reads validate through that same owner,
 so its first creation does not invalidate their earlier absence observation.
+Session creation retains this original-absence witness when a sibling finishes
+admission while caller authority is being prepared, including shared stores.
+It still refuses replacement files and changed aliases or shared-state owners.
+
+Cold session readers join the same physical writer queue before dispatch, so they
+cannot observe the database file before its first schema admission completes.
+They use the existing target-discovery lane while holding that queue, so a history
+search waiting for writer-backed index status cannot block their worker dispatch.
+Already admitted readers retain their independent read path. The queue reservation
+ends before consumer callbacks run, and the existing request deadline, cancellation,
+and database revocation cover admission waiting. Read-only access never creates a
+missing store; idle agents still have no durable database until their first write.
+No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
 dispatch. Each read retains its physical owner and writer FIFO through synchronous

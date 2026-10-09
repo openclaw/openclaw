@@ -132,6 +132,7 @@ import {
 } from "./session-init-conflict-retry.js";
 import type { SessionInitResult } from "./session-init.types.js";
 import {
+  prepareReplySessionInitialization,
   resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
@@ -279,38 +280,10 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     }
   }
   params.signal?.throwIfAborted();
-  const parentSessionKey = normalizeOptionalString(params.ctx.ParentSessionKey);
-  const snapshot = await loadReplySessionInitializationSnapshot(
-    {
-      agentId: attemptContext.agentId,
-      storePath: attemptContext.storePath,
-      sessionKey: attemptContext.sessionKey,
-      relatedSessionKeys: parentSessionKey ? [parentSessionKey] : [],
-    },
-    {
-      reader: resolveInitializationSessionReader(params, attemptContext),
-      assertCurrent: () => params.signal?.throwIfAborted(),
-    },
+  const { snapshot, parentSessionKey } = await prepareReplySessionInitialization(
+    params,
+    attemptContext,
   );
-  const { restoreSessionColdTranscript } =
-    await import("../../config/sessions/session-cold-storage.js");
-  const restoreTargets = [
-    attemptContext.sessionKey,
-    ...(parentSessionKey ? [parentSessionKey] : []),
-  ].map((sessionKey) => ({ sessionKey, sessionId: snapshot.readEntry(sessionKey)?.sessionId }));
-  // Restore before the writer lane: reset hooks and parent forks read synchronously inside it.
-  for (const { sessionKey, sessionId } of restoreTargets) {
-    if (sessionId) {
-      params.signal?.throwIfAborted();
-      await restoreSessionColdTranscript({
-        sessionKey,
-        sessionId,
-        agentId: attemptContext.agentId,
-        storePath: attemptContext.storePath,
-      });
-    }
-  }
-  params.signal?.throwIfAborted();
   // Creation hooks, parent forks, and legacy-main retirement can touch other sessions.
   const storeWriterIdentity =
     snapshot.currentEntry &&
