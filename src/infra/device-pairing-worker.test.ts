@@ -12,6 +12,8 @@ import {
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
+  loadDeviceBootstrapTokenRecords,
+  persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,
   type DevicePairingStoreState,
@@ -22,6 +24,7 @@ import {
   verifyDeviceToken,
 } from "./device-pairing-tokens.js";
 import {
+  clearDevicePairing,
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
@@ -30,6 +33,7 @@ import {
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
+import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -167,6 +171,139 @@ test("keeps public list, lookup, and pending bytes while executing no host queri
     all.mockRestore();
     first.mockRestore();
   }
+});
+
+test("bulk clear commits repairs, bootstrap revocation, and APNS removal together", async () => {
+  const now = Date.now();
+  persistDeviceBootstrapTokenRecords(
+    {
+      synthetic: {
+        token: "synthetic",
+        deviceId: "paired-rich",
+        publicKey: "synthetic-replacement-key",
+        ts: now,
+        issuedAtMs: now,
+      },
+      unrelated: {
+        token: "unrelated",
+        deviceId: "unrelated-device",
+        publicKey: "unrelated-key",
+        ts: now,
+        issuedAtMs: now,
+      },
+    },
+    baseDir,
+  );
+  await registerApnsRegistration({
+    nodeId: "paired-rich",
+    transport: "direct",
+    token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox",
+    baseDir,
+  });
+  const result = await clearDevicePairing({ pending: true }, baseDir);
+  expect(result.removedDevices.toSorted()).toEqual(["paired-minimal", "paired-rich"]);
+  expect(
+    result.rejectedRequests.toSorted((a, b) => a.requestId.localeCompare(b.requestId)),
+  ).toEqual([
+    { requestId: "newest", deviceId: "paired-rich" },
+    { requestId: "refreshed", deviceId: "refreshed-device" },
+  ]);
+  expect(await listDevicePairing(baseDir)).toEqual({ pending: [], paired: [] });
+  expect(Object.keys(loadDeviceBootstrapTokenRecords(baseDir))).toEqual(["unrelated"]);
+  expect(await loadApnsRegistration("paired-rich", baseDir)).toBeNull();
+  expect(await clearDevicePairing({ pending: true }, baseDir)).toEqual({
+    removedDevices: [],
+    rejectedRequests: [],
+  });
+  const arrival = await requestDevicePairing(
+    { deviceId: "later-device", publicKey: "later-key" },
+    baseDir,
+  );
+  expect((await listDevicePairing(baseDir)).pending.map((entry) => entry.requestId)).toEqual([
+    arrival.request.requestId,
+  ]);
+});
+
+test("clear without pending preserves unrelated requests and cascades paired repairs", async () => {
+  const result = await clearDevicePairing({ pending: false }, baseDir);
+  expect(result.removedDevices.toSorted()).toEqual(["paired-minimal", "paired-rich"]);
+  expect(result.rejectedRequests).toEqual([]);
+  const remaining = await listDevicePairing(baseDir);
+  expect(remaining.paired).toEqual([]);
+  expect(remaining.pending.map((request) => request.requestId)).toEqual(["refreshed"]);
+});
+
+test("bulk clear preserves other devices and rolls back if current removal policy refuses", async () => {
+  const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
+  await expect(
+    clearDevicePairing({ pending: true, deviceId: "paired-rich", canRemove: () => false }, baseDir),
+  ).rejects.toThrow("Device pairing clear denied");
+  expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
+  const result = await clearDevicePairing({ pending: true, deviceId: "paired-rich" }, baseDir);
+  expect(result).toEqual({
+    removedDevices: ["paired-rich"],
+    rejectedRequests: [{ requestId: "newest", deviceId: "paired-rich" }],
+  });
+  const remaining = await listDevicePairing(baseDir);
+  expect(remaining.paired.map((device) => device.deviceId)).toEqual(["paired-minimal"]);
+  expect(remaining.pending.map((request) => request.requestId)).toEqual(["refreshed"]);
+});
+
+test("bulk clear rolls back when caller authority expires after transaction admission", async () => {
+  const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
+  let current = true;
+  await expect(
+    clearDevicePairing(
+      {
+        pending: true,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("synthetic caller retired");
+          }
+        },
+        canRemove: () => {
+          queueMicrotask(() => {
+            current = false;
+          });
+          return true;
+        },
+      },
+      baseDir,
+    ),
+  ).rejects.toThrow("synthetic caller retired");
+  expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
+});
+
+test("a mid-clear SQLite failure rolls back paired, pending, and bootstrap deletions", async () => {
+  const now = Date.now();
+  persistDeviceBootstrapTokenRecords(
+    {
+      synthetic: {
+        token: "synthetic",
+        deviceId: "paired-rich",
+        publicKey: "synthetic-replacement-key",
+        ts: now,
+        issuedAtMs: now,
+      },
+    },
+    baseDir,
+  );
+  const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
+  const bootstrapBefore = JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir));
+  database.db.exec(`CREATE TRIGGER fail_bulk_clear BEFORE DELETE ON device_pairing_paired
+    BEGIN SELECT RAISE(ABORT, 'synthetic clear failure'); END;`);
+  try {
+    await expect(clearDevicePairing({ pending: true }, baseDir)).rejects.toThrow(
+      "synthetic clear failure",
+    );
+    expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
+    expect(JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir))).toBe(bootstrapBefore);
+  } finally {
+    database.db.exec("DROP TRIGGER fail_bulk_clear");
+  }
+  expect((await clearDevicePairing({ pending: true }, baseDir)).removedDevices).toHaveLength(2);
 });
 
 test("rolls back owner approval when live policy is revoked before worker commit", async () => {

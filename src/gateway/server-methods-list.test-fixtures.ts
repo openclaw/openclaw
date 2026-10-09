@@ -51,7 +51,7 @@ sessions.pluginPatch sessions.cleanup sessions.reset sessions.delete sessions.co
 sessions.groups.list sessions.groups.defaults sessions.groups.put sessions.groups.rename
 sessions.groups.update sessions.groups.delete last-heartbeat set-heartbeats wake node.pair.list
 node.pair.approve node.pair.reject node.pair.remove device.pair.list device.pair.approve
-device.pair.reject device.pair.remove device.pair.rename device.token.rotate device.token.revoke
+device.pair.reject device.pair.remove device.pair.clear device.pair.rename device.token.rotate device.token.revoke
 node.rename node.list node.describe node.pluginSurface.refresh node.pluginTools.update
 node.skills.update node.pending.drain node.pending.enqueue node.invoke node.pending.pull
 node.pending.ack node.invoke.progress node.invoke.result node.event cron.get cron.list

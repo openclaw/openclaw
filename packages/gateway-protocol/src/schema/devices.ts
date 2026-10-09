@@ -12,6 +12,16 @@ export const DevicePairRejectParamsSchema = closedObject({ requestId: NonEmptySt
 
 export const DevicePairRemoveParamsSchema = closedObject({ deviceId: NonEmptyString });
 
+export const DevicePairClearParamsSchema = closedObject({
+  pending: Type.Optional(Type.Boolean()),
+});
+
+export const DevicePairClearResultSchema = closedObject({
+  removedDevices: Type.Array(NonEmptyString),
+  rejectedPending: Type.Array(NonEmptyString),
+  cleanupFailedDevices: Type.Optional(Type.Array(NonEmptyString)),
+});
+
 const DevicePairLabelString = Type.String({ minLength: 1, maxLength: 64 });
 
 export const DevicePairRenameParamsSchema = closedObject({
@@ -221,6 +231,8 @@ export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
 export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
+export type DevicePairClearParams = Static<typeof DevicePairClearParamsSchema>;
+export type DevicePairClearResult = Static<typeof DevicePairClearResultSchema>;
 export type DevicePairSetupCodeParams = Static<typeof DevicePairSetupCodeParamsSchema>;
 export type DevicePairSetupCodeResult = Static<typeof DevicePairSetupCodeResultSchema>;
 export type DevicePairSetupCompletedEvent = Static<typeof DevicePairSetupCompletedEventSchema>;

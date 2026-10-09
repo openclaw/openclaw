@@ -55,6 +55,7 @@ const loadGatewayServerMethods = createLazyPromise(
 
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
+  "device.pair.clear",
   "device.token.rotate",
   "device.token.revoke",
   "node.pair.remove",

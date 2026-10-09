@@ -10,6 +10,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const {
   approveDevicePairingMock,
+  clearDevicePairingMock,
   getPairedDeviceMock,
   getPendingDevicePairingMock,
   listDevicePairingMock,
@@ -20,6 +21,7 @@ const {
   updatePairedDeviceMetadataMock,
 } = vi.hoisted(() => ({
   approveDevicePairingMock: vi.fn(),
+  clearDevicePairingMock: vi.fn(),
   getPairedDeviceMock: vi.fn(),
   getPendingDevicePairingMock: vi.fn(),
   listDevicePairingMock: vi.fn(),
@@ -32,6 +34,7 @@ const {
 
 export {
   approveDevicePairingMock,
+  clearDevicePairingMock,
   getPairedDeviceMock,
   getPendingDevicePairingMock,
   listDevicePairingMock,
@@ -48,6 +51,7 @@ vi.mock("../../infra/device-pairing.js", async () => {
   );
   return {
     ...actual,
+    clearDevicePairing: clearDevicePairingMock,
     getPairedDevice: getPairedDeviceMock,
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,

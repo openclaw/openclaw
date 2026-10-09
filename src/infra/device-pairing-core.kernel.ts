@@ -4,6 +4,7 @@ import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { revokeDeviceBootstrapTokensForDeviceInDatabase } from "./device-bootstrap.worker-kernel.js";
 import type {
+  ClearDevicePairingResult,
   RequestDevicePairingResult,
   PairedDeviceMetadataPatch,
   PrunedSupersededPairedDevice,
@@ -233,6 +234,43 @@ export function removePairedDeviceInWorker(
   removePairedDeviceRecord(state, normalized);
   persistState(state, undefined, "both", { clearApnsNodeIds: [normalized] });
   return { deviceId: normalized };
+}
+
+/** Clear one authoritative snapshot in the existing pairing worker transaction. */
+export function clearDevicePairingInWorker(
+  database: OpenClawStateDatabase,
+  input: { pending: boolean; deviceId?: string; nowMs: number },
+): ClearDevicePairingResult {
+  const state = loadDevicePairingStateForMutation(input.nowMs);
+  const paired = Object.values(state.pairedByDeviceId).filter(
+    (device) => input.deviceId === undefined || device.deviceId === input.deviceId,
+  );
+  const pending = input.pending
+    ? Object.values(state.pendingById).filter(
+        (request) => input.deviceId === undefined || request.deviceId === input.deviceId,
+      )
+    : [];
+  requestDevicePairingMutationAdmission({ kind: "pairing-clear", paired });
+  // Capture repairs before paired removal cascades to their pending records.
+  const result: ClearDevicePairingResult = {
+    removedDevices: paired.map((device) => device.deviceId),
+    rejectedRequests: pending.map(({ requestId, deviceId }) => ({ requestId, deviceId })),
+  };
+  for (const device of paired) {
+    removePairedDeviceRecord(state, device.deviceId);
+  }
+  for (const request of pending) {
+    delete state.pendingById[request.requestId];
+    revokeDeviceBootstrapTokensForDeviceInDatabase(database, {
+      deviceId: request.deviceId,
+      publicKey: request.publicKey,
+      nowMs: input.nowMs,
+    });
+  }
+  if (paired.length > 0 || pending.length > 0) {
+    persistState(state, undefined, "both", { clearApnsNodeIds: result.removedDevices });
+  }
+  return result;
 }
 
 // Silent pairings from the same client software on the same host mint a fresh
