@@ -72,6 +72,10 @@ export type WorkboardLifecycleSessionReader = (
   options: WorkboardLifecycleSessionReadOptions,
 ) => Promise<WorkboardLifecycleSessionSnapshot>;
 
+function isLiveWorkboardLifecycleSession(session: WorkboardLifecycleSession): boolean {
+  return session.hasActiveRun === true || session.status === "running";
+}
+
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
   sessionKey?: string;
@@ -128,33 +132,56 @@ async function syncWorkboardLifecycleEvent(params: {
   // transition to its run-level owners (subagent_ended, lifecycle sweep).
   // An absent session or failed read keeps the event's own outcome so genuine
   // failures are never lost.
-  let liveSessionKeys: ReadonlySet<string> | undefined;
+  //
+  // Liveness matching preserves the sweep's session-ownership rules: the
+  // event's exact session key is authoritative, and an agentless
+  // "subagent:workboard-*" card link borrows a suffix match only when the
+  // complete snapshot shows exactly one session with that suffix. A different
+  // agent's live session never vouches for this event's terminal outcome.
+  let liveness:
+    | {
+        sessions: readonly WorkboardLifecycleSession[];
+        liveKeys: ReadonlySet<string>;
+        complete: boolean;
+      }
+    | undefined;
   if (params.readSessions && params.observation.state === "failed") {
     try {
       const snapshot = await params.readSessions({ includeUnknown: false });
-      liveSessionKeys = new Set(
-        snapshot.sessions
-          .filter((session) => session.hasActiveRun === true || session.status === "running")
-          .map((session) => session.key),
-      );
+      liveness = {
+        sessions: snapshot.sessions,
+        liveKeys: new Set(
+          snapshot.sessions.filter(isLiveWorkboardLifecycleSession).map((session) => session.key),
+        ),
+        complete: snapshot.complete,
+      };
     } catch {
-      liveSessionKeys = undefined;
+      liveness = undefined;
     }
   }
   const isLiveRunForCard = (card: WorkboardCard): boolean => {
-    if (!liveSessionKeys || liveSessionKeys.size === 0) {
+    if (!liveness) {
       return false;
     }
-    const cardLookupKey = workboardCardSessionLookupKey(card);
-    for (const sessionKey of liveSessionKeys) {
-      if (
-        (params.source.sessionKey && sessionKeyMatchesCard(sessionKey, params.source.sessionKey)) ||
-        sessionKeyMatchesCard(sessionKey, cardLookupKey)
-      ) {
-        return true;
-      }
+    if (params.source.sessionKey) {
+      return liveness.liveKeys.has(params.source.sessionKey);
     }
-    return false;
+    const cardLookupKey = workboardCardSessionLookupKey(card);
+    if (!cardLookupKey.startsWith("subagent:workboard-")) {
+      return liveness.liveKeys.has(cardLookupKey);
+    }
+    if (!liveness.complete) {
+      return false;
+    }
+    const suffixMatches = liveness.sessions.filter((session) =>
+      sessionKeyMatchesCard(session.key, cardLookupKey),
+    );
+    const [soleMatch] = suffixMatches;
+    return (
+      suffixMatches.length === 1 &&
+      soleMatch !== undefined &&
+      isLiveWorkboardLifecycleSession(soleMatch)
+    );
   };
   const updates = Promise.all(
     cards.map(async (card) => {

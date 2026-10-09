@@ -490,28 +490,100 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
-  it("does not read lifecycle sessions for a successful agent_end", async () => {
+  it("blocks on the event's exact terminal session while another agent runs the same suffix", async () => {
     const store = createWorkboardSqliteTestStore();
-    const sessionKey = "agent:worker:subagent:workboard-ops-success";
     const card = await createLinkedCard(store, {
-      sessionKey,
+      sessionKey: "subagent:workboard-ops-card",
       runId: "run-agent",
-      execution: execution(sessionKey, "run-agent"),
+      execution: execution("subagent:workboard-ops-card", "run-agent"),
     });
-    const readSessions = vi.fn();
+    const alphaKey = "agent:alpha:subagent:workboard-ops-card";
+    const betaKey = "agent:beta:subagent:workboard-ops-card";
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        { key: alphaKey, status: "failed", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
+        { key: betaKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+      ],
+      complete: true,
+    });
 
     await syncWorkboardAgentEnded({
       store,
-      event: { runId: "run-agent", success: true },
-      context: { runId: "run-agent", sessionKey },
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent", sessionKey: alphaKey },
       now: card.updatedAt + 2,
       readSessions,
     });
 
-    expect(readSessions).not.toHaveBeenCalled();
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
-      execution: { status: "review" },
+      status: "blocked",
+      execution: { status: "blocked" },
+      metadata: { failureCount: 1 },
+    });
+  });
+
+  it("vetoes an agentless card link on a unique live suffix match in a complete snapshot", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await createLinkedCard(store, {
+      sessionKey: "subagent:workboard-ops-agentless",
+      runId: "run-agent",
+      execution: execution("subagent:workboard-ops-agentless", "run-agent"),
+    });
+    const liveKey = "agent:beta:subagent:workboard-ops-agentless";
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [{ key: liveKey, status: "running", hasActiveRun: true }],
+      complete: true,
+    });
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent" },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+    });
+    expect((await store.get(card.id))?.metadata?.failureCount).toBeUndefined();
+  });
+
+  it("does not veto an agentless card link when the suffix matches several sessions", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await createLinkedCard(store, {
+      sessionKey: "subagent:workboard-ops-ambiguous",
+      runId: "run-agent",
+      execution: execution("subagent:workboard-ops-ambiguous", "run-agent"),
+    });
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        {
+          key: "agent:alpha:subagent:workboard-ops-ambiguous",
+          status: "failed",
+          hasActiveRun: false,
+        },
+        {
+          key: "agent:beta:subagent:workboard-ops-ambiguous",
+          status: "running",
+          hasActiveRun: true,
+        },
+      ],
+      complete: true,
+    });
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent" },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
     });
   });
 
