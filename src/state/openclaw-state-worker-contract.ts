@@ -165,6 +165,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "agentProvenance.record": { input: AgentProvenance; output: void };
     "secrets.write": {
       input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
         capturePrevious: boolean;
@@ -266,6 +267,7 @@ export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
   runtimePreparation?: SqliteWorkerRuntimePreparation;
   existingOnly?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };

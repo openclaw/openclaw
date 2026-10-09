@@ -5,16 +5,24 @@ import { DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS } from "opencl
 import {
   asFiniteNumberInRange,
   asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
   parseDateStringTimestampMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  asOptionalObjectRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
-import type { ShortTermRecallEntry, ShortTermRecallStore } from "./short-term-promotion-types.js";
+import {
+  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
+  DEFAULT_PROMOTION_MIN_SCORE,
+  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+  type PromotionThresholdOptions,
+  type ShortTermRecallEntry,
+  type ShortTermRecallStore,
+} from "./short-term-promotion-types.js";
 
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -47,8 +55,21 @@ export function clampScore(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-export function toFiniteScore(value: unknown, fallback: number): number {
-  return asFiniteNumberInRange(Number(value), { min: 0, max: 1 }) ?? fallback;
+export function resolvePromotionThresholds(options: PromotionThresholdOptions) {
+  return {
+    minScore:
+      asFiniteNumberInRange(Number(options.minScore), { min: 0, max: 1 }) ??
+      DEFAULT_PROMOTION_MIN_SCORE,
+    minRecallCount: toFiniteNonNegativeInt(
+      options.minRecallCount,
+      DEFAULT_PROMOTION_MIN_RECALL_COUNT,
+    ),
+    minUniqueQueries: toFiniteNonNegativeInt(
+      options.minUniqueQueries,
+      DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+    ),
+    maxAgeDays: toFiniteNonNegativeInt(options.maxAgeDays, -1),
+  };
 }
 
 export function isGenericDailyHeading(heading: string): boolean {
@@ -258,7 +279,7 @@ export function mergeRecentDistinct(
   return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
-export function normalizeIsoDay(isoLike: string): string | null {
+export function normalizeIsoDay(isoLike: unknown): string | null {
   if (typeof isoLike !== "string") {
     return null;
   }
@@ -271,19 +292,19 @@ export function totalSignalCountForEntry(entry: ShortTermRecallEntry): number {
 }
 
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
-  if (!raw || typeof raw !== "object") {
+  const record = asOptionalObjectRecord(raw);
+  if (!record) {
     return { version: 1, updatedAt: nowIso, entries: {} };
   }
-  const record = raw as Record<string, unknown>;
-  const entriesRaw = record.entries;
+  const entriesRaw = asOptionalObjectRecord(record.entries);
   const entries: Record<string, ShortTermRecallEntry> = {};
 
-  if (entriesRaw && typeof entriesRaw === "object") {
-    for (const [key, value] of Object.entries(entriesRaw as Record<string, unknown>)) {
-      if (!value || typeof value !== "object") {
+  if (entriesRaw) {
+    for (const [key, value] of Object.entries(entriesRaw)) {
+      const entry = asOptionalObjectRecord(value);
+      if (!entry) {
         continue;
       }
-      const entry = value as Record<string, unknown>;
       const entryPath = typeof entry.path === "string" ? normalizeMemoryPath(entry.path) : "";
       const startLine = Number(entry.startLine);
       const endLine = Number(entry.endLine);
@@ -302,10 +323,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       const lastRecalledAt =
         typeof entry.lastRecalledAt === "string" ? entry.lastRecalledAt : nowIso;
       const promotedAt = typeof entry.promotedAt === "string" ? entry.promotedAt : undefined;
-      const claimHash =
-        typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
-          ? entry.claimHash.trim()
-          : undefined;
+      const claimHash = normalizeOptionalString(entry.claimHash);
       const projectKey = normalizeProjectKeyList(entry.projectKey);
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
       if (
@@ -317,9 +335,10 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
-      const queryHashes = Array.isArray(entry.queryHashes)
-        ? normalizeUniqueTrimmedStringList(entry.queryHashes).slice(0, MAX_QUERY_HASHES)
-        : [];
+      const queryHashes = normalizeUniqueTrimmedStringList(entry.queryHashes).slice(
+        0,
+        MAX_QUERY_HASHES,
+      );
       const storedUserQueryHashes = Array.isArray(entry.userQueryHashes)
         ? normalizeUniqueTrimmedStringList(entry.userQueryHashes).slice(0, MAX_QUERY_HASHES)
         : undefined;
@@ -331,20 +350,16 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         (dailyCount === 0 && groundedCount === 0 ? queryHashes : undefined);
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
-            .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
+            .map(normalizeIsoDay)
             .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
         ? normalizeUniqueTrimmedStringList(
-            entry.conceptTags.map((tag) =>
-              typeof tag === "string" ? normalizeLowercaseStringOrEmpty(tag) : tag,
-            ),
+            entry.conceptTags.map(normalizeLowercaseStringOrEmpty),
           ).slice(0, MAX_CONCEPT_TAGS)
         : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
-      const provenanceRaw =
-        entry.provenance && typeof entry.provenance === "object"
-          ? (entry.provenance as Record<string, unknown>)
-          : undefined;
+      const provenanceRaw = asOptionalObjectRecord(entry.provenance);
+      const supersedesKey = normalizeOptionalString(provenanceRaw?.supersedesKey);
       const lastObservedAt = Date.parse(lastRecalledAt);
       const fallbackObservedAt = Number.isFinite(lastObservedAt)
         ? lastObservedAt
@@ -371,10 +386,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
               Number.isFinite(provenanceRaw.observedAt)
                 ? provenanceRaw.observedAt
                 : fallbackObservedAt,
-            ...(typeof provenanceRaw.supersedesKey === "string" &&
-            provenanceRaw.supersedesKey.trim()
-              ? { supersedesKey: provenanceRaw.supersedesKey.trim() }
-              : {}),
+            ...(supersedesKey ? { supersedesKey } : {}),
           }
         : undefined;
 
@@ -463,10 +475,6 @@ export function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore
     .slice(0, SHORT_TERM_RECALL_MAX_ENTRIES);
   store.entries = Object.fromEntries(retained.toSorted(([a], [b]) => a.localeCompare(b)));
   return entries.length - retained.length;
-}
-
-export function toFinitePositive(value: unknown, fallback: number): number {
-  return asPositiveFiniteNumber(Number(value)) ?? fallback;
 }
 
 export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {

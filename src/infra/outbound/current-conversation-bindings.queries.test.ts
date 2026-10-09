@@ -5,6 +5,7 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
@@ -17,12 +18,17 @@ import {
   resolveCurrentConversationBindingRecord,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
+import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import {
   inspectSessionBindingsByConversations,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
+
+type CurrentConversationBindingPublication = Parameters<
+  Parameters<typeof currentConversationBindingPublication.subscribe>[0]
+>[0];
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -417,6 +423,177 @@ it("inspects mixed owner batches once without replacing exact rows by legacy fal
       executions.restore();
       unregisterSessionBindingAdapter({ ...adapter, adapter });
       manager.stop();
+    }
+  });
+});
+
+it("installs every native binding fact before observers and discards nested rollback", async () => {
+  await withOpenClawTestState({ label: "binding-native-receipts" }, async () => {
+    const first = binding("receipt-one", "default", true);
+    const second = binding("receipt-two", "default", true);
+    const discarded = binding("receipt-rollback", "default", true);
+    const facts = new Map<string, string>();
+    const observedFacts: string[][] = [];
+    const publications: CurrentConversationBindingPublication[] = [];
+    const unsubscribeFacts = currentConversationBindingPublication.subscribeFacts((change) => {
+      if (!("receipt" in change)) {
+        return;
+      }
+      const { receipt } = change;
+      for (const [key, fact] of receipt.facts) {
+        if (fact.kind === "postimage") {
+          facts.set(key, fact.value.targetSessionKey);
+        } else {
+          facts.delete(key);
+        }
+      }
+    });
+    const unsubscribe = currentConversationBindingPublication.subscribe((publication) => {
+      publications.push(publication);
+      observedFacts.push([...facts.values()]);
+    });
+    try {
+      runOpenClawStateWriteTransaction(() => {
+        writeBinding(first);
+        expect(facts.size).toBe(0);
+        expect(() =>
+          runOpenClawStateWriteTransaction(() => {
+            writeBinding(discarded);
+            throw new Error("rollback nested binding");
+          }),
+        ).toThrow("rollback nested binding");
+        writeBinding(second);
+        expect(facts.size).toBe(0);
+      });
+      expect(publications).toHaveLength(2);
+      expect(observedFacts).toEqual([
+        [first.targetSessionKey, second.targetSessionKey],
+        [first.targetSessionKey, second.targetSessionKey],
+      ]);
+      expect(publications.every(({ receipt }) => typeof receipt.source.identity === "string")).toBe(
+        true,
+      );
+      expect(resolveCurrentConversationBindingRecord(discarded.conversation)).toBeNull();
+      expect(() =>
+        runOpenClawStateWriteTransaction(() => {
+          writeBinding(discarded);
+          throw new Error("rollback outer binding");
+        }),
+      ).toThrow("rollback outer binding");
+      expect(publications).toHaveLength(2);
+    } finally {
+      unsubscribeFacts();
+      unsubscribe();
+    }
+  });
+});
+
+it("publishes rebind, legacy repair, expiry and scoped deletion reverse-index invalidations", async () => {
+  await withOpenClawTestState({ label: "binding-reverse-receipts" }, async () => {
+    const original = binding("receipt-rebind", "default", true);
+    const sibling = binding("receipt-sibling", "other", true);
+    writeBinding(original);
+    writeBinding(sibling);
+    const publications: CurrentConversationBindingPublication[] = [];
+    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
+      publications.push(publication),
+    );
+    try {
+      const rebound = { ...original, targetSessionKey: "agent:main:replacement" };
+      writeBinding(rebound);
+      expect(publications.at(-1)?.sessionKeys).toEqual([
+        original.targetSessionKey,
+        rebound.targetSessionKey,
+      ]);
+      const { db } = openOpenClawStateDatabase();
+      db.prepare(
+        "UPDATE current_conversation_bindings SET binding_key = ? WHERE binding_id = ?",
+      ).run("old-receipt-key", original.bindingId);
+      expect(resolveCurrentConversationBindingRecord(original.conversation)).toEqual(rebound);
+      const repaired = publications.at(-1)!;
+      expect(repaired.receipt.facts.get("old-receipt-key")).toEqual({ kind: "absent" });
+      expect([...repaired.receipt.facts.values()]).toContainEqual({
+        kind: "postimage",
+        value: rebound,
+      });
+      writeBinding({ ...rebound, expiresAt: 1 });
+      expect(listCurrentConversationBindingRecordsBySession(rebound.targetSessionKey)).toEqual([]);
+      expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+      expect(publications.at(-1)?.sessionKeys).toEqual([rebound.targetSessionKey]);
+      expect(
+        deleteCurrentConversationBindingRecordsBySession(
+          sibling.targetSessionKey,
+          original.conversation,
+        ),
+      ).toEqual([]);
+      expect(resolveCurrentConversationBindingRecord(sibling.conversation)).toEqual(sibling);
+      expect(
+        deleteCurrentConversationBindingRecordsBySession(
+          sibling.targetSessionKey,
+          sibling.conversation,
+        ),
+      ).toEqual([sibling]);
+      expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+it("retires failed binding fact installation without hiding the durable commit", async () => {
+  await withOpenClawTestState({ label: "binding-failed-receipt" }, async () => {
+    const record = binding("receipt-failure");
+    const publications: CurrentConversationBindingPublication[] = [];
+    const unsubscribeFacts = currentConversationBindingPublication.subscribeFacts((change) => {
+      if (!("receipt" in change)) {
+        return;
+      }
+      const { receipt } = change;
+      if ([...receipt.facts.values()].some((fact) => fact.kind === "postimage")) {
+        throw new Error("synthetic binding projection failure");
+      }
+    });
+    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
+      publications.push(publication),
+    );
+    try {
+      expect(writeBinding(record)).toEqual(record);
+      expect(resolveCurrentConversationBindingRecord(record.conversation)).toEqual(record);
+      expect(publications).toHaveLength(1);
+      expect([...publications[0]!.receipt.facts.values()]).toEqual([{ kind: "unknown" }]);
+    } finally {
+      unsubscribeFacts();
+      unsubscribe();
+    }
+  });
+});
+
+it("publishes SQLite's actual binding and reverse-index keys for non-scalar text", async () => {
+  await withOpenClawTestState({ label: "binding-native-text-receipt" }, async () => {
+    const record = binding("receipt-\ud800");
+    record.targetSessionKey = "agent:main:receipt-\ud800";
+    const publications: CurrentConversationBindingPublication[] = [];
+    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
+      publications.push(publication),
+    );
+    try {
+      writeBinding(record);
+      expect(publications).toHaveLength(1);
+      expect([...publications[0]!.receipt.facts.keys()]).toEqual([
+        "demo\u241fdefault\u241f\u241freceipt-\ufffd",
+      ]);
+      expect(publications[0]!.sessionKeys).toEqual(["agent:main:receipt-\ufffd"]);
+      const { db } = openOpenClawStateDatabase();
+      expect(
+        db
+          .prepare("SELECT binding_key, target_session_key FROM current_conversation_bindings")
+          .get(),
+      ).toEqual({
+        binding_key: "demo\u241fdefault\u241f\u241freceipt-\ufffd",
+        target_session_key: "agent:main:receipt-\ufffd",
+      });
+    } finally {
+      unsubscribe();
     }
   });
 });

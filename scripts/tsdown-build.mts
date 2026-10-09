@@ -293,8 +293,13 @@ function listExistingGeneratedDeclarationOutputPaths(
   roots: string[],
 ) {
   const protectedPaths = new Set<string>();
+  // Postbuild recreates the staging-only overlay from canonical dist declarations.
+  const runtimeOverlay = path.resolve(cwd, "dist-runtime");
   for (const root of roots) {
-    collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
+    const outputRoot = path.resolve(cwd, root);
+    if (outputRoot !== runtimeOverlay) {
+      collectDeclarationOutputPaths(outputRoot, protectedPaths, fsImpl);
+    }
   }
   return protectedPaths;
 }

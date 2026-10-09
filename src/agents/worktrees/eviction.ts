@@ -166,7 +166,7 @@ export async function evictManagedWorktree(params: {
           };
           let deletionAdmitted = false;
           const assertEffectCurrent = () => (deletionAdmitted ? settleGuard() : beforeRun());
-          const fenceDependencies = async (ids: string[]) => {
+          const fenceDependencies = async (ids: string[], signal: AbortSignal) => {
             for (const id of ids) {
               if (id === record.id || !liveIds.has(id)) {
                 throw new Error("Worktree dependency is outside the admitted inventory");
@@ -180,8 +180,9 @@ export async function evictManagedWorktree(params: {
                     ? {
                         leaseSet: authority.leaseSet,
                         predicates: [{ kind: "binding", record }, claimsPredicate()],
+                        signal,
                       }
-                    : heldClaimsAuthority(),
+                    : { ...heldClaimsAuthority(), signal },
                 });
               } catch (error) {
                 if (error instanceof WorktreeRemovalContentionError && error.blockedByRun) {
@@ -208,10 +209,18 @@ export async function evictManagedWorktree(params: {
               { type: "worktree.eviction-purge", input: { record, live } },
               {
                 assertCurrent: assertEffectCurrent,
-                onEffect: async (effect) => {
+                onEffect: async (effect, { signal }) => {
+                  // Admitted deletion keeps the worker deadline while caller cancellation joins settlement.
+                  const effectSignal =
+                    !deletionAdmitted && guard.signal
+                      ? AbortSignal.any([signal, guard.signal])
+                      : signal;
+                  if (!deletionAdmitted) {
+                    effectSignal.throwIfAborted();
+                  }
                   assertEffectCurrent();
                   if (effect.type === "worktree.eviction-fence") {
-                    await fenceDependencies(effect.input.worktreeIds);
+                    await fenceDependencies(effect.input.worktreeIds, effectSignal);
                   } else if (effect.type === "worktree.eviction-admit") {
                     deletionAdmitted = true;
                   }

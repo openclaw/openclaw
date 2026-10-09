@@ -406,6 +406,7 @@ function createIncognitoAgentExecutionOwner(
               path: params.databasePath ? path.resolve(params.databasePath) : undefined,
             });
             const readInput = {
+              signal: params.signal,
               cfg: captureRuntimeConfigWithSource(params.cfg, params.cfg),
               sessionKey: params.sessionKey,
               env,
@@ -425,6 +426,7 @@ function createIncognitoAgentExecutionOwner(
             return execution.sessions.withSharedState(async () => {
               const { prepareIncognitoAcpSessionEntryRead } =
                 await import("../acp/runtime/session-meta-worker-mutation.js");
+              readInput.signal?.throwIfAborted();
               assertReadCurrent();
               return prepareIncognitoAcpSessionEntryRead({
                 ...readInput,

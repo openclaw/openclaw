@@ -22,6 +22,7 @@ import * as sessionArchive from "../config/sessions/session-accessor.sqlite-arch
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   emitSessionIdentityMutation,
   onSessionIdentityMutation,
@@ -275,36 +276,31 @@ test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed
         };
         return store;
       });
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          const wrapped =
-            isRecord(request.facts) && request.facts.kind === "session-entry-current"
-              ? request.facts
-              : undefined;
-          const facts = wrapped?.domainFacts ?? request.facts;
-          if (
-            boundary === "foreign grant" &&
-            !injected &&
-            request.stage === "commit" &&
-            isRecord(facts) &&
-            facts.workspaceId === repository.workspaceId &&
-            facts.changed === true &&
-            facts.workspace === undefined
-          ) {
-            nativeAbsent = wrapped !== undefined && wrapped.entry === undefined;
-            // Run every real host guard first; commit the peer write before releasing the native grant.
-            admit(request, () => {
-              inject();
-              return grant();
-            });
-            return;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      const wrapped =
+        isRecord(request.facts) && request.facts.kind === "session-entry-current"
+          ? request.facts
+          : undefined;
+      const facts = wrapped?.domainFacts ?? request.facts;
+      if (
+        boundary === "foreign grant" &&
+        !injected &&
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.workspaceId === repository.workspaceId &&
+        facts.changed === true &&
+        facts.workspace === undefined
+      ) {
+        nativeAbsent = wrapped !== undefined && wrapped.entry === undefined;
+        // Run every real host guard first; commit the peer write before releasing the native grant.
+        admit(request, () => {
+          inject();
+          return grant();
+        });
+        return;
+      }
+      admit(request, grant);
+    });
     try {
       const observed = await directSessionReq("sessions.delete", { key: sessionKey }).then(
         (response) => ({ response, error: undefined }),

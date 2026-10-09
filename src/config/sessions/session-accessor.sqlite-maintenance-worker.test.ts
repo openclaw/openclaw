@@ -936,6 +936,10 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
           "UPDATE session_nodes SET updated_at = 1, entry_json = json_set(entry_json, '$.updatedAt', 1) WHERE session_key = ?",
         )
         .run(foreignVictim.sessionKey);
+      // The foreign writer certifies its canonical timestamp update after triggers clear proof.
+      foreign
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(foreignVictim.sessionKey);
     } finally {
       foreign.close();
     }

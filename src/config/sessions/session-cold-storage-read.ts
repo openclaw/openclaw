@@ -11,10 +11,12 @@ import {
   SessionTranscriptColdError,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 
 /** History callers retain their prepared physical target and read owner through restoration. */
 export type SessionColdReadPreparation = {
   target: ResolvedTranscriptReadScope;
+  acceptSourceValidation?: (validation: SessionSourceValidation) => void;
   readMetadata: (
     phase: "initial" | "queued",
   ) => Promise<Omit<SessionColdArchive, "archive_blob"> | undefined>;

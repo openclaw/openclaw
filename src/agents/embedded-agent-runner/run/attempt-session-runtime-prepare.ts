@@ -135,6 +135,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     attempt.model.api,
     attempt.model.baseUrl,
     transcriptPolicy.inHistorySystemUpdates === true,
+    // Personal bootstrap follows the selected human, not only the session ID.
+    attempt.bootstrapUserProfileId,
   ]);
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>

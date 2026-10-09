@@ -177,16 +177,7 @@ suite.define(() => {
           expect(await chooser.element().getAttribute("capture")).toBeNull();
           const accept = await chooser.element().getAttribute("accept");
           if (kind === "file") {
-            for (const type of [
-              "image/*",
-              "video/*",
-              "audio/*",
-              "application/pdf",
-              ".docx",
-              ".zip",
-            ]) {
-              expect(accept).toContain(type);
-            }
+            expect(accept).toBeNull();
           } else {
             expect(accept).toBe("image/*");
           }

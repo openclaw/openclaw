@@ -214,57 +214,52 @@ export async function emulateMediaViaPlaywright(
   await page.emulateMedia({ colorScheme: opts.colorScheme });
 }
 
-export async function setLocaleViaPlaywright(
-  opts: InteractionTargetOptions & {
-    locale: string;
-  },
+async function setPageEmulationOverride(
+  opts: InteractionTargetOptions & { locale?: string; timezoneId?: string },
+  field: "locale" | "timezoneId",
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   const pageState = ensurePageState(page);
-  const locale = normalizeOptionalString(opts.locale) ?? "";
-  if (!locale) {
-    throw new Error("locale is required");
+  const value = normalizeOptionalString(opts[field]) ?? "";
+  if (!value) {
+    throw new Error(`${field} is required`);
   }
   const session = await resolvePageEmulationSession(page, pageState);
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
   try {
-    await session.send("Emulation.setLocaleOverride", { locale });
-  } catch (err) {
-    if (!String(err).includes("Another locale override is already in effect")) {
-      throw err;
+    if (field === "locale") {
+      await session.send("Emulation.setLocaleOverride", { locale: value });
+    } else {
+      await session.send("Emulation.setTimezoneOverride", { timezoneId: value });
     }
-  }
-}
-
-export async function setTimezoneViaPlaywright(
-  opts: InteractionTargetOptions & {
-    timezoneId: string;
-  },
-): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  const pageState = ensurePageState(page);
-  const timezoneId = normalizeOptionalString(opts.timezoneId) ?? "";
-  if (!timezoneId) {
-    throw new Error("timezoneId is required");
-  }
-  const session = await resolvePageEmulationSession(page, pageState);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  try {
-    await session.send("Emulation.setTimezoneOverride", { timezoneId });
   } catch (err) {
     const msg = String(err);
-    if (msg.includes("Timezone override is already in effect")) {
+    const alreadyApplied =
+      field === "locale"
+        ? "Another locale override is already in effect"
+        : "Timezone override is already in effect";
+    if (msg.includes(alreadyApplied)) {
       return;
     }
-    if (msg.includes("Invalid timezone")) {
-      throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
+    if (field === "timezoneId" && msg.includes("Invalid timezone")) {
+      throw new Error(`Invalid timezone ID: ${value}`, { cause: err });
     }
     throw err;
   }
+}
+
+export async function setLocaleViaPlaywright(
+  opts: InteractionTargetOptions & { locale: string },
+): Promise<void> {
+  await setPageEmulationOverride(opts, "locale");
+}
+
+export async function setTimezoneViaPlaywright(
+  opts: InteractionTargetOptions & { timezoneId: string },
+): Promise<void> {
+  await setPageEmulationOverride(opts, "timezoneId");
 }
 
 export async function setDeviceViaPlaywright(

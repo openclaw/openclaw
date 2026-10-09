@@ -1,7 +1,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
+import {
+  assertAgentDatabaseTerminalOpenAllowed,
+  revalidateAgentDatabaseTerminalOpenAsync,
+} from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -35,6 +38,10 @@ import {
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
+import {
+  targetDiscoveryLane,
+  type SessionHistoryWorkerLane,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -129,6 +136,7 @@ export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
   limits?: { maxBytes: number; maxEvents: number },
   signal?: AbortSignal,
+  lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
   const incognito = captureIncognitoSessionHistoryBinding(source);
   if (incognito) {
@@ -168,36 +176,44 @@ export function prepareSessionTranscriptHydration(
     signal?.throwIfAborted();
     const options = toDatabaseOptions(resolvedScope);
     const databasePath = resolveOpenClawAgentSqlitePath(options);
-    assertAgentDatabaseTerminalOpenAllowed(databasePath);
+    await revalidateAgentDatabaseTerminalOpenAsync(
+      databasePath,
+      () => signal?.throwIfAborted(),
+      signal,
+    );
     try {
-      const result = await withSessionHistoryWorkerDatabase(options, async (owner) => {
-        const assertReadCurrent = () => {
-          signal?.throwIfAborted();
-          owner.assertCurrent();
-        };
-        try {
-          return await readRestoredSessionTranscript(
-            target,
-            () => readInWorker(owner, resolvedScope),
-            {
-              assertCurrent: assertReadCurrent,
-              coldRead: {
-                target: resolvedScope,
-                readMetadata: async () => {
-                  const metadata = await owner.readColdMetadata({
-                    sessionId: resolvedScope.sessionId,
-                    env: target.env,
-                  });
-                  return metadata.archive;
+      const result = await withSessionHistoryWorkerDatabase(
+        options,
+        async (owner) => {
+          const assertReadCurrent = () => {
+            signal?.throwIfAborted();
+            owner.assertCurrent();
+          };
+          try {
+            return await readRestoredSessionTranscript(
+              target,
+              () => readInWorker(owner, resolvedScope),
+              {
+                assertCurrent: assertReadCurrent,
+                coldRead: {
+                  target: resolvedScope,
+                  readMetadata: async () => {
+                    const metadata = await owner.readColdMetadata({
+                      sessionId: resolvedScope.sessionId,
+                      env: target.env,
+                    });
+                    return metadata.archive;
+                  },
                 },
               },
-            },
-          );
-        } finally {
-          // An absent-store reply must not hide a revoked read owner.
-          owner.assertCurrent();
-        }
-      });
+            );
+          } finally {
+            // An absent-store reply must not hide a revoked read owner.
+            owner.assertCurrent();
+          }
+        },
+        lane,
+      );
       signal?.throwIfAborted();
       return result;
     } finally {
@@ -289,6 +305,8 @@ export function prepareSessionTranscriptHydration(
               );
             },
             signal,
+            // Cohort consumption holds the writer through read failure and reader cleanup.
+            targetDiscoveryLane,
           );
         }
       : undefined;

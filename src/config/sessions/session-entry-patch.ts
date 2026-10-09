@@ -38,8 +38,9 @@ import type {
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
 import {
-  prepareSessionSourceAuthority,
+  acceptSessionSourceValidation,
   type PreparedSessionSourceAuthority,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -70,6 +71,13 @@ export async function patchSessionEntryInWorker(params: {
     ...params,
     releaseSource,
     candidateKind: "session-entry-patch",
+    onTransactionFacts(facts) {
+      if (source && isRecord(facts) && facts.kind === "session-entry-patch-validated") {
+        // SAFETY: The paired kernel supplies the source indices from this transaction.
+        acceptSessionSourceValidation(source, facts.sourceValidation as SessionSourceValidation);
+      }
+      return false;
+    },
     assertPrepared: () => {
       params.guard?.assertCurrent?.();
       source?.assertCurrent();
@@ -141,11 +149,8 @@ export async function patchSessionEntryInWorker(params: {
           );
         }
       }
+      // This write may change its source; callers authorize subsequent effects separately.
       await releaseSource();
-      if (committed.entry !== null && params.guard?.source) {
-        source = await prepareSessionSourceAuthority(params.guard.source);
-        source.assertCurrent();
-      }
       return { entry: committed.entry, wrote: Boolean(committed.publication) };
     },
   });

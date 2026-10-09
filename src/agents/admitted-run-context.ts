@@ -13,6 +13,7 @@ import {
   composeSessionSourceAssertion,
   prepareSessionSourceScope,
   runWithSessionSourceScope,
+  type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -52,7 +53,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
   /** Opaque original source identity used only to compare compatible queued input. */
   source?: object;
@@ -100,8 +101,15 @@ export function createAdmittedRunOperatorAuthority(
       throw error;
     }
   });
-  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
-  const readCurrentGithubLogin = source.readCurrentGithubLogin;
+  const bindCurrentReader = (read: (() => string | null) | undefined) =>
+    read
+      ? () => {
+          assertCurrent();
+          return read();
+        }
+      : undefined;
+  const readCurrentRoleAssignment = bindCurrentReader(source.readCurrentRoleAssignment);
+  const readCurrentGithubLogin = bindCurrentReader(source.readCurrentGithubLogin);
   const authority = Object.freeze({
     profileId: source.profileId,
     recoverySnapshot: source.recoverySnapshot
@@ -119,18 +127,8 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleAssignment: readCurrentRoleAssignment
-      ? () => {
-          assertCurrent();
-          return readCurrentRoleAssignment();
-        }
-      : undefined,
-    readCurrentGithubLogin: readCurrentGithubLogin
-      ? () => {
-          assertCurrent();
-          return readCurrentGithubLogin();
-        }
-      : undefined,
+    readCurrentRoleAssignment,
+    readCurrentGithubLogin,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
@@ -158,17 +156,27 @@ export function assertOperatorModelAllowed(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: ModelRef | undefined,
 ): void {
-  if (!authority) {
-    return;
-  }
-  assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
-  const policy = authority.modelPolicy;
-  if (policy && (!model || !policy.allows(model))) {
-    throw new Error(
-      "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
-    );
-  }
+  createOperatorModelSelectionAssertion(authority, model)();
+}
+
+/** Carry the operator's source checks into writes without rereading its store on the host. */
+export function createOperatorModelSelectionAssertion(
+  authority: AdmittedRunOperatorAuthority | undefined,
+  model: ModelRef | undefined,
+): SessionSourceAssertion {
+  return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+    if (!authority) {
+      return;
+    }
+    assertAdmittedRunOperatorAuthority(authority);
+    assertSource();
+    const policy = authority.modelPolicy;
+    if (policy && (!model || !policy.allows(model))) {
+      throw new Error(
+        "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
+      );
+    }
+  });
 }
 
 /** Keeps one selected model current without revoking other work from the same source. */
@@ -361,7 +369,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): (() => void) | undefined {
+): SessionSourceAssertion | undefined {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }

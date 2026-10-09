@@ -11,6 +11,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -30,6 +31,7 @@ import {
 import * as anchorKernel from "./session-transcript-anchor-read.kernel.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const events = [
@@ -272,15 +274,41 @@ it.each([
         reason: "rebuilding",
       });
       const hydrate = prepareSessionTranscriptHydration(scope, { maxBytes: 4096, maxEvents: 10 });
-      await expect(
-        hydrate.readCohort!({ sessionKey: scope.sessionKey, entryIds: ["question"] }, () => {
-          throw new Error("Stale hydration must not publish anchors");
-        }),
-      ).rejects.toMatchObject({
-        name: "SessionTranscriptProjectionUnavailableError",
-        sessionId: scope.sessionId,
-        reason: "rebuilding",
+      const retirementEntered = createDeferred();
+      const releaseRetirement = createDeferred();
+      let following: Promise<void> | undefined;
+      const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+        following ??= runOpenClawAgentWriteAdmission(
+          { agentId: scope.agentId, env: scope.env, path: scope.storePath },
+          () => {},
+        );
+        retirementEntered.resolve();
+        return Promise.race([following, releaseRetirement.promise]);
       });
+      const reading = hydrate.readCohort!(
+        { sessionKey: scope.sessionKey, entryIds: ["question"] },
+        () => {
+          throw new Error("Stale hydration must not publish anchors");
+        },
+      );
+      try {
+        await expect(
+          Promise.race([
+            reading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Hydration cleanup waits on the writer queued behind its cohort");
+            }),
+          ]),
+        ).rejects.toMatchObject({
+          name: "SessionTranscriptProjectionUnavailableError",
+          sessionId: scope.sessionId,
+          reason: "rebuilding",
+        });
+      } finally {
+        releaseRetirement.resolve();
+        await Promise.allSettled([reading, following]);
+        retirement.mockRestore();
+      }
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();

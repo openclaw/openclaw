@@ -119,11 +119,12 @@ The system prompt is **OpenClaw-owned** and rendered each run. It includes:
 
 Full breakdown: [System Prompt](/concepts/system-prompt).
 
-On supported direct Anthropic API-key routes, OpenClaw keeps the stable system
-prefix pinned for the session and sends changed sections as system messages
-after the current user turn. The dynamic suffix keeps updating normally.
-Changing the route or compacting history starts a new prefix series; after a
-Gateway restart, a changed stable prefix also starts a new series.
+On supported direct Anthropic API-key routes and native OpenAI Responses routes,
+OpenClaw pins the complete system prompt for the session. Changed sections,
+including skills, workspace memory, and temporal context, arrive as instruction
+messages after the current user turn. Existing skill and memory refresh rules
+still apply. Changing the route or selected personal profile, resetting, or
+compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 

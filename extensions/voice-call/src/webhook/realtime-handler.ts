@@ -44,7 +44,6 @@ import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
 import type { CallRecord, EndReason, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
-import { appendRecentTalkEventMetadata } from "./realtime-call-metadata.js";
 import { createRealtimeCallPlayback } from "./realtime-call-playback.js";
 import {
   buildForcedConsultSpeechPrompt,
@@ -60,6 +59,7 @@ import {
 } from "./realtime-transcript-text.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import { StreamFrameAdapter } from "./stream-frame-adapter.js";
+import { appendRecentTalkEventMetadata } from "./talk-event-metadata.js";
 
 type ToolHandlerFn = (
   args: unknown,
@@ -788,7 +788,7 @@ export class RealtimeCallHandler {
       onTalkEvent: (event) => {
         void this.manager
           .updateCallMetadata(callRecord, (metadata) =>
-            appendRecentTalkEventMetadata(metadata, event),
+            appendRecentTalkEventMetadata(metadata, event, "realtime"),
           )
           .catch((error: unknown) => {
             console.warn("[voice-call] Failed to update realtime call metadata:", error);
@@ -1130,7 +1130,7 @@ export class RealtimeCallHandler {
               clearRecentFinalUserTranscript(state);
               state.nativeConsultInvocation = undefined;
             }
-            this.resetConsultSessionForContinuity(callId, owner);
+            this.cancelConsultSession(callId, owner, "continuity-reset");
           }
           harness.flushOutput(() => {
             audioPacer.clearAudio();
@@ -1456,46 +1456,36 @@ export class RealtimeCallHandler {
     return state === owner ? state : undefined;
   }
 
-  private cancelNativeConsult(callId: string, owner: ActiveRealtimeVoiceBridge): void {
-    const state = this.nativeConsultsInFlightByCallId.get(callId);
-    if (!state || state.owner !== owner) {
-      return;
-    }
-    this.nativeConsultsInFlightByCallId.delete(callId);
-    state.cancel();
-  }
-
-  private cancelForcedConsult(callId: string, owner: ActiveRealtimeVoiceBridge): void {
-    const state = this.forcedConsultsByCallId.get(callId);
-    if (!state || state.owner !== owner) {
-      return;
-    }
-    state.cancelled = true;
-    state.sendSpeechPrompt = false;
-    state.cancel();
-    this.forcedConsultsByCallId.delete(callId);
-  }
-
-  private resetConsultSessionForContinuity(callId: string, owner: ActiveRealtimeVoiceBridge): void {
+  private cancelConsultSession(
+    callId: string,
+    owner: ActiveRealtimeVoiceBridge,
+    mode: "retire" | "continuity-reset" = "retire",
+  ): void {
     const session = this.consultSessionsByCallId.get(callId);
     if (!session || session.owner !== owner) {
       return;
     }
-    this.cancelForcedConsult(callId, owner);
-    this.cancelNativeConsult(callId, owner);
-    // A fresh provider session must not inherit cancelled/recent consult dedupe.
-    session.coordinator.clear();
-  }
-
-  private cancelConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge): void {
-    const session = this.consultSessionsByCallId.get(callId);
-    if (!session || session.owner !== owner) {
-      return;
+    if (mode === "retire") {
+      session.coordinator.clearPending();
     }
-    session.coordinator.clearPending();
-    this.cancelForcedConsult(callId, owner);
-    this.cancelNativeConsult(callId, owner);
-    this.consultSessionsByCallId.delete(callId);
+    const forced = this.forcedConsultsByCallId.get(callId);
+    if (forced?.owner === owner) {
+      forced.cancelled = true;
+      forced.sendSpeechPrompt = false;
+      forced.cancel();
+      this.forcedConsultsByCallId.delete(callId);
+    }
+    const native = this.nativeConsultsInFlightByCallId.get(callId);
+    if (native?.owner === owner) {
+      this.nativeConsultsInFlightByCallId.delete(callId);
+      native.cancel();
+    }
+    if (mode === "continuity-reset") {
+      // A fresh provider session must not inherit cancelled/recent consult dedupe.
+      session.coordinator.clear();
+    } else {
+      this.consultSessionsByCallId.delete(callId);
+    }
   }
 
   private isActiveBridgeOwner(callId: string, owner: ActiveRealtimeVoiceBridge): boolean {

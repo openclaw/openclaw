@@ -631,6 +631,77 @@ export async function hydrateModelCatalogFromModelsDev(options: {
   return result;
 }
 
+/**
+ * Providers whose public, keyless /models lists the ids requests send. Novita's list mixes
+ * the case of some ids, so only a case-insensitive miss means it no longer serves the row.
+ */
+const PROVIDER_MODEL_INVENTORIES: Readonly<
+  Record<string, { url: string; caseInsensitive?: true }>
+> = {
+  chutes: { url: "https://llm.chutes.ai/v1/models" },
+  deepinfra: { url: "https://api.deepinfra.com/v1/openai/models" },
+  huggingface: { url: "https://router.huggingface.co/v1/models" },
+  kilocode: { url: "https://api.kilo.ai/api/gateway/models" },
+  novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
+  nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
+  opencode: { url: "https://opencode.ai/zen/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/zen/go/v1/models" },
+  venice: { url: "https://api.venice.ai/api/v1/models" },
+};
+
+/** Marks published rows a provider's live inventory no longer lists as deprecated. */
+export async function retireUnservedModels(options: {
+  bundle: PublishedModelCatalogBundle;
+  fetchImpl?: typeof fetch;
+  loadSource?: ModelCatalogSourceLoader;
+}): Promise<Record<string, string[]>> {
+  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
+  const result: Record<string, string[]> = {};
+  for (const [providerId, { url, caseInsensitive }] of Object.entries(PROVIDER_MODEL_INVENTORIES)) {
+    const provider = options.bundle.providers[providerId];
+    if (!provider) {
+      continue;
+    }
+    let payload: unknown;
+    try {
+      payload = await loadSource(url, `${providerId} model inventory`);
+    } catch (error) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${error instanceof Error ? error.message : String(error)}; publishing ${providerId} without inventory retirement\n`,
+      );
+      continue;
+    }
+    const rows = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+    const ids = rows.flatMap((row) =>
+      isRecord(row) && typeof row.id === "string" && row.id ? [row.id] : [],
+    );
+    // An empty or partial inventory is an outage, not proof every model was retired.
+    if (ids.length === 0 || ids.length !== rows.length) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} model inventory is empty or malformed; publishing ${providerId} without inventory retirement\n`,
+      );
+      continue;
+    }
+    const fold = (id: string) => (caseInsensitive ? id.toLowerCase() : id);
+    const served = new Set(ids.map(fold));
+    const retired: string[] = [];
+    for (const model of provider.models) {
+      if (
+        model.status === "deprecated" ||
+        model.status === "disabled" ||
+        served.has(fold(model.id))
+      ) {
+        continue;
+      }
+      model.status = "deprecated";
+      model.statusReason = `${providerId} no longer lists this model in its public model inventory.`;
+      retired.push(model.id);
+    }
+    result[providerId] = retired;
+  }
+  return result;
+}
+
 async function parsePricingCatalog(
   source: PricingSource,
   body: unknown,
@@ -1212,6 +1283,7 @@ export async function runPublishModelCatalog(
   }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
+  const retirementResult = await retireUnservedModels({ bundle, loadSource });
   const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({
@@ -1262,9 +1334,17 @@ export async function runPublishModelCatalog(
         `[${SCRIPT_LABEL}] models.dev provider=${providerId} added=${added} filled=${filled} skipped=${skipped}\n`,
     )
     .join("");
+  const retirementSummary = Object.entries(retirementResult)
+    .map(
+      ([providerId, ids]) =>
+        `[${SCRIPT_LABEL}] inventory provider=${providerId} retired=${ids.length}${ids.length > 0 ? ` ids=${ids.join(",")}` : ""}\n`,
+    )
+    .join("");
   const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
-    process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}`);
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}${retirementSummary}`,
+    );
     return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
   if (!args.out) {
@@ -1286,7 +1366,9 @@ export async function runPublishModelCatalog(
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
-  process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
+  process.stdout.write(
+    `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}`,
+  );
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }
 

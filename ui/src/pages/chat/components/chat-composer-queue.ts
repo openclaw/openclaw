@@ -323,6 +323,16 @@ function renderChatQueueItem(
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
     editing ? " chat-queue__item--editing" : ""
   }`;
+  const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => html`<button
+    class="chat-queue__action chat-queue__${action}"
+    type="button"
+    ?disabled=${disabled}
+    aria-label=${t(`chat.queue.${action}QueuedMessage`)}
+    @click=${() => (action === "retry" ? props.onQueueRetry?.(item.id) : props.onQueueSteer?.(item.id))}
+  >
+    ${action === "retry" ? icons.refresh : icons.arrowUp}
+    <span>${t(`chat.queue.${action}`)}</span>
+  </button>`;
   // The error occupies the grid's final columns below the primary row, so a
   // diagnostic grows the attached tray without disturbing its action rail.
   return html`
@@ -535,37 +545,8 @@ function renderChatQueueItem(
             </span>`
       }
       <span class="chat-queue__actions">
-        ${
-          failed && !editing && props.onQueueRetry
-            ? html`
-                <button
-                  class="chat-queue__action chat-queue__retry"
-                  type="button"
-                  aria-label=${t("chat.queue.retryQueuedMessage")}
-                  @click=${() => props.onQueueRetry?.(item.id)}
-                >
-                  ${icons.refresh}
-                  <span>${t("chat.queue.retry")}</span>
-                </button>
-              `
-            : nothing
-        }
-        ${
-          showsSteer
-            ? html`
-                <button
-                  class="chat-queue__action chat-queue__steer"
-                  type="button"
-                  ?disabled=${!canSteer}
-                  aria-label=${t("chat.queue.steerQueuedMessage")}
-                  @click=${() => props.onQueueSteer?.(item.id)}
-                >
-                  ${icons.arrowUp}
-                  <span>${t("chat.queue.steer")}</span>
-                </button>
-              `
-            : nothing
-        }
+        ${failed && !editing && props.onQueueRetry ? renderDeliveryAction("retry") : nothing}
+        ${showsSteer ? renderDeliveryAction("steer", !canSteer) : nothing}
         ${
           editing
             ? html`

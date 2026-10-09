@@ -7,9 +7,15 @@ import {
   patchSessionEntryTarget,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
-import type { PreparedSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+} from "../config/sessions/session-source-authority.js";
+import { patchSessionEntry as patchSdkSessionEntry } from "../plugin-sdk/session-store-runtime.js";
+import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
@@ -173,31 +179,56 @@ it("rejects a valid captured durable source before reading outside its actor", a
   ).rejects.toThrow("Captured session database changed");
 });
 
-it.each(["transaction", "commit"] as const)(
-  "rechecks host permission at %s and never publishes a refused write",
-  async (stage) => {
-    const scope = await create(`revoked-${stage}`);
+it.each(
+  (["core", "SDK", "runtime", "composed SDK"] as const).flatMap((boundary) =>
+    (["transaction", "commit", "allowed"] as const).map((stage) => ({ boundary, stage })),
+  ),
+)(
+  "rechecks $boundary host permission at $stage and persists only allowed writes",
+  async ({ boundary, stage }) => {
+    const name = `permission-${boundary}-${stage}`.toLowerCase().replaceAll(" ", "-");
+    const scope = await create(name);
     let grants = 0;
-    let publications = 0;
-    await expect(
-      withIncognitoSessionActor(actor, () =>
-        patchSessionEntryCore(scope, () => ({ label: "forbidden" }), {
-          assertCommitAllowed() {
-            grants += 1;
-            if (grants === (stage === "transaction" ? 1 : 2)) {
-              throw new Error("permission revoked");
-            }
-          },
-          onCommitted() {
-            publications += 1;
-          },
-        }),
-      ),
-    ).rejects.toThrow("permission revoked");
-    expect(publications).toBe(0);
+    const assertCommitAllowed = () => {
+      grants += 1;
+      if (stage !== "allowed" && grants === (stage === "transaction" ? 1 : 2)) {
+        throw new Error("permission revoked");
+      }
+    };
+    const update = () => ({ label: "allowed" });
+    const guard =
+      boundary === "composed SDK"
+        ? composeSessionSourceAssertion([
+            captureSessionEntrySourceAssertion({
+              scope,
+              expected: { sessionId: name },
+              fields: ["sessionId"],
+              assertCurrent: assertCommitAllowed,
+              refuse() {
+                throw new Error("permission revoked");
+              },
+            }),
+          ])
+        : assertCommitAllowed;
+    const patch = withIncognitoSessionActor(actor, () =>
+      boundary === "core"
+        ? patchSessionEntryCore(scope, update, { assertCommitAllowed })
+        : (boundary === "runtime"
+            ? createRuntimeAgent().session.patchSessionEntry
+            : patchSdkSessionEntry)({
+            ...scope,
+            update,
+            assertCommitAllowed: guard,
+          }),
+    );
+    if (stage === "allowed") {
+      await expect(patch).resolves.toMatchObject({ label: "allowed" });
+    } else {
+      await expect(patch).rejects.toThrow("permission revoked");
+    }
     expect(
       (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
-    ).toBeUndefined();
+    ).toBe(stage === "allowed" ? "allowed" : undefined);
   },
 );
 

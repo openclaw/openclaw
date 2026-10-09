@@ -543,9 +543,8 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
 
 async function refreshChat(
   host: ChatPageHost,
-  opts?: ChatRefreshOptions & {
-    onStartupMetadata?: ChatStartupMetadataHandler;
-  },
+  opts: ChatRefreshOptions,
+  onStartupMetadata: ChatStartupMetadataHandler,
 ) {
   const refreshedClient = host.client;
   const refreshedSessions = host.sessions;
@@ -658,10 +657,10 @@ async function refreshChat(
     }
   });
   const startupMetadataRefresh =
-    opts?.startup === true && opts.onStartupMetadata
+    opts.startup === true
       ? historyLoad.then(
-          (history) => opts.onStartupMetadata?.(history?.metadata),
-          () => opts.onStartupMetadata?.(undefined),
+          (history) => onStartupMetadata(history?.metadata),
+          () => onStartupMetadata(undefined),
         )
       : Promise.resolve();
   flushChatQueueAfterIdleSessionReconciliation(
@@ -688,25 +687,22 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   if (binding) {
     void refreshChatMetadata(host, { automatic: true, startup: true });
   }
-  const refresh = refreshChat(host, {
-    ...opts,
-    onStartupMetadata: async (metadata) => {
-      // The publication belongs to the shared scope, not the pane that started history.
-      // Final subscriber release or invalidation retires it; one pane closing must not.
-      if (!binding || !publication?.isCurrent()) {
-        return;
-      }
-      if (metadata) {
-        publication.publish(metadata);
-      } else {
-        // Startup can omit its bounded projection. Read the same session scope without history.
-        const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
-          kind: "metadata",
-          revalidateMetadata: () => publication.isCurrent(),
-        });
-        await fallback.completed;
-      }
-    },
+  const refresh = refreshChat(host, { ...opts }, async (metadata) => {
+    // The publication belongs to the shared scope, not the pane that started history.
+    // Final subscriber release or invalidation retires it; one pane closing must not.
+    if (!binding || !publication?.isCurrent()) {
+      return;
+    }
+    if (metadata) {
+      publication.publish(metadata);
+    } else {
+      // Startup can omit its bounded projection. Read the same session scope without history.
+      const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
+        kind: "metadata",
+        revalidateMetadata: () => publication.isCurrent(),
+      });
+      await fallback.completed;
+    }
   });
   const sessionKey = host.sessionKey;
   const client = host.client;

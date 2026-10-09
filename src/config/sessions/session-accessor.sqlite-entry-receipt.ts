@@ -17,6 +17,9 @@ export function isSessionEntryReplacementReceiptUsable(
     ) ||
     (publication.projection !== undefined && !(publication.projection instanceof Map)) ||
     !Array.isArray(publication.ageChanges) ||
+    (publication.unavailableParticipantKeys !== undefined &&
+      (!Array.isArray(publication.unavailableParticipantKeys) ||
+        !publication.unavailableParticipantKeys.every((key) => typeof key === "string"))) ||
     ![
       publication.changedKeys,
       publication.membershipInvalidatedKeys,
@@ -54,7 +57,28 @@ export function isSessionEntryReplacementReceiptUsable(
       }
     } else if (fact.kind === "postimage") {
       const value = fact.value;
-      if (!isRecord(value) || !isRecord(value.entry) || !isRecord(value.projection)) {
+      if (
+        !isRecord(value) ||
+        !isRecord(value.entry) ||
+        !isDeepStrictEqual(value.entry, publication.current.get(key))
+      ) {
+        return false;
+      }
+      if (value.participantProjectionUnavailable === true) {
+        if (
+          !publication.unavailableParticipantKeys?.includes(key) ||
+          value.projection !== undefined ||
+          publication.projection?.has(key)
+        ) {
+          return false;
+        }
+        continue;
+      }
+      if (
+        value.participantProjectionUnavailable !== undefined ||
+        publication.unavailableParticipantKeys?.includes(key) ||
+        !isRecord(value.projection)
+      ) {
         return false;
       }
       const { membership, hasBoard, activitySummaryWatermark: watermark } = value.projection;
@@ -72,7 +96,6 @@ export function isSessionEntryReplacementReceiptUsable(
           (!isRecord(watermark) ||
             (watermark.generation !== null && typeof watermark.generation !== "string") ||
             (watermark.maxSeq !== null && typeof watermark.maxSeq !== "number"))) ||
-        !isDeepStrictEqual(value.entry, publication.current.get(key)) ||
         !isDeepStrictEqual(value.projection, publication.projection?.get(key))
       ) {
         return false;

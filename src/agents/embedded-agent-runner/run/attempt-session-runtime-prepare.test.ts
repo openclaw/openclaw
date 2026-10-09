@@ -275,6 +275,43 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
+    const fixture = createFixture();
+    fixture.transcriptPolicy.inHistorySystemUpdates = true;
+    const entries: SessionEntry[] = [];
+    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
+      entries.push({
+        type: "custom",
+        customType,
+        data,
+        id: `profile-marker-${entries.length}`,
+        parentId: null,
+        timestamp: "2026-10-01T00:00:00Z",
+      });
+    };
+    Object.assign(fixture.sessionManager, {
+      getBranch: () => entries,
+      getSessionTarget: () => undefined,
+      getSessionId: () => "shared-profile-session",
+      appendCustomEntryAsync,
+    });
+    Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+    mocks.retainSessionPromptState.mockImplementation(() => ({
+      state: { toolResults: { projected: true } },
+      [Symbol.dispose]: () => {},
+    }));
+    for (const profile of ["alice", "bob", undefined]) {
+      fixture.input.attempt.bootstrapUserProfileId = profile;
+      const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const prompt = `## User\n${profile ?? "Shared"} guidance`;
+      const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
+      expect(prepared.restart).toBe(true);
+      expect(prepared.systemPrompt).toBe(prompt);
+      prepared.commit();
+      await persistSessionSystemPrompt(runtime.sessionPromptState, appendCustomEntryAsync);
+    }
+  });
+
   it.each(["current", "run-revoked", "reader-revoked"] as const)(
     "keeps constructor transcript authority across preparation when %s",
     async (outcome) => {

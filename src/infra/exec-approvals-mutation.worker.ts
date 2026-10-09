@@ -1,4 +1,3 @@
-import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import {
   generateToken,
@@ -6,11 +5,7 @@ import {
   resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
-import type {
-  ExecApprovalsAgent,
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
-} from "./exec-approvals-core.js";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import {
   applyExecApprovalsUpdate,
@@ -28,12 +23,6 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
-
-type AgentExecApprovalsRemoval = {
-  agentId: string;
-  operationId: string;
-  entries: [string, ExecApprovalsAgent][];
-};
 
 function mutate<T>(
   context: WorkerWriteOperationContext,
@@ -100,44 +89,6 @@ export const execPolicyMutationOperations = {
         assertExecApprovalsMutationAllowed({ db, current: current.file, next });
       }
       return { next, result: (snapshot) => snapshot };
-    }),
-  "execApprovals.removeAgent": (
-    input: { agentId: string; operationId: string },
-    context: WorkerWriteOperationContext,
-  ): AgentExecApprovalsRemoval =>
-    mutate(context, "exec-approvals.remove-agent", (current, db) => {
-      const entries = Object.entries(current.file.agents ?? {}).filter(([key]) => {
-        const normalized = normalizeAgentIdStrict(key);
-        return normalized.ok && normalized.value === input.agentId;
-      });
-      const agents = { ...current.file.agents };
-      for (const [key] of entries) {
-        delete agents[key];
-      }
-      const next = { ...current.file, agents };
-      assertExecApprovalsMutationAllowed({
-        db,
-        current: current.file,
-        next,
-        authority: { ...input, action: "remove" },
-      });
-      return {
-        next: entries.length ? next : null,
-        result: () => ({ ...input, entries }),
-      };
-    }),
-  "execApprovals.restoreAgent": (
-    input: AgentExecApprovalsRemoval,
-    context: WorkerWriteOperationContext,
-  ) =>
-    mutate(context, "exec-approvals.restore-agent", (current, db) => {
-      const authority = { ...input, action: "restore" as const };
-      const next = {
-        ...current.file,
-        agents: { ...current.file.agents, ...Object.fromEntries(input.entries) },
-      };
-      assertExecApprovalsMutationAllowed({ db, current: current.file, next, authority });
-      return { next, result: () => undefined };
     }),
   "execApprovals.restoreSnapshot": (
     input: { snapshot: ExecApprovalsSnapshot; baseHash: string },

@@ -156,7 +156,18 @@ export async function captureSessionEventTargetForHost(
           throw read.error;
         }
         if (preparedSource && owner.selectedStore) {
-          source = { ...preparedSource, selectedStore: { ...owner.selectedStore } };
+          source = {
+            ...preparedSource,
+            // Cold admission may wait for the first writer; bind the file the worker actually read.
+            identity: owner.source
+              ? {
+                  ...preparedSource.identity,
+                  key: `file:${owner.source.databaseIdentity}`,
+                  birthtime: owner.source.databaseBirthtime,
+                }
+              : preparedSource.identity,
+            selectedStore: { ...owner.selectedStore },
+          };
         }
         return read.value;
       },

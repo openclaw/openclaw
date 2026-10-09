@@ -113,12 +113,9 @@ async function getGatewayCatalogPool(
 ): Promise<GatewayCatalogPool> {
   const cache = getPluginMetadataSnapshotCache(metadata);
   getPluginCacheRetirementSignal(cache).throwIfAborted();
-  if (gatewayCatalog.rotating) {
-    await gatewayCatalog.rotating;
-    return getGatewayCatalogPool(input, metadata, environmentFingerprint);
-  }
-  if (gatewayCatalog.current?.recovery) {
-    await gatewayCatalog.current.recovery;
+  const pending = gatewayCatalog.rotating ?? gatewayCatalog.current?.recovery;
+  if (pending) {
+    await pending;
     return getGatewayCatalogPool(input, metadata, environmentFingerprint);
   }
   if (gatewayCatalog.current?.cache === cache) {

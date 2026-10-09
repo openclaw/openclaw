@@ -223,17 +223,6 @@ function reconcilePendingChatOutboxInput(
   return undefined;
 }
 
-function sessionRunProvesQueuedDelivery(
-  sessionInfo: ChatHistoryResult["sessionInfo"],
-  item: ChatQueueItem,
-): boolean {
-  return Boolean(
-    item.sendRunId &&
-    (sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
-      sessionInfo?.lastRunId === item.sendRunId),
-  );
-}
-
 export async function readCurrentStoredChatHistory(
   host: ChatHost,
   outbox: StoredChatOutbox,
@@ -455,7 +444,9 @@ export async function readCurrentStoredChatHistory(
       inputReceipt ||
       submission ||
       (!requiresChatInputConsumption(item) &&
-        sessionRunProvesQueuedDelivery(history.sessionInfo, item))
+        item.sendRunId &&
+        (history.sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
+          history.sessionInfo?.lastRunId === item.sendRunId))
     ) {
       const retired =
         (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox, {

@@ -65,7 +65,7 @@ export type SessionTranscriptWriterFence = Readonly<{
 export type InitialSessionTranscriptWriter = Readonly<{
   writerRunId: string;
   committedFence: SessionTranscriptWriterFence | undefined;
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
   recordCommitted: (fence: SessionTranscriptWriterFence) => void;
   withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
 }>;
@@ -88,7 +88,7 @@ export type OwnedSessionTranscriptWriteContext = {
   initialWriter?: InitialSessionTranscriptWriter;
   sessionReader?: SessionEntryCohortReader;
   /** Revalidate the captured owner, including an absent writer, inside each commit. */
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
   metadataPublication?: { current?: MetadataPublication };
 };
@@ -470,7 +470,10 @@ export function getOwnedSessionTranscriptInitialWriter(
 function assertTranscriptWriteContext(
   context: OwnedSessionTranscriptWriteContext | undefined,
   scope: SessionTranscriptWriteTarget,
-  assertCommitAllowed = context?.assertCommitAllowed,
+  assertSource = () => {
+    context?.assertCommitAllowed?.();
+    context?.initialWriter?.assertActive();
+  },
 ): void {
   if (!context?.assertCommitAllowed && !context?.initialWriter) {
     return;
@@ -482,8 +485,7 @@ function assertTranscriptWriteContext(
   ) {
     throw new SessionTranscriptWriterClaimReboundError();
   }
-  assertCommitAllowed?.();
-  context.initialWriter?.assertActive();
+  assertSource();
 }
 
 /** A guarded context cannot silently become an unfenced write to another target. */
@@ -498,8 +500,11 @@ export function captureOwnedTranscriptWriteAssertion(
   const context = ownedTranscriptWriteContext.getStore();
   const target = captureWriteTarget(scope);
   return composeSessionSourceAssertion(
-    [captureExternalSessionCommitGuard(context?.assertCommitAllowed)],
-    (assertSources) => assertTranscriptWriteContext(context, target, assertSources),
+    [
+      captureExternalSessionCommitGuard(context?.assertCommitAllowed),
+      context?.initialWriter?.assertActive,
+    ],
+    (assertSource) => assertTranscriptWriteContext(context, target, assertSource),
   );
 }
 

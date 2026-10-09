@@ -1,4 +1,5 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import {
   isAuditLedgerEnabled,
@@ -323,18 +324,13 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             getSessionRowProjection: params.getSessionRowProjection,
             loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
               // Tool progress must not wait for optional row enrichment before reply capture.
-              if (
-                !options?.ownerEvent &&
-                params.getSessionRowProjection?.()?.needsMaterialization
-              ) {
-                return { row: null };
-              }
               const owner = options?.ownerEvent
                 ? eventRowOwners.get(options.ownerEvent)
                 : undefined;
               if (
-                options?.ownerEvent &&
-                (!owner?.record || !owner.projection.isCurrent(owner.record))
+                options?.ownerEvent
+                  ? !owner?.record || !owner.projection.isCurrent(owner.record)
+                  : params.getSessionRowProjection?.()?.needsMaterialization
               ) {
                 return { row: null };
               }
@@ -467,7 +463,11 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         ) {
           entry.projectSessionTerminalPending = terminal;
           entry.projectSessionTerminalObservedAt = observedAt;
-          if (definitiveTerminal && terminalOwnerCurrent) {
+          if (
+            definitiveTerminal &&
+            terminalOwnerCurrent &&
+            !isAgentLifecycleYieldedWaiting(evt.data)
+          ) {
             markChatAbortTerminalOutcome(entry);
           }
           if (terminal) {

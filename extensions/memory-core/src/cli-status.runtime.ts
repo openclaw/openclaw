@@ -10,7 +10,6 @@ import {
   shortenHomePath,
   theme,
   withProgress,
-  withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
   getRuntimeConfig,
@@ -37,6 +36,7 @@ import {
   resolveMemoryAgentIds,
   resolveMemoryPluginConfig,
   scanMemoryManagerSources,
+  syncMemoryWithProgress,
   withMemoryCommand,
   type MemoryManager,
   type MemorySourceScan,
@@ -246,35 +246,15 @@ export async function runMemoryStatus(
           },
         );
         if (opts.index && syncFn) {
-          await withProgressTotals(
-            {
-              label: "Indexing memory…",
-              total: 0,
-              fallback: opts.verbose ? "line" : undefined,
+          await syncMemoryWithProgress({
+            sync: syncFn,
+            options: opts,
+            onError: (err) => {
+              indexError = formatErrorMessage(err);
+              defaultRuntime.error(`Memory index failed: ${indexError}`);
+              process.exitCode = 1;
             },
-            async (update, progress) => {
-              try {
-                await syncFn({
-                  reason: "cli",
-                  force: Boolean(opts.force),
-                  progress: (syncUpdate) => {
-                    update({
-                      completed: syncUpdate.completed,
-                      total: syncUpdate.total,
-                      label: syncUpdate.label,
-                    });
-                    if (syncUpdate.label) {
-                      progress.setLabel(syncUpdate.label);
-                    }
-                  },
-                });
-              } catch (err) {
-                indexError = formatErrorMessage(err);
-                defaultRuntime.error(`Memory index failed: ${indexError}`);
-                process.exitCode = 1;
-              }
-            },
-          );
+          });
         } else if (opts.index && !syncFn) {
           defaultRuntime.log("Memory backend does not support manual reindex.");
         }

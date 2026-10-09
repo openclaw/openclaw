@@ -357,24 +357,21 @@ export function replaceWorkspaceAttestationInDatabase(
     return snapshot.attestation;
   }
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const values = {
+    // Heals the NULL path on adopted legacy orphan attestation rows.
+    workspace_path: identity.workspacePath,
+    attested_at_ms: params.attestedAtMs,
+    attestation_updated_at_ms: updatedAtMs,
+  };
   executeSqliteQuerySync(
     database.db,
     kysely
       .insertInto("workspace_setup_state")
       .values({
         workspace_key: identity.workspaceKey,
-        workspace_path: identity.workspacePath,
-        attested_at_ms: params.attestedAtMs,
-        attestation_updated_at_ms: updatedAtMs,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.column("workspace_key").doUpdateSet({
-          // Heals the NULL path on adopted legacy orphan attestation rows.
-          workspace_path: identity.workspacePath,
-          attested_at_ms: params.attestedAtMs,
-          attestation_updated_at_ms: updatedAtMs,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
   const committedHashes = snapshot.attestation?.generatedHashes;
   if (
@@ -441,37 +438,33 @@ export function deleteWorkspaceStateRowsInDatabase(
       kysely.deleteFrom("migration_sources").where("source_key", "in", receiptKeys),
     );
     const runIds = [...new Set(receiptRows.map((row) => row.last_run_id))];
-    const referencedRunIds = new Set(
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("migration_sources")
-          .select("last_run_id")
-          .where("last_run_id", "in", runIds),
-      ).rows.map((row) => row.last_run_id),
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("migration_runs")
+        .where("id", "in", runIds)
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("migration_sources")
+                .select("source_key")
+                .whereRef("migration_sources.last_run_id", "=", "migration_runs.id"),
+            ),
+          ),
+        ),
     );
-    const orphanedRunIds = runIds.filter((runId) => !referencedRunIds.has(runId));
-    if (orphanedRunIds.length > 0) {
-      executeSqliteQuerySync(
-        database.db,
-        kysely.deleteFrom("migration_runs").where("id", "in", orphanedRunIds),
-      );
-    }
   }
-  executeSqliteQuerySync(
-    database.db,
-    kysely
-      .deleteFrom("workspace_generated_bootstrap_hashes")
-      .where("workspace_key", "=", workspaceKey),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    kysely.deleteFrom("workspace_setup_state").where("workspace_key", "=", workspaceKey),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    kysely.deleteFrom("workspace_path_aliases").where("workspace_key", "=", workspaceKey),
-  );
+  for (const table of [
+    "workspace_generated_bootstrap_hashes",
+    "workspace_setup_state",
+    "workspace_path_aliases",
+  ] as const) {
+    executeSqliteQuerySync(
+      database.db,
+      kysely.deleteFrom(table).where("workspace_key", "=", workspaceKey),
+    );
+  }
 }
 
 export function recentWorkspaceAttestation(

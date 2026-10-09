@@ -62,15 +62,23 @@ it.each([
       mocks.config.mockReturnValue(cfg);
       let failedWrite = false;
       if (failure === "ENOSPC") {
-        const copy = fsSafeAdvanced.copyRootFileSync;
-        vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
-          if (options.source.absolutePath === source) {
-            failedWrite = true;
-            throw new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
-              cause: Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" }),
-            });
-          }
-          return copy(options);
+        const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
+        vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+          const batch = createBatch();
+          return {
+            ...batch,
+            copyFile(options) {
+              if (options.source.absolutePath === source) {
+                failedWrite = true;
+                throw new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
+                  cause: Object.assign(new Error("fixture capture write failed"), {
+                    code: "ENOSPC",
+                  }),
+                });
+              }
+              return batch.copyFile(options);
+            },
+          };
         });
       }
       mocks.runContributions.mockImplementation(async () => {

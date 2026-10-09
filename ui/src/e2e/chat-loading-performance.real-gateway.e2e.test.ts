@@ -571,11 +571,11 @@ suite.define(() => {
               selectedPane.evaluate((element) => {
                 const pane = element as HTMLElement & {
                   loadingOlder: boolean;
-                  historyIntentConsumed: boolean;
+                  historyIntentTimer: number | null;
                 };
                 return {
                   loadingOlder: pane.loadingOlder,
-                  historyIntentConsumed: pane.historyIntentConsumed,
+                  historyIntentConsumed: pane.historyIntentTimer !== null,
                 };
               }),
             )

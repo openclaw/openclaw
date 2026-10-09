@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -128,7 +129,8 @@ it.each(["model", "thinking", "context loading"] as const)(
           throw new Error("Expected the real append's committed metadata entry");
         }
         completed.entry = structuredClone(entry);
-        completed.records = await loadTranscriptEvents(original);
+        // Inspect committed fixture bytes while the SDK still owns metadata admission.
+        completed.records = loadTranscriptEventsSync(original);
         completed.watermark = readSessionTranscriptWatermark(original);
         manager.setSessionTarget(replacement);
         return id;
@@ -594,7 +596,7 @@ it.each(["SDK initialization", "model transition"] as const)(
           .spyOn(manager, "appendModelChange")
           .mockImplementation(async (provider, modelId) => {
             const id = await append(provider, modelId);
-            completed.records = await loadTranscriptEvents(first);
+            completed.records = loadTranscriptEventsSync(first);
             process.chdir(secondDir);
             return id;
           });

@@ -25,10 +25,10 @@ if (!process.send || !process.disconnect) {
 const sendMessage = process.send.bind(process);
 const disconnect = process.disconnect.bind(process);
 
-function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+function send(message: SqliteIntegrityWorkerMessage): Promise<void> {
   return new Promise((resolve, reject) => {
     // Flush each phase before native work can block this child's event loop.
-    sendMessage({ type: "phase", phase } satisfies SqliteIntegrityWorkerMessage, (error) => {
+    sendMessage(message, (error) => {
       if (error) {
         reject(error);
       } else {
@@ -36,6 +36,10 @@ function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
       }
     });
   });
+}
+
+function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+  return send({ type: "phase", phase });
 }
 
 async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrityWorkerResult> {
@@ -100,9 +104,7 @@ for await (const [input] of on(process, "message") as AsyncIterable<
     break;
   }
   const result = await check(input);
-  await new Promise<void>((resolve, reject) => {
-    sendMessage(result, (error) => (error ? reject(error) : resolve()));
-  });
+  await send(result);
   if (!input.reuse || !result.ok) {
     disconnect();
     break;
