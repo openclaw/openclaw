@@ -145,6 +145,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   hookMessagesForCurrentPrompt: AgentMessage[];
   includeBoundaryTimestamp: boolean;
   promptForPrecheck: string;
+  pendingInputTokens?: number;
   reserveTokens: number;
   sessionMessageCount: number;
   state: AttemptPromptPreflightState;
@@ -169,6 +170,15 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     : undefined;
   if (input.state.skipPromptSubmission) {
     return { ...input.state };
+  }
+  if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
+    return {
+      ...input.state,
+      preflightRecovery: { route: "compact_only" },
+      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
   }
   let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>;
   try {
