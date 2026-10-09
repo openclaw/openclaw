@@ -259,7 +259,21 @@ function mapCopilotApiModelToDefinition(
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const api = resolveCopilotListedApi(entry, id);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
-  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api);
+  // Copilot lists effort levels instead of Anthropic's capability tree. Only
+  // adaptive-thinking Claude models offer xhigh, so a listed Claude id that
+  // OpenClaw does not know yet still gets adaptive thinking, not manual budgets.
+  const efforts = compat?.supportedReasoningEfforts;
+  const params =
+    api === "anthropic-messages" && efforts?.includes("xhigh")
+      ? {
+          claudeCapabilities: {
+            adaptiveThinking: true,
+            xhighEffort: true,
+            maxEffort: efforts.includes("max"),
+          },
+        }
+      : undefined;
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
 
   const definition: CopilotCatalogModel = {
     id,
@@ -273,6 +287,7 @@ function mapCopilotApiModelToDefinition(
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),
+    ...(params ? { params } : {}),
   };
   copilotModelSelectionMetadata.set(definition, {
     category: normalizeOptionalLowercaseString(entry.model_picker_category),

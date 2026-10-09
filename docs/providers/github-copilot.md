@@ -302,7 +302,9 @@ configured default model is never replaced.
     When a Responses model starts its native effort range at `low`, `minimal`
     maps to `low` instead of sending an unsupported value.
     Explicit live limits take precedence over the bundled catalog. Gemini's
-    Chat Completions transport does not expose `max`.
+    Chat Completions transport does not expose `max`. A Claude model whose live
+    entry lists `xhigh` uses adaptive thinking even before OpenClaw recognizes
+    its model ID.
     See [Thinking levels](/tools/thinking) for session and per-message controls.
   </Accordion>
 
