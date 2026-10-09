@@ -89,49 +89,61 @@ describe("managed llama-server recovery", () => {
     expect(mocks.reap).not.toHaveBeenCalled();
   });
 
-  it("reclaims a matching orphan before creating the embedding transport, once per host", async () => {
-    const { command, modelPath, presetPath, provider } = await createFixture();
-    let orphanAlive = true;
-    mocks.reap.mockImplementation(async ({ command: executable, matchesArguments }) => {
-      expect(executable).toBe(command);
-      expect(matchesArguments([command, "--port", "19432", "--models-preset", presetPath])).toBe(
-        true,
-      );
-      expect(matchesArguments([command, "--port", "19433", "--models-preset", presetPath])).toBe(
-        false,
-      );
-      expect(
-        matchesArguments([command, "--port", "19432", "--models-preset", `${presetPath}.other`]),
-      ).toBe(false);
-      expect(
-        matchesArguments([
-          command,
-          "--port",
-          "19432",
-          "--port",
-          "19433",
-          "--models-preset",
-          presetPath,
-        ]),
-      ).toBe(false);
-      orphanAlive = false;
-      return [1234];
-    });
-    mocks.genericCreate.mockImplementation(async () => {
-      expect(orphanAlive).toBe(false);
-      return { provider: null };
-    });
-    const options = {
-      config: { models: { providers: { "llama-cpp": { ...provider, models: [] } } } },
-      provider: "local",
-      model: modelPath,
-      local: { modelPath },
-    };
-    await llamaCppEmbeddingProviderAdapter.create(options);
-    await llamaCppEmbeddingProviderAdapter.create(options);
-    expect(mocks.reap).toHaveBeenCalledOnce();
-    expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
-  });
+  it.each(["absolute", "relative", "equals"])(
+    "recovers a %s preset before transport creation, once per host",
+    async (kind) => {
+      const { root, command, modelPath, presetPath, provider } = await createFixture();
+      const preset = kind === "relative" ? "models.ini" : presetPath;
+      const localService = {
+        ...provider.localService,
+        ...(kind === "relative" ? { cwd: root } : {}),
+        args: kind === "equals" ? [`--models-preset=${preset}`] : ["--models-preset", preset],
+      };
+      let orphanAlive = true;
+      mocks.reap.mockImplementation(async ({ command: executable, matchesArguments, cwd }) => {
+        expect(executable).toBe(command);
+        expect(matchesArguments([command, "--port", "19432", "--models-preset", preset])).toBe(
+          true,
+        );
+        expect(cwd).toBe(kind === "relative" ? root : undefined);
+        expect(matchesArguments([command, "--port", "19433", "--models-preset", preset])).toBe(
+          false,
+        );
+        expect(
+          matchesArguments([command, "--port", "19432", "--models-preset", `${preset}.other`]),
+        ).toBe(false);
+        expect(
+          matchesArguments([
+            command,
+            "--port",
+            "19432",
+            "--port",
+            "19433",
+            "--models-preset",
+            preset,
+          ]),
+        ).toBe(false);
+        orphanAlive = false;
+        return [1234];
+      });
+      mocks.genericCreate.mockImplementation(async () => {
+        expect(orphanAlive).toBe(false);
+        return { provider: null };
+      });
+      const options = {
+        config: {
+          models: { providers: { "llama-cpp": { ...provider, localService, models: [] } } },
+        },
+        provider: "local",
+        model: modelPath,
+        local: { modelPath },
+      };
+      await llamaCppEmbeddingProviderAdapter.create(options);
+      await llamaCppEmbeddingProviderAdapter.create(options);
+      expect(mocks.reap).toHaveBeenCalledOnce();
+      expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("restores a missing configured managed executable before preparing chat", async () => {
     const { asset, command, presetPath, model, provider } = await createFixture();

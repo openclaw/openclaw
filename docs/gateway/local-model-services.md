@@ -33,7 +33,8 @@ For its pinned managed installation, llama.cpp checks for orphaned servers befor
 the first local-service request in a new host process. On native Apple silicon
 macOS, it reclaims a launchd-adopted router only when the native executable
 is exactly this state directory's managed binary and its port and configured
-preset match. It captures matching descendants, sends SIGTERM, waits up to five
+preset arguments match; relative presets also require the configured working
+directory. It captures matching descendants, sends SIGTERM, waits up to five
 seconds, then uses SIGKILL if needed. Process birth and executable identities are
 rechecked before each signal. Live parents, custom binaries, other state
 directories, and different ports or presets are left alone. A new managed child
@@ -42,9 +43,9 @@ SIGKILL, or a crash. This does not change inherited `nohup` signal handling.
 
 Update the host and plugin together to enable recovery; older compatible hosts
 without the recovery capability keep their existing reuse behavior.
-Recovery requires native process identity inspection. Linux and Windows retain
+Hosts without native process identity support, Linux, and Windows retain
 the existing reuse behavior; Linux PID 1 may itself be a live Gateway, so parent
-PID alone cannot identify an orphan. If a matching macOS orphan cannot be safely identified,
+PID alone cannot identify an orphan. On a supported host, if a matching orphan cannot be safely identified,
 startup reports its PID and asks you to stop it manually before retrying.
 
 ## Managed llama.cpp

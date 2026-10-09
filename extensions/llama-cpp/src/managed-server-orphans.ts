@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { findManagedLlamaServerAsset } from "./llama-server-assets.js";
 
@@ -20,6 +21,7 @@ export async function recoverManagedLlamaServer(params: {
   command: string;
   port: number;
   presetPath?: string;
+  cwd?: string;
   args?: readonly string[];
   signal?: AbortSignal;
 }): Promise<void> {
@@ -28,14 +30,17 @@ export async function recoverManagedLlamaServer(params: {
     return;
   }
   const required = new Map([["--port", String(params.port)]]);
-  if (params.presetPath) {
-    required.set("--models-preset", params.presetPath);
+  const preset = params.presetPath ?? readUniqueArgument(params.args ?? [], "--models-preset");
+  if (preset) {
+    required.set("--models-preset", preset);
   }
+  const cwd =
+    preset && !path.isAbsolute(preset) ? path.resolve(params.cwd ?? process.cwd()) : undefined;
   const host = readUniqueArgument(params.args ?? [], "--host");
   if (host) {
     required.set("--host", host);
   }
-  const key = JSON.stringify([params.command, [...required]]);
+  const key = JSON.stringify([params.command, [...required], cwd]);
   let recovery = recoveries.get(key);
   if (!recovery) {
     recovery = (async () => {
@@ -46,6 +51,7 @@ export async function recoverManagedLlamaServer(params: {
       }
       await reapOrphanedProcesses({
         command: params.command,
+        cwd,
         matchesArguments: (argv) =>
           [...required].every(([name, value]) => readUniqueArgument(argv, name) === value),
         signal: params.signal,

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { sleepWithAbort } from "@openclaw/retry";
 import { hasErrnoCode } from "../infra/errno.js";
 import { getProcessInstanceStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
@@ -6,6 +7,22 @@ import { readDarwinProcessCommand } from "./supervisor/darwin-process-command.js
 
 type ProcessRow = { pid: number; parentPid: number; uid: number; command: string };
 type CapturedProcess = ProcessRow & { startedAt: number; argv: string[] };
+
+function readProcessCwd(pid: number): string {
+  const output = execFileSync("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "cwd", "-F0n"], {
+    encoding: "utf8",
+    timeout: 5_000,
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const paths = output.split("\0").filter((field) => field.startsWith("n"));
+  if (paths.length !== 1 || !paths[0]) {
+    throw new Error(
+      `Cannot inspect orphaned process ${pid}'s working directory; inspect it before retrying.`,
+    );
+  }
+  return paths[0].slice(1);
+}
 
 function readProcesses(pid?: number): ProcessRow[] {
   let output: string;
@@ -46,6 +63,7 @@ function captureProcess(
   row: ProcessRow,
   command: string,
   matchesArguments?: (argv: readonly string[]) => boolean,
+  cwd?: string,
 ): CapturedProcess | undefined {
   if (row.uid !== process.getuid?.() || row.command !== command) {
     return undefined;
@@ -60,6 +78,9 @@ function captureProcess(
       observed.argv[0] !== command ||
       (matchesArguments && !matchesArguments(observed.argv))
     ) {
+      return undefined;
+    }
+    if (cwd !== undefined && readProcessCwd(row.pid) !== cwd) {
       return undefined;
     }
     if (startedAt === null) {
@@ -92,18 +113,20 @@ function isCapturedProcessAlive(target: CapturedProcess): boolean {
 export async function reapOrphanedProcesses(params: {
   command: string;
   matchesArguments: (argv: readonly string[]) => boolean;
+  cwd?: string;
   signal?: AbortSignal;
   onReap?: (pid: number) => void;
 }): Promise<number[]> {
   params.signal?.throwIfAborted();
   // Linux PID 1 can itself be a live Gateway; PPID 1 does not establish orphanhood there.
-  if (process.platform !== "darwin") {
+  if (process.platform !== "darwin" || getProcessInstanceStartTime(process.pid) === null) {
     return [];
   }
+  const cwd = params.cwd === undefined ? undefined : realpathSync(params.cwd);
   const rows = readProcesses();
   const roots = rows
     .filter((row) => row.parentPid === 1 && row.pid !== process.pid)
-    .map((row) => captureProcess(row, params.command, params.matchesArguments))
+    .map((row) => captureProcess(row, params.command, params.matchesArguments, cwd))
     .filter((row) => row !== undefined);
   const reaped: number[] = [];
   for (const root of roots) {
@@ -128,7 +151,9 @@ export async function reapOrphanedProcesses(params: {
         return false;
       }
       const row = readProcesses(target.pid)[0];
-      const current = row && captureProcess(row, params.command);
+      const current =
+        row &&
+        captureProcess(row, params.command, undefined, target.pid === root.pid ? cwd : undefined);
       if (!isCapturedProcessAlive(target)) {
         return false;
       }

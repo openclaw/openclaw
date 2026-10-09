@@ -5,8 +5,10 @@ const mocks = vi.hoisted(() => ({
   identity: vi.fn(),
   dead: vi.fn(),
   command: vi.fn(),
+  realpath: vi.fn(),
 }));
 vi.mock("node:child_process", () => ({ execFileSync: mocks.ps }));
+vi.mock("node:fs", () => ({ realpathSync: mocks.realpath }));
 // mock-isolation: synthetic process identities must never inspect the test host's PIDs.
 vi.mock("../shared/pid-alive.js", () => ({
   getProcessInstanceStartTime: mocks.identity,
@@ -28,6 +30,7 @@ type KernelProcess = {
   executable: string;
   argv: string[];
   startedAt: number | null;
+  cwd: string;
 };
 const processes = new Map<number, KernelProcess>();
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -44,6 +47,7 @@ function add(pid: number, overrides: Partial<KernelProcess> = {}) {
     executable: command,
     argv: [...rootArgs],
     startedAt: pid * 100,
+    cwd: "/state",
     ...overrides,
   };
   processes.set(pid, entry);
@@ -59,7 +63,9 @@ function exit(pid: number) {
   }
 }
 
-function reap(options: { signal?: AbortSignal; onReap?: (pid: number) => void } = {}) {
+function reap(
+  options: { cwd?: string; signal?: AbortSignal; onReap?: (pid: number) => void } = {},
+) {
   return reapOrphanedProcesses({
     command,
     matchesArguments: (argv) =>
@@ -76,7 +82,12 @@ beforeEach(() => {
   onSignal = undefined;
   Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 501 });
-  mocks.ps.mockImplementation((_command: string, args: string[]) => {
+  mocks.realpath.mockImplementation((directory: string) => directory);
+  mocks.ps.mockImplementation((executable: string, args: string[]) => {
+    if (executable === "/usr/sbin/lsof") {
+      const pid = Number(args[args.indexOf("-p") + 1]);
+      return `p${pid}\0\nfcwd\0n${processes.get(pid)?.cwd}\0\n`;
+    }
     const pid = args[0] === "-p" ? Number(args[1]) : undefined;
     onPs?.(pid);
     const rows = pid === undefined ? [...processes.values()] : [processes.get(pid)];
@@ -87,7 +98,9 @@ beforeEach(() => {
       .flatMap((row) => (row ? [`${row.pid} ${row.parentPid} ${row.uid} ${row.command}`] : []))
       .join("\n");
   });
-  mocks.identity.mockImplementation((pid: number) => processes.get(pid)?.startedAt ?? null);
+  mocks.identity.mockImplementation((pid: number) =>
+    pid === process.pid ? 1 : (processes.get(pid)?.startedAt ?? null),
+  );
   mocks.dead.mockImplementation((pid: number) => !processes.has(pid));
   mocks.command.mockImplementation((pid: number) => {
     const row = processes.get(pid);
@@ -149,6 +162,26 @@ it("reports unavailable precise identity only for a matching process", async () 
   add(100, { startedAt: null });
   await expect(reap()).rejects.toThrow("Cannot verify orphaned process 100");
   expect(process.kill).not.toHaveBeenCalled();
+});
+
+it("leaves hosts without native birth identity support unchanged", async () => {
+  add(100);
+  mocks.identity.mockImplementation((pid: number) =>
+    pid === process.pid ? null : (processes.get(pid)?.startedAt ?? null),
+  );
+  expect(await reap()).toEqual([]);
+  expect(mocks.ps).not.toHaveBeenCalled();
+  expect(process.kill).not.toHaveBeenCalled();
+});
+
+it.each([
+  { cwd: "/state", expected: [100] },
+  { cwd: "/other", expected: [] },
+])("requires the configured working directory, observed $cwd", async ({ cwd, expected }) => {
+  add(100, { cwd });
+  mocks.realpath.mockReturnValue("/state");
+  expect(await reap({ cwd: "/state-alias" })).toEqual(expected);
+  expect(process.kill).toHaveBeenCalledTimes(expected.length);
 });
 
 it("does not inspect an unreadable server from another installation", async () => {
@@ -258,7 +291,7 @@ it.each(["before inspection", "before TERM", "after TERM"])(
   },
 );
 
-it.each(["arguments", "executable", "user"])(
+it.each(["arguments", "executable", "user", "working directory"])(
   "refuses changed %s before escalation",
   async (change) => {
     const root = add(100);
@@ -267,11 +300,13 @@ it.each(["arguments", "executable", "user"])(
         root.argv = [command, "--other"];
       } else if (change === "executable") {
         root.executable = "/other/llama-server";
-      } else {
+      } else if (change === "user") {
         root.uid = 502;
+      } else {
+        root.cwd = "/other";
       }
     };
-    const result = reap();
+    const result = reap({ cwd: "/state" });
     const rejected = expect(result).rejects.toThrow(
       "Could not safely stop orphaned process tree 100",
     );
