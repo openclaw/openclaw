@@ -2,6 +2,7 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
   getSqliteReadScopeRevision,
   readSqliteNativeMutationRevision,
+  type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
@@ -15,6 +16,7 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -24,6 +26,12 @@ type TranscriptEntryRead = {
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
+};
+
+export type TranscriptAppendPostimage = {
+  revision: SqliteReadScopeRevision;
+  version: SessionTranscriptContextVersion;
+  anchor: TranscriptEntryAnchor;
 };
 
 /** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
@@ -52,6 +60,7 @@ export function readActiveTranscriptEntryAnchorFromProjection(
 function readActiveTranscriptEntryFacts(
   params: TranscriptEntryRead,
   projection?: CurrentTranscriptProjection,
+  includeVersion = false,
 ) {
   const db = getSessionKysely(params.database.db);
   const query = db
@@ -84,6 +93,15 @@ function readActiveTranscriptEntryFacts(
           (join) => join.onTrue(),
         )
         .select(["rewrite.generation", "status.latestSeq"])
+        .$if(includeVersion, (withVersion) =>
+          withVersion.select((eb) =>
+            eb
+              .selectFrom("session_windows")
+              .select("transcript_updated_at")
+              .whereRef("session_windows.session_id", "=", "identity.session_id")
+              .as("transcriptUpdatedAt"),
+          ),
+        )
         // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
         .where("status.needs_reconcile", "is not", 1),
     ),
@@ -106,16 +124,32 @@ export function readActiveTranscriptEntryAnchorInTransaction(
 
 /** The append receipt shares its anchor read with the subsequent visible-tail consumer. */
 export function readTranscriptMessageAppendMetadataInTransaction(params: TranscriptEntryRead) {
-  const revision = getSqliteReadScopeRevision(params.database.db)?.mutationRevision;
-  const row = readActiveTranscriptEntryFacts(params);
+  const revision = getSqliteReadScopeRevision(params.database.db);
+  const row = readActiveTranscriptEntryFacts(params, undefined, true);
   const anchor = createTranscriptEntryAnchor({ ...params, row });
+  const postimage: TranscriptAppendPostimage | undefined =
+    revision &&
+    getSqliteReadScopeRevision(params.database.db) === revision &&
+    anchor &&
+    typeof row?.latestSeq === "number"
+      ? {
+          revision,
+          anchor,
+          version: {
+            generation: anchor.generation,
+            rawSeq: row.latestSeq,
+            updatedAt: row.transcriptUpdatedAt ?? null,
+          },
+        }
+      : undefined;
   return {
     anchor,
+    postimage,
     visibleTailEntryId:
       anchor &&
       row?.seq === row?.latestSeq &&
       revision !== undefined &&
-      readSqliteNativeMutationRevision(params.database.db) === revision
+      readSqliteNativeMutationRevision(params.database.db) === revision.mutationRevision
         ? params.entryId
         : undefined,
   };

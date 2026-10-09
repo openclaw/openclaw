@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -20,6 +21,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { TranscriptAppendPostimage } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
@@ -95,7 +97,7 @@ export function runTranscriptWriteSnapshotSync<T>(
   operation: (
     database: OpenClawAgentDatabase,
     resolved: ReturnType<typeof resolveSqliteTranscriptScope>,
-  ) => T,
+  ) => { value: T; postimage?: TranscriptAppendPostimage },
   beforeCommitInTransaction?: () => void,
   expectedMutationAt?: number | null,
   view?: TranscriptWriteViewGuard,
@@ -122,14 +124,18 @@ export function runTranscriptWriteSnapshotSync<T>(
         throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
       }
       const lifecycleRevision = fresh?.entry.lifecycleRevision;
-      const value = operation(database, resolved);
+      const { value, postimage } = operation(database, resolved);
       view?.assertCurrent();
       assertOwnedTranscriptWriteCommit(fencedScope);
       return ok({
         result: value,
         lifecycleRevision,
         before,
-        after: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+        // Hooks may write after the append. Reuse only within its unchanged native snapshot.
+        after:
+          postimage && getSqliteReadScopeRevision(database.db) === postimage.revision
+            ? { ...postimage.version }
+            : readTranscriptContextVersionInTransaction(database, resolved.sessionId),
       });
     },
     toDatabaseOptions(resolved),

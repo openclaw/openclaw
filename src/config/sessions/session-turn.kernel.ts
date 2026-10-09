@@ -19,6 +19,7 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type { TranscriptAppendPostimage } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import type {
@@ -130,6 +131,7 @@ export function createSessionTranscriptTurnKernel(
         goal.id = options.preparedGoalId;
       }
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+      let postimage: TranscriptAppendPostimage | undefined;
       for (const append of messages) {
         const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
         if (shouldAppendInTransaction) {
@@ -170,6 +172,7 @@ export function createSessionTranscriptTurnKernel(
         );
         if (appended) {
           appendedMessages.push(appended.result);
+          postimage = appended.postimage;
         }
       }
       if (
@@ -200,6 +203,7 @@ export function createSessionTranscriptTurnKernel(
         transactionDb,
         resolved.sessionId,
         appendedMessages,
+        postimage,
       );
 
       // Append-owned metadata (including history coverage) is part of this same

@@ -29,6 +29,7 @@ import {
 import {
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,
+  type TranscriptAppendPostimage,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
@@ -51,6 +52,7 @@ export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-
 type TranscriptMessageCommit<TMessage> = {
   result: TranscriptMessageAppendResult<TMessage>;
   visibleTailEntryId?: string;
+  postimage?: TranscriptAppendPostimage;
 };
 
 class TranscriptTurnAdmissionConflictError extends Error {
@@ -340,6 +342,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       message: persistedMessage,
       messageId,
     },
+    postimage: metadata.postimage,
     ...(metadata.visibleTailEntryId !== undefined &&
     revision !== undefined &&
     readSqliteNativeMutationRevision(database.db) === revision

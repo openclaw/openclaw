@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
@@ -234,6 +235,23 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
           projectionNeedsReconcile = true;
         },
       });
+      const revision = getSqliteReadScopeRevision(database.db);
+      const publication = committed.identity
+        ? prepareSessionEntryReplacementPublication(
+            {
+              ...committed.identity,
+              pendingArchiveRecovery: false,
+              membershipInvalidatedKeys: [],
+              maintenancePlans: [],
+            },
+            database,
+          )
+        : undefined;
+      const custodyEntry =
+        input.custody &&
+        revision &&
+        getSqliteReadScopeRevision(database.db) === revision &&
+        publication?.current.get(input.custody.sessionKey);
       const candidate: SessionTurnCommitted = {
         kind: "session-turn",
         result: committed.result,
@@ -248,19 +266,12 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
                 database,
                 input.custody.sessionKey,
                 input.custody.agentId,
+                custodyEntry && revision
+                  ? { sessionKey: input.custody.sessionKey, entry: custodyEntry, revision }
+                  : undefined,
               )
             : undefined,
-        publication: committed.identity
-          ? prepareSessionEntryReplacementPublication(
-              {
-                ...committed.identity,
-                pendingArchiveRecovery: false,
-                membershipInvalidatedKeys: [],
-                maintenancePlans: [],
-              },
-              database,
-            )
-          : undefined,
+        publication,
       };
       return transferSessionEntryWorkerCandidate(database, context.admit, candidate);
     }),

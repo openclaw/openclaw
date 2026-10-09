@@ -2107,6 +2107,18 @@ This prerequisite changes no schema, retention, durability, or update behavior.
 
 ## Carry facts, publish after commit
 
+Transcript append receipts carry the anchor's transcript version and admitted read
+revision into turn cursor and snapshot publication. An unchanged synchronous
+transaction reuses those postimages; a later native write, foreign commit observed
+at the next read, authorizer, or unavailable active projection uses the ordinary
+reader. Atomic multi-message turns still resolve their cursors from the final
+branch. Lifecycle upserts likewise reuse their transaction-validated canonical
+entry unless a reset boundary intervened. Pending-input custody consumes that
+transaction's committed entry postimage at its matching revision and reads current
+membership in the existing snapshot, without a nested savepoint. Membership publication, heartbeat claims,
+post-maintenance counts, durable append barriers, and event ordering are unchanged.
+This changes no schema, stored bytes, retention, permissions, or update migration.
+
 Session entry replacement receipts carry final entry, membership, category,
 participant, Board-presence, and activity-watermark facts from the committing
 worker. The existing resident row and compact membership projections adopt those

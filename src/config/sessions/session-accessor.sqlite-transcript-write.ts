@@ -332,7 +332,7 @@ export function appendTranscriptEventSnapshotSync(
   view?: TranscriptWriteViewGuard,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
-  return runTranscriptWriteSnapshotSync(
+  return runTranscriptWriteSnapshotSync<TranscriptEventAppendResult>(
     scope,
     (database, resolved) => {
       const resolvedEvent = resolveTranscriptEventAppendParent(
@@ -347,16 +347,16 @@ export function appendTranscriptEventSnapshotSync(
           eventJson: resolvedEvent === event ? projection?.eventJson : undefined,
         }) === false
       ) {
-        return { appended: false };
+        return { value: { appended: false } };
       }
       if (
         isRecord(resolvedEvent) &&
         "parentId" in resolvedEvent &&
         (resolvedEvent.parentId === null || typeof resolvedEvent.parentId === "string")
       ) {
-        return { appended: true, effectiveParentId: resolvedEvent.parentId };
+        return { value: { appended: true, effectiveParentId: resolvedEvent.parentId } };
       }
-      return { appended: true };
+      return { value: { appended: true } };
     },
     options.beforeCommitInTransaction,
     options.expectedMutationAt,
@@ -417,16 +417,19 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
       );
       const result = committed?.result;
       return {
-        result,
-        visibleTailEntryId:
-          committed?.visibleTailEntryId ??
-          (result
-            ? readTranscriptVisibleTailEntryIdInTransaction(
-                database,
-                resolved.sessionId,
-                result.messageId,
-              )
-            : null),
+        postimage: committed?.postimage,
+        value: {
+          result,
+          visibleTailEntryId:
+            committed?.visibleTailEntryId ??
+            (result
+              ? readTranscriptVisibleTailEntryIdInTransaction(
+                  database,
+                  resolved.sessionId,
+                  result.messageId,
+                )
+              : null),
+        },
       };
     },
     undefined,
@@ -600,16 +603,18 @@ async function runNativeTranscriptWriteLock<T>(
                 fencedScope,
               )?.lifecycleRevision;
               const options = prepare?.(writeDatabase) ?? requested;
-              result = appendTranscriptMessageInTransaction(
+              const appended = appendTranscriptMessageInTransaction(
                 writeDatabase,
                 resolved,
                 options,
-              )?.result;
+              );
+              result = appended?.result;
               if (result) {
                 rememberCommittedTranscriptMessageSequencesInTransaction(
                   writeDatabase,
                   resolved.sessionId,
                   [result],
+                  appended?.postimage,
                 );
                 messageSeq = readCommittedTranscriptMessageSequence(result);
               }
