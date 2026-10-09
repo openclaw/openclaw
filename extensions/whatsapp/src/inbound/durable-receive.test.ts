@@ -11,6 +11,9 @@ import {
   serializeWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
 import { createWhatsAppIngressMonitor } from "./durable-receive.js";
+import { resolveWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
+import { createWhatsAppInboundMessageDebouncer } from "./message-debounce.js";
+import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 
 type WhatsAppDurableInboundPayload = {
   message: ReturnType<typeof serializeWhatsAppDurableInboundMessage>;
@@ -50,14 +53,19 @@ function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayl
   };
 }
 
+function createQueue(stateDir: string, now?: () => number) {
+  return createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+    channelId: "whatsapp",
+    accountId: "acct",
+    stateDir,
+    ...(now ? { now } : {}),
+  });
+}
+
 describe("createWhatsAppIngressMonitor", () => {
   it("rejects messages without a native id as a permanent ingress failure", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const monitor = createWhatsAppIngressMonitor({
         queue,
         pollIntervalMs: 10,
@@ -81,11 +89,7 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("releases claims when dispatch throws before adoption", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const id = eventId("msg-1");
       await queue.enqueue(id, payload("msg-1"), { laneKey: REMOTE_JID });
 
@@ -110,11 +114,7 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("propagates failed-retryable results as claim release", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const id = eventId("msg-2");
       await queue.enqueue(id, payload("msg-2"), { laneKey: REMOTE_JID });
 
@@ -140,11 +140,7 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("tombstones after an explicit completed dispatch", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const id = eventId("msg-3");
       await queue.enqueue(id, payload("msg-3"), { laneKey: REMOTE_JID });
 
@@ -163,13 +159,9 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("keeps a second same-lane message pending until the first turn adopts", async () => {
+  it("delivers same-lane debounce candidates while retaining each claim until adoption", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const firstId = eventId("msg-4a");
       const secondId = eventId("msg-4b");
       await queue.enqueue(firstId, payload("msg-4a"), {
@@ -182,7 +174,7 @@ describe("createWhatsAppIngressMonitor", () => {
       });
 
       const dispatched: string[] = [];
-      let adoptFirst: (() => void | Promise<void>) | undefined;
+      const adoptions: Array<() => void | Promise<void>> = [];
       const monitor = createWhatsAppIngressMonitor({
         queue,
         pollIntervalMs: 10,
@@ -192,45 +184,128 @@ describe("createWhatsAppIngressMonitor", () => {
             throw new Error("expected transport id");
           }
           dispatched.push(id);
-          if (id === "msg-4a") {
-            adoptFirst = lifecycle.onAdopted;
-            return { kind: "deferred" as const };
-          }
-          return { kind: "completed" as const };
+          adoptions.push(lifecycle.onAdopted);
+          return { kind: "deferred" as const };
         },
       });
 
       monitor.start();
       await monitor.waitForIdle();
 
-      // Core drain serializes a conversation lane: msg-4b cannot reach the
-      // channel debouncer until msg-4a transfers into the reply lane.
-      expect(dispatched).toEqual(["msg-4a"]);
-      expect((await queue.listClaims()).map((row) => row.id)).toEqual([firstId]);
-      expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([secondId]);
+      try {
+        expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
+        expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
+          [firstId, secondId].toSorted(),
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
-      if (!adoptFirst) {
-        throw new Error("expected first adoption callback");
+        const [adoptFirst, adoptSecond] = adoptions;
+        if (!adoptFirst || !adoptSecond) {
+          throw new Error("expected both adoption callbacks");
+        }
+        await adoptFirst();
+        await adoptFirst();
+        expect((await queue.listClaims()).map((row) => row.id)).toEqual([secondId]);
+        await expect(queue.enqueue(firstId, payload("msg-4a"))).resolves.toMatchObject({
+          kind: "completed",
+        });
+        await adoptSecond();
+        await adoptSecond();
+        expect(await queue.listClaims()).toEqual([]);
+        await expect(queue.enqueue(secondId, payload("msg-4b"))).resolves.toMatchObject({
+          kind: "completed",
+        });
+        expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
+      } finally {
+        await monitor.stop();
       }
-      await adoptFirst();
-      await monitor.waitForIdle();
+    });
+  });
 
-      expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      await monitor.stop();
+  it("combines durable same-chat messages in timestamp and receive order before settling claims", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const bodies: string[] = [];
+      const markRead = vi.fn(async () => {});
+      const onError = vi.fn();
+      const debouncer = createWhatsAppInboundMessageDebouncer({
+        resolveDebounceMs: () => 60_000,
+        onMessage: async (msg) => {
+          bodies.push(msg.payload.body);
+          await resolveWhatsAppIngressLifecycle(msg)?.onAdopted();
+        },
+        markRead,
+        onPendingWorkChanged: () => {},
+        onError,
+      });
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async (inbound, lifecycle) => {
+          const id = inbound.message.key.id;
+          if (!id) {
+            throw new Error("expected transport id");
+          }
+          await debouncer.enqueue({
+            ...createTestWebInboundMessage({
+              event: { id, timestamp: Number(inbound.message.messageTimestamp) },
+              payload: { body: id },
+              admission: { conversation: { id: REMOTE_JID } },
+            }),
+            receiveOrder: inbound.receiveOrder,
+            turnAdoptionLifecycle: lifecycle,
+            readReceipt: { remoteJid: REMOTE_JID, id },
+          });
+          return { kind: "deferred" };
+        },
+      });
+      monitor.start();
+      try {
+        for (const [id, timestamp, receiveOrder] of [
+          ["third", 2, 3],
+          ["second", 1, 2],
+          ["first", 1, 1],
+        ] as const) {
+          await monitor.admit({
+            message: { ...message(id), messageTimestamp: timestamp },
+            receiveOrder,
+            receivedAt: Date.now(),
+          });
+        }
+        await monitor.waitForIdle();
+        expect(bodies).toEqual([]);
+        expect(await queue.listClaims()).toHaveLength(3);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(markRead).not.toHaveBeenCalled();
+        await debouncer.drain();
+        await monitor.waitForIdle();
+        expect(bodies).toEqual(["first\nsecond\nthird"]);
+        expect(markRead.mock.calls).toEqual(
+          ["first", "second", "third"].map((id) => [{ remoteJid: REMOTE_JID, id }]),
+        );
+        expect(onError).not.toHaveBeenCalled();
+        expect(await queue.listClaims()).toEqual([]);
+        for (const id of ["first", "second", "third"]) {
+          await expect(queue.enqueue(eventId(id), payload(id))).resolves.toMatchObject({
+            kind: "completed",
+          });
+        }
+      } finally {
+        await monitor.pause();
+        await debouncer.drain();
+        await monitor.stop();
+      }
     });
   });
 
   it("dispatches accepted pending records older than the legacy 30-day TTL", async () => {
     await withTempState(async (stateDir) => {
       const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1_000;
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-        now: () => thirtyOneDaysAgo,
-      });
+      const queue = createQueue(stateDir, () => thirtyOneDaysAgo);
       await queue.enqueue(eventId("msg-old"), payload("msg-old"), {
         laneKey: REMOTE_JID,
         receivedAt: thirtyOneDaysAgo,
@@ -261,11 +336,7 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("dispatches every accepted pending record past the legacy 450-entry cap", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const transportIds = Array.from(
         { length: 451 },
         (_unused, index) => `msg-${String(index).padStart(3, "0")}`,
@@ -302,11 +373,7 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("keeps completed and failed replay guards bounded", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
       const prune = vi.spyOn(queue, "prune");
       const monitor = createWhatsAppIngressMonitor({
         queue,
@@ -343,11 +410,7 @@ describe("WhatsApp durable message serialization", () => {
 
   it("carries receive-time skip decisions through admission and replay", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+      const queue = createQueue(stateDir);
 
       const dispatched: Array<{
         upsertType?: string;

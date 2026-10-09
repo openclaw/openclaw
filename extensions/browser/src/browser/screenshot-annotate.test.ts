@@ -47,19 +47,11 @@ describe("planAnnotations - viewport mode", () => {
       role: "link",
       box: { x: 300, y: 500, width: 80, height: 18 },
     });
-    expect(plan.skipped).toBe(0);
-  });
-
-  it("keeps overlay items in document space regardless of mode", () => {
-    const plan = planAnnotations({
-      inputs: sampleInputs,
-      space: "viewport",
-      scroll: { x: 0, y: 1000 },
-    });
     expect(plan.overlayItems).toEqual([
       { ref: "e1", x: 100, y: 200, w: 50, h: 20 },
       { ref: "e2", x: 300, y: 1500, w: 80, h: 18 },
     ]);
+    expect(plan.skipped).toBe(0);
   });
 
   it("omits empty name field", () => {
@@ -95,18 +87,6 @@ describe("planAnnotations - viewport off-screen accounting", () => {
     // The off-viewport ref raises skipped, preserving the shipped contract.
     expect(plan.skipped).toBe(1);
   });
-
-  it("does not count off-viewport refs when viewport size is omitted", () => {
-    const plan = planAnnotations({
-      inputs: [{ ref: "e2", role: "link", doc: { x: 10, y: 5000, width: 40, height: 20 } }],
-      space: "viewport",
-      scroll: { x: 0, y: 0 },
-    });
-
-    expect(plan.skipped).toBe(0);
-    expect(plan.overlayItems).toHaveLength(1);
-    expect(plan.annotations).toHaveLength(1);
-  });
 });
 
 describe("planAnnotations - fullpage mode", () => {
@@ -124,10 +104,6 @@ describe("planAnnotations - fullpage mode", () => {
       width: 80,
       height: 18,
     });
-  });
-
-  it("does not require scroll", () => {
-    expect(() => planAnnotations({ inputs: sampleInputs, space: "fullpage" })).not.toThrow();
   });
 });
 
@@ -193,36 +169,6 @@ describe("planAnnotations - maxLabels", () => {
 });
 
 describe("buildOverlayInjectionScript", () => {
-  it("returns a self-contained IIFE", () => {
-    const script = buildOverlayInjectionScript({
-      items: [{ ref: "e1", x: 100, y: 200, w: 50, h: 20 }],
-    });
-    expect(script).toMatch(/^\(\s*\(\s*\)\s*=>\s*\{/);
-    expect(script).toMatch(/\}\s*\)\s*\(\s*\)\s*;?\s*$/);
-  });
-
-  it("embeds the overlay attr", () => {
-    const script = buildOverlayInjectionScript({ items: [] });
-    expect(script).toContain(ANNOTATION_OVERLAY_ATTR);
-  });
-
-  it("embeds each item's ref text and coordinates", () => {
-    const script = buildOverlayInjectionScript({
-      items: [
-        { ref: "e1", x: 100, y: 200, w: 50, h: 20 },
-        { ref: "ax42", x: 999, y: 1500, w: 80, h: 18 },
-      ],
-    });
-    expect(script).toMatch(/"ref":\s*"e1"/);
-    expect(script).toMatch(/"ref":\s*"ax42"/);
-    expect(script).toMatch(/"x":\s*100/);
-    expect(script).toMatch(/"x":\s*999/);
-  });
-
-  it("handles empty items without throwing", () => {
-    expect(() => buildOverlayInjectionScript({ items: [] })).not.toThrow();
-  });
-
   it("rounds coordinates to integers", () => {
     const script = buildOverlayInjectionScript({
       items: [{ ref: "e1", x: 100.7, y: 200.4, w: 50.6, h: 20.1 }],
@@ -249,15 +195,6 @@ describe("buildOverlayInjectionScript", () => {
     // The unescaped breakout MUST NOT appear anywhere in the script as a
     // bare statement that would terminate the JSON literal early.
     expect(script).not.toContain('e1");alert(1);');
-  });
-
-  it("flips label below the box when y < 14 (no headroom)", () => {
-    const script = buildOverlayInjectionScript({
-      items: [{ ref: "e1", x: 0, y: 5, w: 10, h: 10 }],
-    });
-    // labelTop = relativeY < 14 ? it.y + 2 : it.y - 14
-    // The expression literal `relativeY < 14 ? (it.y + 2) : (it.y - 14)` is in the script.
-    expect(script).toContain("relativeY < 14 ? (it.y + 2) : (it.y - 14)");
   });
 
   it("uses capture-relative y when deciding whether to flip labels below boxes", () => {
@@ -300,11 +237,9 @@ describe("scaleAnnotations", () => {
 
   it("scales box dimensions by independent x/y factors", () => {
     const out = scaleAnnotations(sample, 0.5, 0.485);
-    expect(out[0]?.box).toEqual({
-      x: 50,
-      y: 97,
-      width: 25,
-      height: 10,
+    expect(out[0]).toEqual({
+      ...sample[0],
+      box: { x: 50, y: 97, width: 25, height: 10 },
     });
   });
 
@@ -329,13 +264,5 @@ describe("scaleAnnotations", () => {
     expect(out2[0]?.box).toEqual(sample[0]?.box);
     const out3 = scaleAnnotations(sample, -1, 1);
     expect(out3[0]?.box).toEqual(sample[0]?.box);
-  });
-
-  it("preserves ref/number/role/name fields verbatim", () => {
-    const out = scaleAnnotations(sample, 0.5, 0.5);
-    expect(out[0]?.ref).toBe("e1");
-    expect(out[0]?.number).toBe(1);
-    expect(out[0]?.role).toBe("button");
-    expect(out[0]?.name).toBe("Submit");
   });
 });

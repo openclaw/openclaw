@@ -7,12 +7,8 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { BoardCapabilityAuthority } from "./board-host-tools.js";
 import { BoardGatewayUnavailableError } from "./board-view-ticket.js";
-import {
-  ControlUiGitHubError,
-  fetchGitHubApi,
-  readGitHubJsonResponse,
-} from "./control-ui-github-api.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -61,7 +57,7 @@ function actionsFailure(error: unknown): Error {
   ) {
     return error;
   }
-  if (error instanceof ControlUiGitHubError) {
+  if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
     if (error.statusCode === 429) {
       return new Error("GitHub Actions is rate limited; wait and retry.");
     }
@@ -90,16 +86,16 @@ export async function prepareBoardGitHubIdentity(
 ) {
   try {
     const config = context.getRuntimeConfig();
-    const identity = await prepareGitHubReadIdentity({
+    return await prepareGitHubReadIdentity({
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: authority.boardSession.agentId,
+      issuer: "github.com",
       getCurrentConfig: () => context.getRuntimeConfig(),
       assertActive: authority.assertActive,
       startActive: authority.useCurrent,
       refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
     });
-    return identity;
   } catch (error) {
     if (
       error instanceof GitHubIdentityError ||
@@ -147,14 +143,27 @@ export async function readBoardGitHubActions(
         cache.pending,
         key,
         async () => {
-          const response = await fetchGitHubApi(request.url, fetch, identity.token, async () => {
-            // A redirect is a new target, not authority to read another repository or operation.
-            throw new BoardValidationError(
-              "invalid_operation",
-              "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
-            );
-          });
-          const raw = await readGitHubJsonResponse(response, ACTIONS_MAX_RESPONSE_BYTES);
+          const response = await gitHubPublicApi.fetchGitHubApi(
+            request.url,
+            fetch,
+            identity.token,
+            async () => {
+              // A redirect is a new target, not authority to read another repository or operation.
+              throw new BoardValidationError(
+                "invalid_operation",
+                "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
+              );
+            },
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            gitHubPublicApi.GITHUB_API_ORIGIN,
+          );
+          const raw = await gitHubPublicApi.readGitHubJsonResponse(
+            response,
+            ACTIONS_MAX_RESPONSE_BYTES,
+          );
           const parsed = runsSchema.safeParse(raw);
           if (
             !parsed.success ||

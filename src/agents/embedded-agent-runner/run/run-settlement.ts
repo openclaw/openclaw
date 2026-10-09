@@ -14,7 +14,7 @@ import type { CompactionAccountingFact } from "./internal-params.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 export async function settleEmbeddedRun(input: {
   runInput: Pick<PreparedEmbeddedRunInput, "runParams" | "progressController">;
@@ -99,7 +99,9 @@ export async function settleEmbeddedRun(input: {
   if (params.isFinalFallbackAttempt !== false) {
     await runInput.progressController.maybeEmitFastModeAutoResetBestEffort();
   }
-  forgetPromptBuildDrainCacheForRun(params.runId);
+  if (ownedContextEngineLease) {
+    forgetPromptBuildDrainCacheForRun(params.runId);
+  }
   clearProviderPromptState(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
   await ownedContextEngineLease?.dispose();

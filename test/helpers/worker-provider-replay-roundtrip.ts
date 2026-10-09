@@ -21,10 +21,10 @@ type DescriptorOptions = {
 };
 
 type RoundTripHarness = {
-  createDescriptor(options?: DescriptorOptions): WorkerLaunchDescriptor;
+  createDescriptor(options?: DescriptorOptions): Promise<WorkerLaunchDescriptor>;
   requestParams(method: string): unknown[];
   sessionTarget: Parameters<typeof SessionManager.open>[0];
-  settleRun(runId: string): void;
+  settleRun(runId: string): Promise<void>;
   setOutcome(outcome: WorkerInferenceTerminalOutcome): void;
 };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
@@ -53,7 +53,7 @@ function doneMessage(
 }
 
 export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness): Promise<void> {
-  const baseDescriptor = harness.createDescriptor({ runId: "replay-run-1" });
+  const baseDescriptor = await harness.createDescriptor({ runId: "replay-run-1" });
   const model = {
     id: baseDescriptor.assignment.modelRef.model,
     name: "Fault replay model",
@@ -112,7 +112,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
   if (initial.kind !== "complete") {
     throw new Error("expected replayable canonical history");
   }
-  harness.settleRun("replay-run-1");
+  await harness.settleRun("replay-run-1");
 
   harness.setOutcome({
     type: "done",
@@ -123,7 +123,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
       (request) => request.seq,
     ),
   );
-  const secondDescriptor = harness.createDescriptor({
+  const secondDescriptor = await harness.createDescriptor({
     runId: "replay-run-2",
     baseLeafId: first.transcriptLeafId,
     initialSeq: first.transcriptNextSeq,
@@ -135,7 +135,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
   await expect(runWorkerDescriptor(secondDescriptor)).resolves.toMatchObject({
     status: "completed",
   });
-  harness.settleRun("replay-run-2");
+  await harness.settleRun("replay-run-2");
 
   const requests = harness.requestParams("worker.inference.start") as WorkerInferenceStartParams[];
   const nextContext = requests[1]?.context;

@@ -1,15 +1,51 @@
-// Vllm tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("vLLM provider thinking policy", () => {
-  it("exposes a binary profile for configured Qwen chat-template models", () => {
+  it.each(["qwen", "qwen-chat-template"])(
+    "uses the declared %s effort ladder",
+    (thinkingFormat) => {
+      expect(
+        resolveThinkingProfile({
+          provider: "vllm",
+          modelId: "qwen3:8b",
+          reasoning: true,
+          compat: {
+            thinkingFormat,
+            supportedReasoningEfforts: ["xhigh", " low ", "medium", "low"],
+          },
+        }),
+      ).toEqual({
+        levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "xhigh" }],
+        defaultLevel: "off",
+      });
+    },
+  );
+
+  it("exposes logical map keys while preserving case-sensitive wire labels", () => {
     expect(
       resolveThinkingProfile({
         provider: "vllm",
-        modelId: "Qwen/Qwen3-8B",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
+        modelId: "qwen3:8b",
+        compat: {
+          thinkingFormat: "qwen-chat-template",
+          supportedReasoningEfforts: [" LOW ", "HIGH"],
+          reasoningEffortMap: { low: "LOW", high: "HIGH", max: "UNSUPPORTED" },
+        },
+      }),
+    ).toEqual({ levels: [{ id: "off" }, { id: "low" }, { id: "high" }], defaultLevel: "off" });
+  });
+
+  it.each([
+    { supportedReasoningEfforts: [] },
+    { supportedReasoningEfforts: ["LOW", "HIGH"] },
+    { supportsReasoningEffort: false, supportedReasoningEfforts: ["low", "high"] },
+  ])("keeps binary thinking when no selectable effort is supported: %j", (compat) => {
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "qwen3:8b",
+        compat: { thinkingFormat: "qwen-chat-template", ...compat },
       }),
     ).toEqual({
       levels: [{ id: "off" }, { id: "low", label: "on" }],
@@ -28,39 +64,6 @@ describe("vLLM provider thinking policy", () => {
       levels: [{ id: "off" }, { id: "low", label: "on" }],
       defaultLevel: "off",
     });
-  });
-
-  it("exposes the declared effort ladder for Qwen chat-template models", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "qwen38-flash-next",
-        reasoning: true,
-        compat: {
-          thinkingFormat: "qwen-chat-template",
-          supportedReasoningEfforts: ["xhigh", "medium", "low"],
-        },
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "xhigh" }],
-      defaultLevel: "off",
-    });
-  });
-
-  it("keeps the binary profile when the declared efforts are empty or unknown", () => {
-    for (const supportedReasoningEfforts of [[], ["turbo"]]) {
-      expect(
-        resolveThinkingProfile({
-          provider: "vllm",
-          modelId: "Qwen/Qwen3-8B",
-          reasoning: true,
-          compat: { thinkingFormat: "qwen", supportedReasoningEfforts },
-        }),
-      ).toEqual({
-        levels: [{ id: "off" }, { id: "low", label: "on" }],
-        defaultLevel: "off",
-      });
-    }
   });
 
   it("exposes a binary profile for vLLM Nemotron 3 reasoning models", () => {

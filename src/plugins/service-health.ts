@@ -26,7 +26,7 @@ export function createPluginServiceHealthReporter(service: PluginServiceRegistra
         if (canReport()) {
           state.failure = {
             pluginId: service.pluginId,
-            serviceId: service.service.id,
+            serviceId: service.id,
             origin: service.origin,
             error: formatErrorMessage(error),
           };

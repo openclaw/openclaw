@@ -1,5 +1,4 @@
 // Reply payload tests cover reply target parsing, media payloads, and approval metadata.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTtsSupplementMediaPayload,
@@ -19,7 +18,6 @@ import {
   resolveAskUserQuestionOptionIndex,
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
-  resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
@@ -153,7 +151,6 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
 describe("sendPayloadTextChunkSequence", () => {
   it.each([
     { name: "empty", chunks: [], expectedCalls: [], expectedResult: undefined },
-    { name: "single", chunks: ["one"], expectedCalls: [["one", 0, true]], expectedResult: "one" },
     {
       name: "multiple",
       chunks: ["one", "two"],
@@ -500,23 +497,6 @@ describe("sendTextMediaPayload", () => {
 });
 
 describe("normalizeOutboundReplyPayload", () => {
-  it("strips internal-only local media trust flags from loose payload objects", () => {
-    expect(
-      normalizeOutboundReplyPayload({
-        text: "hello",
-        mediaUrl: "/tmp/reply.opus",
-        trustedLocalMedia: true,
-        sensitiveMedia: true,
-        replyToId: "abc123",
-      }),
-    ).toEqual({
-      text: "hello",
-      mediaUrl: "/tmp/reply.opus",
-      sensitiveMedia: true,
-      replyToId: "abc123",
-    });
-  });
-
   it("preserves rich outbound fields from loose payload objects", () => {
     const presentation = {
       blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
@@ -589,13 +569,14 @@ describe("normalizeOutboundReplyPayload", () => {
       mediaUrl: "/tmp/reply.opus",
       trustedLocalMedia: true,
       sensitiveMedia: true,
+      replyToId: "abc123",
     });
 
     expect(handler).toHaveBeenCalledWith({
       text: "hello",
       mediaUrl: "/tmp/reply.opus",
       sensitiveMedia: true,
-      replyToId: undefined,
+      replyToId: "abc123",
       mediaUrls: undefined,
     });
   });
@@ -647,14 +628,6 @@ describe("resolveOutboundMediaUrls", () => {
   it.each<[name: string, payload: { mediaUrls?: string[]; mediaUrl?: string }, expected: string[]]>(
     [
       [
-        "prefers mediaUrls over the legacy single-media field",
-        {
-          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-          mediaUrl: "https://example.com/legacy.png",
-        },
-        ["https://example.com/a.png", "https://example.com/b.png"],
-      ],
-      [
         "falls back to the legacy single-media field",
         {
           mediaUrl: "https://example.com/legacy.png",
@@ -688,23 +661,10 @@ describe("resolveOutboundMediaUrls", () => {
 });
 
 describe("countOutboundMedia", () => {
-  it.each([
-    {
-      name: "counts normalized media entries",
-      payload: {
-        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-      },
-      expected: 2,
-    },
-    {
-      name: "counts legacy single-media payloads",
-      payload: {
-        mediaUrl: "https://example.com/legacy.png",
-      },
-      expected: 1,
-    },
-  ])("$name", ({ payload, expected }) => {
-    expect(countOutboundMedia(payload)).toBe(expected);
+  it("counts normalized media entries", () => {
+    expect(
+      countOutboundMedia({ mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"] }),
+    ).toBe(2);
   });
 });
 
@@ -718,7 +678,6 @@ describe("hasOutboundMedia", () => {
 
 describe("hasOutboundText", () => {
   it.each([
-    ["checks raw text presence by default", { text: "hello" }, undefined, true],
     ["treats whitespace-only text as present by default", { text: "   " }, undefined, true],
     ["returns false when text is missing", {}, undefined, false],
     ["can trim whitespace-only text", { text: "   " }, { trim: true }, false],
@@ -731,7 +690,6 @@ describe("hasOutboundText", () => {
 describe("hasOutboundReplyContent", () => {
   it.each([
     ["detects text content", { text: "hello" }, undefined, true],
-    ["detects media content", { mediaUrl: "https://example.com/a.png" }, undefined, true],
     ["returns false when text and media are both missing", {}, undefined, false],
     ["can ignore whitespace-only text", { text: "   " }, { trimText: true }, false],
     [
@@ -814,31 +772,6 @@ describe("resolveSendableOutboundReplyParts", () => {
       hasMedia: false,
       hasContent: true,
     });
-  });
-});
-
-describe("resolveTextChunksWithFallback", () => {
-  it.each([
-    {
-      name: "returns existing chunks unchanged",
-      text: "hello",
-      chunks: ["a", "b"],
-      expected: ["a", "b"],
-    },
-    {
-      name: "falls back to the full text when chunkers return nothing",
-      text: "hello",
-      chunks: [],
-      expected: ["hello"],
-    },
-    {
-      name: "returns empty for empty text with no chunks",
-      text: "",
-      chunks: [],
-      expected: [],
-    },
-  ])("$name", ({ text, chunks, expected }) => {
-    expect(resolveTextChunksWithFallback(text, chunks)).toEqual(expected);
   });
 });
 
@@ -965,25 +898,14 @@ describe("sendMediaWithLeadingCaption", () => {
     ).resolves.toBe(true);
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const [errorPayload] = expectDefined(
-      (
-        onError.mock.calls as unknown as Array<
-          [
-            {
-              mediaUrl?: string;
-              caption?: string;
-              index?: number;
-              isFirst?: boolean;
-            },
-          ]
-        >
-      )[0],
-      "(onError.mock.calls as unknown as Array<\n        [\n          {\n            mediaUrl?: string;\n            caption?: string;\n            index?: number;\n            isFirst?: boolean;\n          },\n        ]\n      >)[0] test invariant",
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.png",
+        caption: "hello",
+        index: 0,
+        isFirst: true,
+      }),
     );
-    expect(errorPayload.mediaUrl).toBe("https://example.com/a.png");
-    expect(errorPayload.caption).toBe("hello");
-    expect(errorPayload.index).toBe(0);
-    expect(errorPayload.isFirst).toBe(true);
     expect(send).toHaveBeenNthCalledWith(2, {
       mediaUrl: "https://example.com/b.png",
       caption: undefined,

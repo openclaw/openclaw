@@ -1,10 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { applyJobPatch } from "../../../src/cron/service/jobs.js";
 import type { CronStoredJob } from "../../../src/cron/types.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -12,7 +13,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const record = createRequireRecord("record", "expected-object-value");
-const source: CronStoredJob = {
+const source = {
   id: "paced-watch",
   name: "Synthetic paced watcher",
   enabled: true,
@@ -25,7 +26,7 @@ const source: CronStoredJob = {
   payload: { kind: "agentTurn", message: "Check synthetic status and choose the next check." },
   delivery: { mode: "none" },
   state: {},
-};
+} satisfies CronStoredJob;
 const list = {
   jobs: [{ ...source, configRevision: "source-revision" }],
   snapshotRevision: "pacing-proof",
@@ -43,7 +44,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": list,
+            "cron.list": cronListResponseFixture(list),
             "cron.status": { enabled: true, jobs: 1, triggersEnabled: true },
             "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
           },

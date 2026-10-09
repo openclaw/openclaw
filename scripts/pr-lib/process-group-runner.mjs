@@ -1,8 +1,20 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { constants, tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspectManagedProcessGroup } from "../lib/managed-child-process.mts";
 
 const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
@@ -21,15 +33,88 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
+// Only the mktemp creator survives both execs as this supervisor. No child may
+// inherit cleanup authority, and an inherited pathname is never a deletion input.
+const anchorCreator = process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
+const anchorFd = process.env.OPENCLAW_PR_ANCHOR_FD;
+delete process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
+delete process.env.OPENCLAW_PR_ANCHOR_FD;
+let ownedAnchor;
+if (anchorCreator === String(process.pid) && anchorFd === "9") {
+  let directoryFd = false;
+  try {
+    const path = dirname(dirname(resolve(script)));
+    const held = fstatSync(9, { bigint: true });
+    directoryFd = held.isDirectory();
+    const current = lstatSync(path, { bigint: true });
+    if (
+      basename(path).startsWith("openclaw-pr-anchor.") &&
+      resolve(script) === join(path, "scripts", "pr") &&
+      realpathSync(script) === resolve(script) &&
+      realpathSync(fileURLToPath(import.meta.url)) ===
+        join(path, "scripts", "pr-lib", "process-group-runner.mjs") &&
+      held.isDirectory() &&
+      current.isDirectory() &&
+      held.dev === current.dev &&
+      held.ino === current.ino &&
+      held.uid === BigInt(process.getuid()) &&
+      (held.mode & 0o777n) === 0o700n &&
+      held.mode === current.mode &&
+      held.uid === current.uid
+    ) {
+      ownedAnchor = { path, dev: held.dev, ino: held.ino, uid: held.uid, mode: held.mode };
+    }
+  } catch {
+    // Missing or replaced creation evidence is retain-only.
+  }
+  if (directoryFd) {
+    process.once("exit", () => {
+      try {
+        closeSync(9);
+      } catch {
+        // A missing creation FD never grants cleanup authority.
+      }
+    });
+  }
+}
 // The supervisor must not retain a cwd inside a worktree the operation may
 // delete. Start the child in this same owner so early Git/gh reads use the
 // repository selected by the wrapper, before any PR worktree is entered.
 process.chdir(repoRoot);
 const lockScript = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
+// Preflight the same identity policy the lock uses. Working ps environments
+// need no Python; sandboxed macOS can use the stdlib libproc backend instead.
+// Neither unavailable route may start an operation or synthesize an identity.
+const darwinIdentityScript = fileURLToPath(
+  new URL("./darwin-process-identity.py", import.meta.url),
+);
+if (process.platform === "darwin") {
+  const identity = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; pr_operation_lock_process_birth "$2"',
+      "pr-identity-preflight",
+      lockScript,
+      String(process.pid),
+    ],
+    { encoding: "utf8", timeout: 15_000, maxBuffer: 4096, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (identity.status !== 0 || !identity.stdout?.trim()) {
+    console.error(
+      "Cannot read macOS process identity. When ps is unavailable, put Python 3 with ctypes on PATH for libproc access.",
+    );
+    if (identity.error) {
+      console.error(identity.error.message);
+    }
+    if (identity.stderr) {
+      console.error(identity.stderr.trim());
+    }
+    process.exit(1);
+  }
+}
 const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
 const lockScriptSnapshot = join(lockSnapshotDir, "operation-lock.sh");
-// merge-run can delete this revision's script directory before lock release.
-writeFileSync(lockScriptSnapshot, readFileSync(lockScript));
 process.once("exit", () => {
   try {
     rmSync(lockSnapshotDir, { force: true, recursive: true });
@@ -37,6 +122,43 @@ process.once("exit", () => {
     // Best-effort cleanup must not change the operation result.
   }
 });
+// merge-run can delete this revision's script directory before lock release.
+writeFileSync(lockScriptSnapshot, readFileSync(lockScript));
+writeFileSync(
+  join(lockSnapshotDir, "host-tools.sh"),
+  readFileSync(new URL("./host-tools.sh", import.meta.url)),
+);
+// GC may delete the linked wrapper before reading the next PR. Retain this
+// stdlib-only adapter under the same supervisor-owned cleanup lifetime.
+for (const relative of [
+  "pr-lib/github.sh",
+  "pr-lib/github.mjs",
+  "pr-lib/gh-api-preflight.mjs",
+  "lib/plain-gh.mjs",
+  "lib/direct-run.mjs",
+]) {
+  const target = join(lockSnapshotDir, "scripts", relative);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, readFileSync(new URL(`../${relative}`, import.meta.url)));
+}
+// Imported Git owners and package-manager children use PATH. Keep the selected
+// binary available even after merge cleanup removes the wrapper's worktree.
+const selectedGit = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC;
+const childPath = selectedGit
+  ? `${lockSnapshotDir}${delimiter}${process.env.PATH ?? ""}`
+  : process.env.PATH;
+if (selectedGit) {
+  symlinkSync(selectedGit, join(lockSnapshotDir, "git"));
+}
+if (process.platform === "darwin") {
+  // Keep the complete stdlib-only provider beside the release shell. No app
+  // node_modules, dynamic package loader or deleted source path is retained.
+  writeFileSync(
+    join(lockSnapshotDir, "darwin-process-identity.py"),
+    readFileSync(darwinIdentityScript),
+  );
+}
+
 const locks = new Map();
 let notificationBuffer = "";
 let discardingOversizedNotificationLine = false;
@@ -45,6 +167,7 @@ let notificationEnded = false;
 let notificationFailure;
 let receivedSignal;
 let escalationTimer;
+let cleanupGraceMs = SIGNAL_GRACE_MS;
 let killDeadline;
 const operationGroup = { pid: undefined };
 let operationGroupGone = false;
@@ -71,25 +194,21 @@ function exitCodeForSignal(signal) {
   return typeof signalNumber === "number" ? 128 + signalNumber : 1;
 }
 
-function processGroupStatus(pgid) {
+function processGroupStatus() {
   if (operationGroupGone) {
     return "dead";
   }
-  if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid > 0x7fffffff) {
-    return "indeterminate";
+  // The shared owner distinguishes exited Linux threads awaiting reaping from
+  // live descendants. Only this supervisor's observed child exit permits that check.
+  const state = inspectManagedProcessGroup(child, {
+    deadlineAt: killDeadline,
+    errorPolicy: "indeterminate",
+  });
+  if (state === "dead") {
+    // Never let later PGID reuse redirect a delayed signal or liveness probe.
+    operationGroupGone = true;
   }
-  try {
-    process.kill(-pgid, 0);
-    return "live";
-  } catch (error) {
-    if (error?.code === "ESRCH") {
-      // Once absent, this operation group is gone forever. Never let later
-      // PGID reuse redirect a delayed signal or liveness probe.
-      operationGroupGone = true;
-      return "dead";
-    }
-    return "indeterminate";
-  }
+  return state;
 }
 
 function processGroupRows(pgid) {
@@ -189,18 +308,22 @@ for (const signal of FORWARDED_SIGNALS) {
       return;
     }
     receivedSignal = signal;
+    if (cleanupGraceMs > SIGNAL_GRACE_MS) {
+      console.error("Waiting for PR provisioning cleanup; interrupt again to force termination.");
+    }
     signalProcessGroup(signal);
-    escalationTimer = setTimeout(escalateSignal, SIGNAL_GRACE_MS);
+    escalationTimer = setTimeout(escalateSignal, cleanupGraceMs);
   };
   signalHandlers.set(signal, handler);
   process.on(signal, handler);
 }
 
-// Git maintenance must join before leader completion, not daemonize with fd 3.
-// Append to Git's inherited -c transport so nested tools share this lifetime
-// without changing repository config or discarding the caller's other settings.
+// Suppress automatic maintenance; explicit maintenance must still join before completion.
+// Preserve inherited Git settings for nested tools without changing repository config.
 const gitConfigParameters = [
   process.env.GIT_CONFIG_PARAMETERS,
+  "'maintenance.auto=false'",
+  "'gc.auto=0'",
   "'maintenance.autoDetach=false'",
   "'gc.autoDetach=false'",
 ]
@@ -212,10 +335,12 @@ const child = spawn(script, args, {
   detached: true,
   env: {
     ...process.env,
+    PATH: childPath,
     GIT_CONFIG_PARAMETERS: gitConfigParameters,
     OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
     OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
+    OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: lockSnapshotDir,
   },
   stdio: ["inherit", "inherit", "inherit", "pipe"],
 });
@@ -229,6 +354,28 @@ if (killDeadline) {
 function consumeNotificationLine(line) {
   if (operationCompleteReceived) {
     notificationFailure ??= new Error("scripts/pr emitted metadata after operation completion");
+    return;
+  }
+  if (line.startsWith("phase\tcleanup-grace\t")) {
+    const value = line.slice("phase\tcleanup-grace\t".length);
+    const milliseconds = Number(value);
+    if (
+      !locks.size ||
+      !/^(0|[1-9][0-9]*)$/u.test(value) ||
+      !Number.isSafeInteger(milliseconds) ||
+      milliseconds > 0x7fffffff
+    ) {
+      notificationFailure ??= new Error("scripts/pr emitted invalid cleanup-grace metadata");
+      return;
+    }
+    const nextGraceMs = Math.max(SIGNAL_GRACE_MS, milliseconds);
+    // A signal can arrive before its queued provisioning budget. Grant that
+    // cleanup window without shortening an already-admitted cancellation.
+    if (receivedSignal && !killDeadline && nextGraceMs > cleanupGraceMs) {
+      clearTimeout(escalationTimer);
+      escalationTimer = setTimeout(escalateSignal, nextGraceMs);
+    }
+    cleanupGraceMs = nextGraceMs;
     return;
   }
   if (line === "phase\toperation-complete") {
@@ -257,10 +404,14 @@ function consumeNotificationLine(line) {
     return;
   }
 
-  const owner = spawnSync("git", ["-C", repoRoot, "cat-file", "blob", ownerOid], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const owner = spawnSync(
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
+    ["-C", repoRoot, "cat-file", "blob", ownerOid],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
   const ownerMatch =
     owner.status === 0
       ? /^version=3\nstate=active\npgid=([1-9][0-9]*)\nsupervisor_pid=([1-9][0-9]*)\nsupervisor_birth=[^\t\n]+\ntoken=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n?$/u.exec(
@@ -381,7 +532,7 @@ function childResultAllowsLockRelease() {
   return completedCleanly || failedDuringValidation;
 }
 
-const postExitGroupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
+const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
 if (postExitGroupStatus === "indeterminate") {
   notificationFailure ??= new Error("scripts/pr process-group state became indeterminate");
 } else if (postExitGroupStatus === "live") {
@@ -391,7 +542,7 @@ if (postExitGroupStatus === "indeterminate") {
   lingeringGroupProcesses = processGroupRows(child.pid);
   notificationFailure ??= new Error("scripts/pr process group remained active after wrapper exit");
   signalProcessGroup("SIGTERM");
-  escalationTimer ??= setTimeout(escalateSignal, SIGNAL_GRACE_MS);
+  escalationTimer ??= setTimeout(escalateSignal, cleanupGraceMs);
 } else if (!notificationEnded) {
   // A detached descendant may be the last writer. It cannot be signalled by
   // this group supervisor, so bound the wait and retain the lock on timeout.
@@ -400,7 +551,7 @@ if (postExitGroupStatus === "indeterminate") {
 
 async function waitForOperationDrain() {
   while (true) {
-    const groupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
+    const groupStatus = child.pid ? processGroupStatus() : "dead";
     if (groupStatus === "indeterminate") {
       throw new Error("scripts/pr process-group state became indeterminate");
     }
@@ -599,6 +750,35 @@ if (drained && childResultAllowsLockRelease()) {
 }
 for (const { lock, releaseError } of retainedLocks) {
   reportRetainedLock(lock, releaseError, releaseFailures);
+}
+
+if (
+  ownedAnchor &&
+  drainResult === "drained" &&
+  childResultAllowsLockRelease() &&
+  retainedLocks.length === 0 &&
+  !notificationFailure
+) {
+  try {
+    const held = fstatSync(9, { bigint: true });
+    const current = lstatSync(ownedAnchor.path, { bigint: true });
+    if (
+      current.isDirectory() &&
+      realpathSync(ownedAnchor.path) === ownedAnchor.path &&
+      [held, current].every(
+        (value) =>
+          value.dev === ownedAnchor.dev &&
+          value.ino === ownedAnchor.ino &&
+          value.uid === ownedAnchor.uid &&
+          value.mode === ownedAnchor.mode,
+      )
+    ) {
+      // rm does not follow the materializer's external dependency symlinks.
+      rmSync(ownedAnchor.path, { recursive: true });
+    }
+  } catch {
+    console.error("Warning: retaining the materialized PR wrapper after anchor cleanup failed.");
+  }
 }
 
 if (notificationFailure) {

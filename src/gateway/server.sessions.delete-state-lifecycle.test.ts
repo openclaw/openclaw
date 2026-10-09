@@ -1,9 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
+import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -13,35 +21,44 @@ import * as sessionArchiveStore from "../config/sessions/session-accessor.sqlite
 import * as sessionArchive from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   emitSessionIdentityMutation,
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion, type SessionCompanionService } from "./session-companion.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
-  writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-function afterSessionStateMaterialization(after: () => void) {
+function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   const materialize = sessionArchive.materializeSessionStateDeletePlans;
   // Earlier files can load the owner in this non-isolated shard. Observe its
   // real export instead of replacing a module after that owner has captured it.
   vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementation(
     async (...args) => {
       const result = await materialize(...args);
-      after();
+      await after();
       return result;
     },
   );
@@ -54,21 +71,74 @@ const {
 } = setupGatewaySessionsHandlerTestHarness();
 const companions = new Set<SessionCompanionService>();
 
-afterEach(() => {
+afterEach(async () => {
   for (const companion of companions) {
     companion.dispose();
   }
   companions.clear();
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
+
+test.each(["sessions.reset", "sessions.delete"] as const)(
+  "%s preserves the session generation until mandatory native cleanup succeeds",
+  async (method) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:dashboard:mandatory-cleanup";
+    const sessionId = "mandatory-cleanup-session";
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision: "before-cleanup" }),
+      },
+    });
+    const before = loadSessionEntry({ sessionKey, storePath });
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    const cleanupFailure = new AgentHarnessSessionCleanupError("Native session is still active");
+    let cleanupBlocked = true;
+    registerAgentHarness({
+      id: "mandatory-cleanup-fixture",
+      label: "Mandatory cleanup fixture",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      reset: async (input) => {
+        expect(input.sessionId).toBe(sessionId);
+        if (cleanupBlocked) {
+          throw cleanupFailure;
+        }
+      },
+    });
+    try {
+      await expect(directSessionReq(method, { key: sessionKey })).rejects.toThrow(cleanupFailure);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
+
+      cleanupBlocked = false;
+      const retried = await directSessionReq(method, { key: sessionKey });
+      expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
+      const after = loadSessionEntry({ sessionKey, storePath });
+      if (method === "sessions.delete") {
+        expect(retried.payload).toMatchObject({ deleted: true });
+        expect(after).toBeUndefined();
+      } else {
+        expect(after?.lifecycleRevision).toEqual(expect.any(String));
+        expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
+      }
+    } finally {
+      restoreRegisteredAgentHarnesses(registeredHarnesses);
+    }
+  },
+);
 
 test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:repository-lifecycle";
-  const repositories = getSessionRepositoryWorkspaceStore();
-  const repository = repositories.create({
+  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+  const repository = await repositories.create({
     agentId: "main",
     sessionKey,
     url: "https://github.com/openclaw/fixture.git",
@@ -102,23 +172,181 @@ test("repository ownership survives reset and archive, then permanent deletion r
     expect(entry?.repositoryWorkspaceId).toBe(repository.workspaceId);
     expect(entry?.worktree).toBeUndefined();
     expect(entry?.spawnedCwd).toBeUndefined();
-    expect(repositories.get(repository.workspaceId)).toEqual(repository);
+    expect(await repositories.get(repository.workspaceId)).toEqual(repository);
   }
   const denied = await directSessionReq("sessions.delete", {
     key: sessionKey,
     expectedSessionId: "replaced-session",
   });
   expect(denied.ok).toBe(false);
-  expect(repositories.get(repository.workspaceId)).toEqual(repository);
+  expect(await repositories.get(repository.workspaceId)).toEqual(repository);
   expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
     "accepted checkpoint",
   );
   const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  expect(repositories.get(repository.workspaceId)).toBeUndefined();
+  expect(await repositories.get(repository.workspaceId)).toBeUndefined();
   await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
+  "repository cleanup preserves full logical absence checks for %s",
+  async (boundary) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
+    const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+    const repository = await repositories.create({
+      agentId: "main",
+      sessionKey,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry("repository-cleanup-original", {
+          repositoryWorkspaceId: repository.workspaceId,
+        }),
+      },
+    });
+    const artifactRoot = repositories.artifactPath(repository.workspaceId);
+    await fs.mkdir(artifactRoot, { recursive: true });
+    const artifact = path.join(artifactRoot, "retained-checkpoint");
+    await fs.writeFile(artifact, "accepted checkpoint");
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    if (!databasePath) {
+      throw new Error("Repository cleanup fixture has no physical agent database");
+    }
+    const peer = new DatabaseSync(databasePath);
+    const successor = sessionStoreEntry("repository-cleanup-successor", {
+      lifecycleRevision: "foreign-cleanup-generation",
+      repositoryWorkspaceId: repository.workspaceId,
+    });
+    let injected = false;
+    let nativeAbsent = false;
+    const inject = () => {
+      expect(
+        peer.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
+      ).toBeUndefined();
+      const key = boundary === "folded sibling" ? sessionKey.toLowerCase() : sessionKey;
+      const json =
+        boundary === "retained placeholder"
+          ? "{}"
+          : boundary === "foreign grant"
+            ? JSON.stringify(successor)
+            : "{";
+      // A separate native connection changes durable rows without in-process publications.
+      peer.exec("BEGIN IMMEDIATE");
+      try {
+        peer
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(key, successor.sessionId, json, successor.updatedAt);
+        if (boundary === "retained placeholder") {
+          peer
+            .prepare(
+              "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            )
+            .run(successor.sessionId, key, successor.updatedAt, successor.updatedAt);
+        }
+        peer
+          .prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?")
+          .run(boundary === "retained placeholder" ? -1 : 1, key);
+        peer.exec("COMMIT");
+      } catch (error) {
+        peer.exec("ROLLBACK");
+        throw error;
+      }
+      injected = true;
+    };
+    const createStore = repositoryWorkspaces.createSessionRepositoryWorkspaceStore;
+    const storeSelection = vi
+      .spyOn(repositoryWorkspaces, "createSessionRepositoryWorkspaceStore")
+      .mockImplementation((options) => {
+        const store = createStore(options);
+        const remove = store.delete.bind(store);
+        store.delete = async (input) => {
+          if (input.workspaceId === repository.workspaceId && boundary !== "foreign grant") {
+            inject();
+          }
+          await remove(input);
+        };
+        return store;
+      });
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      const wrapped =
+        isRecord(request.facts) && request.facts.kind === "session-entry-current"
+          ? request.facts
+          : undefined;
+      const facts = wrapped?.domainFacts ?? request.facts;
+      if (
+        boundary === "foreign grant" &&
+        !injected &&
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.workspaceId === repository.workspaceId &&
+        facts.changed === true &&
+        facts.workspace === undefined
+      ) {
+        nativeAbsent = wrapped !== undefined && wrapped.entry === undefined;
+        // Run every real host guard first; commit the peer write before releasing the native grant.
+        admit(request, () => {
+          inject();
+          return grant();
+        });
+        return;
+      }
+      admit(request, grant);
+    });
+    try {
+      const observed = await directSessionReq("sessions.delete", { key: sessionKey }).then(
+        (response) => ({ response, error: undefined }),
+        (error: unknown) => ({ response: undefined, error }),
+      );
+      expect(injected).toBe(true);
+      if (boundary === "foreign grant") {
+        const current = peer
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey);
+        expect(current?.entry_json).toBe(JSON.stringify(successor));
+      }
+      if (boundary === "retained placeholder") {
+        expect(observed.error).toBeUndefined();
+        expect(observed.response).toMatchObject({ ok: true, payload: { deleted: true } });
+        expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+        await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await repositories.get(repository.workspaceId)).toEqual(repository);
+        expect(await fs.readFile(artifact, "utf8")).toBe("accepted checkpoint");
+        expect(observed.error).toBeInstanceOf(Error);
+        expect(observed.error).toMatchObject({
+          message: expect.stringContaining(
+            boundary === "foreign grant"
+              ? "Session currency changed while awaiting its native grant"
+              : "invalid persisted session row",
+          ),
+        });
+      }
+      if (boundary === "foreign grant") {
+        expect(nativeAbsent).toBe(true);
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(successor);
+      } else if (boundary === "retained placeholder") {
+        expect(
+          peer
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey),
+        ).toEqual({ entry_json: "{}" });
+      }
+    } finally {
+      admission.mockRestore();
+      storeSelection.mockRestore();
+      peer.close();
+    }
+  },
+);
 
 test("sessions.delete broadcasts the removed generation after a replacement appears", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -154,52 +382,6 @@ test("sessions.delete broadcasts the removed generation after a replacement appe
     },
     { event: "sessions.changed", payload: { reason: "delete", ts: expect.any(Number) } },
   ]);
-});
-
-test("sessions.delete removes the session board from its agent database", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-board", "hello");
-  await writeSessionStore({
-    entries: {
-      "discord:group:board-delete": sessionStoreEntry("sess-board"),
-    },
-  });
-  const sessionKey = "agent:main:discord:group:board-delete";
-  if (!testState.sessionStorePath) {
-    throw new Error("expected gateway session store path");
-  }
-  const databasePath = resolveSqliteTargetFromSessionStorePath(testState.sessionStorePath, {
-    agentId: "main",
-  }).path;
-  if (!databasePath) {
-    throw new Error("expected gateway agent database path");
-  }
-  const store = new SqliteBoardStore({
-    resolveSession: () => ({
-      agentId: "main",
-      path: databasePath,
-      sessionKey,
-    }),
-    env: process.env,
-  });
-  await store.putWidget({
-    sessionKey,
-    name: "status",
-    content: { kind: "html", html: "ok" },
-  });
-
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: "discord:group:board-delete",
-  });
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
-  expect(await store.getSnapshot({ sessionKey })).toEqual({
-    sessionKey,
-    revision: 0,
-    tabs: [],
-    widgets: [],
-  });
 });
 
 test("sessions.delete reports an exact-entry replacement during transcript materialization", async () => {
@@ -259,11 +441,11 @@ test.each(["authorization", "placement"] as const)(
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
-    afterSessionStateMaterialization(() => {
+    afterSessionStateMaterialization(async () => {
       if (change === "authorization") {
         authorized = false;
       } else {
-        placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
+        await placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
       }
     });
     await expect(
@@ -292,56 +474,83 @@ test.each(["authorization", "placement"] as const)(
   },
 );
 
-test("sessions.delete accepts placement retirement by the absent-session reconciler after commit", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "agent:main:postcommit-retirement";
-  const sessionId = "postcommit-retirement-session";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = placementStore.claimTurn({
-    sessionId,
-    sessionKey,
-    agentId: "main",
-    owner: { kind: "local" },
-    claimId: "postcommit-claim",
-    runId: "postcommit-run",
-  });
-  placementStore.releaseTurn(claim);
-  let retired = false;
-  const publish = sessionArchiveStore.publishSessionStateArchives;
-  vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
-    async (...args) => {
-      const result = await publish(...args);
-      if (!loadSessionEntry({ sessionKey }) && !retired) {
-        placementStore.retireSessionPlacement({
-          sessionId,
-          expectedState: "local",
-          expectedGeneration: claim.placementGeneration,
-        });
-        retired = true;
-      }
-      return result;
-    },
-  );
-  const deleted = await directSessionReq(
-    "sessions.delete",
-    { key: sessionKey },
-    {
-      context: { workerSessionPlacementService: placementStore },
-    },
-  );
-  expect(retired).toBe(true);
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(placementStore.get(sessionId)).toBeUndefined();
-});
+test.each(["archive-publication", "worker-queue"] as const)(
+  "sessions.delete accepts postcommit placement retirement during %s",
+  async (phase) => {
+    await createSessionStoreDir();
+    const sessionKey = "agent:main:postcommit-retirement";
+    const sessionId = "postcommit-retirement-session";
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+    const claim = await placementStore.claimTurn({
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      owner: { kind: "local" },
+      claimId: "postcommit-claim",
+      runId: "postcommit-run",
+    });
+    await placementStore.releaseTurn(claim);
+    let retired = false;
+    let placementService = placementStore;
+    const retire = placementStore.retireSessionPlacementAsync.bind(placementStore);
+    if (phase === "archive-publication") {
+      const publish = sessionArchiveStore.publishSessionStateArchives;
+      vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
+        async (...args) => {
+          const result = await publish(...args);
+          if (!loadSessionEntry({ sessionKey }) && !retired) {
+            placementStore.retireSessionPlacement({
+              sessionId,
+              expectedState: "local",
+              expectedGeneration: claim.placementGeneration,
+            });
+            retired = true;
+          }
+          return result;
+        },
+      );
+    } else {
+      placementService = {
+        ...placementStore,
+        async retireSessionPlacementAsync(...args: Parameters<typeof retire>) {
+          expect(loadSessionEntry({ sessionKey })).toBeUndefined();
+          expect(placementStore.get(sessionId)).toMatchObject({
+            state: "local",
+            generation: claim.placementGeneration,
+            turnClaim: null,
+          });
+          // The orphan wins FIFO after deletion's host check, before its worker CAS.
+          await Promise.all([
+            retire(...args).then(() => {
+              retired = true;
+            }),
+            retire(...args),
+          ]);
+        },
+      };
+    }
+    const deleted = await directSessionReq(
+      "sessions.delete",
+      { key: sessionKey },
+      {
+        context: { workerSessionPlacementService: placementService },
+      },
+    );
+    expect(retired).toBe(true);
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(placementStore.get(sessionId)).toBeUndefined();
+  },
+);
 
 async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const run = vi.fn(runModel ?? (async () => "Synthetic answer from the selected session."));
   const service = createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: getRuntimeConfig,
     contextReader: defaultSessionCompanionContextReader,
-    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
     run,
   });
@@ -376,65 +585,6 @@ async function recreate(sessionKey: string) {
   expect(response.ok, response.error?.message).toBe(true);
   return response.payload?.entry.sessionId;
 }
-
-test("sessions.delete retires Side chat before same-key recreation", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("generation-a") } });
-  const { service, run } = await createCompanion();
-  await ask(service, sessionKey, "Question about generation A?");
-  expect((await readState(service, sessionKey))?.exchanges).toHaveLength(1);
-
-  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-
-  const nextSessionId = await recreate(sessionKey);
-  expect(nextSessionId).toBeTruthy();
-  expect(nextSessionId).not.toBe("generation-a");
-  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-  expect(run).toHaveBeenCalledTimes(1);
-});
-
-test("sessions.delete preserves Side chat when the deletion expectation is stale", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-rejected-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("current-generation") } });
-  const { service } = await createCompanion();
-  await ask(service, sessionKey, "Keep this exchange?");
-  const before = await readState(service, sessionKey);
-
-  const deleted = await directSessionReq("sessions.delete", {
-    key: sessionKey,
-    expectedSessionId: "stale-generation",
-  });
-  expect(deleted).toMatchObject({ ok: false, error: { details: { reason: "session-changed" } } });
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("current-generation");
-  expect(await readState(service, sessionKey)).toEqual(before);
-});
-
-test("sessions.reset clears its Side chat and preserves another session", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-reset";
-  const otherKey = "agent:main:companion-unrelated";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("reset-generation"),
-      [otherKey]: sessionStoreEntry("unrelated-generation"),
-    },
-  });
-  const { service } = await createCompanion();
-  await ask(service, sessionKey, "Before reset?");
-  await ask(service, otherKey, "Keep the unrelated conversation?");
-  const otherBefore = await readState(service, otherKey);
-
-  const reset = await directSessionReq("sessions.reset", { key: sessionKey });
-  expect(reset.ok, reset.error?.message).toBe(true);
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("reset-generation");
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-  expect(await readState(service, otherKey)).toEqual(otherBefore);
-});
 
 test("sessions.delete isolates Side chat for the same global key and session ID in another agent", async () => {
   const stores = await createConfiguredGlobalAgentSessionStore();
@@ -479,7 +629,9 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
     stop();
   }
   expect(deletion).toBeDefined();
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   await recreate(sessionKey);
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   await ask(service, sessionKey, "New generation question?");
   const newState = await readState(service, sessionKey);
   expect(newState?.exchanges.map((exchange) => exchange.question)).toEqual([
@@ -490,16 +642,26 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
   expect(await readState(service, sessionKey)).toEqual(newState);
 });
 
-test("sessions.delete cancels a prepared Side chat ask before its late answer", async () => {
+test("sessions.delete cancels a prepared Side chat ask before its late answer", async ({
+  signal,
+}) => {
   await createSessionStoreDir();
   const sessionKey = "agent:main:companion-active-delete";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("active-generation") } });
   const pending = createDeferred<string>();
-  const { service, run } = await createCompanion(() => pending.promise);
+  const started = createDeferred();
+  const { service, run } = await createCompanion(() => {
+    started.resolve();
+    return pending.promise;
+  });
   const active = ask(service, sessionKey, "Can this survive deletion?");
   const failure = active.catch((error: unknown) => error);
   try {
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, active, "Side chat settled before model start"),
+      signal,
+    );
+    expect(run).toHaveBeenCalledOnce();
     const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);
@@ -508,6 +670,8 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
     await active.catch(() => undefined);
     expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   } finally {
+    service.dispose();
+    companions.delete(service);
     pending.resolve("Late answer from the deleted session.");
     await active.catch(() => undefined);
   }

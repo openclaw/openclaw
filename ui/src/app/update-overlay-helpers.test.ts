@@ -36,6 +36,8 @@ describe("update schedule hydration", () => {
         git: {
           status: "behind",
           currentSha: "a".repeat(40),
+          upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
           commitAtMs: 1_000,
           installedAtMs: 2_000,
           commitsBehind: 3,
@@ -65,6 +67,7 @@ describe("update schedule hydration", () => {
           currentSha: "a".repeat(40),
           upstreamRef: "origin/main",
           upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
           commitsBehind: 3,
           commits: [
             { sha: "b0b0b0b", subject: "Improve update scheduling" },
@@ -79,6 +82,7 @@ describe("update schedule hydration", () => {
       currentSha: "a".repeat(40),
       upstreamRef: "origin/main",
       upstreamSha: "b".repeat(40),
+      repositoryUrl: "https://github.com/example/openclaw",
       commitsBehind: 3,
       commits: [
         { sha: "b0b0b0b", subject: "Improve update scheduling" },
@@ -154,6 +158,28 @@ describe("update schedule hydration", () => {
     const blankSchedule = { channel: "", autoEnabled: true };
     expect(readUpdateScheduleValue(blankSchedule)).toBeNull();
     expect(Value.Check(UpdateScheduleStateSchema, blankSchedule)).toBe(false);
+  });
+
+  it.each([
+    { currentSha: "abcdef" },
+    { currentPath: "" },
+    { prepared: { sha: "b".repeat(40), path: "/candidate", buildDigest: "bad", preparedAtMs: 1 } },
+  ])("rejects malformed immutable facts in both schema and UI (%j)", (invalid) => {
+    const payload = {
+      channel: "dev",
+      autoEnabled: false,
+      install: {
+        kind: "immutable",
+        immutable: {
+          root: "/opt/openclaw",
+          currentSha: "a".repeat(40),
+          currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+          ...invalid,
+        },
+      },
+    };
+    expect(Value.Check(UpdateScheduleStateSchema, payload)).toBe(false);
+    expect(readUpdateScheduleValue(payload)).toBeNull();
   });
 
   it("drops blank optional strings instead of discarding the whole payload", () => {
@@ -292,6 +318,29 @@ describe("update schedule hydration", () => {
       readUpdateScheduleValue,
     ],
     [
+      "schedule with a prepared immutable generation",
+      {
+        channel: "dev",
+        autoEnabled: false,
+        install: {
+          kind: "immutable",
+          immutable: {
+            root: "/opt/openclaw",
+            currentSha: "a".repeat(40),
+            currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+            prepared: {
+              sha: "b".repeat(40),
+              path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+              buildDigest: "c".repeat(64),
+              preparedAtMs: 123,
+            },
+          },
+        },
+      },
+      UpdateScheduleStateSchema,
+      readUpdateScheduleValue,
+    ],
+    [
       "schedule with diverged git install and campaign",
       {
         channel: "dev",
@@ -328,6 +377,22 @@ describe("update schedule hydration", () => {
 });
 
 describe("update status localization", () => {
+  it("keeps external supervisor refusals visible without launching failure triage", () => {
+    const projected = projectUpdateSentinel({
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: { reason: "external-supervisor-update-required" },
+    });
+
+    expect(projected?.banner?.tone).toBe("warn");
+    expect(projected?.banner?.text).toContain("managed by an external supervisor");
+    expect(projected?.banner?.text).toContain("Use your server or deployment's update workflow");
+    expect(projected?.banner?.text).not.toContain("openclaw triage");
+    expect(projected?.attempt?.reason).toBe("external-supervisor-update-required");
+    expect(projected?.failure).toBeNull();
+  });
+
   it("distinguishes a failed status check from a failed update", () => {
     const error = "gateway request timed out after 5000ms: update.status";
     expect(resolveUpdateStatusCheckBanner(new Error(error))).toEqual({
@@ -460,13 +525,16 @@ describe("update status localization", () => {
     },
   );
 
-  it("preserves unknown status details inside localized fallback guidance", () => {
-    const translate = vi.spyOn(i18n, "t");
+  it.each(["disk-read-only", "constructor", "__proto__", "toString"])(
+    "preserves unknown status %s inside localized fallback guidance",
+    (reason) => {
+      const translate = vi.spyOn(i18n, "t");
 
-    expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
-      tone: "danger",
-      text: "Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed.",
-    });
-    expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
-  });
+      expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
+        tone: "danger",
+        text: `Update error: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
+      });
+      expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
+    },
+  );
 });

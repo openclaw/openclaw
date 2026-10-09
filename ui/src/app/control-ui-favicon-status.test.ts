@@ -10,8 +10,11 @@ import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts"
 import { client, createGatewayHarness, flushMicrotasks } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
+// mock-isolation: Observe source lifetimes without sharing the browser compositor’s DOM state.
 vi.mock("./control-ui-environment-presentation.runtime.ts", () => ({
   applyControlUiFaviconStatus: vi.fn(),
+  applyControlUiFaviconImage: vi.fn(),
+  invalidateControlUiFaviconPalette: vi.fn(),
 }));
 const cleanups: Array<() => void> = [];
 

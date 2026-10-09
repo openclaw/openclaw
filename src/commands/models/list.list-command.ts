@@ -4,7 +4,7 @@ import type {
   ModelChoice,
   ModelsListParams,
   ModelsListResult,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
@@ -130,12 +130,20 @@ export async function modelsListCommand(
       },
     );
   }
-  if (
-    result.refreshFailed ||
-    (opts.refresh && result.providerOutcomes?.some((outcome) => outcome.status !== "ready"))
-  ) {
+  if (result.refreshFailed) {
     runtime.error(
       "Model discovery could not refresh all providers. Showing the available published model list.",
+    );
+  }
+  for (const outcome of result.providerOutcomes ?? []) {
+    if (outcome.status === "ready") {
+      continue;
+    }
+    const label = `${sanitizeTerminalText(outcome.provider)}${outcome.profileId ? ` (profile ${sanitizeTerminalText(outcome.profileId)})` : ""}`;
+    runtime.error(
+      outcome.status === "auth-rejected"
+        ? `Model discovery authentication was rejected for ${label}. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.`
+        : `Model discovery is unavailable for ${label}. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.`,
     );
   }
   const rows = result.models
@@ -144,7 +152,7 @@ export async function modelsListCommand(
   if (rows.length === 0 && !opts.json && !opts.plain) {
     runtime.log("No models found.");
   } else {
-    printModelTable(rows, runtime, opts);
+    printModelTable(rows, runtime, { ...opts, providerOutcomes: result.providerOutcomes });
   }
   requestExitAfterOneShotOutput(runtime);
 }

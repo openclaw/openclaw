@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 362012,
-  "reason": "Maintainer-approved 354 KiB cap after integrated scoped catalog invalidation (#147845), remote workspaces (#147773), and update-status feedback (#147883). Controlled build measured 362012 B; deferring the new workspace labels saved only 64 B and still failed the previous limit. Existing 512 B growth and 64 B build variance allowances remain unchanged.",
-  "updatedAt": "2026-09-14"
+  "startupJsGzipBytes": 372878,
+  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
+  "updatedAt": "2026-10-02"
 }

@@ -4,6 +4,7 @@
 // independent of the Kysely value graph.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
 export const { kyselyByDatabase, queryErrorHandlerByDatabase } = resolveGlobalSingleton(
@@ -20,9 +21,9 @@ const statementInvalidationSymbol = Symbol.for("openclaw.kyselySyncStatementInva
 const statementCacheEnabledSymbol = Symbol.for("openclaw.kyselySyncStatementCacheEnabled");
 const authorizerActiveSymbol = Symbol.for("openclaw.kyselySyncAuthorizerActive");
 const disposeCallbacksSymbol = Symbol.for("openclaw.sqliteDisposeCallbacks");
-// Bound SQL plus variable-size bindings to about 2 MiB per enabled database.
-// Process-wide retention scales with open handles; repeated variable SQL can enter.
-const statementCacheCapacity = 32;
+// Admit up to 4 MiB of SQL plus variable-size bindings per enabled database.
+// Candidate SQL and native/JS overhead are additional; retention scales with open handles.
+const statementCacheCapacity = 64;
 const statementCacheEntryBytes = 64 * 1024;
 
 type SqliteAuthorizer = Parameters<DatabaseSync["setAuthorizer"]>[0];
@@ -49,11 +50,7 @@ export function registerNodeSqliteDisposeCallback(
 ): () => void {
   const owner: StatementCacheOwner = db;
   installStatementInvalidation(owner);
-  const callbacks = (owner[disposeCallbacksSymbol] ??= new Set());
-  callbacks.add(callback);
-  return () => {
-    callbacks.delete(callback);
-  };
+  return registerListener((owner[disposeCallbacksSymbol] ??= new Set()), callback);
 }
 
 export function disposeNodeSqliteDependents(
@@ -117,29 +114,19 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       },
     });
   }
-  if (typeof owner.close === "function") {
-    const close = owner.close.bind(owner);
-    Object.defineProperty(owner, "close", {
-      configurable: true,
-      writable: true,
-      value(this: StatementCacheOwner): void {
-        disposeNodeSqliteDependents(this);
-        clearNodeSqliteKyselyCacheForDatabase(this);
-        return close();
-      },
-    });
-  }
-  if (typeof owner[Symbol.dispose] === "function") {
-    const dispose = owner[Symbol.dispose].bind(owner);
-    Object.defineProperty(owner, Symbol.dispose, {
-      configurable: true,
-      writable: true,
-      value(this: StatementCacheOwner): void {
-        disposeNodeSqliteDependents(this);
-        clearNodeSqliteKyselyCacheForDatabase(this);
-        return dispose();
-      },
-    });
+  for (const method of ["close", Symbol.dispose] as const) {
+    if (typeof owner[method] === "function") {
+      const dispose = owner[method].bind(owner);
+      Object.defineProperty(owner, method, {
+        configurable: true,
+        writable: true,
+        value(this: StatementCacheOwner): void {
+          disposeNodeSqliteDependents(this);
+          clearNodeSqliteKyselyCacheForDatabase(this);
+          return dispose();
+        },
+      });
+    }
   }
   Object.defineProperty(owner, statementInvalidationSymbol, {
     configurable: true,

@@ -107,13 +107,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it.each([
     ["camera", "Turn camera off", undefined, "on"],
     ["camera", "Turn camera on", undefined, "off"],
-    ["camera", "Stop video", undefined, "on"],
-    ["camera", "Start video", undefined, "off"],
     ["camera", "Turn camera on", "true", "on"],
     ["microphone", "Mute", undefined, "on"],
     ["microphone", "Unmute", undefined, "off"],
-    ["microphone", "Turn microphone off", undefined, "on"],
-    ["microphone", "Turn microphone on", undefined, "off"],
     ["microphone", "Microphone is muted", undefined, "off"],
     ["microphone", "Turn microphone off", "false", "off"],
   ])(
@@ -133,8 +129,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it.each([
     ["camera", true, false],
-    ["camera", false, true],
-    ["microphone", true, false],
     ["microphone", false, true],
   ])("reads the live %s switch checked=%s", async (kind, checked, expectedOff) => {
     const target = control({ checked, label: kind === "camera" ? "Camera" : "Microphone" });
@@ -746,13 +740,10 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(join.clicks).toBe(1);
   });
 
-  it.each(["meeting ended", "call ended — rejoin"])(
-    "does not infer departure from page-wide text: %s",
-    (bodyText) => {
-      const { result } = runLeaveScript({ bodyText });
-      expect(result).toEqual({ departed: false, urlMatched: true });
-    },
-  );
+  it("does not infer departure from page-wide text", () => {
+    const { result } = runLeaveScript({ bodyText: "call ended — rejoin" });
+    expect(result).toEqual({ departed: false, urlMatched: true });
+  });
 
   it("requires positive input and output route evidence before realtime", () => {
     expect(

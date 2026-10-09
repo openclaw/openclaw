@@ -93,6 +93,12 @@ The Go model-list endpoint is a general inventory, not an account-entitlement
 check. A successful listing does not grant access: inference still requires an
 active Go subscription, including for promotional models.
 
+DeepSeek V4 models apply the same thinking controls in agent turns and standalone
+completions. Explicit `off` disables native thinking and removes reasoning from
+replayed history; enabled thinking preserves the reasoning needed for follow-up turns.
+Both paths also omit unsupported controls for MiniMax models with fixed reasoning
+and remove Kimi K2 reasoning replay fields.
+
 ## Privacy
 
 Retention and training policies vary by model. Review the current

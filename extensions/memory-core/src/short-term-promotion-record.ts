@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   MemoryEntryProvenance,
@@ -6,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import {
@@ -13,6 +13,7 @@ import {
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import { inspectWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import type { SessionEntryOrigin } from "./session-ingestion.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
@@ -61,9 +62,12 @@ function mergeRecallProvenance(
   };
 }
 
-async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
+async function shortTermRecallSourceIsFile(
+  workspaceDir: string,
+  sourcePath: string,
+): Promise<boolean> {
   try {
-    const stat = await fs.stat(sourcePath);
+    const stat = await inspectWorkspaceFile(workspaceDir, sourcePath);
     return stat.isFile();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -88,45 +92,29 @@ export async function filterLiveShortTermRecallEntries(params: {
     if (existing) {
       return existing;
     }
-    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(sourcePath));
+    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(workspaceDir, sourcePath));
     sourceFileChecks.set(sourcePath, check);
     return check;
   };
   const results = await Promise.all(
     params.entries.map(async (entry) => {
-      let exists = false;
       for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
         if (await checkSourceFile(sourcePath)) {
-          exists = true;
-          break;
+          return entry;
         }
       }
-      return { entry, exists };
+      return undefined;
     }),
   );
-  return results.filter((result) => result.exists).map((result) => result.entry);
+  return results.filter((entry) => entry !== undefined);
 }
 
-function buildMemoryRecallSkippedEvent(params: {
-  timestamp: string;
-  query: string;
-  eligibleResultCount: number;
-  skipped: MemorySearchResult[];
-}) {
+function recallEventResult(result: MemorySearchResult) {
   return {
-    type: "memory.recall.skipped" as const,
-    timestamp: params.timestamp,
-    query: params.query,
-    reason: "non-short-term-memory-path" as const,
-    eligibleResultCount: params.eligibleResultCount,
-    skippedResultCount: params.skipped.length,
-    results: params.skipped.map((result) => ({
-      path: normalizeMemoryPath(result.path),
-      startLine: Math.max(1, Math.floor(result.startLine)),
-      endLine: Math.max(1, Math.floor(result.endLine)),
-      score: clampScore(result.score),
-      reason: "non-short-term-memory-path" as const,
-    })),
+    path: normalizeMemoryPath(result.path),
+    startLine: Math.max(1, Math.floor(result.startLine)),
+    endLine: Math.max(1, Math.floor(result.endLine)),
+    score: clampScore(result.score),
   };
 }
 
@@ -166,16 +154,21 @@ export async function recordShortTermRecalls(params: {
 
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const appendSkippedEvent = (eligibleResultCount: number) =>
+    appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: nowIso,
+      query,
+      reason: "non-short-term-memory-path",
+      eligibleResultCount,
+      skippedResultCount: skipped.length,
+      results: skipped.map((result) => ({
+        ...recallEventResult(result),
+        reason: "non-short-term-memory-path" as const,
+      })),
+    });
   if (relevant.length === 0) {
-    await appendMemoryHostEvent(
-      workspaceDir,
-      buildMemoryRecallSkippedEvent({
-        timestamp: nowIso,
-        query,
-        eligibleResultCount: relevant.length,
-        skipped,
-      }),
-    );
+    await appendSkippedEvent(0);
     return;
   }
   const sourceSessions = new Map<string, Set<string>>();
@@ -194,7 +187,7 @@ export async function recordShortTermRecalls(params: {
       forgottenByAgent.set(
         agentId,
         new Set(
-          listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] }).map(
+          (await listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] })).map(
             (entry) => entry.sessionId,
           ),
         ),
@@ -212,7 +205,7 @@ export async function recordShortTermRecalls(params: {
     }
     const origins: MemoryEntryOrigin[] = [];
     for (const result of admitted) {
-      const normalizedPath = normalizeMemoryPath(result.path);
+      const { path: normalizedPath, startLine, endLine, score } = recallEventResult(result);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
       if (
@@ -236,9 +229,7 @@ export async function recordShortTermRecalls(params: {
           ? Object.values(store.entries).find(
               (entry) =>
                 !entry.key.startsWith("memory:claim:") &&
-                Math.max(0, Math.floor(entry.recallCount ?? 0)) +
-                  Math.max(0, Math.floor(entry.groundedCount ?? 0)) >
-                  0 &&
+                entry.recallCount + entry.groundedCount > 0 &&
                 entry.claimHash === claimHash,
             )
           : undefined;
@@ -249,8 +240,8 @@ export async function recordShortTermRecalls(params: {
           ? buildDailyClaimEntryKey(claimHash)
           : buildEntryKey({
               path: normalizedPath,
-              startLine: Math.max(1, Math.floor(result.startLine)),
-              endLine: Math.max(1, Math.floor(result.endLine)),
+              startLine,
+              endLine,
               source: "memory",
               claimHash,
             });
@@ -261,7 +252,6 @@ export async function recordShortTermRecalls(params: {
         dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];
-      const score = clampScore(result.score);
       const effectiveQuery =
         signalType === "grounded" ? normalizeSnippet(result.query ?? query) || query : query;
       const queryHash = hashQuery(effectiveQuery);
@@ -278,18 +268,11 @@ export async function recordShortTermRecalls(params: {
         queryHashesBase.includes(queryHash) &&
         recallDaysBase.includes(dayBucket);
       const addedSignals = dedupeSignal ? 0 : signalCount;
-      const recallCount = Math.max(
-        0,
-        Math.floor(existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0),
-      );
-      const dailyCount = Math.max(
-        0,
-        Math.floor(existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0),
-      );
-      const groundedCount = Math.max(
-        0,
-        Math.floor(existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0),
-      );
+      const recallCount =
+        (existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0);
+      const dailyCount = (existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0);
+      const groundedCount =
+        (existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0);
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeRecentDistinct(queryHashesBase, queryHash, MAX_QUERY_HASHES);
@@ -318,7 +301,7 @@ export async function recordShortTermRecalls(params: {
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
       // Daily claim keys omit the file path; retain the first source citation
-      // while observations from distinct days accumulate on the same claim. A
+      // while observations from distinct days accumulate on the same claim.
       // A later non-daily signal cites it the same way, so the claim never
       // adopts the path of whichever file the search or backfill happened to hit.
       const preserveFirstDailySource =
@@ -326,12 +309,8 @@ export async function recordShortTermRecalls(params: {
       store.entries[key] = {
         key,
         path: preserveFirstDailySource ? existing.path : normalizedPath,
-        startLine: preserveFirstDailySource
-          ? existing.startLine
-          : Math.max(1, Math.floor(result.startLine)),
-        endLine: preserveFirstDailySource
-          ? existing.endLine
-          : Math.max(1, Math.floor(result.endLine)),
+        startLine: preserveFirstDailySource ? existing.startLine : startLine,
+        endLine: preserveFirstDailySource ? existing.endLine : endLine,
         source: "memory",
         snippet: snippet || existing?.snippet || "",
         recallCount,
@@ -364,7 +343,7 @@ export async function recordShortTermRecalls(params: {
     // Reserve lineage before publishing candidates. A failed provenance write
     // must not leave durable staged content without its source-session facts.
     for (const agentId of sourceSessions.keys()) {
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId,
         origins: origins.filter((origin) => origin.agentId === agentId),
       });
@@ -379,53 +358,11 @@ export async function recordShortTermRecalls(params: {
       timestamp: nowIso,
       query,
       resultCount: admitted.length,
-      results: admitted.map((result) => ({
-        path: normalizeMemoryPath(result.path),
-        startLine: Math.max(1, Math.floor(result.startLine)),
-        endLine: Math.max(1, Math.floor(result.endLine)),
-        score: clampScore(result.score),
-      })),
+      results: admitted.map(recallEventResult),
     });
     if (skipped.length > 0) {
-      await appendMemoryHostEvent(
-        workspaceDir,
-        buildMemoryRecallSkippedEvent({
-          timestamp: nowIso,
-          query,
-          eligibleResultCount: admitted.length,
-          skipped,
-        }),
-      );
+      await appendSkippedEvent(admitted.length);
     }
-  });
-}
-
-export async function recordGroundedShortTermCandidates(params: {
-  workspaceDir?: string;
-  query: string;
-  items: Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    snippet: string;
-    score: number;
-    query?: string;
-    signalCount?: number;
-    dayBucket?: string;
-    projectKey?: string;
-    provenance?: MemoryEntryProvenance;
-    sessionOrigin?: SessionEntryOrigin;
-  }>;
-  dedupeByQueryPerDay?: boolean;
-  dayBucket?: string;
-  nowMs?: number;
-  timezone?: string;
-}): Promise<void> {
-  const { items, ...options } = params;
-  await recordShortTermRecalls({
-    ...options,
-    signalType: "grounded",
-    results: items.map((item) => Object.assign({}, item, { source: "memory" as const })),
   });
 }
 
@@ -440,10 +377,7 @@ export async function readShortTermRecallEntries(params: {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
-  return Object.values(store.entries).filter(
-    (entry): entry is ShortTermRecallEntry =>
-      Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
-  );
+  return Object.values(store.entries).filter((entry) => isShortTermMemoryPath(entry.path));
 }
 
 export function resolveShortTermSourcePathCandidates(
@@ -455,15 +389,5 @@ export function resolveShortTermSourcePathCandidates(
   if (!normalizedPath.startsWith("memory/")) {
     basenames.push(path.posix.join("memory", path.posix.basename(normalizedPath)));
   }
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const relativePath of basenames) {
-    const absolutePath = path.resolve(workspaceDir, relativePath);
-    if (seen.has(absolutePath)) {
-      continue;
-    }
-    seen.add(absolutePath);
-    resolved.push(absolutePath);
-  }
-  return resolved;
+  return uniqueStrings(basenames.map((relativePath) => path.resolve(workspaceDir, relativePath)));
 }

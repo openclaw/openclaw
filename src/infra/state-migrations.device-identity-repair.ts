@@ -1,5 +1,6 @@
 // Owner-authorized detection and Doctor-only replacement for invalid device identity rows.
 import path from "node:path";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   DeviceIdentityStorageError,
   generateStoredDeviceIdentity,
@@ -21,20 +22,21 @@ export function detectLegacyDeviceIdentity(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
-  allowLegacyDeviceIdentityImport?: boolean;
 }): LegacyDeviceIdentityDetection {
   const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
   const doctorAuthorized = params.doctorOnlyStateMigrations === true;
-  const importAuthorized = doctorAuthorized || params.allowLegacyDeviceIdentityImport === true;
   let hasInvalidCanonical = false;
   if (doctorAuthorized) {
     try {
-      readStoredDeviceIdentityReadOnly({
-        env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
-        identityKey: IDENTITY_KEY,
-      });
+      // Planning must preserve WAL/SHM files as well as SQLite rows.
+      withArtifactPreservingStateReads(() =>
+        readStoredDeviceIdentityReadOnly({
+          env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
+          identityKey: IDENTITY_KEY,
+        }),
+      );
     } catch (error) {
       hasInvalidCanonical = error instanceof DeviceIdentityStorageError;
     }
@@ -44,7 +46,7 @@ export function detectLegacyDeviceIdentity(params: {
     claimPath,
     nativeClaimPath,
     hasLegacy:
-      importAuthorized &&
+      doctorAuthorized &&
       (pathMayExistSync(claimPath) ||
         pathMayExistSync(nativeClaimPath) ||
         pathMayExistSync(sourcePath)),

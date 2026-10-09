@@ -4,6 +4,12 @@ import type { CompactionRequestConstraints } from "../../sessions/compaction/req
 import type { SessionManager } from "../../sessions/session-manager.js";
 import type { NormalizedUsage } from "../../usage.js";
 
+export type CompactionAccountingReceipt = {
+  tokensBefore: number;
+  tokensAfter: number | undefined;
+  compactionKind: "context-engine" | "server-endpoint";
+};
+
 type CompactionAccountingRecorder = CompactionRequestConstraints & {
   /** A precheck can require budget recovery while its user request is still pending. */
   pendingRequestState?: "unresolved";
@@ -14,7 +20,7 @@ type CompactionAccountingRecorder = CompactionRequestConstraints & {
     assertActive: () => void;
   };
   recordUsage?: (usage: NormalizedUsage) => void;
-  recordCompaction?: (tokensAfter: number | undefined) => void;
+  recordCompaction?: (receipt: CompactionAccountingReceipt) => void;
 };
 
 // Bind to the actual invocation context after watchdog projection. Public

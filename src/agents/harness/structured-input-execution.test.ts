@@ -18,6 +18,7 @@ function compileForm(properties: Record<string, unknown>, required = Object.keys
     fallbackMessage: "Input requested",
     options: {
       protocolName: "test",
+      allowEmptyForm: true,
       minimumChoiceCount: 1,
       metadata: { secretPath: ["isSecret"] },
     },
@@ -183,36 +184,67 @@ describe("structured input execution", () => {
     );
   });
 
-  it("fences an answer when the owning turn becomes inactive before commit", async () => {
-    let settle!: (value: unknown) => void;
-    const wait = new Promise<unknown>((resolve) => {
-      settle = resolve;
+  it("decodes a displayed choice label with surrounding whitespace", async () => {
+    const gateway = createGateway((questions) => ({ [questions[0]!.questionId]: [" Alpha "] }));
+    const input = compileForm({
+      mode: {
+        type: "string",
+        oneOf: [
+          { const: "a", title: " Alpha " },
+          { const: "b", title: "Beta" },
+        ],
+      },
     });
-    const gatewayCallMock = vi.fn(async (method: string, _opts: unknown, params: unknown) => {
-      if (method === "question.request") {
-        return { id: (params as { id: string }).id };
-      }
-      if (method === "question.waitAnswer") {
-        return await wait;
-      }
-      return { status: "cancelled" };
-    });
-    const gatewayCall: AgentHarnessQuestionGatewayCall = gatewayCallMock;
-    let active = true;
-    const result = runStructuredInput({
-      input: compileForm({ name: { type: "string" } }),
-      ...executionParams(gatewayCall),
-      isActive: () => active,
-    });
-    await vi.waitFor(() =>
-      expect(gatewayCallMock.mock.calls.some(([method]) => method === "question.waitAnswer")).toBe(
-        true,
-      ),
-    );
 
-    active = false;
-    settle({ status: "answered", answers: { answers: { name: ["too late"] } } });
-
-    await expect(result).resolves.toMatchObject({ status: "cancelled" });
+    await expect(runStructuredInput({ input, ...executionParams(gateway.call) })).resolves.toEqual({
+      status: "answered",
+      answers: { mode: [" Alpha "] },
+      content: { mode: "a" },
+    });
+    expect(gateway.requested[0]?.questions).toMatchObject([
+      { options: [{ label: " Alpha " }, { label: "Beta" }] },
+    ]);
   });
+
+  it.each(["populated", "empty"] as const)(
+    "fences a %s form answer when the owning turn becomes inactive before commit",
+    async (formKind) => {
+      let questionId: string | undefined;
+      let settle!: (value: unknown) => void;
+      const wait = new Promise<unknown>((resolve) => {
+        settle = resolve;
+      });
+      const gatewayCallMock = vi.fn(async (method: string, _opts: unknown, params: unknown) => {
+        if (method === "question.request") {
+          const request = params as GatewayRequest;
+          questionId = request.questions[0]?.questionId;
+          return { id: request.id };
+        }
+        if (method === "question.waitAnswer") {
+          return await wait;
+        }
+        return { status: "cancelled" };
+      });
+      const gatewayCall: AgentHarnessQuestionGatewayCall = gatewayCallMock;
+      let active = true;
+      const result = runStructuredInput({
+        input: compileForm(formKind === "empty" ? {} : { name: { type: "string" } }),
+        ...executionParams(gatewayCall),
+        isActive: () => active,
+      });
+      await vi.waitFor(() =>
+        expect(
+          gatewayCallMock.mock.calls.some(([method]) => method === "question.waitAnswer"),
+        ).toBe(true),
+      );
+
+      if (!questionId) {
+        throw new Error("expected form question id");
+      }
+      active = false;
+      settle({ status: "answered", answers: { answers: { [questionId]: ["Allow"] } } });
+
+      await expect(result).resolves.toMatchObject({ status: "cancelled" });
+    },
+  );
 });

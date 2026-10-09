@@ -82,7 +82,7 @@ struct RealtimeTalkVoiceSelectionTests {
         }
     }
 
-    @Test func `matching server cancellation closes before reporting failure and cannot cancel a newer operation`() async throws {
+    @Test func `matching cancellation closes before failure and protects newer operations`() async throws {
         let ready = RealtimeRelayStartupBarrier()
         let closed = RealtimeRelayStartupBarrier()
         let completed = RealtimeRelayTestSignal<TalkVoiceCompleteParams>()
@@ -151,5 +151,62 @@ struct RealtimeTalkVoiceSelectionTests {
         #expect(result.voicesessionid == nil)
         #expect(failures == 1)
         #expect(selection.selectedVoice == nil)
+    }
+
+    @Test func `an old replacement never waits for a newer cancellation`() async throws {
+        let firstReplacement = RealtimeRelayStartupBarrier()
+        let secondReplacement = RealtimeRelayStartupBarrier()
+        let secondClose = RealtimeRelayStartupBarrier()
+        let cancelled = RealtimeRelayTestSignal<Int>()
+        let completed = RealtimeRelayTestSignal<TalkVoiceCompleteParams>()
+        var currentID: String? = "old-call"
+        var cancellations = 0
+        let selection = RealtimeTalkVoiceSelection(
+            sessionKey: "chat-1",
+            currentVoiceSessionID: { currentID },
+            isCurrent: { _ in true },
+            replace: { change in
+                await (change.changeid == "change-1" ? firstReplacement : secondReplacement).suspend()
+                return "late-replacement"
+            },
+            complete: { completed.send($0) },
+            cancel: {
+                cancellations += 1
+                if cancellations == 2 { await secondClose.suspend() }
+                currentID = nil
+            },
+            onFailure: { _ in cancelled.send(cancellations) })
+        defer { selection.invalidate() }
+        do {
+            selection.handle(self.event())
+            try await firstReplacement.waitUntilEntered()
+            selection.handle(self.event(phase: "cancelled"))
+            #expect(try await cancelled.next("first cancellation") == 1)
+            #expect(!selection.isChanging)
+
+            currentID = "second-call"
+            selection.handle(self.event(changeID: "change-2", voiceSessionID: "second-call"))
+            try await secondReplacement.waitUntilEntered()
+            selection.handle(self.event(phase: "cancelled", changeID: "change-2", voiceSessionID: "second-call"))
+            try await secondClose.waitUntilEntered()
+            await firstReplacement.release()
+
+            let first = try await completed.next("first completion while second cancellation remains blocked")
+            #expect(first.changeid == "change-1")
+            #expect(first.outcome.stringValue == "failed")
+            #expect(selection.isChanging)
+            #expect(currentID == "second-call")
+            await secondReplacement.release()
+            await secondClose.release()
+            let second = try await completed.next("second completion")
+            #expect(second.changeid == "change-2")
+            #expect(second.outcome.stringValue == "failed")
+            #expect(cancellations == 2)
+        } catch {
+            await firstReplacement.release()
+            await secondReplacement.release()
+            await secondClose.release()
+            throw error
+        }
     }
 }

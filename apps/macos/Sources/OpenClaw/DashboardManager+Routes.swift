@@ -29,9 +29,7 @@ extension DashboardManager {
         route.path = source.path
         return route.url
     }
-}
 
-extension DashboardManager {
     func primaryEndpoint(
         mode: AppState.ConnectionMode) async throws -> GatewayConnection.EndpointSnapshot
     {
@@ -40,7 +38,13 @@ extension DashboardManager {
             return try await testPrimaryEndpointProvider(mode)
         }
         #endif
-        return try await Self.resolvePrimaryEndpoint(mode: mode)
+        if let endpoint = Self.immediateDashboardEndpoint(mode: mode) {
+            return endpoint
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            await GatewayEndpointStore.shared.refresh()
+            return try await GatewayEndpointStore.shared.requireEndpoint()
+        }.value
     }
 
     func profileEndpoint(profileID: String) async throws -> GatewayConnection.EndpointSnapshot {
@@ -67,18 +71,6 @@ extension DashboardManager {
         }
         #endif
         return try await DashboardGatewayCatalog.loadEntries()
-    }
-
-    static func resolvePrimaryEndpoint(
-        mode: AppState.ConnectionMode) async throws -> GatewayConnection.EndpointSnapshot
-    {
-        if let endpoint = self.immediateDashboardEndpoint(mode: mode) {
-            return endpoint
-        }
-        return try await Task.detached(priority: .userInitiated) {
-            await GatewayEndpointStore.shared.refresh()
-            return try await GatewayEndpointStore.shared.requireEndpoint()
-        }.value
     }
 
     static func immediateDashboardEndpoint(
@@ -108,9 +100,7 @@ extension DashboardManager {
 
         return nil
     }
-}
 
-extension DashboardManager {
     /// The card's native update path only makes sense when the app owns the
     /// local gateway and the post-relaunch repair is allowed to run; otherwise
     /// (external CLI, write-disabled launchd, extended-stable pin) the card
@@ -124,9 +114,7 @@ extension DashboardManager {
             installPolicy: CLIInstallPolicy.storedPolicy(),
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
     }
-}
 
-extension DashboardManager {
     func presentGatewayError(title: String, message: String, over window: NSWindow? = nil) {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -139,30 +127,35 @@ extension DashboardManager {
     func presentGatewayError(_ error: Error, title: String, over window: NSWindow? = nil) {
         self.presentGatewayError(title: title, message: error.localizedDescription, over: window)
     }
-}
 
-extension DashboardManager {
     func immediateWindowConfiguration()
-        -> (AppState.ConnectionMode, URL, DashboardWindowAuth, GatewayTLSParams?)?
+        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)?
     {
         let mode = AppStateStore.shared.connectionMode
         guard mode == .local,
               let endpoint = Self.immediateDashboardEndpoint(mode: mode),
               let url = try? GatewayEndpointStore.dashboardURL(
-                  for: endpoint.config,
-                  mode: mode,
-                  authToken: endpoint.config.token)
+                  for: (url: endpoint.config.url, token: nil, password: nil),
+                  mode: mode)
         else { return nil }
-        let config = endpoint.config
-        let auth = DashboardWindowAuth(
+        // Hidden preload may create a credential-free document. Visible fast
+        // presentation requires hasAcceptedNativeBinding; fresh presentation
+        // waits for native hello in dashboardConfiguration instead.
+        let auth = self.immediateResolvedDashboardAuth(url: url, endpoint: endpoint) ?? .nativeDevice(
             gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
-            password: (config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty))
-        return auth.hasCredential ? (mode, url, auth, endpoint.tls?.params) : nil
+            token: endpoint.config.token,
+            password: endpoint.config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        guard auth.hasCredential || auth.hasAcceptedNativeBinding else { return nil }
+        return (WindowConfiguration(
+            url: url,
+            auth: auth,
+            tlsParams: endpoint.tls?.params,
+            mode: mode,
+            displayName: "OpenClaw",
+            legacyNativeCredentials: self.currentNativeStartupCredentials,
+            nativeAuthProvider: self.nativeAuthProvider(target: .primary, endpoint: endpoint)), endpoint)
     }
-}
 
-extension DashboardManager {
     func navigateBack() {
         guard let controller = frontmostDashboard()?.controller,
               controller.window?.isKeyWindow == true else { return }
@@ -178,9 +171,22 @@ extension DashboardManager {
     func confirmSetPrimary(_ target: DashboardGatewayTarget) {
         self.presentSetPrimaryConfirmation(target, source: nil)
     }
-}
 
-extension DashboardManager {
+    func frontmostDashboard()
+        -> (target: DashboardGatewayTarget, controller: DashboardWindowController)?
+    {
+        let controllers = self.dashboardControllers().filter(\.controller.isWindowOpen)
+        if let key = controllers.first(where: { $0.controller.window?.isKeyWindow == true }) {
+            return key
+        }
+        for window in NSApp.orderedWindows {
+            if let match = controllers.first(where: { $0.controller.window === window }) {
+                return match
+            }
+        }
+        return controllers.last
+    }
+
     func presentSetPrimaryConfirmation(
         _ target: DashboardGatewayTarget,
         source: DashboardWindowController?)
@@ -222,5 +228,47 @@ extension DashboardManager {
             alert,
             over: source?.window ?? self.frontmostDashboard()?.controller.window,
             completion: apply)
+    }
+
+    func handleGatewayRequest(_ request: DashboardGatewaysRequest, from source: DashboardWindowController) {
+        // Retained WebViews may still emit callbacks after their window closes or document is replaced.
+        guard self.target(for: source) != nil, source.isWindowOpen else { return }
+        switch request {
+        case let .select(target):
+            self.switchTarget(target, in: source)
+        case let .openWindow(target):
+            self.openNewDashboardWindow(for: target)
+        case let .setPrimary(target):
+            guard self.target(for: source) == target else { return }
+            self.presentSetPrimaryConfirmation(target, source: source)
+        case let .reconnect(target):
+            guard self.target(for: source) == target else { return }
+            source.reconnectGateway(target)
+        case let .reconnectCancel(target):
+            guard self.target(for: source) == target else { return }
+            source.cancelGatewayReconnect(target)
+        case let .reconnectBrowser(target, attempt):
+            guard self.target(for: source) == target else { return }
+            source.openGatewaySignInBrowser(target, attempt: attempt)
+        case .openSettings:
+            AppNavigationActions.openConnection(tab: .gateways)
+        }
+    }
+
+    func handleGatewaySetup(_ link: GatewayConnectDeepLink) async {
+        AppActivation.shared.activate()
+        let coordinator = DashboardGatewaySetupCoordinator(
+            adapter: DashboardPrimaryGatewayAdapter(state: AppStateStore.shared),
+            confirm: { title, message in
+                let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
+                return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
+            },
+            presentError: { [weak self] title, message in
+                self?.presentGatewayError(title: title, message: message)
+            },
+            openConnectionSettings: {
+                AppNavigationActions.openConnection()
+            })
+        await coordinator.handle(link)
     }
 }

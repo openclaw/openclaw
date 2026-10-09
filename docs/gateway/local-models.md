@@ -22,14 +22,15 @@ For custom servers, leave room for the full OpenClaw prompt, tools, history, and
 
 ## Pick a backend
 
-| Backend                                              | Use when                                                                           |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls           |
-| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                |
-| [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server |
-| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                           |
-| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint        |
-| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                             |
+| Backend                                              | Use when                                                                                     |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls                     |
+| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                          |
+| [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server           |
+| [llmman](/providers/llmman)                          | OCI-registry model pulls, upstream llama.cpp/vLLM/MLX engines, hybrid local + hosted routing |
+| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                                     |
+| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint                  |
+| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                                       |
 
 Use `api: "openai-responses"` when the backend supports it (LM Studio does). Otherwise use `api: "openai-completions"`. If `api` is omitted on a custom provider with a `baseUrl`, OpenClaw defaults to `openai-completions`.
 
@@ -128,6 +129,8 @@ Setup checklist:
 ```
 
 For local-first with a hosted safety net, swap `primary`/`fallbacks` order and keep the same `providers` block and `models.mode: "merge"`.
+
+OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
 
 ### Regional hosting / data routing
 
@@ -271,11 +274,11 @@ If the model loads cleanly but full agent turns misbehave, check transport first
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Check Tool Search** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `localModelLean` unset or set it to `false` so optional tools remain available. Check the server's actual context allocation and memory use as well.
+3. **Check Tool Search** if both checks pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `localModelLean` unset or set it to `false` so optional tools remain available. Check the server's actual context allocation and memory use as well.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
-5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only probe does not prove that the model can reliably complete a multi-step agent task.
+5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
 
 ## Troubleshooting
 
@@ -283,6 +286,7 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 - **LM Studio model unloaded?** Reload it. Cold start is a common "hanging" cause.
 - **Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?** OpenClaw records a low-cardinality `model.call.error.failureKind` plus the OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama memory pressure, match that timestamp against the server log or a macOS crash/jetsam log to check whether the model server was killed.
 - **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap. It warns below 20% with an **8k** floor. It hard-blocks below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.
+- **One-token replies near the context limit?** OpenAI-compatible proxy requests enter context-overflow recovery when the input estimate would reduce the requested output cap below 16 tokens, including with thinking off. Deliberately short caps still work when they fit. The estimate is conservative: if a prompt fits the server but OpenClaw reports overflow, reduce the prompt or raise the configured context limit to match the server's actual allocation.
 - **`messages[].content ... expected a string`?** Add `compat.requiresStringContent: true` on that model entry.
 - **`validation.keys`, or "message entries only allow `role` and `content`"?** Add `compat.strictMessageKeys: true` on that model entry.
 - **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first. `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
@@ -348,7 +352,6 @@ For one agent only:
   agents: {
     entries: {
       local: {
-        default: true,
         model: "lmstudio/gemma-4-e4b-it",
         experimental: {
           localModelLean: true,

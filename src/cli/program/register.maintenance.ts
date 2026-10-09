@@ -1,14 +1,17 @@
-// Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { defaultRuntime } from "../../runtime.js";
+import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
+import { formatDocsHelp } from "../help-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
+import { installCliDoctorSignalExitHandlers } from "../signal-exit-barrier.js";
+import type { ProgramContext } from "./context.js";
+import { collectOption } from "./helpers.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
@@ -34,25 +37,23 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "only",
 ] as const;
 
-function exitDoctorError(message: string, json: boolean): never {
+function exitDoctorError(error: unknown, json: boolean): never {
   if (json) {
-    defaultRuntime.writeJson(formatCliJsonFailure(message));
+    defaultRuntime.writeJson(formatCliJsonFailure(error));
   } else {
-    defaultRuntime.error(message);
+    defaultRuntime.error(formatError(error));
   }
   exitCliAfterOutput(defaultRuntime, 2);
 }
 
-/** Register maintenance commands that inspect or mutate local OpenClaw state. */
-export function registerMaintenanceCommands(program: Command) {
+export function registerMaintenanceCommands(
+  program: Command,
+  ctx?: Pick<ProgramContext, "doctorDatabasePreflight">,
+) {
   const doctor = program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/doctor"))
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
@@ -99,19 +100,17 @@ export function registerMaintenanceCommands(program: Command) {
       "With --lint: drop findings below this severity (info|warning|error)",
     )
     .option("--all", "With --lint: run all registered checks, including opt-in checks", false)
-    .option(
-      "--skip <id>",
-      "With --lint: skip a specific check id (repeatable)",
-      (v: string, prev: string[]) => [...prev, v],
-      [],
-    )
+    .option("--skip <id>", "With --lint: skip a specific check id (repeatable)", collectOption, [])
     .option(
       "--only <id>",
       "With --lint: run only the specified check id (repeatable)",
-      (v: string, prev: string[]) => [...prev, v],
+      collectOption,
       [],
     )
     .action(async (opts, command) => {
+      if (hasCliProcessScope()) {
+        installCliDoctorSignalExitHandlers();
+      }
       if (
         typeof opts.stateSqlite === "string" &&
         hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
@@ -121,7 +120,13 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true,
         );
       }
-      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+      if (
+        typeof opts.sessionSqlite !== "string" &&
+        (typeof opts.sessionSqliteAgent === "string" ||
+          opts.githubIssue === true ||
+          opts.sessionSqliteAllAgents === true ||
+          typeof opts.sessionSqliteStore === "string")
+      ) {
         return exitDoctorError(
           "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
@@ -180,75 +185,87 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
         );
       }
-      if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
+      if (
+        opts.lint !== true &&
+        (typeof opts.severityMin === "string" ||
+          opts.all === true ||
+          (Array.isArray(opts.skip) && opts.skip.length > 0) ||
+          (Array.isArray(opts.only) && opts.only.length > 0))
+      ) {
         return exitDoctorError(
           "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
           opts.json === true,
         );
       }
-      if (lintMode) {
-        return await runCommandWithRuntime(
-          defaultRuntime,
-          async () => {
-            const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
-            const exitCode = await runDoctorLintCli(defaultRuntime, {
-              json: Boolean(opts.json),
-              severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
-              includeAllChecks: Boolean(opts.all),
-              skipIds: Array.isArray(opts.skip) ? opts.skip : [],
-              onlyIds: Array.isArray(opts.only) ? opts.only : [],
-              allowExec: Boolean(opts.allowExec),
-              deep: Boolean(opts.deep),
-            });
-            exitCliAfterOutput(defaultRuntime, jsonImpliesLint ? 0 : exitCode);
-          },
-          (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
-        );
-      }
-      await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const { doctorCommand } = await import("../../commands/doctor.js");
-          await doctorCommand(defaultRuntime, {
-            workspaceSuggestions: opts.workspaceSuggestions,
-            yes: Boolean(opts.yes),
-            repair: Boolean(opts.repair) || Boolean(opts.fix),
-            force: Boolean(opts.force),
-            nonInteractive: Boolean(opts.nonInteractive),
-            generateGatewayToken: Boolean(opts.generateGatewayToken),
+      try {
+        if (lintMode) {
+          const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
+          const exitCode = await runDoctorLintCli(defaultRuntime, {
+            json: Boolean(opts.json),
+            severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
+            includeAllChecks: Boolean(opts.all),
+            skipIds: Array.isArray(opts.skip) ? opts.skip : [],
+            onlyIds: Array.isArray(opts.only) ? opts.only : [],
             allowExec: Boolean(opts.allowExec),
             deep: Boolean(opts.deep),
-            postUpgrade: Boolean(opts.postUpgrade),
-            ...(stateSqlite ? { stateSqlite } : {}),
-            ...(sessionSqlite ? { sessionSqlite } : {}),
-            ...(typeof opts.sessionSqliteStore === "string"
-              ? { sessionSqliteStore: opts.sessionSqliteStore }
-              : {}),
-            ...(typeof opts.sessionSqliteAgent === "string"
-              ? { sessionSqliteAgent: opts.sessionSqliteAgent }
-              : {}),
-            sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
-            sessionSqliteGithubIssue: Boolean(opts.githubIssue),
-            json: Boolean(opts.json),
           });
+          exitCliAfterOutput(defaultRuntime, jsonImpliesLint ? 0 : exitCode);
+        }
+        return await runCommandWithRuntime(defaultRuntime, async () => {
+          const { doctorCommand } = await import("../../commands/doctor.js");
+          await doctorCommand(
+            defaultRuntime,
+            {
+              workspaceSuggestions: opts.workspaceSuggestions,
+              yes: Boolean(opts.yes),
+              repair: Boolean(opts.repair) || Boolean(opts.fix),
+              force: Boolean(opts.force),
+              nonInteractive: Boolean(opts.nonInteractive),
+              generateGatewayToken: Boolean(opts.generateGatewayToken),
+              allowExec: Boolean(opts.allowExec),
+              deep: Boolean(opts.deep),
+              postUpgrade: Boolean(opts.postUpgrade),
+              ...(stateSqlite ? { stateSqlite } : {}),
+              ...(sessionSqlite ? { sessionSqlite } : {}),
+              ...(typeof opts.sessionSqliteStore === "string"
+                ? { sessionSqliteStore: opts.sessionSqliteStore }
+                : {}),
+              ...(typeof opts.sessionSqliteAgent === "string"
+                ? { sessionSqliteAgent: opts.sessionSqliteAgent }
+                : {}),
+              sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
+              sessionSqliteGithubIssue: Boolean(opts.githubIssue),
+              json: Boolean(opts.json),
+            },
+            ctx?.doctorDatabasePreflight,
+          );
           exitCliAfterOutput(defaultRuntime, 0);
-        },
-        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
-      );
+        });
+      } catch (error) {
+        // Completed reports retain their status and the shared output-drain lifecycle.
+        if (error instanceof ExitError || (!lintMode && !opts.json)) {
+          throw error;
+        }
+        if (lintMode && (opts.json === true || !process.stdout.isTTY)) {
+          const { formatDoctorLintFailure } = await import("../../commands/doctor-lint-output.js");
+          defaultRuntime.writeJson(formatDoctorLintFailure(error));
+          exitCliAfterOutput(defaultRuntime, 2);
+        }
+        exitDoctorError(error, opts.json === true || !process.stdout.isTTY);
+      }
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
 
   program
     .command("triage")
     .description("Collect sanitized diagnostics and open a local coding agent for repair")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/triage", "docs.openclaw.ai/cli/triage")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/triage"))
     .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
     .option("--no-export", "Skip the sanitized diagnostics archive")
-    .option("--agent <name>", "Select a coding agent (claude|codex|opencode|pi)")
+    .option(
+      "--agent <name>",
+      `Select a coding agent (${TRIAGE_EXTERNAL_AGENTS.toSorted().join("|")})`,
+    )
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
     .option(
       "--non-interactive",
@@ -263,19 +280,14 @@ export function registerMaintenanceCommands(program: Command) {
       if (opts.nonInteractive === true && opts.run === true) {
         return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
       }
-      const agent: unknown = opts.agent;
-      if (opts.run === true && agent !== undefined) {
+      const requestedAgent: unknown = opts.agent;
+      const agent = TRIAGE_EXTERNAL_AGENTS.find((name) => name === requestedAgent);
+      if (opts.run === true && requestedAgent !== undefined) {
         return exitDoctorError("triage --run cannot be combined with --agent.", opts.json === true);
       }
-      if (
-        agent !== undefined &&
-        agent !== "claude" &&
-        agent !== "codex" &&
-        agent !== "opencode" &&
-        agent !== "pi"
-      ) {
+      if (requestedAgent !== undefined && agent === undefined) {
         return exitDoctorError(
-          "Invalid --agent. Use claude, codex, opencode, or pi.",
+          `Invalid --agent. Use ${TRIAGE_EXTERNAL_AGENTS.toSorted().join(", ")}.`,
           opts.json === true,
         );
       }
@@ -299,11 +311,7 @@ export function registerMaintenanceCommands(program: Command) {
   program
     .command("dashboard")
     .description("Open the Control UI with your current token")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/dashboard"))
     .option("--no-open", "Print URL but do not launch a browser")
     .option("--json", "Output dashboard connection details as JSON", false)
     .option("--yes", "Start/install the gateway without prompting when needed", false)
@@ -321,11 +329,7 @@ export function registerMaintenanceCommands(program: Command) {
   program
     .command("reset")
     .description("Reset local config/state (keeps the CLI installed)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/reset", "docs.openclaw.ai/cli/reset")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/reset"))
     .option("--scope <scope>", "config|config+creds+sessions|full (default: interactive prompt)")
     .option("--yes", "Skip confirmation prompts", false)
     .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
@@ -333,23 +337,14 @@ export function registerMaintenanceCommands(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { resetCommand } = await import("../../commands/reset.js");
-        await resetCommand(defaultRuntime, {
-          scope: opts.scope,
-          yes: Boolean(opts.yes),
-          nonInteractive: Boolean(opts.nonInteractive),
-          dryRun: Boolean(opts.dryRun),
-        });
+        await resetCommand(defaultRuntime, opts);
       });
     });
 
   program
     .command("uninstall")
     .description("Uninstall the gateway service + local data")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/uninstall", "docs.openclaw.ai/cli/uninstall")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/uninstall"))
     .option("--service", "Remove the gateway service", false)
     .option("--state", "Remove state + config", false)
     .option("--workspace", "Remove workspace dirs", false)
@@ -361,48 +356,9 @@ export function registerMaintenanceCommands(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { uninstallCommand } = await import("../../commands/uninstall.js");
-        await uninstallCommand(defaultRuntime, {
-          service: Boolean(opts.service),
-          state: Boolean(opts.state),
-          workspace: Boolean(opts.workspace),
-          app: Boolean(opts.app),
-          all: Boolean(opts.all),
-          yes: Boolean(opts.yes),
-          nonInteractive: Boolean(opts.nonInteractive),
-          dryRun: Boolean(opts.dryRun),
-        });
+        await uninstallCommand(defaultRuntime, opts);
       });
     });
-}
-
-function hasLintOnlyDoctorOptions(opts: {
-  readonly severityMin?: unknown;
-  readonly all?: boolean;
-  readonly skip?: unknown;
-  readonly only?: unknown;
-}): boolean {
-  return (
-    typeof opts.severityMin === "string" ||
-    opts.all === true ||
-    (Array.isArray(opts.skip) && opts.skip.length > 0) ||
-    (Array.isArray(opts.only) && opts.only.length > 0)
-  );
-}
-
-function hasSessionSqliteOnlyDoctorOptions(opts: {
-  readonly sessionSqlite?: unknown;
-  readonly sessionSqliteAgent?: unknown;
-  readonly sessionSqliteAllAgents?: unknown;
-  readonly githubIssue?: unknown;
-  readonly sessionSqliteStore?: unknown;
-}): boolean {
-  return (
-    typeof opts.sessionSqlite !== "string" &&
-    (typeof opts.sessionSqliteAgent === "string" ||
-      opts.githubIssue === true ||
-      opts.sessionSqliteAllAgents === true ||
-      typeof opts.sessionSqliteStore === "string")
-  );
 }
 
 function parseDoctorStateSqliteMode(value: unknown, json: boolean): "compact" | undefined {

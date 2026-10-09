@@ -12,7 +12,8 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { isPrimarySessionTranscriptFileName } from "./artifacts.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionFilePathCore } from "./paths.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
+import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
 import type { SessionEntry } from "./types.js";
 
 export type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };
@@ -100,10 +101,11 @@ export function readLegacySessionStoreEntries(
     }
     const entries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
     for (const [sessionKey, value] of Object.entries(parsed)) {
+      assertSupportedSessionStoreEntry(value);
       if (!isSessionEntry(value)) {
         issues.push({
           code: "entry_invalid",
-          message: "Session entry is missing a valid sessionId.",
+          message: `${target.storePath}: session entry is missing a valid sessionId; skipped while preserving the original index for recovery.`,
           sessionKey,
         });
         continue;

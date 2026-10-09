@@ -2,6 +2,7 @@ import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { DiscoveryConfig, MdnsDiscoveryMode } from "../config/types.gateway.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -191,7 +192,6 @@ export async function startGatewayDiscovery(params: {
       }
       advertisement.started = true;
       let timedOut = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
       const instance = entry.instance ?? getPluginValueInstance(entry.service);
       const start = async () => {
         let handle: Awaited<ReturnType<typeof entry.service.advertise>>;
@@ -218,7 +218,7 @@ export async function startGatewayDiscovery(params: {
         }
         if (timedOut) {
           params.logDiscovery.warn(
-            `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
+            `gateway discovery service completed after startup timeout (${entry.id}, plugin=${entry.pluginId})`,
           );
         }
       };
@@ -226,24 +226,21 @@ export async function startGatewayDiscovery(params: {
       const started = (async () => (instance ? instance.run(start) : start()))().catch(
         (err: unknown) => {
           params.logDiscovery.warn(
-            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
+            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.id}, plugin=${entry.pluginId}): ${String(err)}`,
           );
         },
       );
-      await Promise.race([
+      await raceWithTimeout(
         started,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            params.logDiscovery.warn(
-              `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.service.id}, plugin=${entry.pluginId}); continuing startup`,
-            );
-            resolve();
-          }, advertiseTimeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      clearTimeout(timer);
+        advertiseTimeoutMs,
+        () => {
+          timedOut = true;
+          params.logDiscovery.warn(
+            `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.id}, plugin=${entry.pluginId}); continuing startup`,
+          );
+        },
+        { ref: false },
+      );
     }
   };
   const update: GatewayDiscovery["update"] = (next, nextClaim = claim) => {

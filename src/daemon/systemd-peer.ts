@@ -1,13 +1,22 @@
 /** Admit only the private peer belonging to the originally selected broker manager. */
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  findServiceOwnershipRefusal,
+  ServiceOwnershipRefusalError,
+} from "./service-inspection-error.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdBusOwner,
+  readSystemdUnitObjectPath,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 const MANAGER = "org.freedesktop.systemd1";
-const BUS = "org.freedesktop.DBus";
 const unavailable = () => new Error("Original systemd manager binding is unavailable or changed.");
 
 // Native peer credentials apply only to the selected local Unix transport.
@@ -52,6 +61,7 @@ function isLocalUnixAddress(address: string): boolean {
 export async function admitSystemdServiceReadBinding(
   env: GatewayServiceEnv,
   deadline: number,
+  selectedUnitName?: string,
 ): Promise<SystemdServiceReadBinding | undefined> {
   // Capture ambient selectors once; neither subsequent env mutation nor the
   // legacy machine fallback may change the broker authenticated here.
@@ -62,23 +72,16 @@ export async function admitSystemdServiceReadBinding(
   if (process.platform !== "linux" || uid === undefined || uid === 0 || route.SUDO_USER) {
     return undefined;
   }
-  const unit = `${resolveSystemdServiceName(env)}.service`;
+  const unit = selectedUnitName ?? `${resolveSystemdServiceName(env)}.service`;
   let broker: Awaited<ReturnType<typeof openSystemdBroker>> | undefined;
-  const query = async (method: string, name: string, signature: string) => {
+  const brokerQuery = (args: string[], signatures: string[]) => {
     if (!broker) {
       throw unavailable();
     }
-    const values = await broker.query(
-      ["call", BUS, "/org/freedesktop/DBus", BUS, method, "s", name],
-      [signature],
-      deadline,
-    );
-    const tuple = values?.[0];
-    if (!Array.isArray(tuple) || tuple.length !== 1) {
-      throw unavailable();
-    }
-    return tuple[0];
+    return broker.query(args, signatures, deadline);
   };
+  const query = async (method: string, name: string, signature: string) =>
+    readSystemdBusCall(brokerQuery, method, ["s", name], signature, unavailable);
   let peer: Awaited<ReturnType<typeof openSystemdPrivatePeer>> | undefined;
   try {
     const transport = await resolveSystemdUserTransport(route, deadline, undefined, "admission");
@@ -92,12 +95,13 @@ export async function admitSystemdServiceReadBinding(
       return undefined;
     }
     broker = await openSystemdBroker(transport.address, deadline);
-    const destination = await query("GetNameOwner", MANAGER, "s");
-    if (typeof destination !== "string" || !/^:[0-9]+\.[0-9]+$/.test(destination)) {
+    const destination = await readSystemdBusOwner(brokerQuery, unavailable);
+    const managerUid = await query("GetConnectionUnixUser", destination, "u");
+    if (!isSystemdManagerUid(managerUid)) {
       throw unavailable();
     }
-    if ((await query("GetConnectionUnixUser", destination, "u")) !== uid) {
-      throw unavailable();
+    if (managerUid !== uid) {
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }
     const pid = await query("GetConnectionUnixProcessID", destination, "u");
     if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || !isPidAlive(pid)) {
@@ -112,11 +116,16 @@ export async function admitSystemdServiceReadBinding(
     const socket = path.join(transport.runtimeDir, "systemd/private");
     const address = `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
     peer = await openSystemdPrivatePeer(address, { uid, pid, startTime }, deadline);
-    if (
-      (await query("GetNameOwner", MANAGER, "s")) !== destination ||
-      (await query("GetConnectionUnixProcessID", destination, "u")) !== pid
-    ) {
+    const currentDestination = await readSystemdBusOwner(brokerQuery, unavailable);
+    if (currentDestination !== destination) {
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+    }
+    const currentPid = await query("GetConnectionUnixProcessID", destination, "u");
+    if (typeof currentPid !== "number" || !Number.isInteger(currentPid) || currentPid <= 0) {
       throw unavailable();
+    }
+    if (currentPid !== pid) {
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }
     peer.verify();
     const retained = peer;
@@ -130,20 +139,29 @@ export async function admitSystemdServiceReadBinding(
       async query(args, signatures, until, inspection) {
         retained.verify();
         if (args[1] !== destination) {
+          if (typeof args[1] === "string" && /^:[0-9]+\.[0-9]+$/.test(args[1])) {
+            throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+          }
           throw unavailable();
         }
         if (args[0] === "call") {
           const method = args[4] ?? "";
           const managerRead = ["GetUnit", "GetUnitFileState", "GetUnitProcesses"].includes(method);
           const ownedLoad = method === "LoadUnit" && inspection?.managerUid === uid;
+          if (method === "LoadUnit" && inspection && inspection.managerUid !== uid) {
+            throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+          }
           if (managerRead || ownedLoad) {
             if (
               args[2] !== "/org/freedesktop/systemd1" ||
               args[3] !== `${MANAGER}.Manager` ||
               args[5] !== "s" ||
-              args[6] !== unit
+              typeof args[6] !== "string"
             ) {
               throw unavailable();
+            }
+            if (args[6] !== unit) {
+              throw new ServiceOwnershipRefusalError("systemd-unit-changed");
             }
           } else if (
             method !== "GetProcesses" ||
@@ -172,24 +190,21 @@ export async function admitSystemdServiceReadBinding(
         const values = await retained.query(args, signatures, until, assertCurrent);
         if (args[0] === "call" && ["GetUnit", "LoadUnit"].includes(args[4] ?? "") && values) {
           const [value] = values;
-          if (
-            !Array.isArray(value) ||
-            value.length !== 1 ||
-            typeof value[0] !== "string" ||
-            !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(value[0])
-          ) {
-            throw unavailable();
+          const observedPath = readSystemdUnitObjectPath(value, unavailable);
+          if (unitPath && observedPath !== unitPath) {
+            throw new ServiceOwnershipRefusalError("systemd-unit-changed");
           }
-          if (unitPath && value[0] !== unitPath) {
-            throw unavailable();
-          }
-          unitPath = value[0];
+          unitPath = observedPath;
         }
         return values;
       },
     };
-  } catch {
+  } catch (error) {
     await peer?.close();
+    const refusal = findServiceOwnershipRefusal(error);
+    if (refusal) {
+      throw refusal;
+    }
     // Failure to establish an optional peer leaves existing broker inspection
     // intact. Once admitted, retained queries fail closed; they never re-admit.
     return undefined;

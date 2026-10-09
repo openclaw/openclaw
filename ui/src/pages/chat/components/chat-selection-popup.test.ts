@@ -45,6 +45,7 @@ function selectRange(node: Text, start: number, end: number) {
 
 function pointerUp(thread: HTMLElement) {
   handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+    paneId: "pane-a",
     onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   });
@@ -83,20 +84,16 @@ describe("chat selection popup", () => {
     buttons[actionIndex]?.click();
     const [called, untouched] =
       actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
-    if (actionIndex === 0) {
-      expect(called).toHaveBeenCalledWith(
-        {
-          text: "Let's Encrypt cert",
-          start: 0,
-          end: 18,
-          messageId: "assistant-1",
-          entryId: "entry-1",
-        },
-        expect.objectContaining({ top: 100, left: 100 }),
-      );
-    } else {
-      expect(called).toHaveBeenCalledWith("Let's Encrypt cert");
-    }
+    expect(called).toHaveBeenCalledWith(
+      {
+        text: "Let's Encrypt cert",
+        start: 0,
+        end: 18,
+        messageId: "assistant-1",
+        entryId: "entry-1",
+      },
+      expect.objectContaining({ top: 100, left: 100 }),
+    );
     expect(untouched).not.toHaveBeenCalled();
     expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
@@ -140,11 +137,12 @@ describe("chat selection popup", () => {
     const { thread, textNode } = buildThreadWithBubble("tear down before the selection settles");
     selectRange(textNode, 0, 9);
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
       onAddToChat: onAddToChatSpy,
       onAskSideChat: onAskSideChatSpy,
     });
 
-    removeChatSelectionPopup();
+    removeChatSelectionPopup("pane-a");
     vi.runAllTimers();
 
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
@@ -158,9 +156,11 @@ describe("chat selection popup", () => {
     selectRange(textNode, 0, 11);
     const pendingTimerCount = vi.getTimerCount();
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
       onAskSideChat: firstAskSideChat,
     });
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
       onAskSideChat: secondAskSideChat,
     });
 
@@ -169,7 +169,10 @@ describe("chat selection popup", () => {
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
 
     expect(firstAskSideChat).not.toHaveBeenCalled();
-    expect(secondAskSideChat).toHaveBeenCalledWith("replacement");
+    expect(secondAskSideChat).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "replacement" }),
+      expect.anything(),
+    );
   });
 
   it("dismisses when the selection collapses", () => {
@@ -183,6 +186,24 @@ describe("chat selection popup", () => {
     document.dispatchEvent(new Event("selectionchange"));
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
   });
+
+  it.each(["pending", "mounted"])("keeps a %s selection when another pane retires", (phase) => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("Keep this selection");
+    selectRange(textNode, 0, 4);
+    handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
+      onAskSideChat: onAskSideChatSpy,
+    });
+    if (phase === "mounted") {
+      vi.runAllTimers();
+    }
+    removeChatSelectionPopup("pane-b");
+    vi.runAllTimers();
+    expect(document.querySelector(".chat-selection-popup")).not.toBeNull();
+    removeChatSelectionPopup("pane-a");
+    expect(document.querySelector(".chat-selection-popup")).toBeNull();
+  });
 });
 
 describe("chat annotation editor", () => {
@@ -195,6 +216,7 @@ describe("chat annotation editor", () => {
     const onSave = vi.fn();
     const onCancel = vi.fn();
     showChatAnnotationEditor({
+      paneId: "pane-a",
       anchorRect: new DOMRect(100, 100, 100, 20),
       comment: "",
       onSave,
@@ -237,6 +259,44 @@ describe("chat annotation editor", () => {
     );
     expect(onSave).toHaveBeenCalledWith("  Why this? 🦞\nKeep the next line.  ");
   });
+
+  it.each([
+    { modifiers: {}, release: "keyup" },
+    { modifiers: { ctrlKey: true }, release: "blur" },
+    { modifiers: { metaKey: true }, release: "timeout" },
+  ])(
+    "keeps the comment editor open on Safari composition-confirm Enter: %j",
+    ({ modifiers, release }) => {
+      const { input, onSave } = editor({ comment: "日本語" });
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+      input.dispatchEvent(end);
+      for (const offset of [1, 100]) {
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        });
+        Object.defineProperty(enter, "timeStamp", {
+          value: end.timeStamp + (release === "timeout" ? offset : 1),
+        });
+        if (offset === 100 && release !== "timeout") {
+          input.dispatchEvent(
+            release === "blur"
+              ? new FocusEvent("blur")
+              : new KeyboardEvent("keyup", { key: "Enter" }),
+          );
+        }
+        input.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(offset === 100);
+        expect(onSave).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
+        expect(document.querySelector("[role=dialog]") !== null).toBe(offset !== 100);
+      }
+      expect(onSave).toHaveBeenCalledWith("日本語");
+    },
+  );
 
   it.each([{ isComposing: true }, { keyCode: 229 }])(
     "preserves unsaved comments when Escape dismisses IME candidates: %j",

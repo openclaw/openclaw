@@ -21,13 +21,23 @@ history, verify that Codex unloaded the previous configuration, then append a
 complete superseding policy message before admitting the turn. Historical policy
 text can remain in the transcript; the later policy explicitly supersedes it.
 
-If another client lease, subscriber, or failed native unload prevents configuration
-proof, the turn stops before inference. A prewrite ownership refusal keeps the
-healthy shared client and its other conversations available. External WebSocket,
-Unix-socket, and stdio-proxy connections do not prove exclusive native-process
-ownership, so ordinary conversations cannot perform this guarded cold refresh on
-those transports. Use OpenClaw-managed local stdio; for lease contention, stop
-competing native work before reconnecting. Policy refusals and uncertain or
+Ordinary conversations use the same unsubscribe-and-resume flow over local stdio,
+WebSocket, Unix-socket, and stdio-proxy connections. The native conversation ID
+and history stay unchanged. OpenClaw verifies that the original app-server client
+is still current, the thread has no active turn, and Codex has unloaded the
+previous configuration before installing the current policy.
+
+This refresh requires OpenClaw to be the sole lifecycle owner of the native
+conversation. A gateway-owned remote app-server satisfies this deployment contract
+when no independent client can reload the same conversation during the handoff.
+The connection and unload checks do not provide an atomic handoff between
+independent clients: a competing resume can reinstall old native configuration.
+Shared app-servers with competing conversation owners are outside this refresh
+contract.
+
+If a subscriber or failed native unload prevents configuration proof, the turn
+stops before inference. A prewrite ownership refusal keeps the healthy shared
+client and its other conversations available. Policy refusals and uncertain or
 acknowledged policy-write failures preserve the conversation and stop automatic
 auth-profile, model-fallback, and whole-turn retries.
 
@@ -63,16 +73,22 @@ and `Stop`.
 
 Before starting or resuming a thread, OpenClaw prepares the native relay's
 stored MCP approval snapshot and direct publication attempt, then rechecks the
-current run's authority. If the listener or SQLite locator is unavailable, hook
+current run's authority. For local app-servers, if the listener or SQLite locator is unavailable, hook
 commands can use the existing Gateway fallback. Policy preparation must still
 succeed; Gateway invocation waits for that snapshot independently of publication.
 Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
 field remains undefined until policy preparation finishes.
 
-The cold hook CLI reads the locator on a dedicated read-only worker, closes its
-database, and joins the worker before using the result. The worker preserves
-schema admission without loading shared-state writer startup. The caller retains
-the existing retry and deadline rules.
+The cold hook CLI reads the locator without loading shared-state writer startup.
+On Node, this one-shot process uses a read-only connection with no SQLite lock
+wait; transient lock contention yields to the existing retry and deadline owner.
+On Bun, it uses a dedicated read-only worker and joins that worker before using
+the result so native database handles are released. Both paths preserve schema
+admission and close the database after lookup.
+
+Bridge publication, renewal, lookup, and removal run in the shared-state worker.
+Publication and renewal recheck the current host registration inside their write
+transaction, and cleanup joins accepted work before closing the listener.
 
 A relay without a listening direct bridge can still renew its logical expiry;
 a listening bridge updates its stored locator before extending the visible
@@ -81,6 +97,33 @@ immediately. Cleanup drains accepted locator writes and, once the relay is
 retired, listener closure. Existing grace windows for late hooks and direct
 children retained after a successful yield are preserved; draining pending
 storage work does not close those children.
+
+## Remote native hook callbacks
+
+A dedicated Codex app-server cannot read the Gateway's SQLite locator or reach
+its loopback listener. Set `plugins.entries.codex.config.appServer.nativeHookRelay`
+with `url` and `credentialDirectory` to use a restricted HTTPS callback instead.
+`url` is the externally routed base for `/__openclaw__/native-hook`; the adapter
+appends the relay ID. OCE generates this configuration for dedicated Codex Agents.
+
+The deployment must supply a private directory outside the model workspace and
+file-transfer roots, and trusted CA certificates for hook processes. Before
+starting a turn, the adapter writes a credential through the authenticated Codex
+app-server filesystem API. Hook commands contain only that file's path. The
+callback accepts the current relay token and exact generation, then applies the
+same event policy and live-owner checks as the local bridge. It grants no Gateway
+operator access. Invalid explicit remote configuration or delivery failure stops
+the turn; callbacks never fall back to operator RPC or local SQLite.
+
+The credential path stays stable for a relay generation so warm and incognito
+threads can reuse their hook commands. Each registration writes a new token;
+ordered writes and owner-checked cleanup prevent an old task from deleting its
+replacement's credential. Retained native children can use the credential until
+their existing relay lifetime ends; disposal removes the file.
+Replacement and Gateway restart invalidate old tokens even if a remote file
+cannot be removed. The directory is not a security boundary against compromised
+Harness code running as the same OS user: the callback's restricted authority is
+still required. TLS verification remains enabled and redirects are refused.
 
 When Codex app-server approvals are enabled (`approvalPolicy` is not
 `"never"`), the default injected native hook config omits `PermissionRequest`

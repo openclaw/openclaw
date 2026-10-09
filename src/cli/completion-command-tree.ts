@@ -11,13 +11,11 @@ export type ShellCompletionContext = {
   pathVariants: string[][];
   completions: string[];
   valueOptions: string[];
+  requiredValueOptions: string[];
   valueChoices: ShellCompletionValueChoice[];
 };
 
-export type ShellCompletionCommandTree = {
-  root: ShellCompletionContext;
-  descendants: ShellCompletionContext[];
-};
+export type ShellCompletionCommandTree = ReturnType<typeof collectShellCompletionCommandTree>;
 
 export function completionFlags(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
@@ -37,14 +35,13 @@ export function visibleCompletionCommands(command: Command): Command[] {
     .filter((child) => command.commands.includes(child));
 }
 
-export function collectShellCompletionCommandTree(program: Command): ShellCompletionCommandTree {
+export function collectShellCompletionCommandTree(program: Command) {
   const descendants: ShellCompletionContext[] = [];
 
   const visit = (
     command: Command,
     pathVariants: string[][],
-    inheritedValueOptions: readonly string[],
-    inheritedValueChoices: readonly ShellCompletionValueChoice[],
+    parent?: ShellCompletionContext,
   ): ShellCompletionContext => {
     const ownOptionFlags = new Set(command.options.flatMap(completionFlags));
     const context: ShellCompletionContext = {
@@ -56,14 +53,18 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
       ],
       valueOptions: [
         ...new Set([
-          ...inheritedValueOptions,
+          ...(parent?.valueOptions ?? []).filter((flag) => !ownOptionFlags.has(flag)),
           ...command.options.flatMap((option) =>
             option.required || option.optional ? completionFlags(option) : [],
           ),
         ]),
       ],
+      requiredValueOptions: [
+        ...(parent?.requiredValueOptions ?? []).filter((flag) => !ownOptionFlags.has(flag)),
+        ...command.options.flatMap((option) => (option.required ? completionFlags(option) : [])),
+      ],
       valueChoices: [
-        ...inheritedValueChoices.flatMap(({ flags, ...choice }) => {
+        ...(parent?.valueChoices ?? []).flatMap(({ flags, ...choice }) => {
           const inheritedFlags = flags.filter((flag) => !ownOptionFlags.has(flag));
           return inheritedFlags.length > 0 ? [{ flags: inheritedFlags, ...choice }] : [];
         }),
@@ -91,13 +92,12 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
         pathVariants.flatMap((parents) =>
           commandNameVariants(child).map((name) => parents.concat(name)),
         ),
-        context.valueOptions,
-        context.valueChoices,
+        context,
       );
     }
 
     return context;
   };
 
-  return { root: visit(program, [[]], [], []), descendants };
+  return { root: visit(program, [[]]), descendants };
 }

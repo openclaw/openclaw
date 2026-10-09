@@ -56,6 +56,31 @@ type SecretsStoreViewProps = {
 const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
 const SECRET_MASK = "••••••••";
 
+function renderTextAreaField(props: SecretsStoreViewProps, field: "value" | "hosts" | "bulk") {
+  const [name, value, onInput] = (
+    {
+      value: ["value", props.draft.value, props.onDraftValueChange],
+      hosts: ["allowed-hosts", props.draft.allowedHosts, props.onDraftAllowedHostsChange],
+      bulk: ["bulk-values", props.bulkRaw, props.onBulkRawChange],
+    } as const
+  )[field];
+  return html`<label class="secrets-store-field">
+    <span>${t(field === "hosts" ? "secretsStore.allowedHosts" : "secretsStore.value")}</span>
+    <textarea
+      class="settings-input secrets-store-dialog__${field}${field === "hosts" ? " mono" : ""}"
+      name=${name}
+      autocomplete="off"
+      spellcheck="false"
+      ?autofocus=${field === "bulk"}
+      placeholder=${field === "hosts" ? t("secretsStore.allowedHostsPlaceholder") : nothing}
+      ?disabled=${props.busy}
+      .value=${value}
+      @input=${(event: Event) => onInput((event.currentTarget as HTMLTextAreaElement).value)}
+    ></textarea>
+    ${field === "hosts" ? html`<small>${t("secretsStore.allowedHostsHint")}</small>` : nothing}
+  </label>`;
+}
+
 function updatedLabel(entry: SecretStoreEntry): string {
   const relative = formatRelativeTimestamp(entry.updatedAtMs, { fallback: t("common.unknown") });
   return entry.updatedBy
@@ -193,213 +218,137 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
   `;
 }
 
+function renderDialog(props: SecretsStoreViewProps, content: TemplateResult, bulk = false) {
+  const title = t(
+    bulk
+      ? "secretsStore.bulk"
+      : props.dialogMode === "edit"
+        ? "secretsStore.edit"
+        : "secretsStore.add",
+  );
+  const onClose = bulk ? props.onCloseBulk : props.onCloseDialog;
+  const invalid = bulk && (!props.bulkEntryCount || props.bulkInvalidNames.length > 0);
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${bulk ? nothing : t("secretsStore.hint")}
+    @modal-cancel=${onClose}
+  >
+    <form
+      class="secrets-store-dialog"
+      aria-busy=${props.busy ? "true" : "false"}
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        props[bulk ? "onSubmitBulk" : "onSubmitDraft"]();
+      }}
+    >
+      <div class="secrets-store-dialog__header"><h2>${title}</h2></div>
+      ${content}
+      ${props.formError ? html`<div class="callout danger" role="alert">${props.formError}</div>` : nothing}
+      <div class="secrets-store-dialog__actions">
+        <button class="btn primary" type="submit" ?disabled=${props.busy || invalid}>
+          ${props.busy ? t("common.saving") : t("common.save")}
+        </button>
+        <button class="btn" type="button" ?disabled=${props.busy} @click=${onClose}>
+          ${t("common.cancel")}
+        </button>
+      </div>
+    </form>
+  </openclaw-modal-dialog>`;
+}
+
 function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeof nothing {
   if (!props.dialogMode) {
     return nothing;
   }
   const editing = props.dialogMode === "edit";
-  return html`
-    <openclaw-modal-dialog
-      label=${editing ? t("secretsStore.edit") : t("secretsStore.add")}
-      description=${t("secretsStore.hint")}
-      @modal-cancel=${props.onCloseDialog}
-    >
-      <form
-        class="secrets-store-dialog"
-        aria-busy=${props.busy ? "true" : "false"}
-        @submit=${(event: SubmitEvent) => {
-          event.preventDefault();
-          props.onSubmitDraft();
-        }}
-      >
-        <div class="secrets-store-dialog__header">
-          <h2>${editing ? t("secretsStore.edit") : t("secretsStore.add")}</h2>
-        </div>
-        <label class="secrets-store-field">
-          <span>${t("secretsStore.name")}</span>
-          <input
-            class="settings-input mono"
-            name="name"
-            autocomplete="off"
-            spellcheck="false"
-            autofocus
-            ?readonly=${editing}
-            ?disabled=${props.busy}
-            .value=${props.draft.name}
-            @input=${(event: Event) =>
-              props.onDraftNameChange((event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
-        <label class="secrets-store-field">
-          <span>${t("secretsStore.value")}</span>
-          <textarea
-            class="settings-input secrets-store-dialog__value"
-            name="value"
-            autocomplete="off"
-            spellcheck="false"
-            ?disabled=${props.busy}
-            .value=${props.draft.value}
-            @input=${(event: Event) =>
-              props.onDraftValueChange((event.currentTarget as HTMLTextAreaElement).value)}
-          ></textarea>
-        </label>
-        <fieldset class="secrets-store-modes">
-          <legend>${t("secretsStore.accessMode")}</legend>
-          <label
-            class="secrets-store-mode ${
-              props.draft.kind === "secret" ? "secrets-store-mode--selected" : ""
-            }"
+  return renderDialog(
+    props,
+    html`
+      <label class="secrets-store-field">
+        <span>${t("secretsStore.name")}</span>
+        <input
+          class="settings-input mono"
+          name="name"
+          autocomplete="off"
+          spellcheck="false"
+          autofocus
+          ?readonly=${editing}
+          ?disabled=${props.busy}
+          .value=${props.draft.name}
+          @input=${(event: Event) =>
+            props.onDraftNameChange((event.currentTarget as HTMLInputElement).value)}
+        />
+      </label>
+      ${renderTextAreaField(props, "value")}
+      <fieldset class="secrets-store-modes">
+        <legend>${t("secretsStore.accessMode")}</legend>
+        ${(["secret", "env"] as const).map((kind) => {
+          const selectedClass =
+            kind === "secret"
+              ? "secrets-store-mode--selected"
+              : "secrets-store-mode--selected secrets-store-mode--risk";
+          return html`<label
+            class="secrets-store-mode ${props.draft.kind === kind ? selectedClass : ""}"
           >
             <input
               type="radio"
               name="access-mode"
-              value="secret"
-              .checked=${props.draft.kind === "secret"}
+              value=${kind}
+              .checked=${props.draft.kind === kind}
               ?disabled=${props.busy}
-              @change=${() => props.onDraftKindChange("secret")}
+              @change=${() => props.onDraftKindChange(kind)}
             />
             <span>
-              <strong>${t("secretsStore.protectedSecret")}</strong>
-              <small>${t("secretsStore.protectedSecretHint")}</small>
+              <strong
+                >${t(kind === "secret" ? "secretsStore.protectedSecret" : "secretsStore.agentReadable")}</strong
+              >
+              <small
+                >${t(kind === "secret" ? "secretsStore.protectedSecretHint" : "secretsStore.agentReadableHint")}</small
+              >
             </span>
-          </label>
-          <label
-            class="secrets-store-mode ${
-              props.draft.kind === "env"
-                ? "secrets-store-mode--selected secrets-store-mode--risk"
-                : ""
-            }"
-          >
-            <input
-              type="radio"
-              name="access-mode"
-              value="env"
-              .checked=${props.draft.kind === "env"}
-              ?disabled=${props.busy}
-              @change=${() => props.onDraftKindChange("env")}
-            />
-            <span>
-              <strong>${t("secretsStore.agentReadable")}</strong>
-              <small>${t("secretsStore.agentReadableHint")}</small>
-            </span>
-          </label>
-        </fieldset>
-        ${
-          props.draft.kind === "secret"
-            ? html`
-                <label class="secrets-store-field">
-                  <span>${t("secretsStore.allowedHosts")}</span>
-                  <textarea
-                    class="settings-input secrets-store-dialog__hosts mono"
-                    name="allowed-hosts"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder=${t("secretsStore.allowedHostsPlaceholder")}
-                    ?disabled=${props.busy}
-                    .value=${props.draft.allowedHosts}
-                    @input=${(event: Event) =>
-                      props.onDraftAllowedHostsChange(
-                        (event.currentTarget as HTMLTextAreaElement).value,
-                      )}
-                  ></textarea>
-                  <small>${t("secretsStore.allowedHostsHint")}</small>
-                </label>
-              `
-            : nothing
-        }
-        ${
-          props.formError
-            ? html`<div class="callout danger" role="alert">${props.formError}</div>`
-            : nothing
-        }
-        <div class="secrets-store-dialog__actions">
-          <button class="btn primary" type="submit" ?disabled=${props.busy}>
-            ${props.busy ? t("common.saving") : t("common.save")}
-          </button>
-          <button class="btn" type="button" ?disabled=${props.busy} @click=${props.onCloseDialog}>
-            ${t("common.cancel")}
-          </button>
-        </div>
-      </form>
-    </openclaw-modal-dialog>
-  `;
+          </label>`;
+        })}
+      </fieldset>
+      ${props.draft.kind === "secret" ? renderTextAreaField(props, "hosts") : nothing}
+    `,
+  );
 }
 
 function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof nothing {
   if (!props.bulkOpen) {
     return nothing;
   }
-  return html`
-    <openclaw-modal-dialog label=${t("secretsStore.bulk")} @modal-cancel=${props.onCloseBulk}>
-      <form
-        class="secrets-store-dialog"
-        aria-busy=${props.busy ? "true" : "false"}
-        @submit=${(event: SubmitEvent) => {
-          event.preventDefault();
-          props.onSubmitBulk();
-        }}
-      >
-        <div class="secrets-store-dialog__header">
-          <h2>${t("secretsStore.bulk")}</h2>
-        </div>
-        <label class="secrets-store-field">
-          <span>${t("secretsStore.value")}</span>
-          <textarea
-            class="settings-input secrets-store-dialog__bulk"
-            name="bulk-values"
-            autocomplete="off"
-            spellcheck="false"
-            autofocus
-            ?disabled=${props.busy}
-            .value=${props.bulkRaw}
-            @input=${(event: Event) =>
-              props.onBulkRawChange((event.currentTarget as HTMLTextAreaElement).value)}
-          ></textarea>
-        </label>
-        <div class="secrets-store-bulk__summary" aria-live="polite">
-          ${t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
-            count: String(props.bulkSecretCount),
-          })}
-        </div>
-        <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
-            .checked=${props.bulkAutoDetect}
-            ?disabled=${props.busy}
-            @change=${(event: Event) =>
-              props.onBulkAutoDetectChange((event.currentTarget as HTMLInputElement).checked)}
-          />
-          <span>
-            <strong>${t("secretsStore.detect")}</strong>
-          </span>
-        </label>
-        ${
-          props.bulkInvalidNames.length
-            ? html`<div class="callout danger" role="alert">
-                ${t("secretsStore.badName")} ${props.bulkInvalidNames.join(", ")}
-              </div>`
-            : nothing
-        }
-        ${
-          props.formError
-            ? html`<div class="callout danger" role="alert">${props.formError}</div>`
-            : nothing
-        }
-        <div class="secrets-store-dialog__actions">
-          <button
-            class="btn primary"
-            type="submit"
-            ?disabled=${props.busy || !props.bulkEntryCount || props.bulkInvalidNames.length > 0}
-          >
-            ${props.busy ? t("common.saving") : t("common.save")}
-          </button>
-          <button class="btn" type="button" ?disabled=${props.busy} @click=${props.onCloseBulk}>
-            ${t("common.cancel")}
-          </button>
-        </div>
-      </form>
-    </openclaw-modal-dialog>
-  `;
+  return renderDialog(
+    props,
+    html`
+      ${renderTextAreaField(props, "bulk")}
+      <div class="secrets-store-bulk__summary" aria-live="polite">
+        ${t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
+          count: String(props.bulkSecretCount),
+        })}
+      </div>
+      <label class="secrets-store-checkbox">
+        <input
+          type="checkbox"
+          .checked=${props.bulkAutoDetect}
+          ?disabled=${props.busy}
+          @change=${(event: Event) =>
+            props.onBulkAutoDetectChange((event.currentTarget as HTMLInputElement).checked)}
+        />
+        <span>
+          <strong>${t("secretsStore.detect")}</strong>
+        </span>
+      </label>
+      ${
+        props.bulkInvalidNames.length
+          ? html`<div class="callout danger" role="alert">
+              ${t("secretsStore.badName")} ${props.bulkInvalidNames.join(", ")}
+            </div>`
+          : nothing
+      }
+    `,
+    true,
+  );
 }
 
 export function renderSecretsStore(props: SecretsStoreViewProps): TemplateResult {

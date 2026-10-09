@@ -1,6 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { UiSettings } from "../../../app/settings.ts";
+import { renderBoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.ts";
+import {
+  renderBoardWidgetMenuItems,
+  type BoardWidgetPageMenu,
+} from "../../../components/board/board-widget-cell-render.ts";
 import { icons } from "../../../components/icons.ts";
 import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import {
@@ -12,6 +17,7 @@ import {
 import {
   compactSessionMenuViewForValue,
   renderCompactSessionMenuFrame,
+  renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
 import type { SessionCreatedActor } from "../../../components/session-owner-chip.ts";
@@ -24,18 +30,29 @@ import {
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.ts";
 
-export type HeaderMenuAction = SessionManagementAction | { kind: "continue-in-terminal" };
+export type HeaderMenuAction =
+  | SessionManagementAction
+  | { kind: "continue-in-terminal" }
+  | { kind: "stop-cloud-worker" }
+  | { kind: "plugin"; id: string };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
 
 export type HeaderMenuQuickAction = {
   id: string;
   label: string;
   icon: TemplateResult;
-  active?: boolean;
-  badge?: number;
-  disabled?: boolean;
-  onActivate: () => void;
-};
+  description?: string;
+  variant?: "danger";
+} & (
+  | { kind: "status" }
+  | {
+      kind?: "action";
+      active?: boolean;
+      badge?: number;
+      disabled?: boolean;
+      onActivate: () => void;
+    }
+);
 
 const EMPTY_SETTINGS = {} as UiSettings;
 
@@ -57,14 +74,27 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) compact = false;
-  @property({ attribute: false }) navigationAllowed = false;
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
-  @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
+  @property({
+    attribute: false,
+    hasChanged: (next: UiSettings, previous?: UiSettings) =>
+      next?.chatShowThinking !== previous?.chatShowThinking ||
+      next?.chatShowToolCalls !== previous?.chatShowToolCalls ||
+      next?.chatPersistCommentary !== previous?.chatPersistCommentary,
+  })
+  settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
+  @property({ attribute: false }) sessionActions: HeaderMenuQuickAction[] = [];
+  @property({ attribute: false }) boardWidgetMenu?: BoardWidgetPageMenu;
   @property({ attribute: false }) sharing: ChatSessionSharingProps | null = null;
-  @property({ attribute: false }) groups: readonly string[] = [];
+  @property({
+    attribute: false,
+    hasChanged: (next: readonly string[], previous?: readonly string[]) =>
+      next.length !== previous?.length || next.some((group, index) => group !== previous?.[index]),
+  })
+  groups: readonly string[] = [];
   @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
   @property({ attribute: false }) actionDisabledReasons: Partial<
     Record<HeaderMenuActionKind, string>
@@ -72,6 +102,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) archiveShortcut = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) onOpen: () => void = () => {};
   @property({ attribute: false }) onOpenCommandPalette: () => void = () => {};
@@ -84,7 +115,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       session: this.session,
       selectionCount: 1,
       compact: this.compact,
-      navigationAllowed: this.navigationAllowed,
+      navigationAllowed: true,
       copyMarkdownAllowed: this.copyMarkdownAllowed,
       splitAllowed: this.splitAllowed,
       renderOpenInExtra: (inline) => this.renderTerminalAction(inline),
@@ -93,6 +124,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       forkDisabled: this.forkDisabled,
       forkFromLastCompleted: this.forkFromLastCompleted,
       archiveAllowed: this.archiveAllowed,
+      archiveShortcut: this.archiveShortcut,
       deleteAllowed: this.deleteAllowed,
       groups: this.groups,
       currentOwner: this.currentOwner,
@@ -107,32 +139,22 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     },
   );
 
-  private actionDisabled(kind: HeaderMenuActionKind, extra = false): boolean {
-    return extra || Boolean(this.actionDisabledReasons[kind]);
-  }
-
-  private actionTitle(kind: HeaderMenuActionKind): string | typeof nothing {
-    return this.actionDisabledReasons[kind] ?? nothing;
-  }
-
   private readonly handleSelect = (event: MenuSelectEvent) => {
     const value = event.detail.item.value;
     if (!value) {
       return;
     }
-    const compactView = compactSessionMenuViewForValue(value) ?? COMPACT_MENU_VIEW_BY_VALUE[value];
+    if (value.startsWith("board-widget:")) {
+      this.boardWidgetMenu?.onSelect(value.slice("board-widget:".length));
+      return;
+    }
+    const managementView = compactSessionMenuViewForValue(value);
+    const compactView = managementView ?? COMPACT_MENU_VIEW_BY_VALUE[value];
     if (compactView) {
       event.preventDefault();
       this.compactView = compactView;
-      if (
-        compactView === "root" ||
-        compactView === "open-in" ||
-        compactView === "copy" ||
-        compactView === "assign-owner" ||
-        compactView === "icon" ||
-        compactView === "group"
-      ) {
-        this.managementActions.prepareCompactView(compactView);
+      if (managementView) {
+        this.managementActions.prepareCompactView(managementView);
       } else if (compactView === "sharing" && !this.sharing?.openDisabledReason) {
         this.sharing?.onOpen();
       }
@@ -145,9 +167,14 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     }
     if (value.startsWith("quick:")) {
       const [, group, id] = value.split(":");
-      const actions = group === "panels" ? this.panelActions : this.layoutActions;
+      const actions =
+        group === "panels"
+          ? this.panelActions
+          : group === "session"
+            ? this.sessionActions
+            : this.layoutActions;
       const action = actions.find((candidate) => candidate.id === id);
-      if (action && !action.disabled) {
+      if (action && action.kind !== "status" && !action.disabled) {
         action.onActivate();
       }
       return;
@@ -183,18 +210,36 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       event.preventDefault();
       return;
     }
-    if (value === "continue-in-terminal" && !this.actionDisabled(value)) {
+    if (value === "continue-in-terminal" && !this.actionDisabledReasons[value]) {
       event.currentTarget.open = false;
       this.onAction({ kind: value });
     }
   };
 
   private renderQuickActionItems(
-    group: "panels" | "layout",
+    group: "panels" | "layout" | "session",
     actions: HeaderMenuQuickAction[],
     inline = false,
   ) {
     return actions.map((action) => {
+      const label = html`<span class="session-menu__text"
+        >${action.label}${
+          action.description
+            ? html`<span class="session-menu__description">${action.description}</span>`
+            : nothing
+        }</span
+      >`;
+      if (action.kind === "status") {
+        return html`<div
+          slot=${inline ? nothing : "submenu"}
+          class="session-menu__status"
+          data-menu-status=${action.id}
+          role="note"
+        >
+          <span class="session-menu__check" aria-hidden="true">${action.icon}</span>
+          ${label}
+        </div>`;
+      }
       const detail =
         typeof action.badge === "number" && action.badge > 0
           ? html`<span slot="details" class="session-menu__sub">${action.badge}</span>`
@@ -207,50 +252,41 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           type=${action.active === undefined ? nothing : "checkbox"}
           .checked=${action.active ?? false}
           ?disabled=${action.disabled}
+          variant=${action.variant ?? nothing}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${action.icon}</span>
-          <span class="session-menu__text">${action.label}</span>
-          ${detail}
+          ${label} ${detail}
         </wa-dropdown-item>
       `;
     });
   }
 
-  private renderCompactNavigationItem(
-    view: Exclude<CompactMenuView, "root">,
-    label: string,
-    icon: TemplateResult,
-    disabled = false,
-  ) {
-    return html`
-      <wa-dropdown-item
-        class="session-menu__item"
-        value=${`compact:open-${view}`}
-        ?disabled=${disabled}
-      >
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-        <span class="session-menu__text">${label}</span>
-        <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
-          >${icons.chevronRight}</span
-        >
-      </wa-dropdown-item>
-    `;
-  }
-
-  private renderQuickActions(group: "panels" | "layout", actions: HeaderMenuQuickAction[]) {
-    if (actions.length === 0) {
+  private renderSubmenu(group: "panels" | "layout" | "view") {
+    const actions = group === "panels" ? this.panelActions : this.layoutActions;
+    if (group !== "view" && actions.length === 0) {
       return nothing;
     }
-    const label = t(group === "panels" ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout");
-    const icon = group === "panels" ? icons.panelRightOpen : icons.columns2;
+    const label = t(
+      group === "view"
+        ? "chat.view.menu"
+        : group === "panels"
+          ? "chat.sessionHeader.panels"
+          : "chat.sessionHeader.layout",
+    );
+    const icon =
+      group === "view" ? icons.eye : group === "panels" ? icons.panelRightOpen : icons.columns2;
     if (this.compact) {
-      return this.renderCompactNavigationItem(group, label, icon);
+      return renderCompactSessionMenuNavigationItem({
+        value: `compact:open-${group}`,
+        label,
+        icon,
+      });
     }
     return html`
       <wa-dropdown-item class="session-menu__item">
         <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
         <span class="session-menu__text">${label}</span>
-        ${this.renderQuickActionItems(group, actions)}
+        ${group === "view" ? this.renderViewSubmenu() : this.renderQuickActionItems(group, actions)}
       </wa-dropdown-item>
     `;
   }
@@ -323,31 +359,46 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
               <div class="session-menu__separator" role="separator"></div>`
           : nothing
       }
-      ${this.renderQuickActions("panels", this.panelActions)}
-      ${this.renderQuickActions("layout", this.layoutActions)}
       ${
-        this.compact && this.sharing?.session && canManageChatSessionSharing(this.sharing.session)
-          ? this.renderCompactNavigationItem(
-              "sharing",
-              t("chat.sessionSharing.menu"),
-              icons.users,
-              Boolean(this.sharing.openDisabledReason),
-            )
+        this.boardWidgetMenu
+          ? html`
+              <div class="board-widget__page-menu-heading">
+                <strong
+                  >${this.boardWidgetMenu.widget.title || this.boardWidgetMenu.widget.name}</strong
+                >
+              </div>
+              ${renderBoardGrantedCapabilities(this.boardWidgetMenu.widget, "details")}
+              ${
+                this.boardWidgetMenu.canMutate
+                  ? renderBoardWidgetMenuItems({
+                      widget: this.boardWidgetMenu.widget,
+                      tabs: this.boardWidgetMenu.tabs,
+                      disabled: false,
+                      prefix: "board-widget:",
+                    })
+                  : nothing
+              }
+              <div class="session-menu__separator" role="separator"></div>
+            `
           : nothing
       }
+      ${this.renderSubmenu("panels")} ${this.renderSubmenu("layout")}
       ${
-        this.compact
-          ? this.renderCompactNavigationItem("view", t("chat.view.menu"), icons.eye)
-          : html`<wa-dropdown-item class="session-menu__item">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.eye}</span>
-              <span class="session-menu__text">${t("chat.view.menu")}</span>
-              ${this.renderViewSubmenu()}
-            </wa-dropdown-item>`
+        this.compact && this.sharing?.session && canManageChatSessionSharing(this.sharing.session)
+          ? renderCompactSessionMenuNavigationItem({
+              value: "compact:open-sharing",
+              label: t("chat.sessionSharing.menu"),
+              icon: icons.users,
+              disabled: Boolean(this.sharing.openDisabledReason),
+            })
+          : nothing
       }
+      ${this.renderSubmenu("view")}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderPrimaryActions()}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderOrganizationActions()}
+      ${this.renderQuickActionItems("session", this.sessionActions, true)}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderTransferActions()}
       <div class="session-menu__separator" role="separator"></div>
@@ -360,8 +411,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       slot=${inline ? nothing : "submenu"}
       class="session-menu__item"
       value="continue-in-terminal"
-      ?disabled=${this.actionDisabled("continue-in-terminal")}
-      title=${this.actionTitle("continue-in-terminal")}
+      ?disabled=${Boolean(this.actionDisabledReasons["continue-in-terminal"])}
+      title=${this.actionDisabledReasons["continue-in-terminal"] ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
       <span class="session-menu__text">${t("chat.sessionHeader.continueInTerminal.action")}</span>
@@ -374,15 +425,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     this.onOpen();
   };
 
-  private readonly handleAfterHide = () => {
-    this.compactView = "root";
-  };
-
   override render() {
     const menuLabel = t("chat.sidebar.sessionMenu", { session: this.session.label });
     return html`
       <wa-dropdown
-        class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+        class=${`session-menu chat-header-session-menu${this.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
         placement="bottom-end"
         aria-label=${menuLabel}
         @keydown=${(event: KeyboardEvent) => {
@@ -391,7 +438,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           }
         }}
         @wa-show=${this.handleShow}
-        @wa-after-hide=${this.handleAfterHide}
         @wa-select=${this.handleSelect}
       >
         <button

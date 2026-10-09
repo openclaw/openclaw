@@ -1,4 +1,5 @@
 // Update runtime observation must not load units while discovering their state.
+import * as fsSync from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
 
@@ -13,7 +14,11 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   assertSystemdAvailable: async () => {},
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: async () => null }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+}));
 
+import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 
 const env = {
@@ -26,6 +31,9 @@ const unitPath = "/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice";
 const properties = {
   Id: { type: "s", data: unitName },
   LoadState: { type: "s", data: "loaded" },
+  UnitFileState: { type: "s", data: "enabled" },
+  RefuseManualStart: { type: "b", data: false },
+  CanStart: { type: "b", data: true },
   ActiveState: { type: "s", data: "active" },
   SubState: { type: "s", data: "running" },
   StartLimitBurst: { type: "u", data: 5 },
@@ -39,6 +47,7 @@ const properties = {
   KillMode: { type: "s", data: "control-group" },
   TasksCurrent: { type: "t", data: 8 },
   MemoryCurrent: { type: "t", data: 2048 },
+  ControlGroup: { type: "s", data: "/user.slice/openclaw-owned.service" },
 };
 
 function success(stdout: string): ExecResult {
@@ -82,25 +91,81 @@ beforeEach(() => {
 });
 
 describe("loaded-only systemd runtime", () => {
+  it.each([
+    { load: "masked", file: "masked", refuse: false, canStart: false, reason: "masked" },
+    { load: "loaded", file: "masked-runtime", refuse: false, canStart: false, reason: "masked" },
+    {
+      load: "loaded",
+      file: "disabled",
+      refuse: true,
+      canStart: true,
+      reason: "refuse-manual-start",
+    },
+    {
+      load: "loaded",
+      file: "disabled",
+      refuse: false,
+      canStart: false,
+      reason: "disabled-no-start",
+    },
+    { load: "loaded", file: "disabled", refuse: false, canStart: true, reason: undefined },
+  ])("preserves native start refusal diagnostics ($file, $reason)", async (row) => {
+    busctl.mockImplementation(async (_env, args) =>
+      managerReply(args, {
+        LoadState: { type: "s", data: row.load },
+        UnitFileState: { type: "s", data: row.file },
+        RefuseManualStart: { type: "b", data: row.refuse },
+        CanStart: { type: "b", data: row.canStart },
+        ActiveState: { type: "s", data: "inactive" },
+        MainPID: { type: "u", data: 0 },
+        TasksCurrent: { type: "t", data: 0 },
+      }),
+    );
+    systemctl.mockResolvedValue(
+      success(
+        [
+          `Id=${unitName}`,
+          `LoadState=${row.load}`,
+          `UnitFileState=${row.file}`,
+          `RefuseManualStart=${row.refuse ? "yes" : "no"}`,
+          `CanStart=${row.canStart ? "yes" : "no"}`,
+          "ActiveState=inactive",
+          "MainPID=0",
+          "TasksCurrent=0",
+        ].join("\n"),
+      ),
+    );
+    for (const requireLoaded of [true, false]) {
+      const runtime = await readSystemdServiceRuntime(env, {
+        requireLoaded,
+        commandInspection: { kind: "present" },
+      });
+      expect(runtime.systemd?.startRefusal?.reason).toBe(row.reason);
+      if (row.reason === "masked") {
+        expect(runtime.detail).toContain(`systemctl --user unmask ${unitName}`);
+      }
+    }
+  });
+
   it.each([0, 2001])("authenticates the selected system manager UID %s", async (uid) => {
     systemBusctl.mockImplementation(async (args) =>
       args.includes("GetConnectionUnixUser")
         ? success(JSON.stringify({ type: "u", data: [uid] }))
         : managerReply(args),
     );
-    const runtime = await readSystemdServiceRuntime(env, {
+    const observation = readSystemdServiceRuntime(env, {
       requireLoaded: true,
       systemdReadTarget: { scope: "system", unitName, unitPath: `/etc/systemd/system/${unitName}` },
     });
     if (uid === 0) {
+      const runtime = await observation;
       expect(runtime).toMatchObject({
         status: "running",
         systemd: { scope: "system", unit: unitName, managerUid: 0 },
       });
       expect(runtime.systemd?.transport).toBeUndefined();
     } else {
-      expect(runtime).toMatchObject({ status: "unknown", inspectionFailure: expect.anything() });
-      expect(runtime.systemd?.scope).toBeUndefined();
+      await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
     }
     expect(busctl).not.toHaveBeenCalled();
     expect(systemctl).not.toHaveBeenCalled();
@@ -126,6 +191,7 @@ describe("loaded-only systemd runtime", () => {
         nRestarts: 2,
         tasksCurrent: 8,
         memoryCurrent: 2048,
+        controlGroup: "/user.slice/openclaw-owned.service",
       },
     });
     expect(systemctl).not.toHaveBeenCalled();
@@ -149,6 +215,43 @@ describe("loaded-only systemd runtime", () => {
       ),
     ).toBe(true);
   });
+
+  it.each(["bus", "show"])(
+    "does not infer absent containment from empty %s metadata over a non-root cgroup",
+    async (transport) => {
+      busctl.mockImplementation(async (_env, args) =>
+        managerReply(args, { ControlGroup: { type: "s", data: "" } }),
+      );
+      systemctl.mockResolvedValue(
+        success(`Id=${unitName}\nLoadState=loaded\nActiveState=active\nMainPID=412\nControlGroup=`),
+      );
+      const read = fsSync.readFileSync;
+      const observation = vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
+        if (file === `/proc/${process.pid}/cgroup` || file === "/proc/412/cgroup") {
+          return "0::/container.scope\n";
+        }
+        if (file === `/proc/${process.pid}/stat`) {
+          return `${process.pid} (caller) S 1 901\n`;
+        }
+        if (file === "/proc/412/stat") {
+          return "412 (gateway) S 1 900\n";
+        }
+        return read(file, options);
+      });
+      try {
+        const runtime = await readSystemdServiceRuntime(env, {
+          requireLoaded: transport === "bus",
+          commandInspection: { kind: "present" },
+        });
+        expect(runtime).toMatchObject({ status: "running", pid: 412 });
+        expect(
+          inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
+        ).toBe("unknown");
+      } finally {
+        observation.mockRestore();
+      }
+    },
+  );
 
   it.each([[], [2001.5], [-1], 2001].map((uid) => ({ uid })))(
     "refuses an invalid manager UID reply $uid",
@@ -207,7 +310,9 @@ describe("loaded-only systemd runtime", () => {
         ? success(JSON.stringify({ type: "s", data: [":1.43"] }))
         : managerReply(args),
     );
-    expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe("unknown");
+    await expect(readSystemdServiceRuntime(env, { requireLoaded: true })).rejects.toMatchObject({
+      reason: "systemd-manager-changed",
+    });
     expect(systemctl).not.toHaveBeenCalled();
   });
 
@@ -310,9 +415,15 @@ describe("loaded-only systemd runtime", () => {
         });
       });
       try {
-        expect(
-          (await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 1000 })).status,
-        ).toBe("unknown");
+        const observation = readSystemdServiceRuntime(env, {
+          requireLoaded: true,
+          timeoutMs: 1000,
+        });
+        if (changed === "owner") {
+          await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+        } else {
+          expect((await observation).status).toBe("unknown");
+        }
         expect(enumerated).toBe(true);
         expect(systemctl).not.toHaveBeenCalled();
       } finally {
@@ -454,7 +565,7 @@ describe("owned inspection refuses foreign or unverified collected units", () =>
     "busy",
     "inventory-error",
     "terminated",
-  ] as const)("keeps %s unknown without enabling or starting anything", async (fault) => {
+  ] as const)("preserves the %s refusal without enabling or starting anything", async (fault) => {
     let loaded = false;
     let owners = 0;
     const assertCurrent = () => {
@@ -491,11 +602,15 @@ describe("owned inspection refuses foreign or unverified collected units", () =>
         TasksCurrent: { type: "t", data: Number("18446744073709551615") },
       });
     });
-    const runtime = await readSystemdServiceRuntime(env, {
+    const observation = readSystemdServiceRuntime(env, {
       requireLoaded: true,
       loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
     });
-    expect(runtime.status).toBe("unknown");
+    if (fault === "uid" || fault === "manager-change") {
+      await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+    } else {
+      expect((await observation).status).toBe("unknown");
+    }
     expect(loaded).toBe(!["uid", "revoked-before"].includes(fault));
     expect(systemctl).not.toHaveBeenCalled();
     expect(

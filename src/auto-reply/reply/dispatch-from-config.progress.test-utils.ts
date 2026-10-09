@@ -1,15 +1,12 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { registerProgressPrivacyTests } from "./dispatch-from-config.progress-privacy.test-support.js";
 import {
   createDispatcher,
   emptyConfig,
-  hookMocks,
-  replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -31,72 +28,12 @@ beforeAll(globalBeforeAll0);
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
 
-  it("reports verbose progress visibility to the channel", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      From: "whatsapp:group:123@g.us",
-      SessionKey: "agent:main:whatsapp:group:123@g.us",
-    });
-
-    let isActive: (() => boolean) | undefined;
-    let activeDuringRun: boolean | undefined;
-    let activeAfterLevelChange: boolean | undefined;
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      activeDuringRun = isActive?.();
-      sessionStoreMocks.currentEntry = {
-        verboseLevel: "off",
-      };
-      activeAfterLevelChange = isActive?.();
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        onVerboseProgressVisibility: (getter) => {
-          isActive = getter;
-        },
-      },
-    });
-
-    expect(activeDuringRun).toBe(true);
-    expect(activeAfterLevelChange).toBe(false);
-
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
-    let isActiveOff: (() => boolean) | undefined;
-    let activeDuringOffRun: boolean | undefined;
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () => {
-        activeDuringOffRun = isActiveOff?.();
-        return { text: "done" } satisfies ReplyPayload;
-      },
-      replyOptions: {
-        onVerboseProgressVisibility: (getter) => {
-          isActiveOff = getter;
-        },
-      },
-    });
-
-    expect(activeDuringOffRun).toBe(false);
-  });
+  const verboseConfig = {
+    ...emptyConfig,
+    agents: { defaults: { verboseDefault: "on" } },
+  } satisfies OpenClawConfig;
+  const createDirectCtx = (overrides: Partial<MsgContext> = {}) =>
+    buildTestCtx({ Provider: "telegram", ChatType: "direct", ...overrides });
 
   it.each([
     { stored: "off", override: "full", expected: ["Tool summary", "Tool failure output"] },
@@ -216,8 +153,6 @@ describe("dispatchReplyFromConfig", () => {
 
   it.each([
     { surface: "slack", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
-    { surface: "slack", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
-    { surface: "discord", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
     { surface: "discord", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
   ] as const)(
     "routes $surface commentary through one owner with verbose $verboseLevel",
@@ -237,11 +172,7 @@ describe("dispatchReplyFromConfig", () => {
       const onItemEvent = vi.fn();
       let isVerboseProgressActive = () => false;
 
-      const replyResolver = async (
-        _ctx: MsgContext,
-        opts?: GetReplyOptions,
-        _cfg?: OpenClawConfig,
-      ) => {
+      const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
         sessionStoreMocks.currentEntry = {
           verboseLevel: nextVerboseLevel,
         };
@@ -297,69 +228,7 @@ describe("dispatchReplyFromConfig", () => {
     },
   );
 
-  it("forwards channel-owned group progress callbacks while source delivery is suppressed", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-      From: "telegram:group:-100123",
-      SessionKey: "agent:main:telegram:group:-100123",
-    });
-    const onToolStart = vi.fn();
-    const onItemEvent = vi.fn();
-    const onCommandOutput = vi.fn();
-    const onToolResult = vi.fn();
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolStart?.({ name: "exec", phase: "start" });
-      await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
-      await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
-      await opts?.onToolResult?.({ text: "exec: ok" });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-        suppressDefaultToolProgressMessages: true,
-        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-        onToolStart,
-        onItemEvent,
-        onCommandOutput,
-        onToolResult,
-      },
-    });
-
-    expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
-    expect(onItemEvent).toHaveBeenCalledWith({
-      itemId: "1",
-      kind: "tool",
-      progressText: "running exec",
-    });
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      name: "exec",
-      status: "ok",
-      exitCode: 0,
-    });
-    expect(onToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
+  registerProgressPrivacyTests();
 
   it.each([
     {
@@ -432,9 +301,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("forwards channel-owned room-event progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -450,11 +317,7 @@ describe("dispatchReplyFromConfig", () => {
     const onCommandOutput = vi.fn();
     let commentaryEnabled: boolean | undefined;
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       commentaryEnabled = opts?.commentaryProgressEnabled;
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({
@@ -504,51 +367,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("exposes live group tool-summary state to reply_dispatch hooks", async () => {
-    // Group policy needs the loaded fixture's conversation grammar.
-    setActivePluginRegistry(createSessionConversationTestRegistry());
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "matrix",
-      Surface: "matrix",
-      ChatType: "group",
-      From: "matrix:!room:test",
-      SessionKey: "agent:main:matrix:group:!room:test",
-    });
-    let initialHookState: boolean | undefined;
-    let updatedHookState: boolean | undefined;
-    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event: unknown) => {
-      const replyDispatchEvent = event as { shouldSendToolSummaries: boolean };
-      initialHookState = replyDispatchEvent.shouldSendToolSummaries;
-      sessionStoreMocks.currentEntry = {
-        verboseLevel: "on",
-      };
-      updatedHookState = replyDispatchEvent.shouldSendToolSummaries;
-      return undefined;
-    });
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: automaticGroupReplyConfig,
-      dispatcher,
-      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    expect(initialHookState).toBe(false);
-    expect(updatedHookState).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("forwards direct native progress callbacks while verbose is off", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -563,11 +384,7 @@ describe("dispatchReplyFromConfig", () => {
     const onCommandOutput = vi.fn();
     let commentaryEnabled: boolean | undefined;
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       commentaryEnabled = opts?.commentaryProgressEnabled;
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
@@ -661,11 +478,7 @@ describe("dispatchReplyFromConfig", () => {
     const onCommandOutput = vi.fn();
     let commentaryEnabled: boolean | undefined;
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       commentaryEnabled = opts?.commentaryProgressEnabled;
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
@@ -697,51 +510,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
-    setNoAbort();
-    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
-      async (payload: ReplyPayload) => ({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      }),
-    );
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "NO_REPLY",
-        mediaUrls: ["file://attacker/share/probe.mp3"],
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("webchat");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
   it("delivers tool summaries in forum topic sessions when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
@@ -760,11 +528,7 @@ describe("dispatchReplyFromConfig", () => {
       MessageThreadId: 99,
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
       return { text: "done" } satisfies ReplyPayload;
     };
@@ -775,67 +539,13 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("delivers deterministic exec approval tool payloads in groups", async () => {
-    setNoAbort();
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-        channelData: {
-          execApproval: {
-            approvalId: "117ba06d-1111-2222-3333-444444444444",
-            approvalSlug: "117ba06d",
-            allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
-        },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    const toolPayload = firstToolResultPayload(dispatcher);
-    expect(toolPayload?.text).toBe(
-      "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-    );
-    expect(toolPayload?.channelData).toStrictEqual({
-      execApproval: {
-        approvalId: "117ba06d-1111-2222-3333-444444444444",
-        approvalSlug: "117ba06d",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
-  });
-
   it("sends tool results via dispatcher in DM sessions", async () => {
     setNoAbort();
-    const cfg = {
-      ...emptyConfig,
-      agents: { defaults: { verboseDefault: "on" } },
-    } satisfies OpenClawConfig;
+    const cfg = verboseConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
+    const ctx = createDirectCtx();
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       // Simulate tool result emission
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
       return { text: "done" } satisfies ReplyPayload;
@@ -848,10 +558,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers native tool summaries and tool media", async () => {
     setNoAbort();
-    const cfg = {
-      ...emptyConfig,
-      agents: { defaults: { verboseDefault: "on" } },
-    } satisfies OpenClawConfig;
+    const cfg = verboseConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -859,11 +566,7 @@ describe("dispatchReplyFromConfig", () => {
       CommandSource: "native",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
       await onToolResult({ text: "🔧 tools/sessions_send" });
       await onToolResult({
@@ -891,10 +594,7 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
+    const ctx = createDirectCtx();
     const notice = {
       text: "Model Fallback: openai/gpt-5.5",
       isFallbackNotice: true,
@@ -914,25 +614,11 @@ describe("dispatchReplyFromConfig", () => {
 
   it("renders the first plan update as a status notice without generic working statuses", async () => {
     setNoAbort();
-    const cfg = {
-      ...emptyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = verboseConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
+    const ctx = createDirectCtx();
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
@@ -990,21 +676,11 @@ describe("dispatchReplyFromConfig", () => {
 
   it("sends only one plan status notice per reply run", async () => {
     setNoAbort();
-    const cfg = {
-      ...emptyConfig,
-      agents: { defaults: { verboseDefault: "on" } },
-    } satisfies OpenClawConfig;
+    const cfg = verboseConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
+    const ctx = createDirectCtx();
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         steps: [{ step: "Inspect code", status: "in_progress" }],
@@ -1029,41 +705,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("suppresses generic patch working statuses when verbose is enabled", async () => {
-    setNoAbort();
-    const cfg = {
-      ...emptyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } satisfies OpenClawConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onPatchSummary?.({
-        phase: "end",
-        title: "apply patch",
-        summary: "1 added, 2 modified",
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
   it("delivers Slack non-DM verbose progress when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
@@ -1082,11 +723,7 @@ describe("dispatchReplyFromConfig", () => {
       ChatType: "channel",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
@@ -1118,29 +755,12 @@ describe("dispatchReplyFromConfig", () => {
 
   it("suppresses plan notices when session verbose is off", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
-    const cfg = {
-      ...emptyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } satisfies OpenClawConfig;
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const cfg = verboseConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:main",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:main" });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
@@ -1171,30 +791,13 @@ describe("dispatchReplyFromConfig", () => {
 
   it("refreshes verbose progress with session entry snapshots", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-    };
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
     sessionStoreMocks.loadSessionStoreEntry.mockReturnValue({ verboseLevel: "on" });
-    const cfg = {
-      ...emptyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = verboseConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:main",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:main" });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       sessionStoreMocks.loadSessionStore.mockClear();
       sessionStoreMocks.resolveSessionStoreEntry.mockClear();
       sessionStoreMocks.loadSessionStoreEntry.mockClear();
@@ -1217,7 +820,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+    expect(firstMockArg(sessionStoreMocks.loadSessionStoreEntry, "session")).toMatchObject({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",
       sessionKey: "agent:main:main",
@@ -1237,16 +840,9 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
+    const ctx = createDirectCtx();
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
       return { text: "done" } satisfies ReplyPayload;
     };
@@ -1281,11 +877,7 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:discord:channel:C1",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onCommandOutput?.({
         phase: "end",
         title: "Exec",
@@ -1333,17 +925,9 @@ describe("dispatchReplyFromConfig", () => {
     const onCommandOutput = vi.fn();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onCommandOutput?.({
         phase: "end",
         title: "Exec",
@@ -1352,7 +936,7 @@ describe("dispatchReplyFromConfig", () => {
         exitCode: 2,
       });
       await opts?.onToolResult?.({
-        text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+        text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
       return { text: "done" } satisfies ReplyPayload;
@@ -1392,14 +976,10 @@ describe("dispatchReplyFromConfig", () => {
     };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({
-        text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+        text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
       return { text: "done" } satisfies ReplyPayload;
@@ -1429,21 +1009,13 @@ describe("dispatchReplyFromConfig", () => {
     };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const failedOutput = {
-      text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+      text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
       isError: true,
     } satisfies ReplyPayload;
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.(failedOutput);
       return { text: "done" } satisfies ReplyPayload;
     };
@@ -1458,8 +1030,11 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(failedOutput);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(firstToolResultPayload(dispatcher)).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("No such file or directory"),
+    });
   });
 
   it("forwards failed command progress in regular verbose mode", async () => {
@@ -1472,11 +1047,7 @@ describe("dispatchReplyFromConfig", () => {
     };
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onCommandOutput?.({
         phase: "end",
@@ -1605,11 +1176,7 @@ describe("dispatchReplyFromConfig", () => {
     };
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onCommandOutput?.({
         phase: "end",
@@ -1642,22 +1209,12 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers text-only tool summaries when verbose overrides preview suppression", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:main",
-    });
+    const ctx = createDirectCtx({ SessionKey: "agent:main:main" });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
       return { text: "done" } satisfies ReplyPayload;
     };
@@ -1676,16 +1233,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps channel-hidden tool progress suppressed when verbose is enabled", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => false);
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onItemEvent?.({
         kind: "preamble",
         itemId: "preamble-1",

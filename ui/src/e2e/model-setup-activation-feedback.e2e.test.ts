@@ -10,6 +10,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Model Setup activation feedback mocked Gateway E2E",
@@ -37,13 +38,13 @@ async function viewportIntersection(target: Locator): Promise<number> {
 }
 
 suite.define(() => {
-  it("bootstraps chat after leaving direct Model Setup despite unavailable auth status", async () => {
+  it("bootstraps chat after leaving Models discovery despite unavailable auth status", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [...defaultControlUiFeatureMethods, "openclaw.setup.detect"],
           heldMethods: ["openclaw.setup.detect"],
           historyMessages: [
@@ -65,7 +66,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        await openModelSetup(page, suite.server.baseUrl);
         await gateway.waitForRequest("openclaw.setup.detect");
         await page.locator(".model-setup__loading").waitFor();
         await page.waitForFunction(() => {
@@ -82,6 +83,10 @@ suite.define(() => {
           return { client, recoveryScope: client.recoveryScope };
         });
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+        await page
+          .locator(".model-setup-discovery")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
         await page.getByRole("button", { name: "Back to app" }).click();
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("models.authStatus");
@@ -90,6 +95,8 @@ suite.define(() => {
         // Revisit before the old detection replies: this visit must own a fresh
         // request rather than inherit the abandoned route loader's pending work.
         await page.goBack();
+        await page.locator("[data-models-login-discover]").click();
+        await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
         await gateway.waitForRequest("openclaw.setup.detect", { after: 1 });
         await gateway.resolveDeferred("openclaw.setup.detect");
         await page
@@ -97,6 +104,10 @@ suite.define(() => {
           .getByRole("button", { name: "Check again" })
           .waitFor();
         expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(2);
+        await page
+          .locator(".model-setup-discovery")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
         await page.getByRole("button", { name: "Back to app" }).click();
         await page.getByText("The existing chat is ready.", { exact: true }).waitFor();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -145,7 +156,8 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 720 } },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
+          const installGateway = entry === "manual" ? installMockGateway : installSetupGateway;
+          const gateway = await installGateway(page, {
             featureMethods: [
               "openclaw.setup.detect",
               "openclaw.setup.activate.start",
@@ -182,19 +194,22 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(
-            `${suite.server.baseUrl}settings/model-setup${entry === "manual" ? "?firstRun=1" : ""}`,
-          );
+          if (entry === "manual") {
+            await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+          } else {
+            await openModelSetup(page, suite.server.baseUrl);
+          }
           const setup = page.locator(".model-setup");
           const input = setup.locator('input[type="password"]');
+          const scrollContainer = page.locator(
+            entry === "manual" ? ".content" : ".model-setup-discovery > .model-setup-wizard__body",
+          );
           const scrollToBottom = () =>
-            page.locator(".content").evaluate((element) => {
+            scrollContainer.evaluate((element) => {
               element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
             });
-          if (entry === "manual") {
-            await setup.locator(".model-setup-provider-select__trigger").click();
-            await setup.locator('[data-manual-provider="openai"]').click();
-          }
+          await setup.locator(".model-setup-provider-select__trigger").click();
+          await setup.locator('[data-manual-provider="openai"]').click();
           await input.fill("invalid-test-key");
           const activate =
             entry === "manual"
@@ -202,9 +217,7 @@ suite.define(() => {
               : setup.locator("[data-candidate-kind]").last().getByRole("button");
           await activate.scrollIntoViewIfNeeded();
           expect(await viewportIntersection(setup.locator(".model-setup__intro"))).toBe(0);
-          expect(
-            await page.locator(".content").evaluate((element) => element.scrollTop),
-          ).toBeGreaterThan(0);
+          expect(await scrollContainer.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
           await gateway.deferNext("openclaw.setup.activate.start");
           await activate.click();
           const request = await gateway.waitForRequest("openclaw.setup.activate.start");
@@ -234,12 +247,18 @@ suite.define(() => {
           expect(await failure.count()).toBe(1);
           expect(await failure.textContent()).toContain("HTTP 401");
           expect.soft(await viewportIntersection(failure)).toBeGreaterThan(0.99);
-          expect(await setup.textContent()).not.toContain("invalid-test-key");
+          expect(await page.locator("openclaw-model-setup-page").textContent()).not.toContain(
+            "invalid-test-key",
+          );
           if (artifactDir) {
             await page.screenshot({ path: path.join(artifactDir, `${entry}-viewport-failed.png`) });
           }
           await dialog.getByRole("button", { name: "Close", exact: true }).click();
-          await expect.poll(() => dialog.count()).toBe(0);
+          await expect.poll(() => dialog.count()).toBe(entry === "manual" ? 0 : 1);
+          await expect.poll(() => dialog.getByRole("alert").count()).toBe(0);
+          await expect
+            .poll(() => page.locator(".model-setup-discovery").count())
+            .toBe(entry === "manual" ? 0 : 1);
           await expect
             .poll(() => activate.evaluate((element) => document.activeElement === element))
             .toBe(true);

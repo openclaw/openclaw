@@ -1,46 +1,25 @@
-// Vllm plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { resolveOpenAIRequestReasoning } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
 import {
   composeProviderStreamWrappers,
   createPayloadPatchStreamWrapper,
-  isOpenAICompatibleThinkingEnabled,
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
-  resolveVllmQwenEffortLevels,
+  isVllmNemotronThinkingModel,
+  resolveVllmEffortProfile,
   resolveVllmQwenThinkingFormatFromCompat,
   type VllmQwenThinkingFormat,
 } from "./thinking-policy.js";
 
 type VllmThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 
-function isVllmProviderId(providerId: string): boolean {
-  return normalizeProviderId(providerId) === "vllm";
-}
-
-function resolveVllmQwenThinkingFormat(
-  ctx: Pick<ProviderWrapStreamFnContext, "model">,
-): VllmQwenThinkingFormat | undefined {
-  return resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
-}
-
-function isVllmNemotronModel(model: { api?: unknown; provider?: unknown; id?: unknown }): boolean {
-  return (
-    model.api === "openai-completions" &&
-    typeof model.provider === "string" &&
-    normalizeProviderId(model.provider) === "vllm" &&
-    typeof model.id === "string" &&
-    /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(model.id)
-  );
-}
-
-function setNemotronThinkingOffChatTemplateKwargs(payload: Record<string, unknown>): void {
-  const defaults = {
-    enable_thinking: false,
-    force_nonempty_content: true,
-  };
+function setChatTemplateDefaults(
+  payload: Record<string, unknown>,
+  defaults: Record<string, unknown>,
+): void {
   const existing = payload.chat_template_kwargs;
   payload.chat_template_kwargs =
     existing && typeof existing === "object" && !Array.isArray(existing)
@@ -55,25 +34,28 @@ export function createVllmQwenThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   format: VllmQwenThinkingFormat;
   thinkingLevel: VllmThinkingLevel;
-  /** The model row declares `supportedReasoningEfforts`; keep the graded `reasoning_effort`. */
-  effortLadder?: boolean;
 }): StreamFn {
   return createPayloadPatchStreamWrapper(
     params.baseStreamFn,
-    ({ payload: payloadObj, options }) => {
-      const enableThinking = isOpenAICompatibleThinkingEnabled({
-        thinkingLevel: params.thinkingLevel,
-        options,
-      });
+    ({ payload: payloadObj, model, options }) => {
+      const reasoning = resolveOpenAIRequestReasoning(
+        { ...model, reasoning: model.reasoning ?? true },
+        options?.reasoning ?? params.thinkingLevel,
+      );
+      const enableThinking = reasoning.thinkingEnabled ?? true;
+      const effort =
+        enableThinking && resolveVllmEffortProfile(model.compat) ? reasoning.effort : undefined;
+      delete payloadObj.reasoning_effort;
       if (params.format === "chat-template") {
-        setQwenChatTemplateThinking(payloadObj, enableThinking);
+        const kwargs = setQwenChatTemplateThinking(payloadObj, enableThinking);
+        if (effort !== undefined) {
+          kwargs.reasoning_effort = effort;
+        }
       } else {
         payloadObj.enable_thinking = enableThinking;
-      }
-      // The transport already mapped the level through `reasoningEffortMap`;
-      // only a declared ladder keeps it, and never alongside disabled thinking.
-      if (!params.effortLadder || !enableThinking) {
-        delete payloadObj.reasoning_effort;
+        if (effort !== undefined) {
+          payloadObj.reasoning_effort = effort;
+        }
       }
       delete payloadObj.reasoningEffort;
       delete payloadObj.reasoning;
@@ -85,18 +67,15 @@ export function createVllmQwenThinkingWrapper(params: {
 }
 
 export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  if (!isVllmProviderId(ctx.provider) || (ctx.model && ctx.model.api !== "openai-completions")) {
+  if (
+    normalizeProviderId(ctx.provider) !== "vllm" ||
+    (ctx.model && ctx.model.api !== "openai-completions")
+  ) {
     return undefined;
   }
-  const qwenFormat = resolveVllmQwenThinkingFormat(ctx);
-  const shouldHandleNemotron =
-    ctx.thinkingLevel === "off" &&
-    isVllmNemotronModel({
-      api: "openai-completions",
-      provider: ctx.provider,
-      id: ctx.modelId,
-    });
-  if (!qwenFormat && !shouldHandleNemotron) {
+  const qwenFormat = resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
+  const deepSeek = !qwenFormat && /deepseek[-_]?v4(?:[-_](?:pro|flash))?\b/i.test(ctx.modelId);
+  if (!qwenFormat && !deepSeek && !isVllmNemotronThinkingModel(ctx.modelId)) {
     return undefined;
   }
   return composeProviderStreamWrappers(
@@ -107,17 +86,34 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
           baseStreamFn: streamFn,
           format: qwenFormat,
           thinkingLevel: ctx.thinkingLevel,
-          effortLadder: resolveVllmQwenEffortLevels(ctx.model?.compat) !== undefined,
         })),
     (streamFn) =>
       createPayloadPatchStreamWrapper(
         streamFn,
-        ({ payload }) => setNemotronThinkingOffChatTemplateKwargs(payload),
+        ({ payload, model, options }) => {
+          const level = options?.reasoning ?? ctx.thinkingLevel;
+          if (deepSeek && model.reasoning) {
+            const reasoning = resolveOpenAIRequestReasoning(model, level);
+            const enabled = reasoning.thinkingEnabled ?? true;
+            // vLLM enables DeepSeek if either template flag is true.
+            setChatTemplateDefaults(payload, {
+              thinking: enabled,
+              enable_thinking: enabled,
+              ...(enabled && reasoning.effort ? { reasoning_effort: reasoning.effort } : {}),
+            });
+            delete payload.thinking;
+            delete payload.reasoning_effort;
+            delete payload.reasoning;
+          } else if (level === "off" && isVllmNemotronThinkingModel(model.id)) {
+            setChatTemplateDefaults(payload, {
+              enable_thinking: false,
+              force_nonempty_content: true,
+            });
+          }
+        },
         {
           shouldPatch: ({ model }) =>
-            model.api === "openai-completions" &&
-            ctx.thinkingLevel === "off" &&
-            isVllmNemotronModel(model),
+            model.api === "openai-completions" && normalizeProviderId(model.provider) === "vllm",
         },
       ),
   );

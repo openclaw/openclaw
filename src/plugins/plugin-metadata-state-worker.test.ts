@@ -3,30 +3,49 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
+import {
+  resolveConfigWidePluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync,
+} from "../config/io.plugin-metadata.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import * as machineState from "../state/config-machine-state.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
+  parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
+import { loadFreshManagedPluginMetadata } from "./management-service.js";
 import {
   createPluginCache,
   invalidatePluginCacheMetadata,
+  PluginCacheFactInvalidatedError,
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
+import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -83,33 +102,152 @@ function familyHashes(databasePath: string) {
   });
 }
 
-function observeParentSqlite() {
-  const native = requireNodeSqlite();
-  return [
-    vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(native.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
+async function withoutMainThreadSql(run: () => Promise<void>) {
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
+  try {
+    await run();
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
 }
 
-it("returns a persisted index row without main-thread SQL", async () => {
+it("refreshes current package facts in pinned install roots without parent SQL or lost admissions", async () => {
   const env = environment();
-  const message = "persisted fixture diagnostic";
-  await seed(env, index(message));
-  const counters = observeParentSqlite();
-  try {
+  const roots = resolvePluginInstallRoots(env);
+  const redirectedEnv = environment();
+  const rootDir = path.join(roots.extensionsDir, "fixture");
+  fs.mkdirSync(rootDir, { recursive: true });
+  const fixture = createColdPluginFixture({ rootDir, pluginId: "refresh-fixture" });
+  const config = {
+    plugins: {
+      entries: { [fixture.pluginId]: { enabled: true } },
+    },
+  };
+  await seed(env, index());
+  const refresh = () =>
+    withPluginLifecycleLease({ env }, async (lease) => {
+      await withoutMainThreadSql(async () => {
+        await withPluginInstallRoots(roots, () =>
+          refreshPluginRegistry({ config, env: redirectedEnv, lease, reason: "source-changed" }),
+        );
+      });
+    });
+  await refresh();
+  const admission = {
+    signature: "fixture-generation",
+    sourceDigest: "a".repeat(64),
+    nativeArtifacts: {},
+    nativeNamespaces: {},
+  };
+  expect(
+    await createPluginSourceAdmissionPublisher({ env })!({
+      pluginId: fixture.pluginId,
+      rootDir,
+      key: rootDir,
+      receipt: admission,
+    }),
+  ).toBe(true);
+  createColdPluginFixture({ rootDir, pluginId: fixture.pluginId, packageVersion: "2.0.0" });
+  await refresh();
+  await withoutMainThreadSql(async () => {
+    await withPluginCache(createPluginCache(), async () => {
+      const persisted = await readPersistedInstalledPluginIndex({ env });
+      expect(persisted?.plugins).toContainEqual(
+        expect.objectContaining({
+          pluginId: fixture.pluginId,
+          packageVersion: "2.0.0",
+          enabled: true,
+          sourceAdmissions: { [rootDir]: admission },
+        }),
+      );
+    });
+  });
+  expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
+});
+
+it("merges source admissions into the current install without main-thread SQL or stale-owner writes", async () => {
+  const env = environment();
+  const plugin = {
+    pluginId: "native-demo",
+    rootDir: "/plugins/native-demo",
+    installRecordHash: "current-install",
+    manifestPath: "/plugins/native-demo/openclaw.plugin.json",
+    manifestHash: "manifest",
+    origin: "global",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
+  } satisfies InstalledPluginIndex["plugins"][number];
+  const current = { ...index("current inventory"), plugins: [plugin] };
+  await seed(env, current);
+  const publication = {
+    pluginId: plugin.pluginId,
+    rootDir: plugin.rootDir,
+    installRecordHash: plugin.installRecordHash,
+    key: plugin.rootDir + "\0",
+    receipt: {
+      signature: "source-identity",
+      sourceDigest: "a".repeat(64),
+      nativeArtifacts: {
+        "native-tool": {
+          sourceIdentity: "1:2:3:4:5:6",
+          contentHash: "b".repeat(64),
+          sizeBytes: 4,
+          capturedPath: "/captures/namespace/content/native-tool",
+          namespace: "/captures/namespace",
+          capturedIdentity: "1:7:3:4:5:6",
+        },
+      },
+      nativeNamespaces: {
+        "/captures/namespace": {
+          sourceDirectory: plugin.rootDir,
+          capturedRoot: "/captures/namespace",
+          managed: false,
+          members: {
+            "native-tool": {
+              source: plugin.rootDir + "/native-tool",
+              sourceIdentity: "1:2:3:4:5:6",
+              capturedIdentity: "1:7:3:4:5:6",
+              boundaryChecked: false,
+              contentHash: "b".repeat(64),
+              sizeBytes: 4,
+            },
+          },
+        },
+      },
+    },
+  };
+  await withoutMainThreadSql(async () => {
+    const before = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+    const publish = createPluginSourceAdmissionPublisher({ env })!;
+    expect(await withArtifactPreservingStateReads(() => publish(publication))).toBe(false);
+    expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
+      before,
+    );
+    expect(await publish(publication)).toBe(true);
+    const committed = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
     await withPluginCache(createPluginCache(), async () => {
       const loaded = await readPersistedInstalledPluginIndex({ env });
-      expect(loaded?.diagnostics).toEqual([{ level: "warn", message }]);
+      expect(loaded?.diagnostics).toEqual(current.diagnostics);
+      expect(loaded?.plugins[0]?.sourceAdmissions).toEqual({
+        [publication.key]: publication.receipt,
+      });
     });
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-  } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
-  }
+    expect(await publish(publication)).toBe(true);
+    expect(await publish({ ...publication, rootDir: "/replaced/plugin" })).toBe(false);
+    expect(await publish({ ...publication, installRecordHash: "old-install" })).toBe(false);
+    expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
+      committed,
+    );
+  });
+  expect(
+    parseInstalledPluginIndex({
+      ...current,
+      plugins: [{ ...plugin, sourceAdmissions: { invalid: { signature: 42 } } }],
+    })?.plugins[0],
+  ).toEqual(plugin);
 });
 
 it.each(["explicit", "ambient"] as const)(
@@ -172,47 +310,38 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
     },
     plugins: { allow: ["primary", "secondary"] },
   };
+  const boot = resolveConfigWidePluginMetadataSnapshot({ config, env, allowCurrent: false });
+  setGatewayPluginMetadataSnapshot(boot, { config, env });
   bundledDiscovery.clearBundledDiscoveryModeMemo();
   const prepareMode = bundledDiscovery.prepareBundledDiscoveryMode;
   const mode = vi
     .spyOn(bundledDiscovery, "prepareBundledDiscoveryMode")
-    .mockImplementationOnce(async (capturedEnv) => {
-      const activate = await prepareMode(capturedEnv);
+    .mockImplementationOnce(async (capturedEnv, readPreparedRow) => {
+      const activate = await prepareMode(capturedEnv, readPreparedRow);
       await prepareMode(otherEnv);
       await prepareMode(capturedEnv);
       return activate;
     });
   const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-  const counters = observeParentSqlite();
+  const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
   try {
-    await withPluginCache(createPluginCache(), async () => {
-      const first = await resolveConfigWidePluginMetadataSnapshotAsync({
-        config,
-        env,
-        allowCurrent: false,
-      });
-      const second = await resolveConfigWidePluginMetadataSnapshotAsync({
-        config,
-        env,
-        allowCurrent: false,
-      });
-      expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
-      expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
-      expect(first.registrySource).toBe("derived");
-      expect(second).toBe(first);
-      expect(reads.mock.calls.map(([selector]) => selector)).toEqual([
-        "bundled-discovery",
-        "bundled-discovery",
-        "installed-index",
-      ]);
-    });
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    await withoutMainThreadSql(() =>
+      withPluginCache(createPluginCache(), async () => {
+        const first = await loadFreshManagedPluginMetadata(config, env);
+        const second = await loadFreshManagedPluginMetadata(config, env);
+        expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
+        expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
+        expect(first.registrySource).toBe("derived");
+        expect(second).toBe(first);
+        expect(reads.mock.calls.map(([selector]) => selector)).toEqual(["bundled-discovery"]);
+        expect(batches).toHaveBeenCalledOnce();
+      }),
+    );
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
     reads.mockRestore();
+    batches.mockRestore();
     mode.mockRestore();
+    clearCurrentPluginMetadataSnapshot();
   }
 });
 
@@ -247,20 +376,33 @@ it("uses a newer synchronous index publication when an older worker read finishe
   });
 });
 
-it("does not leak an invalidated worker mode into synchronous discovery", async () => {
-  const env = environment();
-  const row = createDeferredCore<{ value_json: string }>();
-  vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
-  await using cache = createPluginCache();
-  await withPluginCache(cache, async () => {
-    const pending = bundledDiscovery.prepareBundledDiscoveryMode(env);
-    const rejected = expect(pending).rejects.toThrow("Plugin state changed during preparation");
-    invalidatePluginCacheMetadata(cache);
-    row.resolve({ value_json: JSON.stringify("compat") });
-    await rejected;
-    expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBeUndefined();
-  });
-});
+it.each(["policy", "metadata"] as const)(
+  "does not leak invalidated worker %s into synchronous discovery",
+  async (scope) => {
+    const env = environment();
+    const row = createDeferredCore<{ value_json: string }>();
+    vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
+    vi.spyOn(metadataWorker, "readPluginMetadataStateRows").mockImplementation(async () => [
+      { state_key: "plugins.bundledDiscovery", ...(await row.promise) },
+      {
+        state_key: "plugins.installedIndex",
+        value_json: JSON.stringify({ revision: 1, index: index() }),
+      },
+    ]);
+    await using cache = createPluginCache();
+    await withPluginCache(cache, async () => {
+      const pending =
+        scope === "policy"
+          ? bundledDiscovery.prepareBundledDiscoveryMode(env)
+          : loadFreshManagedPluginMetadata({}, env);
+      const rejected = expect(pending).rejects.toThrow("Plugin state changed during preparation");
+      invalidatePluginCacheMetadata(cache);
+      row.resolve({ value_json: JSON.stringify("compat") });
+      await rejected;
+      expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBeUndefined();
+    });
+  },
+);
 
 it("joins a retired cache's worker read without publishing its inventory", async () => {
   const env = environment();
@@ -293,8 +435,7 @@ it("returns persisted bundled recovery locations through its existing async cons
     },
   ];
   await seed(env, stored);
-  const counters = observeParentSqlite();
-  try {
+  await withoutMainThreadSql(async () => {
     await using cache = createPluginCache();
     const recovered = await withPluginCache(cache, () =>
       listPersistedBundledPluginRecoveryLocations({ env }),
@@ -302,12 +443,7 @@ it("returns persisted bundled recovery locations through its existing async cons
     expect(recovered).toHaveLength(1);
     expect(recovered[0]?.pluginId).toBe("fixture");
     expect(recovered[0]?.loadPaths).toContain(rootDir);
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-  } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
-  }
+  });
 });
 
 it("reads the installed ledger inside the existing install lifecycle lease without parent SQL", async () => {
@@ -319,19 +455,122 @@ it("reads the installed ledger inside the existing install lifecycle lease witho
   await seed(env, stored);
   await withPluginLifecycleLease({ env }, async (lease) => {
     lease.assertOwned();
-    const counters = observeParentSqlite();
-    try {
+    await withoutMainThreadSql(async () => {
       const options = { env, filePath: lease.databasePath };
       expect(await loadInstalledPluginIndexInstallRecords(options)).toEqual(stored.installRecords);
       expect((await readPersistedInstalledPluginIndex(options))?.installRecords).toEqual(
         stored.installRecords,
       );
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
-    }
+    });
     lease.assertOwned();
   });
+});
+
+it.each([
+  { pinned: true, reader: "sync", initialMode: "compat" },
+  { pinned: true, reader: "async", initialMode: "compat" },
+  { pinned: false, reader: "async-empty-memo", initialMode: "compat" },
+  { pinned: false, reader: "sync", initialMode: undefined },
+])(
+  "reads captured policy once and keeps it with inventory after a concurrent memo refresh ($reader, pinned roots: $pinned, mode: $initialMode)",
+  async ({ pinned, reader, initialMode }) => {
+    const env = environment();
+    await seed(env, index("captured ledger"));
+    if (initialMode) {
+      writeConfigMachineState("plugins.bundledDiscovery", initialMode, { env });
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const policyReads = vi.spyOn(machineState, "readConfigMachineState");
+    const readEnv = pinned ? environment() : env;
+    const captured = createDeferredCore();
+    const resume = createDeferredCore();
+    const afterCleanup = createDeferredCore();
+    let descendant:
+      | Promise<ReturnType<typeof bundledDiscovery.readBundledDiscoveryModeMemoized>>
+      | undefined;
+    const inspect = () =>
+      withArtifactPreservingStateReads(() =>
+        withPluginCache(createPluginCache(), () =>
+          withOpenClawStateDatabaseReadSnapshot(
+            async () => {
+              captured.resolve();
+              await resume.promise;
+              const previousReads = policyReads.mock.calls.length;
+              if (reader !== "sync") {
+                await resolveConfigWidePluginMetadataSnapshotAsync({
+                  config: {},
+                  env: readEnv,
+                  allowCurrent: false,
+                });
+              }
+              const stored = readPersistedInstalledPluginIndexSync({ env: readEnv });
+              const mode = bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv);
+              for (let decision = 0; decision < 3; decision++) {
+                expect(bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv)).toBe(mode);
+              }
+              expect(
+                policyReads.mock.calls
+                  .slice(previousReads)
+                  .filter(([key]) => key === "plugins.bundledDiscovery"),
+              ).toHaveLength(1);
+              descendant = afterCleanup.promise.then(() =>
+                bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv),
+              );
+              return { mode, diagnostics: stored?.diagnostics };
+            },
+            resolveInstalledPluginIndexStateDatabaseOptions({ env: readEnv }),
+          ),
+        ),
+      );
+    const reading = pinned
+      ? withPluginInstallRoots(resolvePluginInstallRoots(env), inspect)
+      : inspect();
+    try {
+      await Promise.race([captured.promise, reading]);
+      // This writer runs outside the suspended inspection's async context.
+      writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env });
+      writeConfigMachineState(
+        "plugins.installedIndex",
+        { revision: 2, index: index("new ledger") },
+        { env },
+      );
+      bundledDiscovery.clearBundledDiscoveryModeMemo();
+      if (reader !== "async-empty-memo") {
+        expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
+      }
+      resume.resolve();
+      expect(await reading).toEqual({
+        mode: initialMode,
+        diagnostics: [{ level: "warn", message: "captured ledger" }],
+      });
+      expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
+      // An escaped descendant cannot replace its closed snapshot with live policy.
+      writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
+      afterCleanup.resolve();
+      await expect(descendant).rejects.toThrow(PluginCacheFactInvalidatedError);
+    } finally {
+      resume.resolve();
+      afterCleanup.resolve();
+      await reading.catch(() => {});
+      await descendant?.catch(() => {});
+    }
+  },
+);
+
+it("does not reactivate policy preparation inside a later snapshot of the same database", async () => {
+  const env = environment();
+  await seed(env, index());
+  await withArtifactPreservingStateReads(() =>
+    withPluginCache(createPluginCache(), async () => {
+      const options = resolveInstalledPluginIndexStateDatabaseOptions({ env });
+      const activate = await withOpenClawStateDatabaseReadSnapshot(
+        () => bundledDiscovery.prepareBundledDiscoveryMode(env),
+        options,
+      );
+      expect(activate).toThrow(PluginCacheFactInvalidatedError);
+      await withOpenClawStateDatabaseReadSnapshot(async () => {
+        expect(activate).toThrow(PluginCacheFactInvalidatedError);
+      }, options);
+    }),
+  );
 });

@@ -1,15 +1,29 @@
-/**
- * Browser agent tool action executors.
- *
- * Converts model-facing parameters into browser control client calls and wraps
- * browser-originated text as untrusted content before returning it to agents.
- */
+/** Browser actions wrap page-controlled text as untrusted content before returning it to agents. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asNullableObjectRecord,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
+import {
+  appendNavigatedPageState,
+  formatBrowserDebugLogResult,
+  wrapBrowserExternalJson,
+  wrapBrowserExternalText,
+} from "./browser-tool.snapshot.js";
+import { EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS } from "./browser/act-policy.js";
+import type {
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
+} from "./browser/client-actions-types.js";
 import {
   browserAct,
   browserConsoleMessages,
@@ -18,37 +32,14 @@ import {
   browserPageText,
   browserEmulateSetting,
   browserDownload,
-  browserTabs,
   browserWaitForDownload,
-  jsonResult,
-  normalizeBrowserTabsResult,
-  normalizeOptionalString,
-  readStringParam,
-  readStringValue,
-  type BrowserTabsResult,
-} from "./browser-tool.runtime.js";
-import {
-  appendNavigatedPageState,
-  formatBrowserDebugLogResult,
-  wrapBrowserExternalJson,
-  wrapBrowserExternalText,
-} from "./browser-tool.snapshot.js";
-import {
-  EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS,
-  resolveBrowserActRequestTimeoutMs,
-} from "./browser/act-policy.js";
-import type {
-  BrowserBatchAbort,
-  BrowserBatchActionResult,
-} from "./browser/client-actions-types.js";
+} from "./browser/client-actions.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
+import { browserTabs, type BrowserTabsResult } from "./browser/client.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
 } from "./browser/constants.js";
-import { formatErrorMessage } from "./infra/errors.js";
-
-const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 
@@ -91,30 +82,25 @@ function withLocalActTimeout(
   }
 }
 
-type BrowserTabLike = {
-  suggestedTargetId?: unknown;
-  tabId?: unknown;
-  label?: unknown;
-  title?: unknown;
-  url?: unknown;
-  urlUnavailableReason?: unknown;
-  type?: unknown;
-  targetId?: unknown;
-  wsUrl?: unknown;
-};
-
 function formatAgentTab(tab: unknown): Record<string, unknown> {
-  if (!tab || typeof tab !== "object") {
+  const source = asNullableObjectRecord(tab);
+  if (!source) {
     return { value: tab };
   }
-  const source = tab as BrowserTabLike;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
+  const webExtensionTabId =
+    typeof source.webExtensionTabId === "number" &&
+    Number.isSafeInteger(source.webExtensionTabId) &&
+    source.webExtensionTabId >= 0
+      ? source.webExtensionTabId
+      : undefined;
   const label = readStringValue(source.label);
   const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
   return {
     ...(suggestedTargetId ? { suggestedTargetId } : {}),
     ...(tabId ? { tabId } : {}),
+    ...(webExtensionTabId !== undefined ? { webExtensionTabId } : {}),
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
@@ -132,24 +118,18 @@ function formatTabsToolResult(result: {
   running: boolean;
   tabs: unknown[];
 }): AgentToolResult<unknown> {
-  const formattedTabs = result.tabs.map((tab) => formatAgentTab(tab));
+  const formattedTabs = result.tabs.map(formatAgentTab);
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
     payload: { running: result.running, tabs: formattedTabs },
     includeWarning: false,
   });
-  const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: wrapped.wrappedText },
-  ];
-  return {
-    content,
-    details: {
-      ...wrapped.safeDetails,
-      running: result.running,
-      tabCount: formattedTabs.length,
-      tabs: formattedTabs,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    running: result.running,
+    tabCount: formattedTabs.length,
+    tabs: formattedTabs,
+  });
 }
 
 /** Protect page-controlled model text while preserving the shipped structured result contract. */
@@ -164,31 +144,7 @@ export function formatBrowserExternalToolResult(params: {
   });
   // The Browser tool already marks the turn as network-tainted, and replay
   // strips details; changing this public structured payload breaks callers.
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: params.payload,
-  };
-}
-
-function formatConsoleToolResult(result: {
-  targetId?: string;
-  url?: string;
-  messages?: unknown[];
-}): AgentToolResult<unknown> {
-  const wrapped = wrapBrowserExternalJson({
-    kind: "console",
-    payload: result,
-    includeWarning: false,
-  });
-  return {
-    content: [{ type: "text" as const, text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      targetId: readStringValue(result.targetId),
-      url: readStringValue(result.url),
-      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-    },
-  };
+  return textResult(wrapped.wrappedText, params.payload);
 }
 
 function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean {
@@ -197,16 +153,6 @@ function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean
   const msg = String(err);
   const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   return usesChromeMcp && isTabNotFound;
-}
-
-function replaceStaleTargetIdInActRequest(
-  request: BrowserActRequest,
-  targetId: string,
-): BrowserActRequest | null {
-  if (!normalizeOptionalString(request.targetId) || !targetId) {
-    return null;
-  }
-  return { ...request, targetId };
 }
 
 function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
@@ -224,39 +170,31 @@ function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): bo
 }
 
 export async function executeTabsAction(params: {
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
   timeoutMs?: number;
-  proxyRequest: BrowserProxyRequest | null;
   targetId?: string;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, timeoutMs, proxyRequest } = params;
-  const result = proxyRequest
-    ? normalizeBrowserTabsResult(
-        await proxyRequest({ method: "GET", path: "/tabs", profile, timeoutMs }),
-      )
-    : await browserTabs(baseUrl, { profile, timeoutMs, signal: params.signal });
-  const tabs = result.running
-    ? result.tabs.filter(
-        (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
-      )
-    : [];
+  const { target, profile, timeoutMs } = params;
+  const result = await browserTabs(target, {
+    profile,
+    timeoutMs,
+    signal: params.signal,
+  });
+  const tabs = result.tabs.filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
   return formatTabsToolResult({ running: result.running, tabs });
 }
 
 /** Validate the /act wire payload's abort summary once for note and page-state decisions. */
 function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
-  if (!result || typeof result !== "object") {
+  const aborted = asNullableObjectRecord(asNullableObjectRecord(result)?.aborted);
+  if (!aborted) {
     return null;
   }
-  const aborted = (result as { aborted?: unknown }).aborted;
-  if (!aborted || typeof aborted !== "object") {
-    return null;
-  }
-  const { reason, afterAction, url, skipped } = aborted as Partial<
-    Record<keyof BrowserBatchAbort, unknown>
-  >;
+  const { reason, afterAction, url, skipped } = aborted;
   if (
     (reason !== "navigation" && reason !== "closed") ||
     typeof afterAction !== "number" ||
@@ -268,7 +206,6 @@ function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
   return { reason, afterAction, url, skipped };
 }
 
-/** True when an /act response reports a cross-document navigation. */
 function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
   if (aborted?.reason === "navigation") {
     return true;
@@ -282,81 +219,55 @@ function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | nul
   );
 }
 
-/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
-  const query = {
+  const { input, target, profile } = params;
+  const result = await browserConsoleMessages(target, {
     level: normalizeOptionalString(input.level),
     targetId: normalizeOptionalString(input.targetId),
+    profile,
+    signal: params.signal,
+  });
+  const wrapped = wrapBrowserExternalJson({
+    kind: "console",
+    payload: result,
+    includeWarning: false,
+  });
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    targetId: readStringValue(result.targetId),
+    url: readStringValue(result.url),
+    messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+  });
+}
+
+/** Read browser debug logs, keeping counts aligned with the bounded payload. */
+export async function executeDebugLogAction(
+  kind: "requests" | "errors",
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, target, profile, signal } = params;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const options = {
+    targetId: normalizeOptionalString(input.targetId),
+    clear: typeof input.clear === "boolean" ? input.clear : undefined,
+    profile,
+    signal,
   };
-  const result = proxyRequest
-    ? ((await proxyRequest({ method: "GET", path: "/console", profile, query })) as {
-        targetId?: string;
-        messages?: unknown[];
-      })
-    : await browserConsoleMessages(baseUrl, { ...query, profile, signal: params.signal });
-  return formatConsoleToolResult(result);
-}
-
-/** Read recent network requests, keeping counts aligned with the bounded payload. */
-export async function executeRequestsAction(
-  params: Parameters<typeof executeConsoleAction>[0],
-): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
-  const targetId = normalizeOptionalString(input.targetId);
-  const filter = normalizeOptionalString(input.filter);
-  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
-  const limit =
-    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
-    50;
-  const result = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/requests",
-        profile,
-        query: { targetId, filter, clear },
-        // SAFETY: The proxy dispatches the same /requests route as the typed local client.
-      })) as Awaited<ReturnType<typeof browserRequests>>)
-    : await browserRequests(baseUrl, {
-        targetId,
-        filter,
-        clear,
-        profile,
-        signal,
-      });
-  return formatBrowserDebugLogResult("requests", result, result.requests, limit);
-}
-
-/** Read recent page errors, keeping counts aligned with the bounded payload. */
-export async function executeErrorsAction(
-  params: Parameters<typeof executeConsoleAction>[0],
-): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
-  const targetId = normalizeOptionalString(input.targetId);
-  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
-  const limit =
-    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
-    50;
-  const result = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/errors",
-        profile,
-        query: { targetId, clear },
-        // SAFETY: The proxy dispatches the same /errors route as the typed local client.
-      })) as Awaited<ReturnType<typeof browserErrors>>)
-    : await browserErrors(baseUrl, {
-        targetId,
-        clear,
-        profile,
-        signal,
-      });
+  if (kind === "requests") {
+    const result = await browserRequests(target, {
+      ...options,
+      filter: normalizeOptionalString(input.filter),
+    });
+    return formatBrowserDebugLogResult(kind, result, result.requests, limit);
+  }
+  const result = await browserErrors(target, options);
   return formatBrowserDebugLogResult("errors", result, result.errors, limit);
 }
 
@@ -364,7 +275,7 @@ export async function executeErrorsAction(
 export async function executeTextAction(
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const { input, target, profile, signal } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const selector = normalizeOptionalString(input.selector);
   const maxChars = Math.min(
@@ -373,21 +284,13 @@ export async function executeTextAction(
     }) ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   );
-  const result = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/text",
-        profile,
-        query: { targetId, selector, maxChars },
-        // SAFETY: The proxy dispatches the same /text route as the typed local client.
-      })) as Awaited<ReturnType<typeof browserPageText>>)
-    : await browserPageText(baseUrl, {
-        targetId,
-        selector,
-        maxChars,
-        profile,
-        signal,
-      });
+  const result = await browserPageText(target, {
+    targetId,
+    selector,
+    maxChars,
+    profile,
+    signal,
+  });
   const wrapped = wrapBrowserExternalText({
     value: result.text,
     marker: "\n[truncated — retry with a narrower selector]",
@@ -397,23 +300,20 @@ export async function executeTextAction(
       ? "Page text was truncated. Retry with a narrower selector."
       : undefined,
   });
-  return {
-    content: [{ type: "text", text: wrapped.text }],
-    details: {
-      ok: result.ok,
-      targetId: result.targetId,
-      url: result.url,
-      truncated: result.truncated || wrapped.truncated,
-      externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
-    },
-  };
+  return textResult(wrapped.text, {
+    ok: result.ok,
+    targetId: result.targetId,
+    url: result.url,
+    truncated: result.truncated || wrapped.truncated,
+    externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
+  });
 }
 
 /** Apply settings in order and pin later changes to the first resolved tab. */
 export async function executeEmulateAction(
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const { input, target, profile, signal } = params;
   const settings = [
     ["device", "device", "name"],
     ["colorScheme", "media", "colorScheme"],
@@ -432,84 +332,43 @@ export async function executeEmulateAction(
     throw new Error("colorScheme must be dark|light|no-preference|none.");
   }
   let targetId = normalizeOptionalString(input.targetId);
-  const applied: string[] = [];
-  for (const { field, setting, key, value } of requested) {
+  for (const { setting, key, value } of requested) {
     const body = { targetId, [key]: value };
-    const result = proxyRequest
-      ? ((await proxyRequest({
-          method: "POST",
-          path: `/set/${setting}`,
-          profile,
-          body,
-          // SAFETY: All four /set routes return the local client's resolved-tab result.
-        })) as Awaited<ReturnType<typeof browserEmulateSetting>>)
-      : await browserEmulateSetting(baseUrl, {
-          setting,
-          body,
-          profile,
-          signal,
-        });
+    const result = await browserEmulateSetting(target, {
+      setting,
+      body,
+      profile,
+      signal,
+    });
     targetId = result.targetId ?? targetId;
-    applied.push(field);
   }
-  return jsonResult({ ok: true, targetId, applied });
+  return jsonResult({ ok: true, targetId, applied: requested.map(({ field }) => field) });
 }
 
-function resolveDownloadProxyTimeoutMs(timeoutMs: number | undefined): number {
-  const waitTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
-  // The node proxy must outlive the browser-server request; callBrowserProxy
-  // adds a second grace window for the outer Gateway node.invoke call.
-  return waitTimeoutMs + BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS;
-}
-
-/** Execute explicit Browser download operations through the local or node-host path. */
-export async function executeDownloadAction(params: {
-  action: "download" | "waitfordownload";
-  input: Record<string, unknown>;
-  baseUrl?: string;
-  profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
-  signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-}): Promise<AgentToolResult<unknown>> {
-  const { action, input, baseUrl, profile, proxyRequest } = params;
+export async function executeDownloadAction(
+  params: Parameters<typeof executeConsoleAction>[0] & {
+    action: "download" | "waitfordownload";
+    onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  },
+): Promise<AgentToolResult<unknown>> {
+  const { action, input, target, profile } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
-  const download = action === "download";
-  const request = download
-    ? {
-        kind: "download" as const,
-        body: {
+  const options = { targetId, timeoutMs, profile, signal: params.signal };
+  const result =
+    action === "download"
+      ? await browserDownload(target, {
+          ...options,
           ref: readStringParam(input, "ref", { required: true }),
           path: readStringParam(input, "path", { required: true }),
-          targetId,
-          timeoutMs,
-        },
-      }
-    : {
-        kind: "waitfordownload" as const,
-        body: { path: readStringParam(input, "path"), targetId, timeoutMs },
-      };
-  const result = proxyRequest
-    ? await proxyRequest({
-        method: "POST",
-        path: download ? "/download" : "/wait/download",
-        profile,
-        timeoutMs: resolveDownloadProxyTimeoutMs(timeoutMs),
-        body: request.body,
-      })
-    : request.kind === "download"
-      ? await browserDownload(baseUrl, {
-          ...request.body,
-          profile,
-          signal: params.signal,
         })
-      : await browserWaitForDownload(baseUrl, {
-          ...request.body,
-          profile,
-          signal: params.signal,
+      : await browserWaitForDownload(target, {
+          ...options,
+          path: readStringParam(input, "path"),
         });
-  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
@@ -521,8 +380,8 @@ export async function executeActAction(params: {
   usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-  onTabClose?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  onTabClose?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   if ("timeoutMs" in request && request.timeoutMs !== undefined) {
@@ -539,7 +398,7 @@ export async function executeActAction(params: {
       effectiveRequest.kind === "close" || aborted?.reason === "closed"
         ? params.onTabClose
         : params.onTabActivity;
-    onTabResult?.(resolvedTargetId);
+    await onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -549,33 +408,26 @@ export async function executeActAction(params: {
     return await appendNavigatedPageState({
       result: formatted,
       targetId: resolvedTargetId,
-      baseUrl,
+      target: proxyRequest ?? baseUrl,
       profile,
-      proxyRequest,
       signal: params.signal,
     });
   };
-  const dispatchAndFinishAct = async (actionRequest: BrowserActRequest) => {
-    const result = proxyRequest
-      ? await proxyRequest({
-          method: "POST",
-          path: "/act",
-          profile,
-          body: actionRequest,
-          timeoutMs: resolveBrowserActRequestTimeoutMs(actionRequest),
-        })
-      : await browserAct(baseUrl, actionRequest, {
-          profile,
-          signal: params.signal,
-        });
-    return await finishActResult(
+  const dispatchAct = async (actionRequest: BrowserActRequest) => {
+    const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
+      profile,
+      signal: params.signal,
+    });
+    return {
       result,
-      readStringValue((result as { targetId?: unknown }).targetId) ??
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(actionRequest.targetId),
-    );
+    };
   };
+  let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
   try {
-    return await dispatchAndFinishAct(effectiveRequest);
+    dispatched = await dispatchAct(effectiveRequest);
   } catch (err) {
     const proxyRoute = proxyRequest?.route();
     const usesChromeMcp = proxyRequest
@@ -585,11 +437,10 @@ export async function executeActAction(params: {
       proxyRoute?.status === "resolved" ? proxyRoute.profile : (profile ?? "default");
     if (isChromeStaleTargetError(usesChromeMcp, err)) {
       let tabRefreshError: unknown;
-      const availability = await (
-        proxyRequest
-          ? proxyRequest({ method: "GET", path: "/tabs", profile }).then(normalizeBrowserTabsResult)
-          : browserTabs(baseUrl, { profile, signal: params.signal })
-      ).catch((refreshError: unknown): BrowserTabsResult => {
+      const availability = await browserTabs(proxyRequest ?? baseUrl, {
+        profile,
+        signal: params.signal,
+      }).catch((refreshError: unknown): BrowserTabsResult => {
         params.signal?.throwIfAborted();
         tabRefreshError = refreshError;
         return { running: false, tabs: [] };
@@ -599,18 +450,16 @@ export async function executeActAction(params: {
         tabs.length === 1
           ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
           : undefined;
-      const retryRequest = freshTargetId
-        ? replaceStaleTargetIdInActRequest(effectiveRequest, freshTargetId)
-        : null;
+      const retryRequest =
+        freshTargetId && normalizeOptionalString(effectiveRequest.targetId)
+          ? { ...effectiveRequest, targetId: freshTargetId }
+          : null;
       // This is same-agent continuity, not identity recovery: only target-independent
       // waits may retry, against the one freshly listed tab. Ref-scoped and scripted
       // operations require explicit fresh selection (and a fresh snapshot for refs).
-      if (
-        retryRequest &&
-        canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
-        tabs.length === 1
-      ) {
-        return await dispatchAndFinishAct(retryRequest);
+      if (retryRequest && canRetryChromeActAfterSoleTargetRefresh(effectiveRequest)) {
+        const retried = await dispatchAct(retryRequest);
+        return await finishActResult(retried.result, retried.targetId);
       }
       if (tabRefreshError) {
         throw new Error(
@@ -637,6 +486,7 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+  return await finishActResult(dispatched.result, dispatched.targetId);
 }
 
 function formatActToolResult(

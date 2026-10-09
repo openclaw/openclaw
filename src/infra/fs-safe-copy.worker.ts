@@ -13,6 +13,7 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
 } from "./fs-safe-copy-worker-contract.js";
+import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 
 function failure(error: unknown): FsSafeCopyReply {
   return {
@@ -24,11 +25,13 @@ function failure(error: unknown): FsSafeCopyReply {
   };
 }
 
+normalizeFsSafeNativeEnv();
+
 if (parentPort) {
   // This isolate uses the library's default and explicit operator environment.
   // Shared worker plumbing may load Gateway defaults; keep those in the host.
   const nativeConfig = getFsSafeNativeConfig();
-  const { serveWorkerTasks } = await import("./worker-task-pool.js");
+  const { serveWorkerTasks } = await import("./worker-task-server.js");
   configureFsSafeNative(nativeConfig);
   serveWorkerTasks<FsSafeCopyReply>(async (input) => {
     // SAFETY: The private worker receives only the host's typed read operations.

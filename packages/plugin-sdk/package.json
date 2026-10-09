@@ -44,9 +44,9 @@
       "types": "./dist/src/plugin-sdk/config-mutation.d.ts",
       "default": "./src/config-mutation.ts"
     },
-    "./config-runtime": {
-      "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
-      "default": "./src/config-runtime.ts"
+    "./control-ui-link-reader": {
+      "types": "./dist/src/plugin-sdk/control-ui-link-reader.d.ts",
+      "default": "./src/control-ui-link-reader.ts"
     },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
@@ -87,10 +87,6 @@
     "./heartbeat-runtime": {
       "types": "./dist/src/plugin-sdk/heartbeat-runtime.d.ts",
       "default": "./src/heartbeat-runtime.ts"
-    },
-    "./infra-runtime": {
-      "types": "./dist/src/plugin-sdk/infra-runtime.d.ts",
-      "default": "./src/infra-runtime.ts"
     },
     "./model-session-runtime": {
       "types": "./dist/src/plugin-sdk/model-session-runtime.d.ts",

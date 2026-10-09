@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { isSystemCreatedSessionRow } from "../../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   compareSessionRowsByUpdatedAt,
-  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   visibleSessionMatches,
 } from "./navigation.ts";
@@ -19,20 +19,35 @@ function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("resolveSessionNavigation", () => {
-  it("keeps the selected session in its sorted slot instead of hoisting it", () => {
-    const rows = Array.from({ length: 5 }, (_, index) => ({
-      key: `agent:main:recent-${index}`,
+  it("keeps a categorized spawned conversation discoverable without selecting or loading its parent", () => {
+    const parentKey = "agent:main:discord:channel:parent";
+    const office = {
+      key: "agent:main:dashboard:office-ha",
+      sessionId: "office-ha",
       kind: "direct" as const,
-      updatedAt: 100 - index,
-    }));
+      label: "OFFICE HA",
+      category: "HOME ASSISTANT",
+      archived: false,
+      spawnedBy: parentKey,
+      parentSessionKey: parentKey,
+      createdVia: "spawn" as const,
+      createdActor: { type: "agent" as const },
+      updatedAt: 30,
+    };
+    const wake = { key: "agent:main:dashboard:wake-word", kind: "direct" as const, updatedAt: 20 };
+    const result = sessionsResult([
+      office,
+      wake,
+      { ...office, key: "agent:main:subagent:worker" },
+      { ...office, key: "agent:main:dashboard:uncategorized", category: " " },
+      { ...office, key: "agent:main:dashboard:archived", archived: true },
+    ]);
     const navigation = resolveSessionNavigation({
-      result: sessionsResult(rows),
+      result,
       resultAgentId: "main",
-      sessionKey: "agent:main:recent-3",
+      sessionKey: wake.key,
     });
-
-    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(rows.map((row) => row.key));
-    expect(navigation.activeRowKey).toBe("agent:main:recent-3");
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([office.key, wake.key]);
   });
 
   it("hides cron sessions unless showCron opts in", () => {
@@ -66,6 +81,57 @@ describe("resolveSessionNavigation", () => {
       "agent:main:chat",
       "agent:main:cron:job",
     ]);
+  });
+
+  it("hides isolated heartbeat lanes unless showSystem opts in", () => {
+    // Classification comes from persisted provenance, not a matching key suffix.
+    const heartbeatLane: GatewaySessionRow = {
+      key: "agent:main:main:heartbeat",
+      kind: "direct",
+      updatedAt: 200,
+      classification: "heartbeat",
+      createdVia: "cron",
+    };
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      {
+        key: "agent:main:alerts:heartbeat",
+        kind: "direct",
+        label: "My heartbeat monitor",
+        updatedAt: 250,
+      },
+      heartbeatLane,
+    ];
+
+    const hidden = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+    });
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:alerts:heartbeat",
+    ]);
+
+    const shown = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showSystem: true,
+    });
+    expect(shown.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:alerts:heartbeat",
+      "agent:main:main:heartbeat",
+    ]);
+
+    const direct = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: heartbeatLane.key,
+    });
+    expect(direct.currentSessionKey).toBe(heartbeatLane.key);
+    expect(direct.visibleSessions.map((row) => row.key)).toContain(heartbeatLane.key);
   });
 
   it("hides system-created probe sessions unless showSystem opts in", () => {
@@ -121,6 +187,26 @@ describe("resolveSessionNavigation", () => {
       "agent:main:explicit:incident-debug",
     ]);
     expect(navigation.activeRowKey).toBe("agent:main:explicit:incident-debug");
+  });
+
+  it("keeps a selected dock conversation readable without adding it to the sidebar", () => {
+    const dock: GatewaySessionRow = {
+      key: "agent:main:board-agent",
+      kind: "direct",
+      isDock: true,
+      createdVia: "operator",
+      createdSurface: "plugin-dock",
+    };
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([{ key: "agent:main:chat", kind: "direct" }, dock]),
+      resultAgentId: "main",
+      sessionKey: dock.key,
+      activeSession: dock,
+      showSystem: true,
+    });
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+    expect(navigation.selectedSession?.key).toBe(dock.key);
+    expect(navigation.activeRowKey).toBeNull();
   });
 
   it("uses the caller's sort order before applying the recent-session projection", () => {
@@ -231,30 +317,8 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.activeRowKey).toBe("agent:main:recent-11");
   });
 
-  it("keeps every pinned session when many sessions are pinned", () => {
-    const pinnedSessions = Array.from({ length: 10 }, (_, index) => ({
-      key: `agent:main:pinned-${index}`,
-      kind: "direct" as const,
-      pinned: true,
-      updatedAt: 100 - index,
-    }));
-    const navigation = resolveSessionNavigation({
-      result: sessionsResult([
-        { key: "agent:main:recent", kind: "direct", updatedAt: 1_000 },
-        ...pinnedSessions,
-      ]),
-      resultAgentId: "main",
-      sessionKey: "unknown",
-    });
-
-    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
-      ...pinnedSessions.map((row) => row.key),
-      "agent:main:recent",
-    ]);
-  });
-
   it("keeps every active chat in addition to pinned sessions", () => {
-    const pinnedSessions = Array.from({ length: 3 }, (_, index) => ({
+    const pinnedSessions = Array.from({ length: 10 }, (_, index) => ({
       key: `agent:main:pinned-${index}`,
       kind: "direct" as const,
       pinned: true,
@@ -428,6 +492,16 @@ describe("isSystemCreatedSessionRow", () => {
     ["run + no actor + unnamed is system", { createdVia: "run" }, true],
     ["internal + no actor + unnamed is system", { createdVia: "internal" }, true],
     ["system actor is system regardless of via", { createdActor: { type: "system" } }, true],
+    [
+      "heartbeat classification without a user name is system",
+      { classification: "heartbeat" },
+      true,
+    ],
+    [
+      "heartbeat classification with a user label stays visible",
+      { classification: "heartbeat", label: "Background watch" },
+      false,
+    ],
     [
       "run + human actor stays visible",
       { createdVia: "run", createdActor: { type: "human" } },

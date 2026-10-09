@@ -140,7 +140,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     ]);
   });
 
-  it("loads a legacy runtime-api runner from an installed linked plugin", () => {
+  it("requires linked runners to expose the dedicated QA surface", () => {
     const stateDir = tempDirs.make("openclaw-qa-runner-legacy-state-");
     const pluginDir = path.join(stateDir, "extensions", "qa-legacy");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -191,25 +191,9 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       "utf8",
     );
 
-    const contributions = listQaRunnerCliContributions();
-    const contribution = contributions[0];
-    expect(contribution?.status).toBe("available");
-    if (!contribution || contribution.status !== "available") {
-      throw new Error("Expected legacy linked QA runner contribution to be available");
-    }
-    const register = contribution.registration["register"];
-    expect(typeof register).toBe("function");
-    expect(contributions).toEqual([
-      {
-        pluginId: "qa-legacy",
-        commandName: "legacy",
-        status: "available",
-        registration: {
-          commandName: "legacy",
-          register,
-        },
-      },
-    ]);
+    expect(() => listQaRunnerCliContributions()).toThrow(
+      "Unable to resolve bundled plugin public surface qa-legacy/qa-runner-api.js",
+    );
   });
 
   it("ignores operator runner metadata and state during private QA discovery", () => {

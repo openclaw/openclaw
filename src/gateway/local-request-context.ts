@@ -1,5 +1,6 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
@@ -18,6 +19,7 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import {
@@ -28,6 +30,9 @@ import {
   readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -37,33 +42,32 @@ type LocalGatewayRequestContextParams = {
   getRuntimeConfig: () => OpenClawConfig;
 };
 
-function cronUnavailable(): never {
+async function cronUnavailable(): Promise<never> {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
 
 const unavailableCron: GatewayCronServiceContract = {
-  start: async () => {
-    cronUnavailable();
-  },
+  start: cronUnavailable,
   stop: () => {},
   pauseScheduling: () => {},
   resumeScheduling: () => {},
-  status: async () => cronUnavailable(),
-  list: async () => cronUnavailable(),
-  listPage: async () => cronUnavailable(),
-  add: async () => cronUnavailable(),
-  update: async () => cronUnavailable(),
-  updateWithPrecondition: async () => cronUnavailable(),
-  remove: async () => cronUnavailable(),
-  removeStaleJobFamily: async () => cronUnavailable(),
-  removeAgentJobsTransactional: async () => cronUnavailable(),
-  quiesceJobs: async () => cronUnavailable(),
-  run: async () => cronUnavailable(),
-  enqueueRun: async () => cronUnavailable(),
+  status: cronUnavailable,
+  list: cronUnavailable,
+  listPage: cronUnavailable,
+  add: cronUnavailable,
+  update: cronUnavailable,
+  updateWithPrecondition: cronUnavailable,
+  remove: cronUnavailable,
+  removeStaleJobFamily: cronUnavailable,
+  removeAgentJobsTransactional: cronUnavailable,
+  quiesceJobs: cronUnavailable,
+  run: cronUnavailable,
+  enqueueRun: cronUnavailable,
+  waitForManualRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,
-  readScratch: async (): Promise<never> => cronUnavailable(),
-  writeScratch: async () => cronUnavailable(),
+  readScratch: cronUnavailable,
+  writeScratch: cronUnavailable,
   getDefaultAgentId: () => undefined,
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
@@ -73,6 +77,7 @@ function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
+  const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
     ...unavailableCron,
     removeAgentJobsTransactional: async (agentId, commit) =>
@@ -103,6 +108,8 @@ function createLocalGatewayRequestContext(
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
@@ -125,8 +132,10 @@ function createLocalGatewayRequestContext(
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
     logHealth: { error: (message) => logGateway.error(message) },
     logGateway,
-    incrementPresenceVersion: () => 0,
-    getHealthVersion: () => 0,
+    publishPresence: () => {},
+    getPresenceSnapshot: () => {
+      throw new Error("Presence requires a running Gateway connection.");
+    },
     broadcast: () => {},
     broadcastToConnIds: () => {},
     nodeSendToSession: () => {},
@@ -148,6 +157,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
+    forgetConnectionAncestors: () => {},
     subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
@@ -179,6 +189,36 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
+  };
+  let projection: SessionRowProjection | undefined;
+  let initializing: Promise<void> | undefined;
+  bindSessionRowProjection(context, () => projection);
+  context.ensureSessionRowProjection = () => {
+    if (!initializing) {
+      // The same host retains embedded resources used by admitted work after its caller returns.
+      resourceHost.adopt(context, {
+        release: async () => {
+          await initializing?.catch(() => {});
+          projection?.dispose();
+          await projection?.ensureMaterialized();
+        },
+      });
+      initializing = import("./session-row-projection.js").then(
+        async ({ createSessionRowProjection }) => {
+          projection = await createSessionRowProjection({
+            cfg: params.getRuntimeConfig(),
+            getConfig: params.getRuntimeConfig,
+            getModelCatalog: () =>
+              readPreparedServerMethodModelCatalogs(
+                context,
+                listAgentIds(params.getRuntimeConfig()),
+              ),
+            context,
+          });
+        },
+      );
+    }
+    return initializing;
   };
   context.createAgentTurnFacade = async (principal) => {
     const { createInternalAgentTurnFacade } =

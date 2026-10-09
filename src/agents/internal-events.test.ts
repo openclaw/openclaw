@@ -1,11 +1,15 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import {
   buildAgentInternalEventContext,
   buildGeneratedMediaDeliveryContext,
   formatAgentInternalEventsForPrompt,
+  formatGeneratedMediaDeliveryRetryForPrompt,
   type AgentInternalEvent,
-  prependInternalEventContext,
   resolveAcpPromptBody,
   resolveInternalEventPromptBody,
   resolveInternalEventTranscriptBody,
@@ -13,6 +17,7 @@ import {
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
 
 const MAX_STATUS_LABEL_CHARS = 500;
@@ -81,6 +86,58 @@ describe("agent internal events", () => {
     expect(media).toEqual(["https://example.test/report.png"]);
   });
 
+  it.each([
+    "https://example.com/video.mp4?X-Amz-Signature=fake[[reply_to:999]]",
+    "https://example.com/video.mp4?signature=fake[[audio_as_voice]]",
+    "https://example.com/video.mp4?caption=![cover](https://example.org/cover.png)",
+    'https://example.com/video.mp4?signature=part.png"}tail',
+    "https://example.com/video.mp4?token=ends,",
+    'https://example.com/video.mp4?token=ends"',
+    "https://example.com/video.mp4?token=ends\\",
+  ])("preserves signed media through completion and retry directives: %s", (mediaUrl) => {
+    const event = {
+      ...taskCompletionEvent("Generated video."),
+      source: "video_generation",
+      mediaUrls: [mediaUrl],
+      attachments: [{ type: "video", url: mediaUrl }],
+    } satisfies AgentInternalEvent;
+    const prompts = [
+      formatAgentInternalEventsForPrompt([event]),
+      resolveAcpPromptBody("", [event]),
+      buildAgentInternalEventContext([event])
+        .map((fragment) => fragment.text)
+        .join("\n"),
+      formatGeneratedMediaDeliveryRetryForPrompt([mediaUrl]),
+      ...[false, true].map((retry) =>
+        buildGeneratedMediaDeliveryContext([mediaUrl], retry)
+          .map((fragment) => fragment.text)
+          .join("\n"),
+      ),
+    ];
+
+    for (const prompt of prompts) {
+      expect(parseReplyDirectives(prompt, { extractMarkdownImages: true })).toMatchObject({
+        mediaUrls: [mediaUrl],
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+    }
+  });
+
+  it("preserves generated file URL bytes until native reply parsing owns conversion", () => {
+    const filePath = path.resolve("media", "render-final.png,");
+    const fileUrl = pathToFileURL(filePath).href;
+    const prompt = formatGeneratedMediaDeliveryRetryForPrompt([fileUrl]);
+    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+    expect(splitMediaFromOutput(prompt).mediaUrls).toEqual([fileUrl]);
+    expect(parseReplyDirectives(prompt).mediaUrls).toEqual([filePath]);
+    expect(stripInternalRuntimeContext(prompt)).toBe("");
+  });
+
   it("normalizes media references while preserving Unicode and delimiter modes", () => {
     const unicode = "雪😀\ud800x\udc00\u0085\u200b\u2028Z";
     const reference = ` /tmp/a\r\nb\rc\nd\te\u0000f\u001fg\u007fh/${unicode}/${INTERNAL_RUNTIME_CONTEXT_BEGIN}/${INTERNAL_RUNTIME_CONTEXT_END}.png `;
@@ -118,14 +175,6 @@ describe("agent internal events", () => {
     expect(transcriptResult).toBe(protectedResult);
     expect(data?.text).toContain(fullResult);
     expect(event.result).toBe(fullResult);
-  });
-
-  it("keeps ordinary child results unchanged", () => {
-    const result = "small useful result";
-
-    expect(
-      extractChildResult(formatAgentInternalEventsForPrompt([taskCompletionEvent(result)])),
-    ).toBe(result);
   });
 
   it("keeps a bounded route change separate from child result text", () => {
@@ -222,14 +271,11 @@ describe("attempt execution prompt materialization", () => {
   it("removes only the typed producer's duplicate carrier and retains supplemental text", () => {
     const events = [taskCompletionEvent("child result")];
     const carrier = formatAgentInternalEventsForPrompt(events);
-    expect(prependInternalEventContext(carrier, events)).toBe(carrier);
-    expect(prependInternalEventContext("Follow up.", events)).toBe(`${carrier}\n\nFollow up.`);
     expect(resolveInternalEventPromptBody(`${carrier}\n\nFollow up.`, events)).toBe("Follow up.");
     expect(resolveInternalEventPromptBody(carrier, undefined)).toBe(carrier);
     expect(resolveInternalEventTranscriptBody(carrier, undefined)).toBe(carrier);
     const provenance = { kind: "inter_session", sourceTool: "subagent_announce" } as const;
     const annotated = annotateInterSessionPromptText(`${carrier}\n\nFollow up.`, provenance);
-    expect(prependInternalEventContext(annotated, events, provenance)).toBe(annotated);
     expect(resolveInternalEventPromptBody(annotated, events, provenance)).toBe("Follow up.");
     expect(resolveInternalEventPromptBody(annotated, undefined, provenance)).toBe(annotated);
     for (const render of [resolveAcpPromptBody, resolveInternalEventTranscriptBody]) {

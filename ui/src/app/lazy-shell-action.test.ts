@@ -16,6 +16,9 @@ import {
   type TestOptionalCustomElement,
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
+import type { ShellChromeOwner } from "./app-shell-chrome.ts";
+import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
+import type { ApplicationGatewaySnapshot } from "./context.ts";
 import "./app-host.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
@@ -78,6 +81,8 @@ type PaletteShell = HTMLElement &
     openPalette(): void;
     restorePendingLazyAction(): void;
     resetForContextEpoch(): void;
+    commandPaletteLoading: CommandPaletteLoadingState;
+    shellChrome: ShellChromeOwner;
   };
 
 function paletteShell(element: TestOptionalCustomElement, open: () => void): PaletteShell {
@@ -117,6 +122,107 @@ describe("lazy shell action storage", () => {
 });
 
 describe("shell lazy events", () => {
+  it("persists only open intent, never a cold prompt or event payload", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    const gate = createDeferred();
+    const element = createLazyElementSpec("private cold palette");
+    const load = element.loadModule;
+    element.loadModule = async () => {
+      await gate.promise;
+      await load();
+    };
+    const shell = paletteShell(element, vi.fn());
+    await withConnectedShell(shell, async () => {
+      window.dispatchEvent(
+        new CustomEvent(COMMAND_PALETTE_OPEN_EVENT, {
+          detail: { value: "private payload" },
+        }),
+      );
+      const input = document.createElement("textarea");
+      shell.commandPaletteLoading.inputRef(input);
+      input.value = "private cold prompt";
+      shell.commandPaletteLoading.captureInput();
+      expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+      expect(storage.getItem(storageKey)).not.toContain("private");
+      shell.lazyCustomElements.close();
+      gate.resolve();
+    });
+  });
+
+  it.each(["connection", "account", "reconnect"] as const)(
+    "respects the canonical %s boundary while a cold palette is composing",
+    async (change) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const gate = createDeferred();
+      const element = createLazyElementSpec("owned cold palette");
+      const load = element.loadModule;
+      element.loadModule = async () => {
+        await gate.promise;
+        await load();
+      };
+      const open = vi.fn();
+      const shell = paletteShell(element, open);
+      let snapshot: ApplicationGatewaySnapshot = {
+        client: null,
+        phase: "connected",
+        offlineStable: false,
+        canvasPluginSurfaceUrl: null,
+        hello: null,
+        assistantAgentId: "main",
+        sessionKey: "main",
+        lastError: null,
+        lastErrorCode: null,
+        selfUser: { id: "first-user" },
+      };
+      const gateway = {
+        connectionRevision: 0,
+        get snapshot() {
+          return snapshot;
+        },
+      };
+      Object.defineProperty(shell, "context", { value: { gateway }, configurable: true });
+      shell.openPalette();
+      const state = shell.commandPaletteLoading;
+      const input = document.createElement("textarea");
+      state.inputRef(input);
+      input.value = "old-owner prompt";
+      state.captureInput();
+      state.handleCompositionStart();
+      state.handoff(open);
+      const take = state.captureHandoff();
+      if (change === "connection") {
+        gateway.connectionRevision += 1;
+      } else if (change === "account") {
+        snapshot = { ...snapshot, selfUser: { id: "second-user" } };
+      } else {
+        snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
+      }
+      shell.shellChrome.synchronizeCommandPaletteScope();
+      if (change === "reconnect") {
+        expect(state.value).toBe("old-owner prompt");
+        expect(state.active).toBe(true);
+        snapshot = {
+          ...snapshot,
+          phase: "connected",
+          selfUser: { id: "first-user" },
+        };
+        shell.shellChrome.synchronizeCommandPaletteScope();
+        expect(take()?.value).toBe("old-owner prompt");
+        shell.lazyCustomElements.close();
+      } else {
+        expect(state.active).toBe(false);
+        expect(state.value).toBe("");
+        expect(take()).toBeUndefined();
+        expect(readLazyShellAction()).toBeNull();
+      }
+      state.handleCompositionEnd();
+      gate.resolve();
+      await vi.dynamicImportSettled();
+      expect(open).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["unavailable", "denied", "replacement-write-failed"] as const)(
     "retries in place without replaying an older action when storage is %s",
     async (mode) => {
@@ -405,7 +511,6 @@ describe("shell lazy events", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLifecycle & {
       approvalOverlay?: { show(): void };
       execApprovalElement: TestOptionalCustomElement;
-      openApprovals(): void;
     };
     shell.execApprovalElement = element;
     Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
@@ -415,7 +520,7 @@ describe("shell lazy events", () => {
     stubRenderedWhenDefined(shell);
 
     await withConnectedShell(shell, async () => {
-      shell.openApprovals();
+      window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
       await vi.waitFor(() => expect(show).toHaveBeenCalledOnce());
     });
   });

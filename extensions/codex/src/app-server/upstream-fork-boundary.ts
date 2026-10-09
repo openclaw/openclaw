@@ -42,6 +42,9 @@ export type CodexUpstreamForkBoundaryResult =
     }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
 
+const IN_PROGRESS_TURN_MESSAGE =
+  "This Codex turn is still in progress. Wait for it to finish, then try forking again.";
+
 const TURN_PAGE_LIMIT = 100;
 
 function failure(
@@ -62,14 +65,10 @@ function textOnlyMessage(content: unknown): string | undefined {
   // undefined marks the message unverifiable so boundary resolution fails closed.
   const texts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       return undefined;
     }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
+    texts.push(block.text);
   }
   return texts.join("\n");
 }
@@ -88,6 +87,15 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
       }
       const isSteer = userMessagesInTurn > 0;
       userMessagesInTurn += 1;
+      const local = params.localPrefix[localIndex];
+      const identity = local && readMirrorIdentity(local.message);
+      // Imports retain a bounded tail. Locate its recorded start before checking
+      // content omitted from that mirror; repeated text cannot identify the boundary.
+      const matchesIdentity =
+        identity === `${turn.id}:${item.id}` || (!isSteer && identity === `${turn.id}:prompt`);
+      if (!matchedPrefix && !matchesIdentity) {
+        continue;
+      }
       // Display placeholders are not evidence of attachment identity.
       const nativeText = textOnlyMessage(item.content);
       if (nativeText === undefined) {
@@ -96,20 +104,11 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
         );
       }
-      const local = params.localPrefix[localIndex];
       const upstreamText = local && readUpstreamUserText(local.message);
       // Harness evidence binds the complete submitted text, not the trimmed/truncated
       // display projection that legacy imported mirrors retain.
       const text = upstreamText ? nativeText : projectCodexUserItemText(item);
       if (!text) {
-        continue;
-      }
-      const identity = local && readMirrorIdentity(local.message);
-      // Imports retain a bounded tail. Locate its recorded start, then verify every
-      // retained user in order; repeated text must never choose an earlier native turn.
-      const matchesIdentity =
-        identity === `${turn.id}:${item.id}` || (!isSteer && identity === `${turn.id}:prompt`);
-      if (!matchedPrefix && !matchesIdentity) {
         continue;
       }
       matchedPrefix = true;
@@ -145,10 +144,7 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         );
       }
       if (turn.status === "inProgress") {
-        return failure(
-          "in-progress-turn",
-          "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-        );
+        return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
       }
       // beforeTurnId at the first turn yields a valid empty-history fork upstream
       // (codex-rs thread_fork_inner has no minimum-turn guard), matching the empty
@@ -355,10 +351,7 @@ export function precheckCodexUpstreamForkBoundary(params: {
     );
   }
   if (target.status === "inProgress") {
-    return failure(
-      "in-progress-turn",
-      "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-    );
+    return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
   }
   return { ok: true, boundary: params.boundary };
 }

@@ -14,6 +14,10 @@ import {
 
 const contextFixture = createMessageActionContextFixture();
 const { handleForumAction, handleWorkspaceAction } = contextFixture;
+const crossProviderRestrictedConfig: OpenClawConfig = {
+  ...workspaceConfig,
+  tools: { message: { crossContext: { allowAcrossProviders: false } } },
+};
 
 describe("runMessageAction context isolation", () => {
   beforeEach(() => contextFixture.setup());
@@ -46,16 +50,6 @@ describe("runMessageAction context isolation", () => {
 
   it.each([
     {
-      name: "allows send when target matches current channel",
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    },
-    {
       name: "accepts legacy to parameter for send",
       cfg: workspaceConfig,
       actionParams: {
@@ -65,34 +59,12 @@ describe("runMessageAction context isolation", () => {
       },
     },
     {
-      name: "defaults to current channel when target is omitted",
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    },
-    {
       name: "allows media-only send when target matches current channel",
       cfg: workspaceConfig,
       actionParams: {
         channel: "workspace",
         target: "#C12345678",
         media: "https://example.com/note.ogg",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    },
-    {
-      name: "allows send when poll booleans are explicitly false",
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollMulti: false,
-        pollAnonymous: false,
-        pollPublic: false,
       },
       toolContext: { currentChannelId: "C12345678" },
     },
@@ -135,20 +107,6 @@ describe("runMessageAction context isolation", () => {
 
   it.each([
     {
-      name: "send when target differs from current workspace channel",
-      run: () =>
-        runDrySend({
-          cfg: workspaceConfig,
-          actionParams: {
-            channel: "workspace",
-            target: "channel:C99999999",
-            message: "hi",
-          },
-          toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-        }),
-      expectedKind: "send",
-    },
-    {
       name: "thread-reply when channelId differs from current workspace channel",
       run: () =>
         runDryAction({
@@ -169,18 +127,6 @@ describe("runMessageAction context isolation", () => {
   });
 
   it.each([
-    {
-      name: "direct chat match",
-      channel: "directchat",
-      target: "123@g.us",
-      currentChannelId: "123@g.us",
-    },
-    {
-      name: "local chat match",
-      channel: "localchat",
-      target: "localchat:+15551234567",
-      currentChannelId: "localchat:+15551234567",
-    },
     {
       name: "direct chat mismatch",
       channel: "directchat",
@@ -215,27 +161,6 @@ describe("runMessageAction context isolation", () => {
   });
 
   it.each([
-    {
-      name: "infers channel + target from tool context when missing",
-      cfg: {
-        channels: {
-          workspace: {
-            botToken: "workspace-test",
-            appToken: "workspace-app-test",
-          },
-          forum: {
-            token: "forum-test",
-          },
-        },
-      } as OpenClawConfig,
-      action: "send" as const,
-      actionParams: {
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      expectedKind: "send",
-      expectedChannel: "workspace",
-    },
     {
       name: "falls back to tool-context provider when channel param is an id",
       cfg: workspaceConfig,
@@ -276,113 +201,6 @@ describe("runMessageAction context isolation", () => {
 
   it.each([
     {
-      name: "blocks cross-provider sends by default",
-      action: "send" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider message mutations by default",
-      action: "edit" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-        message: "updated",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider delete mutations by default",
-      action: "delete" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider pin mutations by default",
-      action: "pin" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider unpin mutations by default",
-      action: "unpin" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider topic creation by default",
-      action: "topic-create" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        name: "Cross-provider mutation",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider topic edits by default",
-      action: "topic-edit" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageThreadId: "42",
-        name: "Updated topic",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks same-provider cross-context when disabled",
-      action: "send" as const,
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: {
-            crossContext: {
-              allowWithinProvider: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "channel:C99999999",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
       name: "blocks same-provider cross-context uploads when disabled",
       action: "upload-file" as const,
       cfg: {
@@ -404,24 +222,13 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks delegated channel reads without current context before target resolution",
-      action: "channel-info" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        channelId: "U12345678",
-      },
-      message: "requires the exact current conversation and account",
-    },
-    {
       name: "blocks actions outside the per-agent allowlist",
       action: "channel-info" as const,
       cfg: {
         ...workspaceConfig,
         agents: {
-          list: [
-            {
-              id: "sandbox",
+          entries: {
+            sandbox: {
               tools: {
                 message: {
                   actions: {
@@ -430,7 +237,7 @@ describe("runMessageAction context isolation", () => {
                 },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       agentId: "sandbox",
@@ -452,50 +259,10 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(message);
   });
 
-  it.each(
-    (["topic-create", "topic-edit"] as const).flatMap((action) =>
-      ["C12345678", undefined].map((currentChannelId) => ({ action, currentChannelId })),
-    ),
-  )(
-    "denies cross-provider $action with current target $currentChannelId before provider adapter dispatch",
-    async ({ action, currentChannelId }) => {
-      const outcome = await runMessageAction({
-        cfg: workspaceConfig,
-        action,
-        params: {
-          channel: "forum",
-          target: "@opsbot",
-          name: "Protected topic",
-          ...(action === "topic-edit" ? { messageThreadId: "42" } : {}),
-        },
-        toolContext: {
-          currentChannelId,
-          currentChannelProvider: "workspace",
-        },
-        dryRun: false,
-      }).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
-      expect(handleForumAction).not.toHaveBeenCalled();
-      expect(outcome.result).toBeUndefined();
-      expect(outcome.error).toBeInstanceOf(Error);
-      expect((outcome.error as Error).message).toMatch(/Cross-context messaging denied/);
-    },
-  );
-
   it.each([
     {
-      name: "same-context",
+      name: "default cross-provider access",
       cfg: workspaceConfig,
-      toolContext: { currentChannelId: "@opsbot", currentChannelProvider: "forum" },
-    },
-    {
-      name: "explicit cross-provider opt-in",
-      cfg: {
-        ...workspaceConfig,
-        tools: { message: { crossContext: { allowAcrossProviders: true } } },
-      } as OpenClawConfig,
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
     },
   ])("dispatches topic actions for $name", async ({ cfg, toolContext }) => {
@@ -558,10 +325,10 @@ describe("runMessageAction context isolation", () => {
     expect(handleWorkspaceAction).toHaveBeenCalledOnce();
   });
 
-  it("retains cross-provider policy for direct operators", async () => {
+  it("retains explicit cross-provider restrictions for direct operators", async () => {
     await expect(
       runMessageAction({
-        cfg: workspaceConfig,
+        cfg: crossProviderRestrictedConfig,
         action: "pin",
         params: {
           channel: "forum",

@@ -16,6 +16,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const TELEGRAM_PROXY_ERROR_CODE =
+  /^(?:ABORT_ERR|EAI_AGAIN|E(?:CONNREFUSED|CONNRESET|HOSTUNREACH|NETUNREACH|NOTFOUND|PIPE|TIMEDOUT)|UND_ERR_(?:ABORTED|BODY_TIMEOUT|CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET))$/u;
 
 export function telegramTestApiPath(pathname) {
   const match = pathname.match(/^((?:\/file)?\/bot[^/]+)(\/.*)$/u);
@@ -26,7 +28,13 @@ export function telegramTestApiPath(pathname) {
 function requestHeaders(headers) {
   const filtered = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (value !== undefined && key !== "host" && !HOP_BY_HOP_HEADERS.has(key)) {
+    // Fetch owns framing after this proxy buffers or streams the incoming body.
+    if (
+      value !== undefined &&
+      key !== "host" &&
+      key !== "content-length" &&
+      !HOP_BY_HOP_HEADERS.has(key)
+    ) {
       filtered[key] = value;
     }
   }
@@ -47,6 +55,32 @@ function telegramApiMethod(pathname) {
   return pathname.match(/^\/bot[^/]+\/([^/?]+)/u)?.[1];
 }
 
+function reportProxyFailure(error, phase, method) {
+  let current = error;
+  let errorCode;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    if (typeof current.code === "string" && TELEGRAM_PROXY_ERROR_CODE.test(current.code)) {
+      errorCode = current.code;
+      break;
+    }
+    current = current.cause;
+  }
+  // Error messages, URLs, and arbitrary names/codes can contain bot tokens. Emit only
+  // fixed phases and allowlisted atoms so retained QA logs remain safe to publish.
+  const safeMethod =
+    typeof method === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(method) ? method : "unknown";
+  console.error(
+    JSON.stringify({
+      event: "telegram_test_api_proxy_failure",
+      phase,
+      method: safeMethod,
+      errorClass:
+        error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "unknown",
+      errorCode: errorCode ?? "unknown",
+    }),
+  );
+}
+
 async function drainTelegramTestUpdates(apiRoot, token) {
   let offset = 0;
   for (;;) {
@@ -58,9 +92,7 @@ async function drainTelegramTestUpdates(apiRoot, token) {
     });
     const payload = await response.json();
     if (!response.ok || payload?.ok !== true || !Array.isArray(payload.result)) {
-      throw new Error(
-        `Telegram Test Bot API getUpdates failed while draining stale updates (HTTP ${response.status}).`,
-      );
+      throw new Error("Telegram Test Bot API getUpdates failed while draining stale updates.");
     }
     if (payload.result.length === 0) return;
     const updateId = payload.result.at(-1)?.update_id;
@@ -79,27 +111,36 @@ export async function startTelegramTestApiProxy({
   leaseHealth,
 } = {}) {
   let responseHold;
+  let requestRejection;
   let heldResponse;
   let leaseError;
   const upstreamControllers = new Set();
   const holdEvents = [];
+  const rejectionEvents = [];
+  const requestLog = [];
   const methodOrdinals = new Map();
   const heldWaiters = new Set();
+  const sockets = new Set();
+  const requests = new Set();
+  let closing;
 
   const assertLeaseHealthy = () => {
     if (leaseError) throw leaseError;
     leaseHealth?.assertHealthy();
   };
 
-  leaseHealth?.whenUnhealthy.then((error) => {
-    leaseError = error;
+  const stop = (error) => {
+    leaseError ??= error;
+    responseHold = undefined;
+    requestRejection = undefined;
     heldResponse?.release.resolve();
+    for (const waiter of heldWaiters) waiter.reject(error);
     for (const controller of upstreamControllers) controller.abort(error);
-  });
+    for (const socket of sockets) socket.destroy();
+  };
+  leaseHealth?.whenUnhealthy.then(stop);
 
-  const claimResponseHold = (method) => {
-    const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
-    methodOrdinals.set(method, ordinal);
+  const claimResponseHold = (method, ordinal) => {
     if (!responseHold || responseHold.method !== method) return undefined;
     if (responseHold.skip > 0) {
       responseHold.skip -= 1;
@@ -110,33 +151,159 @@ export async function startTelegramTestApiProxy({
     heldResponse = { event, release };
     responseHold = undefined;
     holdEvents.push(event);
-    for (const waiter of heldWaiters) waiter(event);
-    heldWaiters.clear();
+    for (const waiter of heldWaiters) {
+      if (waiter.method === method) waiter.resolve(event);
+    }
     return release.promise;
   };
 
-  const server = http.createServer(async (request, response) => {
+  const server = http.createServer((request, response) => {
+    const work = handleRequest(request, response);
+    requests.add(work);
+    work.then(
+      () => requests.delete(work),
+      () => requests.delete(work),
+    );
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  async function handleRequest(request, response) {
+    let logged;
+    let method;
+    let failurePhase = "request";
+    const recordDoneAt = () => {
+      if (logged) {
+        logged.doneAt ??= Date.now();
+      }
+    };
     const upstreamController = new AbortController();
     upstreamControllers.add(upstreamController);
     const abortUpstream = () => upstreamController.abort();
     request.once("aborted", abortUpstream);
     response.once("close", abortUpstream);
     try {
+      failurePhase = "lease";
       assertLeaseHealthy();
+      failurePhase = "request";
       const incoming = new URL(request.url || "/", `http://${host}`);
       const upstreamUrl = new URL(upstream);
       upstreamUrl.pathname = telegramTestApiPath(incoming.pathname);
       upstreamUrl.search = incoming.search;
+      method = telegramApiMethod(incoming.pathname);
+      const loggedMethod =
+        method ?? (incoming.pathname.startsWith("/file/bot") ? "file" : undefined);
+      const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
+      // File rows are timing facts only; controls still match the Bot API method.
+      logged = loggedMethod ? { method: loggedMethod, at: Date.now() } : undefined;
+      if (logged) {
+        if (method !== "getUpdates") {
+          requestLog.push(logged);
+        }
+        response.once("finish", recordDoneAt);
+        response.once("close", recordDoneAt);
+      }
+      methodOrdinals.set(method, ordinal);
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
+      let body = hasBody ? request : undefined;
+      const readBody = async () => {
+        if (Buffer.isBuffer(body) || !hasBody) return;
+        const chunks = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        body = Buffer.concat(chunks);
+      };
+      // Log only the chat kind (private or group), never the chat id, so cross-chat
+      // flood proof can tell deliveries apart. JSON bodies are small text calls.
+      if (
+        logged &&
+        method !== "getUpdates" &&
+        String(request.headers["content-type"] ?? "").includes("application/json")
+      ) {
+        await readBody();
+        try {
+          const chatId = Number(JSON.parse(body.toString("utf8")).chat_id);
+          if (Number.isFinite(chatId) && chatId !== 0) {
+            logged.chat = chatId < 0 ? "group" : "private";
+          }
+        } catch {
+          // Non-JSON or bodiless calls keep method and timing only.
+        }
+      }
+      const rejection = requestRejection;
+      if (rejection && rejection.method === method) {
+        if (rejection.bodyIncludes !== undefined) await readBody();
+        const matches =
+          requestRejection === rejection &&
+          (rejection.bodyIncludes === undefined ||
+            (Buffer.isBuffer(body) && body.includes(rejection.bodyIncludes)));
+        if (matches && rejection.skip > 0) {
+          rejection.skip -= 1;
+        } else if (matches) {
+          failurePhase = "lease";
+          assertLeaseHealthy();
+          rejection.times -= 1;
+          if (rejection.times <= 0) requestRejection = undefined;
+          const flood = rejection.retryAfter !== undefined;
+          const errorCode = flood ? 429 : 400;
+          rejectionEvents.push({
+            method,
+            ordinal,
+            rejectedAt: Date.now(),
+            upstreamForwarded: false,
+            errorCode,
+            ...(flood ? { retryAfter: rejection.retryAfter } : {}),
+          });
+          request.resume();
+          if (logged) logged.status = errorCode;
+          response.writeHead(errorCode, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify(
+              flood
+                ? {
+                    ok: false,
+                    error_code: 429,
+                    // retryAfter 0 models a bare 429 without parameters.retry_after.
+                    ...(rejection.retryAfter > 0
+                      ? {
+                          description: `Too Many Requests: retry after ${rejection.retryAfter}`,
+                          parameters: { retry_after: rejection.retryAfter },
+                        }
+                      : { description: "Too Many Requests" }),
+                  }
+                : {
+                    ok: false,
+                    error_code: 400,
+                    description: "Bad Request: synthetic Telegram E2E rejection",
+                  },
+            ),
+          );
+          return;
+        }
+      }
+      failurePhase = "upstream-fetch";
       const result = await fetchImpl(upstreamUrl, {
         method: request.method,
         headers: requestHeaders(request.headers),
-        ...(hasBody ? { body: request, duplex: "half" } : {}),
+        ...(hasBody ? { body, duplex: "half" } : {}),
         signal: upstreamController.signal,
       });
+      if (logged) logged.status = result.status;
+      failurePhase = "lease";
       assertLeaseHealthy();
-      const method = telegramApiMethod(incoming.pathname);
-      const hold = method ? claimResponseHold(method) : undefined;
+      failurePhase = "response-stream";
+      const hold = method ? claimResponseHold(method, ordinal) : undefined;
+      if (method === "getUpdates") {
+        try {
+          const payload = await result.clone().json();
+          if (Array.isArray(payload?.result) && payload.result.length > 0) {
+            logged.updates = payload.result.length;
+            requestLog.push(logged);
+          }
+        } catch {
+          // Preserve malformed responses; only valid update counts are logged.
+        }
+      }
       if (hold) {
         const body = result.body ? Buffer.from(await result.arrayBuffer()) : undefined;
         response.writeHead(result.status, responseHeaders(result.headers));
@@ -153,13 +320,17 @@ export async function startTelegramTestApiProxy({
         } finally {
           clearInterval(heartbeat);
         }
+        failurePhase = "lease";
         assertLeaseHealthy();
+        failurePhase = "response-stream";
         heldResponse.event.releasedAt = Date.now();
         heldResponse = undefined;
         response.end(body);
         return;
       }
+      failurePhase = "lease";
       assertLeaseHealthy();
+      failurePhase = "response-stream";
       response.writeHead(result.status, responseHeaders(result.headers));
       if (!result.body) {
         response.end();
@@ -185,7 +356,9 @@ export async function startTelegramTestApiProxy({
         response.once("close", finished);
         readable.pipe(response);
       });
-    } catch {
+    } catch (error) {
+      recordDoneAt();
+      reportProxyFailure(error, failurePhase, method);
       if (!response.headersSent) {
         response.writeHead(502, { "content-type": "application/json" });
       }
@@ -197,7 +370,7 @@ export async function startTelegramTestApiProxy({
       response.off("close", abortUpstream);
       upstreamControllers.delete(upstreamController);
     }
-  });
+  }
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {
@@ -214,37 +387,59 @@ export async function startTelegramTestApiProxy({
   return {
     apiRoot,
     drainUpdates: (token) => drainTelegramTestUpdates(apiRoot, token),
+    rejectNextRequest({ method, skip = 0, bodyIncludes, times = 1, retryAfter }) {
+      assertLeaseHealthy();
+      if (requestRejection) throw new Error("A Telegram API request rejection is active.");
+      requestRejection = { method, skip, bodyIncludes, times, retryAfter };
+    },
     holdNextResponse({ method, skip = 0 }) {
+      assertLeaseHealthy();
       if (responseHold || heldResponse) throw new Error("A Telegram API response hold is active.");
       responseHold = { method, skip };
     },
     waitForHeldResponse(method, timeoutMs) {
+      assertLeaseHealthy();
       if (heldResponse?.event.method === method) return Promise.resolve(heldResponse.event);
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          heldWaiters.delete(onHeld);
-          reject(new Error(`Timed out waiting for held Telegram ${method} response.`));
-        }, timeoutMs);
-        const onHeld = (event) => {
-          if (event.method !== method) return;
+        const done = () => {
           clearTimeout(timer);
-          heldWaiters.delete(onHeld);
-          resolve(event);
+          heldWaiters.delete(waiter);
         };
-        heldWaiters.add(onHeld);
+        const waiter = {
+          method,
+          resolve(event) {
+            done();
+            resolve(event);
+          },
+          reject(error) {
+            done();
+            reject(error);
+          },
+        };
+        const timer = setTimeout(
+          () => waiter.reject(new Error(`Timed out waiting for held Telegram ${method} response.`)),
+          timeoutMs,
+        );
+        heldWaiters.add(waiter);
       });
     },
     releaseHeldResponse() {
+      assertLeaseHealthy();
       if (!heldResponse) throw new Error("No Telegram API response is held.");
       const event = heldResponse.event;
       heldResponse.release.resolve();
       return event;
     },
     getResponseHoldEvents: () => holdEvents.map((event) => ({ ...event })),
+    getRequestRejectionEvents: () => rejectionEvents.map((event) => ({ ...event })),
+    getRequestLog: () => requestLog.map((event) => ({ ...event })),
     close: () => {
-      heldResponse?.release.resolve();
-      for (const controller of upstreamControllers) controller.abort();
-      return new Promise((resolve) => server.close(() => resolve()));
+      closing ??= (async () => {
+        stop(new Error("Telegram Test Server proxy closed."));
+        await new Promise((resolve) => server.close(() => resolve()));
+        await Promise.allSettled([...requests]);
+      })();
+      return closing;
     },
   };
 }

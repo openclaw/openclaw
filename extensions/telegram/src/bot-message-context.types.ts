@@ -1,4 +1,3 @@
-// Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type {
@@ -12,12 +11,11 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
-import type { TelegramReplyChainEntry } from "./message-cache.js";
+import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 export type TelegramMediaRef = {
@@ -40,7 +38,7 @@ export type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
   receivedAtMs?: number;
-  ingressBuffer?: "inbound-debounce" | "text-fragment";
+  ingressBuffer?: "inbound-debounce" | "text-batch";
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
@@ -64,45 +62,16 @@ export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
 
-type ResolveTelegramGroupConfig = (
-  chatId: string | number,
-  messageThreadId: number | undefined,
-  cfg: OpenClawConfig,
-) => {
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-};
-
-type ResolveGroupActivation = (params: {
-  agentId?: string;
-  sessionKey: string;
-  cfg: OpenClawConfig;
-}) => boolean | undefined;
-
-type ResolveGroupRequireMention = (chatId: string | number, cfg: OpenClawConfig) => boolean;
-
 type TelegramMessageContextRuntimeOverrides = Partial<
-  Pick<
-    typeof import("./bot-message-context.runtime.js"),
-    "createStatusReactionController" | "ensureConfiguredBindingRouteReady" | "recordChannelActivity"
-  >
+  typeof import("./bot-message-context.runtime.js")
 >;
 
 export type TelegramMessageContextSessionRuntimeOverrides = Partial<
-  Pick<
-    typeof import("./bot-message-context.session.runtime.js"),
-    | "buildChannelInboundEventContext"
-    | "readSessionUpdatedAt"
-    | "recordInboundSession"
-    | "readAmbientTranscriptWatermark"
-    | "resolveAmbientTranscriptWatermarkKey"
-    | "resolveInboundLastRouteSessionKey"
-    | "resolvePinnedMainDmOwnerFromAllowlist"
-    | "resolveStorePath"
-  >
+  typeof import("./bot-message-context.session.runtime.js")
 >;
 
 export type BuildTelegramMessageContextParams = {
+  nativeCommandNames?: ReadonlyMap<string, string>;
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   replyMedia?: TelegramMediaRef[];
@@ -116,15 +85,25 @@ export type BuildTelegramMessageContextParams = {
   ownerAgentId?: string;
   historyLimit: number;
   dmHistoryLimit: number;
-  groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
-  resolveGroupActivation: ResolveGroupActivation;
-  resolveGroupRequireMention: ResolveGroupRequireMention;
-  resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  resolveGroupActivation: (params: {
+    agentId?: string;
+    sessionKey: string;
+    cfg: OpenClawConfig;
+  }) => boolean | undefined;
+  resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
+  ) => {
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
   runtime?: TelegramMessageContextRuntimeOverrides;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;

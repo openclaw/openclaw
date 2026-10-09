@@ -1,9 +1,9 @@
-// Validate release publish approval tests cover the stdin/env CLI contract.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/validate-release-publish-approval.mjs";
@@ -420,6 +420,24 @@ function writeClawHubApproval(overrides: Record<string, unknown> = {}) {
   return approvalPath;
 }
 
+function runClawHubApproval(
+  env: Parameters<typeof runApprovalScript>[1] = {},
+  approval: Record<string, unknown> = {},
+) {
+  return runApprovalScript(
+    approvalRun({ headBranch: "main", headSha: "d".repeat(40), runAttempt: 2 }),
+    {
+      APPROVAL_PATH: writeClawHubApproval(approval),
+      EXPECTED_WORKFLOW_BRANCH: "main",
+      EXPECTED_RUN_ATTEMPT: "2",
+      RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
+      RELEASE_PACKAGES: "@openclaw/voice-call,@openclaw/meta-provider",
+      RELEASE_TAG: "v2026.7.1-beta.3",
+      ...env,
+    },
+  );
+}
+
 describe("scripts/validate-release-publish-approval.mjs", () => {
   it("accepts an in-progress release publish workflow run for approval", () => {
     const result = runApprovalScript(approvalRun());
@@ -518,19 +536,6 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       ]);
     },
   );
-
-  androidIt("accepts a completed successful parent and an already public stable release", () => {
-    const result = runAndroidApproval({
-      run: { status: "completed", conclusion: "success" },
-      release: { isDraft: false },
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  androidIt("accepts a public stable release while its parent is still active", () => {
-    const result = runAndroidApproval({ release: { isDraft: false } });
-    expect(result.status, result.stderr).toBe(0);
-  });
 
   androidIt.each([
     [
@@ -761,67 +766,14 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
   );
 
   it("accepts an exact attested ClawHub bootstrap parent tuple", () => {
-    const approvalPath = writeClawHubApproval();
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/voice-call,@openclaw/meta-provider",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it("accepts a child workflow SHA that differs from the approving parent tooling", () => {
-    const approvalPath = writeClawHubApproval();
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
+    const result = runClawHubApproval();
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
   });
 
   it("rejects a child workflow SHA that differs from the attested bootstrap tooling", () => {
-    const approvalPath = writeClawHubApproval();
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        CHILD_WORKFLOW_SHA: "c".repeat(40),
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
+    const result = runClawHubApproval({ CHILD_WORKFLOW_SHA: "c".repeat(40) });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -830,20 +782,7 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
   });
 
   it("rejects a ClawHub bootstrap handoff without an attested approval artifact", () => {
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
+    const result = runClawHubApproval({ APPROVAL_PATH: "" });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -861,23 +800,7 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     ["extra field", { unexpected: true }, {}],
     ["requested attempt", {}, { EXPECTED_RUN_ATTEMPT: "3" }],
   ])("rejects a ClawHub bootstrap approval for another %s", (_name, overrides, envOverrides) => {
-    const approvalPath = writeClawHubApproval(overrides);
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-        ...envOverrides,
-      },
-    );
+    const result = runClawHubApproval(envOverrides, overrides);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(
@@ -916,4 +839,21 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       expect(result.stderr).toBe("");
     }
   });
+});
+
+describe("stable npm bootstrap profile authority", () => {
+  it.each(["explicit", "sealed"])(
+    "rejects historical %s waivers for beta-profile stable bootstrap",
+    (source) => {
+      expect(() =>
+        createStablePluginNpmBootstrapApproval({
+          releaseTag: "v2026.9.6",
+          publishTag: "latest",
+          releaseProfile: "beta",
+          stableSoakWaiver: "2026.9.6 approved",
+          stableSoakWaiverSource: source,
+        }),
+      ).toThrow("stable/full validation");
+    },
+  );
 });

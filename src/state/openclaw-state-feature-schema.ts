@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -9,18 +11,21 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 /** Prepare canonical DDL without opening a database; each feature keeps its own handle cache. */
 export function createOpenClawStateSchemaEnsurer(params: {
   table: string;
+  additionalTables?: readonly string[];
+  indexes?: readonly string[];
   endMarker?: string;
   operationLabel: string;
 }): (options?: OpenClawStateDatabaseOptions) => void {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    `\nCREATE TABLE IF NOT EXISTS ${params.table} (\n`,
-  );
-  const endMarker = params.endMarker ?? "\n) STRICT;\n";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
-    throw new Error(`Canonical state schema markers are missing for ${params.table}`);
-  }
-  const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, params.table, {
+    endMarker: params.endMarker ?? "\n) STRICT;\n",
+    errorMessage: `Canonical state schema markers are missing for ${params.table}`,
+  });
+  // Redundant DDL still revokes shared integrity proof, including an exec launch
+  // guard retained while a sibling feature performs its first native read.
+  const ensure = createSqliteSchemaEnsurer(() => schema, {
+    tables: [params.table, ...(params.additionalTables ?? [])],
+    indexes: params.indexes,
+  });
   const ensuredDatabases = new WeakSet<DatabaseSync>();
   return (options = {}) => {
     const database = openOpenClawStateDatabase(options);
@@ -29,7 +34,7 @@ export function createOpenClawStateSchemaEnsurer(params: {
     }
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        db.exec(schema); // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+        ensure(db);
       },
       options,
       { operationLabel: params.operationLabel },

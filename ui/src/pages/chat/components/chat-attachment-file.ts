@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { until } from "lit/directives/until.js";
 import { icons } from "../../../components/icons.ts";
@@ -28,28 +28,44 @@ function renderAttachmentVideoPreview(attachment: ChatAttachment) {
   `;
 }
 
-export function renderCompactAttachmentFile(attachment: ChatAttachment) {
+export function renderCompactAttachmentFile(
+  attachment: ChatAttachment,
+  options?: { label: string; metadata: TemplateResult; onOpen?: () => void },
+) {
   const { family, extensionLabel } = resolveAttachmentFileIcon(
     attachment.fileName ?? "attachment",
     attachment.mimeType,
   );
-  const name = attachment.fileName ?? t("chat.attachments.attachedFile");
+  const name = options?.label ?? attachment.fileName ?? t("chat.attachments.attachedFile");
   const glyph = family === "audio" ? icons.music : icons.fileText;
-  return html`
-    <openclaw-tooltip .content=${name}>
-      <div
-        class=${`chat-attachment-file${family === "video" ? " chat-attachment-file--video" : ""}`}
-      >
-        ${
-          family === "video"
-            ? renderAttachmentVideoPreview(attachment)
-            : html`<span class="chat-attachment-file__icon" data-family=${family}>${glyph}</span>`
-        }
-        <span class="chat-attachment-file__body">
-          <span class="chat-attachment-file__name">${name}</span>
-          <span class="chat-attachment-file__type">${extensionLabel}</span>
-        </span>
-      </div>
-    </openclaw-tooltip>
-  `;
+  const content = html`<div
+    class=${`chat-attachment-file${family === "video" ? " chat-attachment-file--video" : ""}`}
+    @click=${(event: MouseEvent) => {
+      if (event.target instanceof Element && !event.target.closest("button")) {
+        options?.onOpen?.();
+      }
+    }}
+  >
+    ${
+      family === "video"
+        ? renderAttachmentVideoPreview(attachment)
+        : html`<span class="chat-attachment-file__icon" data-family=${family}>${glyph}</span>`
+    }
+    <span class="chat-attachment-file__body">
+      ${
+        options?.onOpen
+          ? html`<button
+              class="chat-attachment-file__name chat-attachment-file__open"
+              type="button"
+              title=${name}
+              @click=${options.onOpen}
+            >
+              ${name}
+            </button>`
+          : html`<span class="chat-attachment-file__name">${name}</span>`
+      }
+      ${options?.metadata ?? html`<span class="chat-attachment-file__type">${extensionLabel}</span>`}
+    </span>
+  </div>`;
+  return options ? content : html`<openclaw-tooltip .content=${name}>${content}</openclaw-tooltip>`;
 }

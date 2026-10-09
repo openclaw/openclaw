@@ -1,9 +1,11 @@
 import { html, nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import "./chat-comment-pins.ts";
 import { renderCommentPreviewChip, renderCommentPreviewRow } from "./chat-comment-preview.ts";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
@@ -12,9 +14,11 @@ const longComment =
   "Please verify the deployment checklist and retain the original context. ".repeat(24);
 let container: HTMLDivElement;
 let originalTheme: string | undefined;
+let originalPalette: string | undefined;
 
 beforeEach(async () => {
   originalTheme = document.documentElement.dataset.themeMode;
+  originalPalette = document.documentElement.dataset.theme;
   await page.viewport(1440, 900);
   container = document.createElement("div");
   document.body.append(container);
@@ -28,6 +32,11 @@ afterEach(() => {
     delete document.documentElement.dataset.themeMode;
   } else {
     document.documentElement.dataset.themeMode = originalTheme;
+  }
+  if (originalPalette === undefined) {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = originalPalette;
   }
 });
 
@@ -50,12 +59,12 @@ function mountComments(count: number, top: number) {
 async function openComments(trigger: HTMLElement) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
-  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   const shown = new Promise<Event>((resolve) => {
-    popup.addEventListener("wa-after-show", resolve, { once: true });
+    tooltip.addEventListener("wa-after-show", resolve, { once: true });
   });
   trigger.focus();
   await shown;
+  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   await expect.poll(() => popup.open).toBe(true);
   const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
   await expect.poll(() => body.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -204,6 +213,7 @@ function openEditor(expanded = false) {
   const onCancel = vi.fn();
   const onDelete = vi.fn();
   showChatAnnotationEditor({
+    paneId: "pane-a",
     anchorRect: new DOMRect(120, 120, 100, 20),
     comment: "",
     expanded,
@@ -222,32 +232,35 @@ function openEditor(expanded = false) {
 
 describe("annotation editor", () => {
   it.each(["light", "dark"])("keeps creation and edit focus frames subtle in %s", async (theme) => {
+    document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.themeMode = theme;
+    await page.elementLocator(document.body).hover({ position: { x: 2, y: 2 } });
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 1;
     const context = canvas.getContext("2d")!;
-    const expectNonRed = (color: string) => {
+    const expectNonRed = (color: string, surface: string) => {
       context.fillStyle = "white";
       context.fillRect(0, 0, 1, 1);
       context.fillStyle = color;
       context.fillRect(0, 0, 1, 1);
       const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
       if (alpha) {
-        expect(red! - Math.max(green!, blue!)).toBeLessThanOrEqual(8);
+        expect(red! - Math.max(green!, blue!), `${surface}: ${color}`).toBeLessThanOrEqual(8);
       }
     };
     const expectQuietFrame = (element: HTMLElement) => {
       const style = getComputedStyle(element);
+      const surface = `${element.localName}.${element.className}`;
       expect(Number.parseFloat(style.borderTopWidth)).toBeLessThanOrEqual(1);
       if (Number.parseFloat(style.borderTopWidth) > 0) {
-        expectNonRed(style.borderTopColor);
+        expectNonRed(style.borderTopColor, `${surface} border`);
       }
       if (style.outlineStyle !== "none") {
         expect(Number.parseFloat(style.outlineWidth)).toBeLessThanOrEqual(1);
-        expectNonRed(style.outlineColor);
+        expectNonRed(style.outlineColor, `${surface} outline`);
       }
       for (const color of style.boxShadow.match(/(?:rgba?|color)\([^)]*\)/g) ?? []) {
-        expectNonRed(color);
+        expectNonRed(color, `${surface} shadow`);
       }
     };
     for (const expanded of [false, true]) {
@@ -293,11 +306,16 @@ describe("annotation editor", () => {
     },
   );
 
-  it.each([1440, 390])(
-    "grows downward from one line to five, then scrolls (%ipx)",
-    async (width) => {
+  it.each([
+    { width: 1440, expanded: false },
+    { width: 390, expanded: false },
+    { width: 1440, expanded: true },
+    { width: 390, expanded: true },
+  ])(
+    "grows to five lines and scrolls without fading editable text ($width px, editing=$expanded)",
+    async ({ width, expanded }) => {
       await page.viewport(width, 900);
-      const { input, popup } = openEditor();
+      const { input, popup } = openEditor(expanded);
       const oneLine = input.getBoundingClientRect().height;
       const originalTop = popup.getBoundingClientRect().top;
       const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
@@ -312,7 +330,15 @@ describe("annotation editor", () => {
       expect(input.getBoundingClientRect().height).toBeLessThanOrEqual(
         oneLine + lineHeight * 4 + 1,
       );
-      input.scrollTop = input.scrollHeight;
+      for (const scrollTop of [
+        0,
+        (input.scrollHeight - input.clientHeight) / 2,
+        input.scrollHeight,
+      ]) {
+        input.scrollTop = scrollTop;
+        input.dispatchEvent(new Event("scroll"));
+        expect(getComputedStyle(input).maskImage).toBe("none");
+      }
       expect(input.scrollTop).toBeGreaterThan(0);
       expect(popup.getBoundingClientRect().top).toBeCloseTo(originalTop, 0);
       expect(popup.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
@@ -343,4 +369,99 @@ describe("annotation editor", () => {
       expect(cancelled.popup.isConnected).toBe(false);
     },
   );
+});
+
+describe("comment pins", () => {
+  it("relayouts for content that can move a placed source, not content after it", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    // Resize delivery is asynchronous in a real browser; this test isolates mutations.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    container.innerHTML = `<div class="chat-thread" style="height: 600px">
+      <div class="chat-thread-inner">
+        <div class="chat-bubble" data-entry-id="before">Earlier context</div>
+        <div class="chat-bubble" data-entry-id="source">Selected passage</div>
+        <div class="chat-bubble" data-entry-id="after">Streaming reply</div>
+      </div>
+    </div>`;
+    const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+    const bubble = (entryId: string) =>
+      thread.querySelector<HTMLElement>(`.chat-bubble[data-entry-id="${entryId}"]`)!;
+    const before = bubble("before");
+    const source = bubble("source");
+    const after = bubble("after");
+    const pins = document.createElement("openclaw-chat-comment-pins") as HTMLElement & {
+      attachments: ChatAttachment[];
+      sessionKey: string;
+      updateComplete: Promise<unknown>;
+    };
+    pins.attachments = [
+      {
+        id: "comment",
+        mimeType: "text/plain",
+        selectionAnnotation: {
+          text: "Selected passage",
+          comment: "Check this",
+          sessionKey: "main",
+          entryId: "source",
+          start: 0,
+          end: 16,
+        },
+      },
+    ];
+    pins.sessionKey = "main";
+    thread.append(pins);
+    const pin = () => pins.querySelector<HTMLButtonElement>("button")!;
+    const layouts = vi.spyOn(pins, "getBoundingClientRect");
+    const settle = async () => {
+      await pins.updateComplete;
+      // Mutation records reach the observer as a microtask.
+      await Promise.resolve();
+      for (const frame of frames.splice(0)) {
+        frame(0);
+      }
+      const count = layouts.mock.calls.length;
+      layouts.mockClear();
+      return count;
+    };
+    expect(await settle()).toBe(1);
+    expect(pin().hidden).toBe(false);
+    const top = Number.parseFloat(pin().style.top);
+
+    // Streaming below the source cannot move it in the top-aligned transcript.
+    after.append(" with more streamed words", document.createElement("p"));
+    after.dataset.messageText = "Streaming reply with more streamed words";
+    expect(await settle()).toBe(0);
+    thread.dispatchEvent(new Event("scroll"));
+    expect(await settle()).toBe(1);
+    expect(Number.parseFloat(pin().style.top)).toBe(top);
+
+    const spacer = document.createElement("div");
+    spacer.style.height = "40px";
+    before.append(spacer);
+    expect(await settle()).toBe(1);
+    expect(Number.parseFloat(pin().style.top)).toBeCloseTo(top + 40, 0);
+
+    source.append(" and its follow-up");
+    expect(await settle()).toBe(1);
+
+    // An unplaced pin cannot rule anything out.
+    source.remove();
+    expect(await settle()).toBe(1);
+    expect(pin().hidden).toBe(true);
+    after.append(" and more");
+    expect(await settle()).toBe(1);
+  });
 });

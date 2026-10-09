@@ -2,7 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
-import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
@@ -35,8 +35,8 @@ describe("session-delivery queue recovery", () => {
     sleepMock.mockResolvedValue(undefined);
   });
 
-  it("replays and acks pending entries on recovery", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+  it("replays and acks old SQLite entries on recovery", async () => {
+    await withSessionDeliveryQueue(async (stateDir, queueContext) => {
       await enqueueSessionDelivery(
         {
           kind: "systemEvent",
@@ -45,6 +45,15 @@ describe("session-delivery queue recovery", () => {
         },
         queueContext,
       );
+      const [entry] = await loadPendingSessionDeliveries(queueContext);
+      if (!entry) {
+        throw new Error("Expected queued session delivery");
+      }
+      seedDeliveryQueueEntry({
+        queueName: "session",
+        entry: { ...entry, enqueuedAt: Date.now() - 6 * 24 * 60 * 60_000 },
+        stateDir,
+      });
 
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
@@ -195,7 +204,7 @@ describe("session-delivery queue recovery", () => {
       if (!entry) {
         throw new Error("Expected pending session delivery");
       }
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: "session",
         entry: {
           ...entry,
@@ -237,7 +246,7 @@ describe("session-delivery queue recovery", () => {
       if (!entry) {
         throw new Error("Expected pending session delivery");
       }
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: "session",
         entry: {
           ...entry,

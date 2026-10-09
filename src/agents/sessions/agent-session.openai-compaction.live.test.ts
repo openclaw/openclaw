@@ -3,18 +3,15 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Message, Model, Tool } from "openclaw/plugin-sdk/llm";
-import { Type } from "typebox";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import {
-  estimateToolSchemaTokenPressure,
-  shouldPreemptivelyCompactBeforePrompt,
-} from "../embedded-agent-runner/run/preemptive-compaction.js";
-import { attemptServerEndpointCompaction } from "../embedded-agent-runner/server-endpoint-compaction.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { runEmbeddedAgent } from "../embedded-agent-runner.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
@@ -26,7 +23,10 @@ import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
-const LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_OPENAI_COMPACTION) && API_KEY.length > 0;
+const LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_OPENAI_COMPACTION);
+if (LIVE && !API_KEY) {
+  throw new Error("OPENCLAW_LIVE_OPENAI_COMPACTION=1 requires OPENAI_API_KEY");
+}
 const FULL_CONTEXT = isTruthyEnvValue(process.env.OPENCLAW_LIVE_OPENAI_COMPACTION_FULL);
 const describeLive = LIVE ? describe : describe.skip;
 const MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_COMPACTION_MODEL?.trim() || "gpt-5.6-luna";
@@ -52,6 +52,16 @@ const STRESS_PROFILE = FULL_CONTEXT
       testTimeoutMs: 10 * 60 * 1000,
     };
 
+const ownedDatabasePaths = new Set<string>();
+const ownedTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const databasePath of ownedDatabasePaths) {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+    }
+    ownedDatabasePaths.clear();
+    cleanup();
+  }),
+);
 const sessions: AgentSession[] = [];
 const tempRoots: string[] = [];
 
@@ -66,9 +76,6 @@ function createResourceLoader(): ResourceLoader {
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -155,13 +162,12 @@ async function createLiveSession() {
   });
   const contextChunk = buildContextChunk(STRESS_PROFILE.chunkChars);
   const { session } = await createAgentSession({
+    systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
     cwd,
-    agentDir,
     model,
     thinkingLevel: "medium",
-    noTools: "all",
+    tools: [],
     resourceLoader: createResourceLoader(),
-    authStorage,
     modelRegistry,
     sessionManager,
     settingsManager,
@@ -183,179 +189,194 @@ afterEach(async () => {
 
 describeLive("OpenAI AgentSession repeated compaction live", () => {
   it(
-    "uses native budget checkpoints and measured usage across two saved tool-output continuations",
+    "automatically compacts tool history and resumes from its SQLite checkpoint",
     async () => {
-      const model = {
+      const root = ownedTempDirs.make("openclaw-budget-compaction-live-");
+      const workspaceDir = join(root, "workspace");
+      const agentDir = join(root, "agents", "main", "agent");
+      const sessionId = randomUUID();
+      const sessionKey = `agent:main:compaction-live:${sessionId}`;
+      const sessionTarget = {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath: join(agentDir, "openclaw-agent.sqlite"),
+      };
+      ownedDatabasePaths.add(sessionTarget.storePath);
+      const marker = `TOOL-MEMORY-${randomUUID()}`;
+      const tailMarker = `SYNTHETIC-END-${randomUUID()}`;
+      const sourceFile = join(workspaceDir, "synthetic-context.txt");
+      const sourceText = `The durable verification marker is ${marker}. Remember it.\n${buildContextChunk(24_000)}\n${tailMarker}\n`;
+      await mkdir(workspaceDir, { recursive: true });
+      await writeFile(sourceFile, sourceText);
+      const modelDefinition = {
         id: MODEL_ID,
         name: MODEL_ID,
-        api: "openai-responses",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
         reasoning: true,
-        input: ["text"],
+        input: ["text" as const],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
+        contextWindow: 100_000,
+        contextTokens: 100_000,
         maxTokens: 1_024,
-      } satisfies Model<"openai-responses">;
-      const sessionId = randomUUID();
-      const durableMarker = `OPENAI-CHECKPOINT-${randomUUID()}`;
-      const systemPrompt = "Preserve the durable marker and follow the user's output instructions.";
-      const tools: Tool[] = [
-        {
-          name: "read_synthetic_context",
-          description: "Read synthetic context records for this compaction test.",
-          parameters: Type.Object({}, { additionalProperties: false }),
+      };
+      const config: OpenClawConfig = {
+        // This proof owns compaction and SQLite replay only. Avoid spending its bounded model
+        // publication window on unrelated workspace-plugin discovery under release-runner load.
+        plugins: { enabled: false, slots: { memory: "none" } },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              auth: "api-key",
+              apiKey: API_KEY,
+              baseUrl: "https://api.openai.com/v1",
+              models: [modelDefinition],
+            },
+          },
         },
-      ];
-      const toolSchemaTokens = estimateToolSchemaTokenPressure(tools);
-      const streamFn = createOpenAIResponsesTransportStreamFn();
-      const requestOptions = {
-        apiKey: API_KEY,
-        sessionId,
-        transport: "sse",
-        reasoning: "low",
-        maxTokens: 1_024,
-        timeoutMs: 2 * 60 * 1000,
-      } as const;
-      let sessionManager = SessionManager.inMemory();
-      const messages = () =>
-        sessionManager
-          .buildSessionContext()
-          .messages.filter(
-            (message): message is Message =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
-          );
-      const reopen = () => {
-        const persisted = JSON.stringify(sessionManager.getPersistedEntries());
-        sessionManager = SessionManager.fromEntries(JSON.parse(persisted));
+        agents: {
+          entries: { main: { agentDir, workspace: workspaceDir } },
+          defaults: {
+            skipBootstrap: true,
+            compaction: {
+              enabled: true,
+              keepRecentTokens: 1_024,
+              memoryFlush: { enabled: false },
+            },
+            models: {
+              [`openai/${MODEL_ID}`]: {
+                agentRuntime: { id: "openclaw" },
+                params: { transport: "sse" },
+              },
+            },
+          },
+        },
+        tools: { allow: ["read"], fs: { workspaceOnly: true } },
       };
-      const complete = async (toolChoice: "none" | "required") => {
+      const run = async (stage: "seed" | "compact" | "replay", prompt: string) => {
+        const allowRead = stage === "seed";
+        const startedAt = Date.now();
+        process.stderr.write(`[openai-checkpoint-live] stage=${stage} phase=started\n`);
+        const runId = randomUUID();
+        const runConfig = structuredClone(config);
+        const admission = prepareSystemAgentRunAdmission(
+          runConfig,
+          runId,
+          "main",
+          "compaction-live",
+        );
         try {
-          const options = {
-            ...requestOptions,
-            toolChoice,
-          } satisfies Parameters<typeof attemptServerEndpointCompaction>[0]["requestOptions"];
-          const stream = await Promise.resolve(
-            streamFn(model, { systemPrompt, messages: messages(), tools }, options),
+          const result = await runEmbeddedAgent({
+            preparedRunAdmission: admission,
+            sessionId,
+            sessionKey,
+            sessionTarget,
+            workspaceDir,
+            agentDir,
+            config: runConfig,
+            prompt,
+            provider: "openai",
+            model: MODEL_ID,
+            thinkLevel: "low",
+            timeoutMs: 2 * 60 * 1000,
+            runId,
+            disableTools: !allowRead,
+            ...(allowRead ? { toolsAllow: ["read"] } : {}),
+            onExecutionPhase: ({ phase }) => {
+              process.stderr.write(
+                `[openai-checkpoint-live] stage=${stage} phase=${phase} elapsedMs=${Date.now() - startedAt}\n`,
+              );
+            },
+            cleanupBundleMcpOnRunEnd: true,
+          });
+          const text = result.payloads
+            ?.map((payload) => payload.text ?? "")
+            .join("")
+            .trim();
+          expect(text).toBe(allowRead ? "STORED" : marker);
+          process.stderr.write(
+            `[openai-checkpoint-live] stage=${stage} phase=completed elapsedMs=${Date.now() - startedAt} compactions=${result.meta.agentMeta?.compactionCount ?? 0}\n`,
           );
-          const response = await stream.result();
-          expect(response.errorMessage).toBeUndefined();
-          expect(response.stopReason).toBe(toolChoice === "required" ? "toolUse" : "stop");
-          sessionManager.appendMessage(response);
-          return response;
+          return result;
         } finally {
-          // Each subsequent request must work from persisted replay, without process-local continuation state.
-          cleanupSessionResources(sessionId);
+          admission.close();
         }
       };
-
+      const reopen = async () => {
+        await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+        return SessionManager.open(sessionTarget, workspaceDir);
+      };
       try {
-        sessionManager.appendMessage({
-          role: "user",
-          content: `Remember durable marker ${durableMarker}. Reply with exactly ${durableMarker}.`,
-          timestamp: Date.now(),
-        });
-        await complete("none");
-
-        for (let cycle = 1; cycle <= 2; cycle += 1) {
-          const compacted = await attemptServerEndpointCompaction({
-            trigger: "budget",
-            streamFn,
-            model,
-            context: { systemPrompt, messages: messages() },
-            sessionManager,
-            extraParams: {},
-            requestOptions,
-          });
-          expect(compacted).toBeDefined();
-          if (!compacted) {
-            throw new Error(`native budget compaction did not complete on cycle ${cycle}`);
-          }
-          reopen();
-          const owner = messages().at(-1);
-          expect(owner).toMatchObject({
-            role: "assistant",
-            providerReplay: { data: compacted.item.encrypted_content },
-          });
-
-          sessionManager.appendMessage({
-            role: "user",
-            content:
-              "Call read_synthetic_context exactly once, then reply with exactly the durable marker I asked you to remember.",
-            timestamp: Date.now(),
-          });
-          const requested = await complete("required");
-          const calls = requested.content.filter((block) => block.type === "toolCall");
-          expect(calls).toHaveLength(1);
-          const call = calls[0];
-          if (!call || call.name !== "read_synthetic_context") {
-            throw new Error("provider did not request the synthetic context tool");
-          }
-          sessionManager.appendMessage({
-            role: "toolResult",
-            toolCallId: call.id,
-            toolName: call.name,
-            content: [{ type: "text", text: buildContextChunk(24_000) }],
-            isError: false,
-            timestamp: Date.now(),
-          });
-          const response = await complete("none");
-          expect(
-            response.content
-              .filter((block) => block.type === "text")
-              .map((block) => block.text)
-              .join("")
-              .trim(),
-          ).toBe(durableMarker);
-          reopen();
-          expect(messages().at(-1)).toHaveProperty(
-            "openclawResponsesInputReplay.contextUsage.totalTokens",
-            response.usage.contextUsage?.state === "available"
-              ? response.usage.contextUsage.totalTokens
-              : undefined,
-          );
-          expect(response.usage.contextUsage?.state).toBe("available");
-
-          const savedMessages = messages();
-          const unboundMessages = structuredClone(savedMessages);
-          for (const message of unboundMessages) {
-            if (
-              "openclawResponsesInputReplay" in message &&
-              isRecord(message.openclawResponsesInputReplay)
-            ) {
-              delete message.openclawResponsesInputReplay.contextUsage;
-            }
-          }
-          const precheck = (history: Message[], contextTokenBudget: number) => {
-            const decision = shouldPreemptivelyCompactBeforePrompt({
-              messages: history,
-              systemPrompt,
-              prompt: "Continue remembering the durable marker.",
-              contextTokenBudget,
-              reserveTokens: 0,
-              toolSchemaTokens,
-              replay: { model, sessionId },
-            });
-            return decision.compactionReplay ?? decision;
-          };
-          const measured = precheck(savedMessages, model.contextWindow);
-          const conservative = precheck(unboundMessages, model.contextWindow);
-          expect(measured.pressureSource).toBe("provider_context_usage");
-          expect(measured.estimatedPromptTokens).toBeLessThan(conservative.estimatedPromptTokens);
-          // This smaller budget exercises host routing only; it is never sent to the provider.
-          const diagnosticBudget = Math.floor(
-            (measured.estimatedPromptTokens + conservative.estimatedPromptTokens) / 2,
-          );
-          expect(precheck(savedMessages, diagnosticBudget).route).toBe("fits");
-          expect(precheck(unboundMessages, diagnosticBudget).overflowTokens).toBeGreaterThan(0);
-          process.stderr.write(
-            `[openai-checkpoint-live] cycle=${cycle} measured=${measured.estimatedPromptTokens} conservative=${conservative.estimatedPromptTokens} budget=${diagnosticBudget} marker=preserved\n`,
-          );
+        await run(
+          "seed",
+          `Read all of ${sourceFile}, remember its durable verification marker, then reply exactly STORED.`,
+        );
+        const seeded = await reopen();
+        const history = seeded.buildSessionContext().messages;
+        const suppliedText = history
+          .filter((message) => message.role === "toolResult")
+          .flatMap((message) => message.content)
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+        expect(suppliedText).toContain(marker);
+        expect(suppliedText).toContain(tailMarker);
+        expect(suppliedText.length).toBeGreaterThanOrEqual(sourceText.length);
+        expect(
+          history
+            .filter((message) => message.role === "user")
+            .some((message) => JSON.stringify(message.content).includes(marker)),
+        ).toBe(false);
+        expect(
+          history
+            .filter((message) => message.role === "assistant")
+            .flatMap((message) => message.content)
+            .some((block) => block.type === "text" && block.text.includes(marker)),
+        ).toBe(false);
+        const last = history.findLast((message) => message.role === "assistant");
+        const usage = last?.role === "assistant" ? last.usage.contextUsage : undefined;
+        if (usage?.state !== "available") {
+          throw new Error("seed turn did not report provider context usage");
         }
+        // A smaller configured window creates real host pressure without a large provider request.
+        modelDefinition.contextTokens = Math.max(8_000, usage.totalTokens + 1_024);
+        expect(modelDefinition.contextTokens).toBeLessThan(48_000);
+        await rm(sourceFile);
+        await run("compact", "Reply exactly with the durable verification marker from the file.");
+        const checkpointSession = await reopen();
+        const checkpoint = checkpointSession
+          .getBranch()
+          .findLast((entry) => entry.type === "compaction");
+        if (checkpoint?.type !== "compaction") {
+          throw new Error("automatic runner compaction did not persist a SQLite checkpoint");
+        }
+        expect(checkpoint.summary).toContain(marker);
+        expect(
+          checkpointSession
+            .buildSessionContext()
+            .messages.filter((message) => message.role === "toolResult"),
+        ).toHaveLength(0);
+        const checkpointCount = countCompactions(checkpointSession);
+        expect(checkpointCount).toBeGreaterThan(0);
+        const continued = await run(
+          "replay",
+          "Repeat the durable verification marker, with no other text.",
+        );
+        expect(continued.meta.agentMeta?.compactionCount ?? 0).toBe(0);
+        const replayedSession = await reopen();
+        expect(countCompactions(replayedSession)).toBe(checkpointCount);
+        const saved = replayedSession.buildSessionContext().messages.at(-1);
+        const replayUsage = saved?.role === "assistant" ? saved.usage.contextUsage : undefined;
+        if (replayUsage?.state !== "available") {
+          throw new Error("replayed runner turn did not report provider context usage");
+        }
+        expect(replayUsage.totalTokens).toBeGreaterThan(0);
+        expect(replayUsage.totalTokens).toBeLessThan(modelDefinition.contextTokens);
+        process.stderr.write(
+          `[openai-checkpoint-live] budget=${modelDefinition.contextTokens} compactions=${checkpointCount} replayTokens=${replayUsage.totalTokens} sqliteReplay=passed toolMarker=preserved\n`,
+        );
       } finally {
-        cleanupSessionResources(sessionId);
+        await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
       }
     },
     10 * 60 * 1000,

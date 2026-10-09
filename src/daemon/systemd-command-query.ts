@@ -1,8 +1,12 @@
 /** Deadline- and custody-bound effective command queries for the systemd reader. */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { ServiceInspectionError } from "./service-inspection-error.js";
+import {
+  findServiceOwnershipRefusal,
+  ServiceInspectionError,
+  ServiceOwnershipRefusalError,
+} from "./service-inspection-error.js";
 import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import { decodeSystemdBusProperties } from "./systemd-bus-query.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import {
   bindSystemdManagerOwner,
@@ -11,6 +15,7 @@ import {
   systemdInspectionError,
 } from "./systemd-exec.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
+import { resolveUnavailableSystemdInspectionReason } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 export async function createSystemdCommandQuery(
@@ -33,10 +38,10 @@ export async function createSystemdCommandQuery(
       peer.unit !== unitName ||
       (inspection && peer.managerUid !== inspection.managerUid))
   ) {
-    throw unavailable();
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   if (scope === "system" && inspection && inspection.managerUid !== 0) {
-    throw unavailable();
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   const transport =
     peer || scope === "system"
@@ -50,12 +55,20 @@ export async function createSystemdCommandQuery(
   if (transport?.kind === "private" && opts?.requireLoaded) {
     throw new ServiceInspectionError("systemd-user-bus-unavailable");
   }
+  const privateInspectionFailed = (error: unknown, preserveReason = false): never => {
+    assertGatewayServiceUpdateCurrent();
+    const refusal = findServiceOwnershipRefusal(error);
+    if (refusal) {
+      throw refusal;
+    }
+    if (preserveReason && error instanceof ServiceInspectionError) {
+      throw error;
+    }
+    throw new ServiceInspectionError("systemd-user-bus-unavailable");
+  };
   const managerPeer =
     !opts?.requireLoaded && transport?.kind === "private"
-      ? await openSystemdUserManager(transport.address, deadlineAt).catch(() => {
-          assertGatewayServiceUpdateCurrent();
-          throw new ServiceInspectionError("systemd-user-bus-unavailable");
-        })
+      ? await openSystemdUserManager(transport.address, deadlineAt).catch(privateInspectionFailed)
       : undefined;
   const managerUid = scope === "system" ? 0 : inspection?.managerUid;
   let remainingCalls = managerUid !== undefined ? 6 : 3;
@@ -65,15 +78,17 @@ export async function createSystemdCommandQuery(
     if (managerPeer) {
       try {
         return await managerPeer.query(args, signatures, deadlineAt);
-      } catch {
-        assertGatewayServiceUpdateCurrent();
-        throw new ServiceInspectionError("systemd-user-bus-unavailable");
+      } catch (error) {
+        privateInspectionFailed(error, true);
       }
     }
     const assertCurrent =
       (args[0] === "call" && args[4] === "LoadUnit" ? undefined : inspection?.assertReadCurrent) ??
       inspection?.assertCurrent;
-    if (managerUid !== undefined && (performance.now() >= deadlineAt || remainingCalls <= 0)) {
+    if (performance.now() >= deadlineAt) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (managerUid !== undefined && remainingCalls <= 0) {
       throw unavailable();
     }
     if (peer) {
@@ -81,7 +96,7 @@ export async function createSystemdCommandQuery(
       const values = await peer.query(args, signatures, deadlineAt, inspection);
       assertCurrent?.();
       if (performance.now() >= deadlineAt) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       return values;
     }
@@ -117,7 +132,7 @@ export async function createSystemdCommandQuery(
       // budget; neither the retry nor later legacy calls earn a new deadline.
       const remaining = Math.floor(callDeadline - performance.now());
       if (remaining <= 0) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       legacyOutput = true;
       result = await exec(
@@ -127,15 +142,21 @@ export async function createSystemdCommandQuery(
       assertCurrent?.();
     }
     if (result.termination === "error" && result.errorCode === "ENOENT") {
-      throw new ServiceInspectionError("systemd-busctl-unavailable");
+      const reason =
+        scope === "system"
+          ? await resolveUnavailableSystemdInspectionReason(
+              "systemd-busctl-unavailable",
+              process.env,
+              callDeadline,
+            )
+          : "systemd-busctl-unavailable";
+      assertCurrent?.();
+      throw new ServiceInspectionError(reason);
     }
-    if (legacyOutput && (result.termination !== "exit" || performance.now() >= callDeadline)) {
-      throw systemdInspectionError(result, unavailable().message, scope);
+    if (performance.now() >= (legacyOutput ? callDeadline : deadlineAt)) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
-    if (
-      managerUid !== undefined &&
-      (result.termination !== "exit" || performance.now() >= deadlineAt)
-    ) {
+    if ((legacyOutput || managerUid !== undefined) && result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     if (result.code !== 0) {
@@ -157,17 +178,7 @@ export async function createSystemdCommandQuery(
     if (legacyOutput) {
       return decodeLegacyBusctlOutput(result.stdout, signatures, args[0] === "call");
     }
-    const properties = result.stdout
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => asOptionalRecord(JSON.parse(line)));
-    if (
-      properties.length !== signatures.length ||
-      !properties.every((property, index) => property?.type === signatures[index])
-    ) {
-      throw unavailable();
-    }
-    return properties.map((property) => property?.data);
+    return decodeSystemdBusProperties(result.stdout, signatures, unavailable);
   };
   const binding =
     peer ??

@@ -8,36 +8,69 @@ import {
 } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { createRestartFlowFixture } from "./scenario-restart-flow.test-support.js";
+
+function matchesAction(action: unknown, fields: { call?: string; saveAs?: string; set?: string }) {
+  return (
+    typeof action === "object" &&
+    action !== null &&
+    Object.entries(fields).every(([key, value]) => Reflect.get(action, key) === value)
+  );
+}
+
+function callIndex(actions: unknown[], call: string, saveAs?: string) {
+  return actions.findIndex((action) =>
+    matchesAction(action, { call, ...(saveAs ? { saveAs } : {}) }),
+  );
+}
+
+function expectInOrder(first: number, ...indices: number[]) {
+  expect(first).toBeGreaterThanOrEqual(0);
+  let previous = first;
+  for (const index of indices) {
+    expect(index).toBeGreaterThan(previous);
+    previous = index;
+  }
+}
+
+function expectContains(text: string, ...needles: string[]) {
+  for (const needle of needles) {
+    expect(text).toContain(needle);
+  }
+}
+
+function runActions(
+  scenarioId: string,
+  actions: unknown[],
+  options: Omit<NonNullable<Parameters<typeof runLoadedScenarioFlow>[1]>, "flow"> = {},
+) {
+  return runLoadedScenarioFlow(scenarioId, {
+    ...options,
+    flow: { steps: [{ name: "checks loaded scenario actions", actions }] },
+  });
+}
 
 describe("qa scenario catalog causality", () => {
+  it("treats denied Telegram admission as silent transport suppression", () => {
+    for (const scenarioId of [
+      "telegram-policy-hot-reload",
+      "telegram-group-policy-hot-reload",
+      "telegram-repeated-command-authorization",
+    ]) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      const flow = JSON.stringify(scenario.execution.flow);
+      expect(flow).toContain("waitForNoOutbound");
+      expect(flow).not.toContain("not authorized");
+    }
+  });
+
   it("never slices bounded gateway log snapshots with absolute cursors", () => {
     expect(readQaScenarioPackYamlSource()).not.toMatch(
       /readGatewayLogs\s*\(\s*\)[^\r\n]*\.slice\s*\(/u,
     );
   });
 
-  it("loads live gateway sentinel scenarios for harness self-health", () => {
-    const scenarioIds = [
-      "plugin-hook-health-sentinel",
-      "plugin-manifest-contract-health",
-      "webchat-direct-reply-routing",
-      "long-context-progress-watchdog",
-      "gateway-restart-inflight-run",
-      "gateway-restart-multi-live",
-      "streaming-final-integrity",
-    ];
-
-    for (const scenarioId of scenarioIds) {
-      const scenario = readQaScenarioById(scenarioId);
-      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
-      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
-    }
-    expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
-      "qa/scenarios/channels/webchat-direct-reply-routing.yaml",
-    );
-    expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
-      "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
-    );
+  it("binds live restart checkpoints to persisted ingress and exactly one final delivery", () => {
     const liveMultiRestart = requireFlowScenario(readQaScenarioById("gateway-restart-multi-live"));
     const liveMultiRestartFlow = liveMultiRestart.execution.flow;
     const liveMultiRestartContract = JSON.stringify(liveMultiRestartFlow);
@@ -51,37 +84,18 @@ describe("qa scenario catalog causality", () => {
         typeof action === "object" && action !== null && "forEach" in action,
     );
     const checkpointActions = checkpointLoop?.forEach?.actions ?? [];
-    const checkpointTranscriptIndex = checkpointActions.findIndex(
-      (action) =>
-        (action as { call?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === "checkpointTranscript",
+    const checkpointPersistenceAssertIndex = checkpointActions.findIndex((action) =>
+      [
+        "checkpointEntry",
+        "checkpointTranscript.userMessageCount >= 1",
+        "checkpointTranscript.eventCursor > 0",
+        "checkpointTranscript.probeTextEndLine ?? 0",
+        "restartRecoveryDeliveryContext?.channel === 'qa-channel'",
+        "restartRecoveryDeliveryContext.to === `dm:${conversationId}`",
+      ].every((needle) => readFlowAssertExpression(action).includes(needle)),
     );
-    const checkpointStoreIndex = checkpointActions.findIndex(
-      (action) =>
-        (action as { call?: string }).call === "readRawQaSessionStore" &&
-        (action as { saveAs?: string }).saveAs === "checkpointStore",
-    );
-    const checkpointPersistenceAssertIndex = checkpointActions.findIndex((action) => {
-      const expression = readFlowAssertExpression(action);
-      return (
-        expression.includes("checkpointEntry") &&
-        expression.includes("checkpointTranscript.userMessageCount >= 1") &&
-        expression.includes("checkpointTranscript.eventCursor > 0") &&
-        expression.includes("checkpointTranscript.probeTextEndLine ?? 0") &&
-        expression.includes("restartRecoveryDeliveryContext?.channel === 'qa-channel'") &&
-        expression.includes("restartRecoveryDeliveryContext.to === `dm:${conversationId}`")
-      );
-    });
-    const checkpointRestartIndex = checkpointActions.findIndex(
-      (action) => (action as { call?: string }).call === "restartGatewayWithConfigPatch",
-    );
-    const finalOutboundIndex = liveMultiRestartActions.findIndex(
-      (action) =>
-        (action as { call?: string }).call === "waitForOutboundMessage" &&
-        (action as { saveAs?: string }).saveAs === "outbound",
-    );
-    const outboundCountIndex = liveMultiRestartActions.findIndex(
-      (action) => (action as { set?: string }).set === "outboundCountAfterDelivery",
+    const outboundCountIndex = liveMultiRestartActions.findIndex((action) =>
+      matchesAction(action, { set: "outboundCountAfterDelivery" }),
     );
     const quietWindowIndex = liveMultiRestartActions.findIndex(
       (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
@@ -95,68 +109,58 @@ describe("qa scenario catalog causality", () => {
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
       '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
-    expect(liveMultiRestartContract).toContain("pendingCodeModeExecNeedle");
-    expect(liveMultiRestartContract).toContain("summary.hasPendingCodeModeWait");
-    expect(liveMultiRestartContract).toContain("checkpoint");
-    expect(liveMultiRestartContract).toContain("restarts=3");
-    for (const fixturePath of [
+    expectContains(
+      liveMultiRestartPrompt,
       "restart-audit/components.md",
       "restart-audit/risks.md",
       "restart-audit/deployments.md",
       "restart-audit/controls.md",
       "restart-audit/recommendation.md",
-    ]) {
-      expect(liveMultiRestartPrompt).toContain(fixturePath);
-    }
-    expect(liveMultiRestartPrompt).toContain(
       "On this original user turn, perform only checkpoint 1",
-    );
-    expect(liveMultiRestartPrompt).toContain(
       "After the third Gateway-recovery system message, perform the audit and final report",
-    );
-    expect(liveMultiRestartPrompt).toContain(
       "make exactly one `exec` call with `restartSafe: true`",
-    );
-    expect(liveMultiRestartPrompt).toContain(
       "expired, or aborted `wait` result after restart is expected",
-    );
-    expect(liveMultiRestartPrompt).toContain(
       "Do not issue another `exec` until a new Gateway-recovery system message arrives",
-    );
-    expect(liveMultiRestartPrompt).toContain(
       '.some(candidate => candidate.toolName === "qa_restart_unsafe_probe")',
+      "Do not read the `restart-audit/` directory path",
     );
-    expect(liveMultiRestartPrompt).toContain("Do not read the `restart-audit/` directory path");
-    expect(liveMultiRestartContract).toContain("sendInbound");
-    expect(liveMultiRestartContract).not.toContain("startAgentRun");
-    expect(liveMultiRestartContract).toContain("id: `dm:${conversationId}`");
-    expect(liveMultiRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
-    expect(liveMultiRestartContract).toContain('"saveAs":"inbound"');
-    expect(liveMultiRestartContract).toContain("probeText: config.finalMarker");
-    expect(liveMultiRestartContract).toContain(
+    expectContains(
+      liveMultiRestartContract,
+      "pendingCodeModeExecNeedle",
+      "summary.hasPendingCodeModeWait",
+      "checkpoint",
+      "restarts=3",
+      "sendInbound",
+      "id: `dm:${conversationId}`",
+      "dmScope: env.cfg.session?.dmScope",
+      '"saveAs":"inbound"',
+      "probeText: config.finalMarker",
       "pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}`",
+      "dispatching restart-safe recovery",
     );
+    expect(liveMultiRestartContract).not.toContain("startAgentRun");
     expect(liveMultiRestartContract).not.toContain(
       "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
     );
-    expect(checkpointTranscriptIndex).toBeGreaterThanOrEqual(0);
-    expect(checkpointStoreIndex).toBeGreaterThan(checkpointTranscriptIndex);
-    expect(checkpointPersistenceAssertIndex).toBeGreaterThan(checkpointStoreIndex);
-    expect(checkpointRestartIndex).toBeGreaterThan(checkpointPersistenceAssertIndex);
-    expect(finalOutboundIndex).toBeGreaterThanOrEqual(0);
-    expect(outboundCountIndex).toBeGreaterThan(finalOutboundIndex);
-    expect(quietWindowIndex).toBeGreaterThan(outboundCountIndex);
+    expectInOrder(
+      callIndex(checkpointActions, "waitForCondition", "checkpointTranscript"),
+      callIndex(checkpointActions, "readRawQaSessionStore", "checkpointStore"),
+      checkpointPersistenceAssertIndex,
+      callIndex(checkpointActions, "restartGatewayWithConfigPatch"),
+    );
+    expectInOrder(
+      callIndex(liveMultiRestartActions, "waitForOutboundMessage", "outbound"),
+      outboundCountIndex,
+      quietWindowIndex,
+      finalCardinalityAssertIndex,
+    );
     expect(liveMultiRestartActions[quietWindowIndex]).toMatchObject({
       waitForNoOutbound: {
         quietMs: 3000,
         sinceIndex: { ref: "outboundCountAfterDelivery" },
       },
     });
-    expect(finalCardinalityAssertIndex).toBeGreaterThan(quietWindowIndex);
-    expect(
-      liveMultiRestartActions.some((action) => (action as { call?: string }).call === "sleep"),
-    ).toBe(false);
-    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(callIndex(liveMultiRestartActions, "sleep")).toBe(-1);
     expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
       requiredProviderMode: "live-frontier",
       requiredProvider: "openai",
@@ -164,111 +168,149 @@ describe("qa scenario catalog causality", () => {
     });
   });
 
-  it("keeps the deterministic restart proof on one inbound turn across three lifecycles", () => {
+  it("rejects an unrelated pending wait at the current restart checkpoint", async () => {
     const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
     const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-    const contract = JSON.stringify(scenario.execution.flow);
     const checkpointLoop = actions.find(
-      (action): action is { forEach: { items: unknown[]; actions: unknown[] } } =>
+      (action): action is { forEach: { actions: unknown[] } } =>
         typeof action === "object" && action !== null && "forEach" in action,
     );
-    const checkpointActions = checkpointLoop?.forEach.actions ?? [];
-    const pendingWaitIndex = checkpointActions.findIndex(
-      (action) =>
-        (action as { call?: string; saveAs?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === "checkpointTranscript",
+    const pendingWait = checkpointLoop?.forEach.actions.find((action) =>
+      matchesAction(action, { call: "waitForCondition", saveAs: "checkpointTranscript" }),
     );
-    const checkpointStoreIndex = checkpointActions.findIndex(
-      (action) =>
-        (action as { call?: string; saveAs?: string }).call === "readRawQaSessionStore" &&
-        (action as { saveAs?: string }).saveAs === "checkpointStore",
+    if (!pendingWait) {
+      throw new Error("restart scenario checkpoint wait is missing");
+    }
+    const observations: unknown[] = [];
+    const result = runActions(
+      "gateway-restart-inflight-run",
+      [
+        { set: "checkpoint", value: { expr: "2" } },
+        { set: "sessionKey", value: "agent:qa:checkpoint" },
+        pendingWait,
+      ],
+      {
+        api: {
+          readSessionTranscriptSummary: async (
+            _env: unknown,
+            _sessionKey: string,
+            options: unknown,
+          ) => {
+            observations.push(options);
+            // Aggregate counts can include an unrelated pending wait after checkpoint 1.
+            return {
+              assistantToolCallCounts: { exec: 2, wait: 2 },
+              completedToolCallCounts: { wait: 1 },
+              hasPendingCodeModeWait: false,
+            };
+          },
+        },
+      },
     );
-    const checkpointPersistenceIndex = checkpointActions.findIndex((action) => {
-      const expression = readFlowAssertExpression(action);
-      return (
-        expression.includes("checkpointTranscript.userMessageCount >= 1") &&
-        expression.includes("checkpointTranscript.probeTextEndLine ?? 0") &&
-        expression.includes("restartRecoveryDeliveryContext?.channel === 'qa-channel'") &&
-        expression.includes("restartRecoveryDeliveryContext.to === `dm:${conversationId}`")
-      );
-    });
-    const restartIndex = checkpointActions.findIndex(
-      (action) => (action as { call?: string }).call === "restartGatewayWithConfigPatch",
-    );
-    const outboundIndex = actions.findIndex(
-      (action) =>
-        (action as { call?: string; saveAs?: string }).call === "waitForOutboundMessage" &&
-        (action as { saveAs?: string }).saveAs === "outbound",
-    );
-    const quietWindowIndex = actions.findIndex(
-      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
-    );
+    await expect(result).rejects.toThrow("test condition was not met");
+    expect(observations.length).toBeGreaterThan(0);
+    for (const options of observations) {
+      expect(options).toMatchObject({ pendingCodeModeExecNeedle: "CHECKPOINT-2" });
+    }
+  });
 
-    expect(scenario.execution).toMatchObject({
-      retryCount: 0,
-      suiteIsolation: "isolated",
-    });
+  it("runs one persisted inbound through three distinct restart lifecycles and quiet delivery", async () => {
+    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
+    // These settings are applied by the suite launcher, outside the flow interpreter.
+    // In particular, the unsafe probe must start available for its later absence to prove fencing.
+    expect(scenario.execution).toMatchObject({ retryCount: 0, suiteIsolation: "isolated" });
     expect(scenario.gatewayConfigPatch).toMatchObject({
       logging: { audit: { executionIdentity: true } },
       plugins: {
         slots: { memory: "none" },
-        entries: {
-          acpx: { enabled: false },
-          "memory-core": { enabled: false },
+        entries: { acpx: { enabled: false }, "memory-core": { enabled: false } },
+      },
+      tools: { alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"] },
+    });
+    const fixture = createRestartFlowFixture();
+    await expect(fixture.run()).resolves.toMatchObject({ status: "pass" });
+    expect(fixture.events).toEqual([
+      "inbound",
+      "pending:CHECKPOINT-1",
+      "persisted:1",
+      "restart:1",
+      "pending:CHECKPOINT-2",
+      "persisted:2",
+      "restart:2",
+      "pending:CHECKPOINT-3",
+      "persisted:3",
+      "restart:3",
+      "delivery",
+      "quiet:3000:1",
+    ]);
+    expect(fixture.auditRunIds).toEqual(["delivery-1", "delivery-1"]);
+    expect(fixture.restartOrigins).toEqual([
+      ["http://127.0.0.1:64001"],
+      ["http://127.0.0.1:64002"],
+      ["http://127.0.0.1:64003"],
+    ]);
+  });
+
+  it.each([
+    ["missing delivery claim", "did not persist the one original prompt", 0],
+    ["stale lifecycle", "did not rotate the accepted delivery run/lifecycle fence", 2],
+    ["stale delivery owner", "did not rotate the accepted delivery run/lifecycle fence", 2],
+    ["changed audit identity", "original admitted audit identity changed", 3],
+    ["duplicate delivery", "expected exactly one automatically recovered marker", 3],
+    ["extra inbound", "expected one real qa-channel inbound turn", 3],
+    ["late delivery", "unexpected outbound during quiet window", 3],
+  ] as const)("rejects %s in the loaded three-restart flow", async (fault, message, restarts) => {
+    const fixture = createRestartFlowFixture(fault);
+    await expect(fixture.run()).rejects.toThrow(message);
+    expect(fixture.restartOrigins).toHaveLength(restarts);
+  });
+
+  it("keeps full-access restart delivery independent from subagent completion handoff", async () => {
+    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-full-access-live"));
+    const prompt =
+      typeof scenario.execution.config?.prompt === "string" ? scenario.execution.config.prompt : "";
+    const actions = scenario.execution.flow?.steps[1]?.actions ?? [];
+    const childIndex = callIndex(actions, "waitForCondition", "childRun");
+    const childWait = actions[childIndex] as
+      | { args?: Array<{ lambda?: { expr?: string } }> }
+      | undefined;
+
+    expectContains(
+      prompt,
+      "expectsCompletionMessage false",
+      "do not call sessions_yield or wait for the child",
+    );
+    expectContains(
+      childWait?.args?.[0]?.lambda?.expr ?? "",
+      "run.execution.status === 'terminal'",
+      "run.execution.outcome?.status === 'ok'",
+      "run.delivery?.status === 'not_required'",
+    );
+    expect(childWait?.args?.[0]?.lambda?.expr).not.toContain("terminalOutcome");
+    expectInOrder(callIndex(actions, "waitForOutboundMessage", "outbound"), childIndex);
+
+    const childAssertionPath = actions.slice(childIndex, childIndex + 3);
+    await expect(
+      runActions(
+        "gateway-restart-full-access-live",
+        [{ set: "sessionKey", value: "agent:qa:restart-proof" }, ...childAssertionPath],
+        {
+          api: {
+            readNativeQaSubagentRuns: async () => [
+              {
+                runId: "restart-proof-child-run",
+                label: "restart-proof-child",
+                requesterSessionKey: "agent:qa:restart-proof",
+                childSessionKey: "agent:qa:restart-proof:child",
+                execution: { status: "terminal", outcome: { status: "ok" } },
+                delivery: { status: "not_required" },
+              },
+            ],
+            readSessionTranscriptSummary: async () => ({ finalText: "CHILD-RESTART-OK" }),
+          },
         },
-      },
-      tools: {
-        alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"],
-      },
-    });
-    expect(checkpointLoop?.forEach.items).toEqual([1, 2, 3]);
-    expect(contract.match(/"sendInbound"/gu)).toHaveLength(1);
-    expect(contract).not.toContain("startAgentRun");
-    expect(contract).not.toContain("chat.send");
-    expect(contract).toContain(
-      "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
-    );
-    expect(contract).toContain(
-      "checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)",
-    );
-    expect(contract).toContain("probeText: config.promptMarker");
-    expect(pendingWaitIndex).toBeGreaterThanOrEqual(0);
-    expect(checkpointStoreIndex).toBeGreaterThan(pendingWaitIndex);
-    expect(checkpointPersistenceIndex).toBeGreaterThan(checkpointStoreIndex);
-    expect(restartIndex).toBeGreaterThan(checkpointPersistenceIndex);
-    expect(contract).toContain("checkpointEntry.restartRecoveryDeliveryRunId");
-    expect(contract).toContain("checkpointEntry.restartRecoveryRuns?.find");
-    expect(contract).toContain("currentDeliveryFence.lifecycleGeneration");
-    expect(contract).toContain("runQaCli(env, ['audit', '--run', auditAnchorRunId");
-    expect(contract).toContain("capturedAuditAnchorInspection.identity.context");
-    expect(contract).toContain("postDeliveryAuditAnchorInspection.identity.context");
-    expect(contract).toContain(
-      "JSON.stringify(postDeliveryAuditAnchorIdentity) === JSON.stringify(auditAnchorIdentity)",
-    );
-    expect(contract).toContain("checkpointDeliveryRunIds.length === 3");
-    expect(contract).toContain("checkpointDeliveryRunIds[2] !== checkpointDeliveryRunIds[1]");
-    expect(contract).toContain("auditAnchorIdentity !== null");
-    expect(contract).not.toContain("finalInterruptedRunId");
-    expect(contract).not.toContain("auditedIdentities");
-    expect(contract).not.toContain("inspectQaRestartRecoveryIdentity");
-    expect(contract).not.toContain("mainRestartRecovery?.executionIdentity");
-    expect(contract).toContain("assistantToolCallCounts.exec ?? 0) === 3");
-    expect(contract).toContain("assistantToolCallCounts.wait ?? 0) >= 3");
-    expect(contract).toContain("recoveryDispatches === 3 && retainedPolicies === 3");
-    expect(contract).toContain("finalMatches.length === 1");
-    expect(contract).toContain("restartNotices.length === 0");
-    expect(contract).toContain("unsafeVisible=false");
-    expect(contract).toContain("!recoveryLogs.includes('unsafe-probe-executed')");
-    expect(restartIndex).toBeGreaterThan(checkpointPersistenceIndex);
-    expect(outboundIndex).toBeGreaterThanOrEqual(0);
-    expect(quietWindowIndex).toBeGreaterThan(outboundIndex);
-    expect(actions[quietWindowIndex]).toMatchObject({
-      waitForNoOutbound: {
-        quietMs: 3000,
-        sinceIndex: { ref: "outboundCountAfterDelivery" },
-      },
-    });
-    expect(actions.some((action) => (action as { call?: string }).call === "sleep")).toBe(false);
+      ),
+    ).resolves.toMatchObject({ status: "pass" });
   });
 
   it.each(["gateway-restart-inflight-run", "gateway-restart-multi-live"] as const)(
@@ -285,10 +327,7 @@ describe("qa scenario catalog causality", () => {
       const priorLogs = "codex_app_server progress stalled before this scenario\n";
 
       await expect(
-        runLoadedScenarioFlow(scenarioId, {
-          flow: {
-            steps: [{ name: "ignores prior sentinels", actions: gatewayActions }],
-          },
+        runActions(scenarioId, gatewayActions, {
           api: {
             markGatewayLogCursor: () => priorLogs.length,
             assertNoGatewayLogSentinels: (
@@ -311,9 +350,7 @@ describe("qa scenario catalog causality", () => {
       const promptIndex = flow.indexOf('"call":"runAgentPrompt"');
       const requestsIndex = flow.indexOf("/debug/requests?after=${requestCursorBefore}");
 
-      expect(cursorIndex, scenarioId).toBeGreaterThanOrEqual(0);
-      expect(cursorIndex, scenarioId).toBeLessThan(promptIndex);
-      expect(requestsIndex, scenarioId).toBeGreaterThan(promptIndex);
+      expectInOrder(cursorIndex, promptIndex, requestsIndex);
       expect(flow, scenarioId).not.toContain("`${env.mock.baseUrl}/debug/requests`");
     }
   });
@@ -342,41 +379,25 @@ describe("qa scenario catalog causality", () => {
     (scenarioId, requestCollectionMode, finalLinkNeedle, durableWaitSaveAs) => {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-      const outboundIndex = actions.findIndex((action) =>
-        durableWaitSaveAs
-          ? (action as { call?: string }).call === "waitForCondition" &&
-            (action as { saveAs?: string }).saveAs === durableWaitSaveAs
-          : (action as { call?: string }).call === "waitForOutboundMessage",
-      );
-      const requestCollectionIndex = actions.findIndex((action) =>
+      const outboundIndex = durableWaitSaveAs
+        ? callIndex(actions, "waitForCondition", durableWaitSaveAs)
+        : callIndex(actions, "waitForOutboundMessage");
+      const requestCollectionIndex =
         requestCollectionMode === "poll"
-          ? (action as { call?: string }).call === "waitForCondition" &&
-            (action as { saveAs?: string }).saveAs === "scenarioRequests"
-          : (action as { set?: string }).set === "scenarioRequests",
-      );
-      const requestCountAssertIndex = actions.findIndex((action) =>
-        readFlowAssertExpression(action).includes("scenarioRequests.length === 3"),
-      );
-      const searchPlanAssertIndex = actions.findIndex((action) =>
-        readFlowAssertExpression(action).includes(
+          ? callIndex(actions, "waitForCondition", "scenarioRequests")
+          : actions.findIndex((action) => matchesAction(action, { set: "scenarioRequests" }));
+      expectInOrder(
+        requestCollectionIndex,
+        ...[
+          "scenarioRequests.length === 3",
           "searchPlanRequest.plannedToolName === 'memory_search'",
-        ),
-      );
-      const searchResultAssertIndex = actions.findIndex((action) =>
-        readFlowAssertExpression(action).includes(
           "searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId",
+          finalLinkNeedle,
+        ].map((needle) =>
+          actions.findIndex((action) => readFlowAssertExpression(action).includes(needle)),
         ),
+        outboundIndex,
       );
-      const finalRequestAssertIndex = actions.findIndex((action) =>
-        readFlowAssertExpression(action).includes(finalLinkNeedle),
-      );
-
-      expect(requestCollectionIndex, scenarioId).toBeGreaterThanOrEqual(0);
-      expect(requestCountAssertIndex, scenarioId).toBeGreaterThan(requestCollectionIndex);
-      expect(searchPlanAssertIndex, scenarioId).toBeGreaterThan(requestCountAssertIndex);
-      expect(searchResultAssertIndex, scenarioId).toBeGreaterThan(searchPlanAssertIndex);
-      expect(finalRequestAssertIndex, scenarioId).toBeGreaterThan(searchResultAssertIndex);
-      expect(outboundIndex, scenarioId).toBeGreaterThan(finalRequestAssertIndex);
 
       if (durableWaitSaveAs) {
         const durableWait = actions[outboundIndex] as
@@ -395,14 +416,7 @@ describe("qa scenario catalog causality", () => {
           "requests.length >= 3 ? requests : undefined",
         );
       } else {
-        expect(
-          actions.some(
-            (action) =>
-              (action as { call?: string }).call === "waitForCondition" &&
-              (action as { saveAs?: string }).saveAs === "scenarioRequests",
-          ),
-          scenarioId,
-        ).toBe(false);
+        expect(callIndex(actions, "waitForCondition", "scenarioRequests"), scenarioId).toBe(-1);
       }
     },
   );
@@ -413,13 +427,7 @@ describe("qa scenario catalog causality", () => {
   ] as const)("keeps the policy-aware durable delivery budget for %s", (scenarioId, saveAs, ms) => {
     const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
     const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-    const durableWait = actions.find(
-      (action) =>
-        (action as { call?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === saveAs,
-    );
-
-    expect(durableWait, scenarioId).toMatchObject({
+    expect(actions[callIndex(actions, "waitForCondition", saveAs)], scenarioId).toMatchObject({
       args: [expect.any(Object), { expr: `liveTurnTimeoutMs(env, ${ms})` }],
     });
   });
@@ -444,11 +452,7 @@ describe("qa scenario catalog causality", () => {
   ] as const)("isolates $scenarioId durable lifecycle evidence by account", async (fixture) => {
     const scenario = requireFlowScenario(readQaScenarioById(fixture.scenarioId));
     const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-    const durableWaitIndex = actions.findIndex(
-      (action) =>
-        (action as { call?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === fixture.saveAs,
-    );
+    const durableWaitIndex = callIndex(actions, "waitForCondition", fixture.saveAs);
     const cardinalityAssertIndex = actions.findIndex((action) =>
       readFlowAssertExpression(action).includes(
         fixture.scenarioId === "memory-tools-channel-context"
@@ -456,11 +460,7 @@ describe("qa scenario catalog causality", () => {
           : "completionMessages.length === 1",
       ),
     );
-    expect(durableWaitIndex, fixture.scenarioId).toBeGreaterThanOrEqual(0);
-    expect(cardinalityAssertIndex, fixture.scenarioId).toBeGreaterThan(durableWaitIndex);
-    if (durableWaitIndex < 0 || cardinalityAssertIndex <= durableWaitIndex) {
-      throw new Error(`missing durable lifecycle assertion path for ${fixture.scenarioId}`);
-    }
+    expectInOrder(durableWaitIndex, cardinalityAssertIndex);
     const postWaitAssertionPath = actions.slice(durableWaitIndex, cardinalityAssertIndex + 1);
 
     const config = scenario.execution.config ?? {};
@@ -468,58 +468,38 @@ describe("qa scenario catalog causality", () => {
     const marker = String(config[fixture.markerKey]);
     const target = `${fixture.targetPrefix}:${conversationId}`;
     const state = createQaBusState();
-    for (const accountId of ["foreign", "qa-channel"]) {
-      const preview = state.addOutboundMessage({ accountId, to: target, text: marker });
-      state.deleteMessage({ accountId, messageId: preview.id });
-      state.addOutboundMessage({ accountId, to: target, text: marker });
-    }
     const foreignKind = fixture.targetPrefix === "dm" ? "channel" : "dm";
-    const foreignKindTarget = `${foreignKind}:${conversationId}`;
-    const foreignKindPreview = state.addOutboundMessage({
-      accountId: "qa-channel",
-      to: foreignKindTarget,
-      text: marker,
-    });
-    state.deleteMessage({ accountId: "qa-channel", messageId: foreignKindPreview.id });
-    state.addOutboundMessage({
-      accountId: "qa-channel",
-      to: foreignKindTarget,
-      text: marker,
-    });
+    for (const [accountId, to] of [
+      ["foreign", target],
+      ["qa-channel", target],
+      ["qa-channel", `${foreignKind}:${conversationId}`],
+    ] as const) {
+      const preview = state.addOutboundMessage({ accountId, to, text: marker });
+      state.deleteMessage({ accountId, messageId: preview.id });
+      state.addOutboundMessage({ accountId, to, text: marker });
+    }
 
     await expect(
-      runLoadedScenarioFlow(fixture.scenarioId, {
-        state,
-        flow: {
-          steps: [
-            {
-              name: "keeps foreign account lifecycle evidence isolated",
-              actions: [
-                { set: "outboundStartIndex", value: { expr: "0" } },
-                { set: fixture.cursorName, value: { expr: "0" } },
-                ...postWaitAssertionPath,
-                {
-                  assert: {
-                    expr: `${fixture.saveAs}.message.accountId === transport.accountId`,
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      }),
+      runActions(
+        fixture.scenarioId,
+        [
+          { set: "outboundStartIndex", value: { expr: "0" } },
+          { set: fixture.cursorName, value: { expr: "0" } },
+          ...postWaitAssertionPath,
+          { assert: { expr: `${fixture.saveAs}.message.accountId === transport.accountId` } },
+        ],
+        { state },
+      ),
     ).resolves.toMatchObject({ status: "pass" });
   });
 
   it("isolates Active Memory request traces from interleaved heartbeats", async () => {
     const scenario = requireFlowScenario(readQaScenarioById("active-memory-preprompt-recall"));
     const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-    const baselineTrace = actions.find(
-      (action) => (action as { set?: string }).set === "baselineMockRequests",
+    const baselineTrace = actions.find((action) =>
+      matchesAction(action, { set: "baselineMockRequests" }),
     );
-    const activeTrace = actions.find(
-      (action) => (action as { set?: string }).set === "activeRequests",
-    );
+    const activeTrace = actions.find((action) => matchesAction(action, { set: "activeRequests" }));
     expect(baselineTrace).toBeDefined();
     expect(activeTrace).toBeDefined();
     if (!baselineTrace || !activeTrace) {
@@ -544,28 +524,24 @@ describe("qa scenario catalog causality", () => {
     ]);
 
     await expect(
-      runLoadedScenarioFlow("active-memory-preprompt-recall", {
-        flow: {
-          steps: [
-            {
-              name: "filters provider-global traces before exact counts",
-              actions: [
-                { set: "requestCursorBeforeBaseline", value: { expr: "10" } },
-                baselineTrace,
-                { assert: "baselineMockRequests.length === 1" },
-                { set: "requestCursorBeforeActive", value: { expr: "20" } },
-                activeTrace,
-                { assert: "activeRequests.length === 4" },
-              ],
-            },
-          ],
+      runActions(
+        "active-memory-preprompt-recall",
+        [
+          { set: "requestCursorBeforeBaseline", value: { expr: "10" } },
+          baselineTrace,
+          { assert: "baselineMockRequests.length === 1" },
+          { set: "requestCursorBeforeActive", value: { expr: "20" } },
+          activeTrace,
+          { assert: "activeRequests.length === 4" },
+        ],
+        {
+          api: {
+            env: { mock: { baseUrl: "http://mock.invalid" } },
+            fetchJson: async (url: string) =>
+              traces.get(new URL(url).searchParams.get("after") ?? "") ?? [],
+          },
         },
-        api: {
-          env: { mock: { baseUrl: "http://mock.invalid" } },
-          fetchJson: async (url: string) =>
-            traces.get(new URL(url).searchParams.get("after") ?? "") ?? [],
-        },
-      }),
+      ),
     ).resolves.toMatchObject({ status: "pass" });
   });
 });

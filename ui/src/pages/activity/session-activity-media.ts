@@ -1,14 +1,12 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type {
-  ArtifactsDownloadResult,
-  ArtifactsListResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -98,6 +96,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   private visible = false;
   private observer?: IntersectionObserver;
   private entry?: ImageEntry;
+  private settledEntry?: ImageEntry;
   private displayedImages: ImageBlock[] = [];
   private owner?: ConnectionImages;
   private key = "";
@@ -106,9 +105,8 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   private imageRequest = 0;
   private observedPending?: Promise<void>;
   private readonly refresh = () => this.requestUpdate();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
   );
 
   override connectedCallback() {
@@ -155,14 +153,10 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   override willUpdate() {
     const { client, hello, phase } = this.context.gateway.snapshot;
     const owner = client && phase === "connected" ? connectionImages(client, hello) : undefined;
-    const key = JSON.stringify([
-      this.agentId,
-      this.sessionKey,
-      this.session?.sessionId,
-      this.revision,
-    ]);
     const imageIdentity = this.imageIdentity;
+    const key = JSON.stringify([imageIdentity, this.revision]);
     if (owner !== this.owner || imageIdentity !== this.boundImageIdentity) {
+      this.settledEntry = undefined;
       this.displayedImages = [];
       this.closeImage();
       releaseChatMediaResourceSubscriber(this.refresh);
@@ -193,21 +187,20 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       this.observedPending = this.entry.pending;
       void this.observedPending.then(this.refresh);
     }
-    if (
-      this.entry?.loaded &&
-      !this.entry.pending &&
-      (!this.entry.error || this.displayedImages.length === 0)
-    ) {
-      this.displayedImages = this.entry.images.slice(0, 4);
+    if (this.entry?.loaded && !this.entry.pending) {
+      this.settledEntry = this.entry;
+    }
+    const settled = this.settledEntry;
+    if (settled && !settled.pending && (!settled.error || this.displayedImages.length === 0)) {
+      this.displayedImages = settled.images.slice(0, 4);
     }
   }
 
-  private load = () => {
+  private load = (entry = this.entry) => {
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
     const owner = this.owner;
-    const entry = this.entry;
-    const key = this.key;
+    const imageIdentity = this.imageIdentity;
     const sessionKey = this.sessionKey;
     const agentId = this.agentId;
     if (!client || !owner || !entry || entry.pending) {
@@ -217,7 +210,8 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       this.isConnected &&
       this.visible &&
       this.owner === owner &&
-      this.key === key &&
+      this.imageIdentity === imageIdentity &&
+      (this.entry === entry || this.settledEntry === entry) &&
       gateway.snapshot.client === client &&
       gateway.snapshot.hello === hello &&
       gateway.snapshot.phase === "connected";
@@ -226,7 +220,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       entry.images = [];
     }
     entry.error = false;
-    entry.pending = queued(owner, JSON.stringify([agentId, sessionKey]), async () => {
+    // Explicit pagination must not supersede a queued background refresh.
+    const queueKey = JSON.stringify([agentId, sessionKey, entry === this.settledEntry]);
+    entry.pending = queued(owner, queueKey, async () => {
       try {
         // A viewport visit searches at most three bounded pages. Older history is explicit.
         for (let page = 0; page < 3 && entry.images.length < 4 && current(); page++) {
@@ -244,16 +240,24 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
           entry.cursor = result.nextCursor;
           entry.omitted ||= result.omittedOversized;
           for (const artifact of result.artifacts) {
+            const image: ImageBlock | undefined = artifact.image?.url
+              ? {
+                  url: artifact.image.url,
+                  artifactId:
+                    artifact.source === "session-transcript-preview" ? undefined : artifact.id,
+                  alt: artifact.title,
+                }
+              : artifact.type === "image" && artifact.download.mode !== "unsupported"
+                ? { artifactId: artifact.id, alt: artifact.title }
+                : undefined;
             if (
-              artifact.image &&
-              !entry.images.some((image) => image.url === artifact.image?.url)
+              image &&
+              !entry.images.some(
+                (existing) =>
+                  (existing.url ?? existing.artifactId) === (image.url ?? image.artifactId),
+              )
             ) {
-              entry.images.push({
-                url: artifact.image.url,
-                artifactId:
-                  artifact.source === "session-transcript-preview" ? undefined : artifact.id,
-                alt: artifact.title,
-              });
+              entry.images.push(image);
             }
           }
           if (!entry.cursor) {
@@ -281,70 +285,96 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   };
 
   override render() {
-    const entry = this.entry;
+    const entry = this.settledEntry ?? this.entry;
     const owner = this.owner;
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
     if (!entry || !owner || !client) {
       return nothing;
     }
-    const showMedia =
-      this.displayedImages.length > 0 || entry.error || entry.cursor || entry.omitted;
+    const currentConnection = () =>
+      gateway.snapshot.client === client &&
+      gateway.snapshot.hello === hello &&
+      gateway.snapshot.phase === "connected";
+    const loadAction = (label: string) => html`<button
+      class="activity-feed__note-action"
+      ?disabled=${Boolean(entry.pending)}
+      @click=${() => this.load(entry)}
+    >
+      ${label}
+    </button>`;
+    const hasImages = this.displayedImages.length > 0;
+    const older =
+      entry.cursor && entry.images.length < 4 && !entry.error
+        ? [loadAction(t(entry.pending ? "common.loading" : "activity.images.older"))]
+        : [];
+    const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
+    const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
+      entry.error
+        ? html`<span role="status">${t("activity.images.failed")}</span
+            >${loadAction(t("common.retry"))}`
+        : hasImages
+          ? nothing
+          : older
+    }`;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;
     return html`
       ${
-        showMedia
+        hasImages || showNote
           ? html`<div class="activity-feed__media">
-              ${renderMessageImages(this.displayedImages, {
-                sessionKey: this.sessionKey,
-                agentId: this.agentId,
-                connectionEpoch: owner.epoch,
-                policyKey: assistantMediaPolicyKey(this.session),
-                resourceBasePath: this.context.resourceBasePath,
-                authToken: resolveControlUiAuthToken({
-                  hello,
-                  settings: { token: gateway.connection.token },
-                  password: gateway.connection.password,
-                }),
-                onRequestUpdate: this.refresh,
-                onRequestOpenImage: () => ++this.imageRequest,
-                onOpenImage: (item, version) => {
-                  if (
-                    !this.isConnected ||
-                    this.owner !== owner ||
-                    this.imageIdentity !== imageIdentity ||
-                    gateway.snapshot.client !== client ||
-                    gateway.snapshot.hello !== hello ||
-                    gateway.snapshot.phase !== "connected" ||
-                    version !== this.imageRequest
-                  ) {
-                    item.release?.();
-                    return;
-                  }
-                  this.lightbox?.release?.();
-                  this.lightbox = item;
-                  this.requestUpdate();
-                },
-                resolveArtifactDownload: async (params) => {
-                  const result = await client.request<ArtifactsDownloadResult>(
-                    "artifacts.download",
-                    {
-                      ...params,
-                      agentId,
-                    },
-                  );
-                  return gateway.snapshot.client === client &&
-                    gateway.snapshot.hello === hello &&
-                    gateway.snapshot.phase === "connected" &&
-                    result.url
-                    ? { url: result.url, expiresAt: result.expiresAt }
-                    : null;
-                },
-              })}
-              ${entry.error ? html`<span role="status">${t("activity.images.failed")}</span><button class="btn btn--sm" @click=${this.load}>${t("common.retry")}</button>` : nothing}
-              ${entry.cursor && entry.images.length < 4 && !entry.error ? html`<button class="btn btn--sm" ?disabled=${Boolean(entry.pending)} @click=${this.load}>${entry.pending ? t("common.loading") : t("activity.images.older")}</button>` : nothing}
-              ${entry.omitted ? html`<span class="activity-feed__media-note">${t("activity.images.incomplete")}</span>` : nothing}
+              ${
+                hasImages
+                  ? renderMessageImages(
+                      this.displayedImages,
+                      {
+                        sessionKey: this.sessionKey,
+                        agentId: this.agentId,
+                        connectionEpoch: owner.epoch,
+                        policyKey: assistantMediaPolicyKey(this.session),
+                        resourceBasePath: this.context.resourceBasePath,
+                        authToken: resolveControlUiAuthToken({
+                          hello,
+                          settings: { token: gateway.connection.token },
+                          password: gateway.connection.password,
+                        }),
+                        onRequestUpdate: this.refresh,
+                        onRequestOpenImage: () => ++this.imageRequest,
+                        onOpenImage: (item, version) => {
+                          if (
+                            !this.isConnected ||
+                            this.owner !== owner ||
+                            this.imageIdentity !== imageIdentity ||
+                            !currentConnection() ||
+                            version !== this.imageRequest
+                          ) {
+                            item.release?.();
+                            return;
+                          }
+                          this.lightbox?.release?.();
+                          this.lightbox = item;
+                          this.requestUpdate();
+                        },
+                        resolveArtifactDownload: (params, signal) =>
+                          resolveArtifactDownloadSource(
+                            {
+                              get client() {
+                                return gateway.snapshot.client;
+                              },
+                              get connected() {
+                                return currentConnection();
+                              },
+                              resourceBasePath: this.context.resourceBasePath,
+                            },
+                            { ...params, agentId },
+                            signal,
+                          ),
+                      },
+                      older,
+                    )
+                  : nothing
+              }
+              ${showNote ? html`<div class="activity-feed__note">${note}</div>` : nothing}
             </div>`
           : nothing
       }

@@ -1,16 +1,15 @@
-// Openai plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  resolveGpt5PromptOverlayMode,
+  resolveGpt5SystemPromptContribution,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
-import {
-  resolveOpenAIPromptOverlayMode,
-  resolveOpenAISystemPromptContribution,
-} from "./prompt-overlay.js";
 import {
   acquireOpenAIQuicksilverBrowserSessionBroker,
   releaseOpenAIQuicksilverBrowserSessionBroker,
@@ -19,7 +18,6 @@ import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider-factory.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
-import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
 
 export default definePluginEntry({
   id: "openai",
@@ -29,9 +27,8 @@ export default definePluginEntry({
     const { ensureAuthProfileStore, listProfilesForProvider, isProviderApiKeyConfigured } =
       api.runtime.modelAuth;
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");
-    const buildProviderWithPromptContribution = <T extends ReturnType<typeof buildOpenAIProvider>>(
-      provider: T,
-    ): T => ({
+    const provider = buildOpenAIProvider();
+    api.registerProvider({
       ...provider,
       ...openAIToolCompatHooks,
       resolveSystemPromptContribution: (ctx) => {
@@ -39,17 +36,16 @@ export default definePluginEntry({
         const pluginConfig =
           runtimePluginConfig ??
           (ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>));
-        return resolveOpenAISystemPromptContribution({
+        return resolveGpt5SystemPromptContribution({
           config: ctx.config,
-          legacyPluginConfig: pluginConfig,
-          mode: resolveOpenAIPromptOverlayMode(pluginConfig),
-          modelProviderId: provider.id,
+          legacyPluginConfig: {
+            personality: resolveGpt5PromptOverlayMode(undefined, pluginConfig),
+          },
           modelId: ctx.modelId,
           trigger: ctx.trigger,
         });
       },
     });
-    api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(
       buildOpenAIImageGenerationProvider({
@@ -95,8 +91,5 @@ export default definePluginEntry({
     });
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
-    api.registerVideoGenerationProvider(
-      buildOpenAIVideoGenerationProvider({ isProviderApiKeyConfigured }),
-    );
   },
 });

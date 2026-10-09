@@ -15,18 +15,18 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronRunTelemetry } from "../types.js";
-import type { CronExecutionResult } from "./run-executor.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import { DEFAULT_CONTEXT_TOKENS, hasNonzeroUsage } from "./run.runtime.js";
+import type { CronCompletedPromptRun } from "./run.types.js";
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
 
-export function resolveCronRunUsage(execution: CronExecutionResult) {
-  if (!execution.completedPromptRuns) {
-    return execution.runResult.meta?.agentMeta?.usage;
+export function resolveCronRunUsage(runs: readonly CronCompletedPromptRun[]) {
+  if (runs.length === 1) {
+    return runs[0]?.runResult.meta?.agentMeta?.usage;
   }
   const accumulated = createUsageAccumulator();
-  for (const { runResult } of execution.completedPromptRuns) {
+  for (const { runResult } of runs) {
     const usage = runResult.meta?.agentMeta?.usage;
     if (!usage) {
       continue;
@@ -43,10 +43,10 @@ export function resolveCronRunUsage(execution: CronExecutionResult) {
 
 export function applyCronRunUsage(
   prepared: PreparedCronRunContext,
-  execution: CronExecutionResult,
+  runs: readonly CronCompletedPromptRun[],
 ): CronRunTelemetry["usage"] {
-  const usage = resolveCronRunUsage(execution);
-  if (!hasNonzeroUsage(usage) && !hasNonzeroUsage(execution.runResult.meta?.agentMeta?.usage)) {
+  const usage = resolveCronRunUsage(runs);
+  if (!hasNonzeroUsage(usage) && !hasNonzeroUsage(runs.at(-1)?.runResult.meta?.agentMeta?.usage)) {
     return undefined;
   }
   const input = usage?.input ?? 0;
@@ -74,11 +74,10 @@ export function applyCronRunUsage(
 /** Preserve each completed prompt's prices and diagnostics across a continuation. */
 export async function recordCronRunUsage(params: {
   prepared: PreparedCronRunContext;
-  execution: CronExecutionResult;
+  runs: readonly CronCompletedPromptRun[];
   contextTokens?: number;
 }): Promise<void> {
-  const { prepared, execution } = params;
-  const runs = execution.completedPromptRuns ?? [execution];
+  const { prepared, runs } = params;
   const billableRuns = runs.filter(({ runResult }) => {
     const meta = runResult.meta?.agentMeta;
     return hasBillableUsage(meta?.usage) || hasBillableUsage(meta?.diagnosticUsage);
@@ -95,8 +94,8 @@ export async function recordCronRunUsage(params: {
     const meta = result.meta?.agentMeta;
     const usage = meta?.usage;
     const diagnosticUsage = meta?.diagnosticUsage ?? usage;
-    const provider = meta?.provider ?? run.fallbackProvider ?? execution.liveSelection.provider;
-    const model = meta?.model ?? run.fallbackModel ?? execution.liveSelection.model;
+    const provider = meta?.provider ?? run.fallbackProvider;
+    const model = meta?.model ?? run.fallbackModel;
     const costConfig = resolveModelCostConfig({
       provider,
       model,
@@ -136,7 +135,7 @@ export async function recordCronRunUsage(params: {
       usage,
     });
     const contextTokens =
-      (result === execution.runResult ? params.contextTokens : undefined) ??
+      (result === runs.at(-1)?.runResult ? params.contextTokens : undefined) ??
       asPositiveFiniteNumber(meta?.contextTokens) ??
       (await cronContextRuntimeLoader.load()).resolveModelContextTokenProjection({
         cfg: prepared.cfgWithAgentDefaults,

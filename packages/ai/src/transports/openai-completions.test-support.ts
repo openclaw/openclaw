@@ -302,23 +302,6 @@ export const customQwenReasoningModel = makeCompletionsModel({
   maxTokens: 32_000,
 });
 
-export const gemma4Model = makeCompletionsModel({
-  id: "google/gemma-4-12b",
-  name: "Gemma 4 12B",
-  provider: "vllm",
-  baseUrl: "https://proxy.example.com/v1",
-  contextWindow: 262_144,
-  maxTokens: 32_000,
-});
-
-export const kimiCodingProxyModel = makeCompletionsModel({
-  ...customKimiProxyModel,
-  id: "kimi-for-coding",
-  name: "Kimi for Coding",
-  provider: "kimi",
-  baseUrl: "https://api.kimi.com/coding/v1",
-});
-
 export function getAssistantMessage(params: { messages: unknown }) {
   expect(Array.isArray(params.messages)).toBe(true);
   const list = params.messages as Array<Record<string, unknown>>;

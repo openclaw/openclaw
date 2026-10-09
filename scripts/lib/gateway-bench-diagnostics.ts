@@ -1,5 +1,10 @@
 import { channel } from "node:diagnostics_channel";
-import { performance, PerformanceObserver } from "node:perf_hooks";
+import {
+  createHistogram,
+  performance,
+  PerformanceObserver,
+  type RecordableHistogram,
+} from "node:perf_hooks";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 
 const CHANNELS = [
@@ -17,6 +22,12 @@ const METRICS = [
   "writerExecutionMs",
   "completionDelayMs",
   "handlerElapsedMs",
+  "storeLoadThreadCpuMs",
+  "prepareThreadCpuMs",
+  "rowThreadCpuMs",
+  "cacheSelectionThreadCpuMs",
+  "cachePublicationThreadCpuMs",
+  "responseThreadCpuMs",
   "prepareSyncMs",
   "rowSyncMs",
   "yieldWaitMs",
@@ -27,6 +38,7 @@ const METRICS = [
   "selectedRowCount",
   "queueMs",
   "preparationMs",
+  "hostWaitMs",
   "runMs",
   "transferMs",
   "pendingTasks",
@@ -46,7 +58,17 @@ const PHASES = [
   "handlerExit",
 ] as const;
 
-type Metric = { count: number; total: number; max: number };
+const MAX_HISTOGRAMS = 256;
+const MAX_DURATION_MS = 3_600_000;
+const HISTOGRAM_SCALE = 1_000;
+
+type Metric = {
+  count: number;
+  total: number;
+  max: number;
+  histogram?: RecordableHistogram;
+  clampedCount?: number;
+};
 type Group = {
   channel: string;
   operation: string;
@@ -57,14 +79,22 @@ type Group = {
   metrics: Record<string, Metric>;
 };
 
-function add(metrics: Record<string, Metric>, key: string, value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return;
-  }
-  const metric = (metrics[key] ??= { count: 0, total: 0, max: 0 });
-  metric.count += 1;
-  metric.total += value;
-  metric.max = Math.max(metric.max, value);
+function summarizeMetrics(metrics: Record<string, Metric>) {
+  return Object.fromEntries(
+    Object.entries(metrics).map(([key, { histogram, clampedCount, ...aggregate }]) => [
+      key,
+      histogram
+        ? {
+            ...aggregate,
+            histogramCount: histogram.count,
+            clampedCount,
+            p50: (histogram.percentile(50) - 1) / HISTOGRAM_SCALE,
+            p95: (histogram.percentile(95) - 1) / HISTOGRAM_SCALE,
+            p99: (histogram.percentile(99) - 1) / HISTOGRAM_SCALE,
+          }
+        : aggregate,
+    ]),
+  );
 }
 
 /** Bounded numeric aggregates for the benchmark's main isolate; profiles cover workers. */
@@ -73,6 +103,39 @@ export function startGatewayBenchDiagnostics() {
   const groups = new Map<string, Group>();
   let droppedEvents = 0;
   let collectionErrors = 0;
+  let histogramCount = 0;
+  let droppedHistogramSamples = 0;
+  const add = (metrics: Record<string, Metric>, key: string, value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return;
+    }
+    const metric = (metrics[key] ??= { count: 0, total: 0, max: 0 });
+    metric.count += 1;
+    metric.total += value;
+    metric.max = Math.max(metric.max, value);
+    if (!key.endsWith("Ms")) {
+      return;
+    }
+    if (!metric.histogram) {
+      if (histogramCount >= MAX_HISTOGRAMS) {
+        droppedHistogramSamples += 1;
+        return;
+      }
+      // Microsecond resolution, two significant digits, and a global allocation cap.
+      metric.histogram = createHistogram({
+        lowest: 1,
+        highest: MAX_DURATION_MS * HISTOGRAM_SCALE + 1,
+        figures: 2,
+      });
+      metric.clampedCount = 0;
+      histogramCount += 1;
+    }
+    if (value > MAX_DURATION_MS) {
+      metric.clampedCount = (metric.clampedCount ?? 0) + 1;
+    }
+    // Offset by one because histograms accept only positive integers; zero stays zero.
+    metric.histogram.record(Math.round(Math.min(value, MAX_DURATION_MS) * HISTOGRAM_SCALE) + 1);
+  };
   const subscriptions = CHANNELS.map((name) => {
     const source = channel(name);
     const listener = (message: unknown) => {
@@ -151,8 +214,18 @@ export function startGatewayBenchDiagnostics() {
       durationMs: endedAt - startedAt,
       droppedEvents,
       collectionErrors,
-      gc,
-      groups: [...groups.values()],
+      droppedHistogramSamples,
+      histogram: { maxHistograms: MAX_HISTOGRAMS, maxDurationMs: MAX_DURATION_MS, figures: 2 },
+      gc: summarizeMetrics(gc),
+      groups: [...groups.values()].map((group) => ({
+        channel: group.channel,
+        operation: group.operation,
+        outcome: group.outcome,
+        cacheRole: group.cacheRole,
+        writer: group.writer,
+        count: group.count,
+        metrics: summarizeMetrics(group.metrics),
+      })),
     };
   };
 }

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -47,7 +48,6 @@ function encodeCompletionProfile(content: string, encoding: CompletionProfileEnc
   return encoding === "utf16be" ? buffer.swap16() : buffer;
 }
 
-/** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
 export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
@@ -79,29 +79,16 @@ export function resolveShellFromEnv(
   return platform === "win32" ? "powershell" : "zsh";
 }
 
-function sanitizeCompletionBasename(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "openclaw";
-  }
-  return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
-}
-
-function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "completions");
-}
-
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
 export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
-  const basename = sanitizeCompletionBasename(binName);
+  const basename = (binName.trim() || "openclaw").replace(/[^a-zA-Z0-9._-]/g, "-");
   return path.join(
-    resolveCompletionCacheDir(),
+    resolveStateDir(process.env, os.homedir),
+    "completions",
     `${basename}.${shell === "powershell" ? "ps1" : shell}`,
   );
 }
 
-/** Check if the completion cache file exists for the given shell. */
 export async function completionCacheExists(
   shell: CompletionShell,
   binName = "openclaw",
@@ -153,10 +140,6 @@ export function formatCompletionReloadCommand(shell: CompletionShell, scriptPath
   const homePrefix = scriptPath.startsWith("~/") ? "~/" : "";
   const value = scriptPath.slice(homePrefix.length);
   return `source ${homePrefix}${quoteCompletionPath(shell, value)}`;
-}
-
-function isCompletionProfileHeader(line: string): boolean {
-  return line.trim() === "# OpenClaw Completion";
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
@@ -282,20 +265,14 @@ function isPortableCompletionSourceLine(
     return false;
   }
   const trimmed = line.replace(/^[ \t]+|[ \t]+$/gu, "");
-  let guardOperand: string | undefined;
-  let sourceOperand: string | undefined;
-  if (shell === "fish") {
-    const hook = /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
-    guardOperand = hook?.[1];
-    sourceOperand = hook?.[2];
-  } else {
-    // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
-    const hook =
-      /^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
-      /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
-    guardOperand = hook?.[1];
-    sourceOperand = hook?.[2];
-  }
+  // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
+  const hook =
+    shell === "fish"
+      ? /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed)
+      : (/^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
+        /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed));
+  const guardOperand = hook?.[1];
+  const sourceOperand = hook?.[2];
   return (
     guardOperand !== undefined &&
     sourceOperand !== undefined &&
@@ -377,7 +354,7 @@ function updateCompletionProfile(
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
-    if (isCompletionProfileHeader(line)) {
+    if (line.trim() === "# OpenClaw Completion") {
       const following = lines[i + 1] ?? "";
       if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
         filtered.push(line);
@@ -401,8 +378,6 @@ function updateCompletionProfile(
       // A portable hook for the current cache counts as configured and stays untouched.
       hadExisting = true;
       portableCoversCurrent = true;
-      filtered.push(line);
-      continue;
     }
     filtered.push(line);
   }
@@ -411,39 +386,16 @@ function updateCompletionProfile(
     const next = filtered.join("\n");
     return { next, changed: next !== content, hadExisting };
   }
-  const trimmed = filtered.join("\n").trimEnd();
+  const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
 }
 
 async function resolveCompletionProfileWritePath(profilePath: string): Promise<string> {
-  const profileDir = path.dirname(profilePath);
-  // Shell startup follows a symlink before `..`; create and canonicalize that lexical parent first.
-  await fs.mkdir(profileDir, { recursive: true });
-  const canonicalDir = await fs.realpath(profileDir);
-  try {
-    // Existing dotfile-manager symlinks must keep pointing at the atomically replaced referent.
-    return await fs.realpath(profilePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  const linkTarget = await fs.readlink(profilePath).catch((error: unknown) => {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EINVAL") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (linkTarget === undefined) {
-    return path.join(canonicalDir, path.basename(profilePath));
-  }
-  // A dangling relative link is resolved from the directory that physically owns the link.
-  const targetPath = path.isAbsolute(linkTarget)
-    ? linkTarget
-    : `${canonicalDir}${path.sep}${linkTarget}`;
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(profilePath);
+  // Keep unresolved `..` components until mkdir has created their physical parents.
+  const targetPath = [existingPath, ...unresolvedSegments].join(path.sep);
   const targetDir = path.dirname(targetPath);
   await fs.mkdir(targetDir, { recursive: true });
   return path.join(await fs.realpath(targetDir), path.basename(targetPath));

@@ -1,8 +1,3 @@
-/**
- * Interactive terminal theme loader.
- *
- * Validates theme JSON, resolves color variables, watches custom theme files, and exposes terminal styling helpers.
- */
 import * as fs from "node:fs";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -10,10 +5,6 @@ import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
-
-// ============================================================================
-// Types & Schema
-// ============================================================================
 
 const ColorValueSchema = Type.Union([
   Type.String(), // hex "#ff0000", var ref "primary", or empty ""
@@ -27,7 +18,6 @@ const ThemeJsonSchema = Type.Object({
   name: Type.String(),
   vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
   colors: Type.Object({
-    // Core UI (10 colors)
     accent: ColorValueSchema,
     border: ColorValueSchema,
     borderAccent: ColorValueSchema,
@@ -39,7 +29,6 @@ const ThemeJsonSchema = Type.Object({
     dim: ColorValueSchema,
     text: ColorValueSchema,
     thinkingText: ColorValueSchema,
-    // Backgrounds & Content Text (11 colors)
     selectedBg: ColorValueSchema,
     userMessageBg: ColorValueSchema,
     userMessageText: ColorValueSchema,
@@ -51,7 +40,6 @@ const ThemeJsonSchema = Type.Object({
     toolErrorBg: ColorValueSchema,
     toolTitle: ColorValueSchema,
     toolOutput: ColorValueSchema,
-    // Markdown (10 colors)
     mdHeading: ColorValueSchema,
     mdLink: ColorValueSchema,
     mdLinkUrl: ColorValueSchema,
@@ -62,11 +50,9 @@ const ThemeJsonSchema = Type.Object({
     mdQuoteBorder: ColorValueSchema,
     mdHr: ColorValueSchema,
     mdListBullet: ColorValueSchema,
-    // Tool Diffs (3 colors)
     toolDiffAdded: ColorValueSchema,
     toolDiffRemoved: ColorValueSchema,
     toolDiffContext: ColorValueSchema,
-    // Syntax Highlighting (9 colors)
     syntaxComment: ColorValueSchema,
     syntaxKeyword: ColorValueSchema,
     syntaxFunction: ColorValueSchema,
@@ -76,14 +62,12 @@ const ThemeJsonSchema = Type.Object({
     syntaxType: ColorValueSchema,
     syntaxOperator: ColorValueSchema,
     syntaxPunctuation: ColorValueSchema,
-    // Thinking Level Borders (6 colors)
     thinkingOff: ColorValueSchema,
     thinkingMinimal: ColorValueSchema,
     thinkingLow: ColorValueSchema,
     thinkingMedium: ColorValueSchema,
     thinkingHigh: ColorValueSchema,
     thinkingXhigh: ColorValueSchema,
-    // Bash Mode (1 color)
     bashMode: ColorValueSchema,
   }),
   export: Type.Optional(
@@ -99,52 +83,7 @@ type ThemeJson = Static<typeof ThemeJsonSchema>;
 
 const validateThemeJson = Compile(ThemeJsonSchema);
 
-type ThemeColor =
-  | "accent"
-  | "border"
-  | "borderAccent"
-  | "borderMuted"
-  | "success"
-  | "error"
-  | "warning"
-  | "muted"
-  | "dim"
-  | "text"
-  | "thinkingText"
-  | "userMessageText"
-  | "customMessageText"
-  | "customMessageLabel"
-  | "toolTitle"
-  | "toolOutput"
-  | "mdHeading"
-  | "mdLink"
-  | "mdLinkUrl"
-  | "mdCode"
-  | "mdCodeBlock"
-  | "mdCodeBlockBorder"
-  | "mdQuote"
-  | "mdQuoteBorder"
-  | "mdHr"
-  | "mdListBullet"
-  | "toolDiffAdded"
-  | "toolDiffRemoved"
-  | "toolDiffContext"
-  | "syntaxComment"
-  | "syntaxKeyword"
-  | "syntaxFunction"
-  | "syntaxVariable"
-  | "syntaxString"
-  | "syntaxNumber"
-  | "syntaxType"
-  | "syntaxOperator"
-  | "syntaxPunctuation"
-  | "thinkingOff"
-  | "thinkingMinimal"
-  | "thinkingLow"
-  | "thinkingMedium"
-  | "thinkingHigh"
-  | "thinkingXhigh"
-  | "bashMode";
+type ThemeColor = Exclude<keyof ThemeJson["colors"], ThemeBg>;
 
 type ThemeBg =
   | "selectedBg"
@@ -156,9 +95,13 @@ type ThemeBg =
 
 type ColorMode = "truecolor" | "256color";
 
-// ============================================================================
-// Color Utilities
-// ============================================================================
+const THINKING_BORDER_COLORS = new Map<string, ThemeColor>([
+  ["minimal", "thinkingMinimal"],
+  ["low", "thinkingLow"],
+  ["medium", "thinkingMedium"],
+  ["high", "thinkingHigh"],
+  ["xhigh", "thinkingXhigh"],
+]);
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const cleaned = hex.replace("#", "");
@@ -209,7 +152,6 @@ function colorDistance(
 }
 
 function rgbTo256(r: number, g: number, b: number): number {
-  // Find closest color in the 6x6x6 cube
   const rIdx = findClosestPaletteIndex(r, CUBE_VALUES);
   const gIdx = findClosestPaletteIndex(g, CUBE_VALUES);
   const bIdx = findClosestPaletteIndex(b, CUBE_VALUES);
@@ -222,7 +164,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const cubeIndex = 16 + 36 * rIdx + 6 * gIdx + bIdx;
   const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
-  // Find closest grayscale
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   const grayIdx = findClosestPaletteIndex(gray, GRAY_VALUES);
   const grayValue = GRAY_VALUES[grayIdx];
@@ -238,18 +179,11 @@ function rgbTo256(r: number, g: number, b: number): number {
   const minC = Math.min(r, g, b);
   const spread = maxC - minC;
 
-  // Only consider grayscale if color is nearly neutral (spread < 10)
-  // AND grayscale is actually closer
   if (spread < 10 && grayDist < cubeDist) {
     return grayIndex;
   }
 
   return cubeIndex;
-}
-
-function hexTo256(hex: string): number {
-  const { r, g, b } = hexToRgb(hex);
-  return rgbTo256(r, g, b);
 }
 
 function colorAnsi(color: string | number, mode: ColorMode, layer: "fg" | "bg"): string {
@@ -261,12 +195,10 @@ function colorAnsi(color: string | number, mode: ColorMode, layer: "fg" | "bg"):
     return `\x1b[${code};5;${color}m`;
   }
   if (color.startsWith("#")) {
-    if (mode === "truecolor") {
-      const { r, g, b } = hexToRgb(color);
-      return `\x1b[${code};2;${r};${g};${b}m`;
-    }
-    const index = hexTo256(color);
-    return `\x1b[${code};5;${index}m`;
+    const { r, g, b } = hexToRgb(color);
+    return mode === "truecolor"
+      ? `\x1b[${code};2;${r};${g};${b}m`
+      : `\x1b[${code};5;${rgbTo256(r, g, b)}m`;
   }
   throw new Error(`Invalid color value: ${color}`);
 }
@@ -281,9 +213,6 @@ function resolveVarRefs(
   }
   if (visited.has(value)) {
     throw new Error(`Circular variable reference detected: ${value}`);
-  }
-  if (!(value in vars)) {
-    throw new Error(`Variable reference not found: ${value}`);
   }
   visited.add(value);
   const resolved = vars[value];
@@ -303,10 +232,6 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
   }
   return resolved as Record<keyof T, string | number>;
 }
-
-// ============================================================================
-// Theme Class
-// ============================================================================
 
 // Keep formatting independent of overridable public ANSI getters.
 function getThemeAnsi(colors: ReadonlyMap<string, string>, color: string, label: string): string {
@@ -390,33 +315,14 @@ export class Theme {
   getThinkingBorderColor(
     level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ): (str: string) => string {
-    // Map thinking levels to dedicated theme colors
-    switch (level) {
-      case "off":
-        return (str: string) => this.fg("thinkingOff", str);
-      case "minimal":
-        return (str: string) => this.fg("thinkingMinimal", str);
-      case "low":
-        return (str: string) => this.fg("thinkingLow", str);
-      case "medium":
-        return (str: string) => this.fg("thinkingMedium", str);
-      case "high":
-        return (str: string) => this.fg("thinkingHigh", str);
-      case "xhigh":
-        return (str: string) => this.fg("thinkingXhigh", str);
-      default:
-        return (str: string) => this.fg("thinkingOff", str);
-    }
+    const color = THINKING_BORDER_COLORS.get(level) ?? "thinkingOff";
+    return (str: string) => this.fg(color, str);
   }
 
   getBashModeBorderColor(): (str: string) => string {
     return (str: string) => this.fg("bashMode", str);
   }
 }
-
-// ============================================================================
-// Theme Loading
-// ============================================================================
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
   if (!validateThemeJson.Check(json)) {
@@ -501,15 +407,9 @@ export function loadThemeFromPath(themePath: string, mode?: ColorMode): Theme {
   return createTheme(themeJson, mode, themePath);
 }
 
-// ============================================================================
-// Global Theme Instance
-// ============================================================================
-
 // Use globalThis to share theme across module loaders (tsx + jiti in dev mode)
 const THEME_KEY = Symbol.for("openclaw:agent-theme");
 
-// Export theme as a getter that reads from globalThis
-// This ensures all module instances (tsx, jiti) see the same theme
 export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
   get(_target, prop) {
     const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
@@ -520,51 +420,25 @@ export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
   },
 });
 
-// ============================================================================
-// HTML Export Helpers
-// ============================================================================
+// Resolve the shared proxy at render time so replacing the global theme stays live.
+const cliHighlightTheme: Record<string, (s: string) => string> = {
+  keyword: (s) => interactiveAgentTheme.fg("syntaxKeyword", s),
+  built_in: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  literal: (s) => interactiveAgentTheme.fg("syntaxNumber", s),
+  number: (s) => interactiveAgentTheme.fg("syntaxNumber", s),
+  string: (s) => interactiveAgentTheme.fg("syntaxString", s),
+  comment: (s) => interactiveAgentTheme.fg("syntaxComment", s),
+  function: (s) => interactiveAgentTheme.fg("syntaxFunction", s),
+  title: (s) => interactiveAgentTheme.fg("syntaxFunction", s),
+  class: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  type: (s) => interactiveAgentTheme.fg("syntaxType", s),
+  attr: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  variable: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  params: (s) => interactiveAgentTheme.fg("syntaxVariable", s),
+  operator: (s) => interactiveAgentTheme.fg("syntaxOperator", s),
+  punctuation: (s) => interactiveAgentTheme.fg("syntaxPunctuation", s),
+};
 
-// ============================================================================
-// TUI Helpers
-// ============================================================================
-
-type CliHighlightTheme = Record<string, (s: string) => string>;
-
-let cachedHighlightThemeFor: Theme | undefined;
-let cachedCliHighlightTheme: CliHighlightTheme | undefined;
-
-function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
-  return {
-    keyword: (s: string) => t.fg("syntaxKeyword", s),
-    built_in: (s: string) => t.fg("syntaxType", s),
-    literal: (s: string) => t.fg("syntaxNumber", s),
-    number: (s: string) => t.fg("syntaxNumber", s),
-    string: (s: string) => t.fg("syntaxString", s),
-    comment: (s: string) => t.fg("syntaxComment", s),
-    function: (s: string) => t.fg("syntaxFunction", s),
-    title: (s: string) => t.fg("syntaxFunction", s),
-    class: (s: string) => t.fg("syntaxType", s),
-    type: (s: string) => t.fg("syntaxType", s),
-    attr: (s: string) => t.fg("syntaxVariable", s),
-    variable: (s: string) => t.fg("syntaxVariable", s),
-    params: (s: string) => t.fg("syntaxVariable", s),
-    operator: (s: string) => t.fg("syntaxOperator", s),
-    punctuation: (s: string) => t.fg("syntaxPunctuation", s),
-  };
-}
-
-function getCliHighlightTheme(t: Theme): CliHighlightTheme {
-  if (cachedHighlightThemeFor !== t || !cachedCliHighlightTheme) {
-    cachedHighlightThemeFor = t;
-    cachedCliHighlightTheme = buildCliHighlightTheme(t);
-  }
-  return cachedCliHighlightTheme;
-}
-
-/**
- * Highlight code with syntax coloring based on file extension or language.
- * Returns array of highlighted lines.
- */
 export function highlightCode(code: string, lang?: string): string[] {
   // Validate language before highlighting to avoid stderr spam from cli-highlight
   const validLang = lang && supportsLanguage(lang) ? lang : undefined;
@@ -574,21 +448,13 @@ export function highlightCode(code: string, lang?: string): string[] {
   if (!validLang) {
     return code.split("\n").map((line) => interactiveAgentTheme.fg("mdCodeBlock", line));
   }
-  const opts = {
-    language: validLang,
-    ignoreIllegals: true,
-    theme: getCliHighlightTheme(interactiveAgentTheme),
-  };
   try {
-    return highlight(code, opts).split("\n");
+    return highlight(code, validLang, cliHighlightTheme).split("\n");
   } catch {
     return code.split("\n");
   }
 }
 
-/**
- * Get language identifier from file path extension.
- */
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
   if (!ext) {

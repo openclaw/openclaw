@@ -33,6 +33,32 @@ describe("config boundary guard", () => {
     tempRoots = [];
   });
 
+  it.each([
+    {
+      name: "deprecated API",
+      collect: collectDeprecatedInternalConfigApiViolations,
+      file: "src/example.ts",
+      expected:
+        "src/example.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
+    },
+    {
+      name: "runtime action",
+      collect: collectRuntimeActionLoadConfigViolations,
+      file: "extensions/telegram/src/send.ts",
+      expected: "extensions/telegram/src/send.ts:1: export function run() { return loadConfig(); }",
+    },
+  ])("refreshes $name source between scans", ({ collect, file, expected }) => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(repoRoot, file, "export function run() {}\n");
+    expect(collect({ repoRoot })).toEqual([]);
+
+    writeFixture(repoRoot, file, "export function run() { return loadConfig(); }\n");
+    expect(collect({ repoRoot })).toEqual([expected]);
+
+    writeFixture(repoRoot, file, "export function run() {}\n");
+    expect(collect({ repoRoot })).toEqual([]);
+  });
+
   it("flags deprecated runtime config calls in production plugin code", () => {
     const repoRoot = makeRepoFixture();
     writeFixture(

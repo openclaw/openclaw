@@ -1,9 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { LegacyAgentListEntry } from "../config/legacy.roster.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
 type AgentRosterConfig = {
   readonly agents?: {
@@ -16,35 +16,68 @@ export type ListedAgentEntry = {
   entry: AgentEntry;
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
+type ListedLegacyAgentEntry = {
+  entry: LegacyAgentListEntry;
+  source: ListedAgentEntry["source"];
+};
 
-/** Lists valid configured agent entries from config. */
-export function listAgentEntriesWithSource(cfg: AgentRosterConfig): ListedAgentEntry[] {
+function collectAgentEntries(
+  cfg: AgentRosterConfig,
+  withSource: true,
+  limit?: number,
+): ListedLegacyAgentEntry[];
+function collectAgentEntries(
+  cfg: AgentRosterConfig,
+  withSource: false,
+  limit?: number,
+): LegacyAgentListEntry[];
+function collectAgentEntries(
+  cfg: AgentRosterConfig,
+  withSource: boolean,
+  limit?: number,
+): Array<LegacyAgentListEntry | ListedLegacyAgentEntry> {
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && isRecord(roster.value)) {
-    return Object.entries(roster.value).flatMap(([id, entry]) =>
-      isRecord(entry)
-        ? [
-            {
-              entry: { ...entry, id },
-              source: { kind: "entries" as const, key: id },
-            },
-          ]
-        : [],
-    );
+    const result: Array<LegacyAgentListEntry | ListedLegacyAgentEntry> = [];
+    for (const id in roster.value) {
+      if (!Object.hasOwn(roster.value, id)) {
+        continue;
+      }
+      const entry = roster.value[id];
+      if (isRecord(entry)) {
+        const projected = { ...entry, id };
+        result.push(
+          withSource ? { entry: projected, source: { kind: "entries", key: id } } : projected,
+        );
+        if (result.length === limit) {
+          break;
+        }
+      }
+    }
+    return result;
   }
   if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
     return [];
   }
-  return roster.value.flatMap((entry, index) =>
-    entry !== null && typeof entry === "object"
-      ? [{ entry: entry as AgentEntry, source: { kind: "list" as const, index } }] // SAFETY: Raw roster compatibility keeps objects verbatim; callers normalize ids.
-      : [],
-  );
+  const listed: ListedLegacyAgentEntry[] = [];
+  roster.value.some((entry, index) => {
+    if (entry !== null && typeof entry === "object") {
+      // SAFETY: Raw roster compatibility keeps objects verbatim; callers normalize ids.
+      listed.push({ entry: entry as LegacyAgentListEntry, source: { kind: "list", index } });
+    }
+    return listed.length === limit;
+  });
+  return withSource ? listed : listed.map(({ entry }) => entry);
+}
+
+/** Lists valid configured agent entries from config. */
+export function listAgentEntriesWithSource(cfg: AgentRosterConfig): ListedAgentEntry[] {
+  return collectAgentEntries(cfg, true);
 }
 
 /** Lists valid configured agent entries from either supported representation. */
 export function listAgentEntries(cfg: AgentRosterConfig): AgentEntry[] {
-  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
+  return collectAgentEntries(cfg, false);
 }
 
 /** Reads the explicitly owned raw roster without normalizing malformed values. */
@@ -79,21 +112,11 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
     // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
     return [LEGACY_IMPLICIT_AGENT_ID];
   }
-  const seen = new Set<string>();
-  const ids: string[] = [];
-  for (const entry of agents) {
-    const id = normalizeAgentId(entry?.id);
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    ids.push(id);
-  }
-  return ids;
+  return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
 }
 
 export function tryResolveSoleAgentId(cfg: AgentRosterConfig): string | undefined {
-  const agents = listAgentEntries(cfg);
+  const agents = collectAgentEntries(cfg, false, 2);
   if (agents.length === 0) {
     if (!hasAgentRosterProperty(cfg)) {
       return LEGACY_IMPLICIT_AGENT_ID;
@@ -107,7 +130,7 @@ export function tryResolveRawLegacyDefaultAgentId(cfg: AgentRosterConfig): strin
   if (cfg.agents?.ownership === "explicit") {
     return undefined;
   }
-  const marked = listAgentEntries(cfg).filter((entry) => entry.default === true);
+  const marked = collectAgentEntries(cfg, false).filter((entry) => entry.default === true);
   return marked.length === 1 ? normalizeAgentId(marked[0]!.id) : undefined;
 }
 
@@ -118,8 +141,5 @@ export function tryResolveDefaultAgentId(cfg: AgentRosterConfig): string | undef
 
 /** Preserves legacy data locators independently of the configured runtime owner. */
 export function tryResolveLegacyDataOwner(cfg: AgentRosterConfig): string | undefined {
-  const retained = getRetainedLegacyDefaultAgentId(cfg);
-  return retained && listAgentIds(cfg).includes(retained)
-    ? retained
-    : tryResolveDefaultAgentId(cfg);
+  return tryResolveDefaultAgentId(cfg);
 }

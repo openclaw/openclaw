@@ -34,6 +34,7 @@ import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionTurnClaim,
 } from "./worker-environments/placement-record.js";
+import { readSessionWorkerPlacementAsync } from "./worker-environments/session-placement-lifecycle.js";
 
 export type NodeClaudeSkillRuntime = {
   node: NodeSession;
@@ -83,7 +84,10 @@ export async function prepareNodeClaudeSkillRuntime(
   const caller = getGatewayToolCallerIdentity();
   const placements = gateway.workerSessionPlacementService;
   const readPlacement = () => placements?.getMany([run.sessionId]).get(run.sessionId);
-  const placement = readPlacement();
+  const placement = await readSessionWorkerPlacementAsync({
+    context: gateway,
+    sessionId: run.sessionId,
+  });
   const persistedClaim = placement?.turnClaim;
   const claim: WorkerSessionTurnClaim | undefined =
     persistedClaim?.owner === "local"
@@ -174,7 +178,12 @@ export async function prepareNodeClaudeSkillRuntime(
     assertCurrent();
     const resources: SkillResourceDelivery | undefined = run.skillsSnapshot?.librarySelections
       ?.length
-      ? await prepareSkillResourceDelivery(run.skillsSnapshot, assertCurrent)
+      ? await prepareSkillResourceDelivery(
+          run.skillsSnapshot,
+          assertCurrent,
+          [],
+          context.workspaceDir,
+        )
       : undefined;
     assertCurrent();
     const workshop = context.nodeSkillWorkshop;

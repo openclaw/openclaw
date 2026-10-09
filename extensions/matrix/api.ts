@@ -1,7 +1,6 @@
-// Matrix API module exposes the plugin public contract.
 export { matrixPlugin } from "./src/channel.js";
 export { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./src/setup-core.js";
-export { matrixOnboardingAdapter } from "./src/setup-surface.js";
+export { matrixOnboardingAdapter } from "./src/onboarding.js";
 export {
   findMatrixAccountEntry,
   requiresExplicitMatrixDefaultAccount,

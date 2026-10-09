@@ -1,9 +1,18 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import {
+  hasProviderTransportDispatcherPool,
+  stopActiveManagedProviderLocalServices,
+} from "../agents/provider-runtime-lifecycle.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
 // consumes at most two 2-second waits. Keep command teardown bounded independently.
 const DISPOSER_TIMEOUT_MS = 5_000;
-const pendingDisposers = new Map<symbol, { name: string; operation: Promise<void> }>();
+const pendingDisposers = new Map<
+  symbol,
+  { name: string; operation: Promise<void>; deferred: boolean }
+>();
 
 export function getPendingCliDisposers(): string[] {
   return [...pendingDisposers.values()].map(({ name }) => name);
@@ -16,36 +25,66 @@ export async function waitForPendingCliDisposers(): Promise<void> {
   }
 }
 
+/** Preserve resources for overdue cleanup without making the command wait again. */
+export async function runCliDisposerAfterPending(
+  name: string,
+  dispose: () => Promise<void>,
+): Promise<void> {
+  const pending = [...pendingDisposers.values()];
+  if (pending.length === 0) {
+    return runCliDisposer(name, dispose);
+  }
+  const token = Symbol(name);
+  const predecessors = pending.filter(({ deferred }) => deferred).map((entry) => entry.operation);
+  const operation = Promise.resolve().then(async () => {
+    // Later deferred drains must not become mutual dependencies. Ordinary disposal can
+    // admit cleanup tails after its reporting deadline, so reselect those until idle.
+    await Promise.allSettled(predecessors);
+    for (;;) {
+      const active = [...pendingDisposers.values()]
+        .filter(({ deferred }) => !deferred)
+        .map((entry) => entry.operation);
+      if (active.length === 0) {
+        break;
+      }
+      await Promise.allSettled(active);
+    }
+    pendingDisposers.delete(token);
+    await runCliDisposer(name, dispose);
+  });
+  pendingDisposers.set(token, { name, operation, deferred: true });
+  console.error(
+    `CLI cleanup deferred: ${name} until pending disposers settle: ${pending.map((entry) => entry.name).join(", ")}`,
+  );
+}
+
 export async function runCliDisposer(
   name: string,
   dispose: () => Promise<void>,
   runCleanup?: (dispose: () => Promise<void>) => Promise<void>,
+  timeoutMs = DISPOSER_TIMEOUT_MS,
 ): Promise<void> {
   const token = Symbol(name);
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
     .finally(() => pendingDisposers.delete(token));
-  pendingDisposers.set(token, { name, operation });
+  pendingDisposers.set(token, { name, operation, deferred: false });
   try {
-    await Promise.race([
-      operation,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          console.error(`CLI cleanup timed out: ${name} after ${DISPOSER_TIMEOUT_MS}ms`);
-          resolve();
-        }, DISPOSER_TIMEOUT_MS);
-      }),
-    ]);
+    await raceWithTimeout(operation, timeoutMs, () => {
+      console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
+    });
   } catch {
     // Teardown cannot mask the command outcome or skip later resources.
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
   const runCleanup = cleanup?.pluginResources?.runCleanup;
+  if (cleanup) {
+    const scheduledWork = cleanup.scheduler.stop();
+    await runCliDisposer("scheduled-work", () => scheduledWork, runCleanup);
+    await scheduledWork;
+  }
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {
       const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
@@ -74,18 +113,8 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         cleanup.registries.clear();
       }
     },
-    "provider-local-services": async () => {
-      const { hasManagedProviderLocalServices } =
-        await import("../agents/provider-runtime-lifecycle.js");
-      if (hasManagedProviderLocalServices()) {
-        const { stopManagedProviderLocalServices } =
-          await import("../agents/provider-local-service.js");
-        await stopManagedProviderLocalServices();
-      }
-    },
+    "provider-local-services": stopActiveManagedProviderLocalServices,
     "provider-transport-dispatchers": async () => {
-      const { hasProviderTransportDispatcherPool } =
-        await import("../agents/provider-runtime-lifecycle.js");
       if (hasProviderTransportDispatcherPool()) {
         const { closeProviderTransportDispatcherPool } =
           await import("../agents/provider-transport-dispatcher-pool.js");
@@ -108,6 +137,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await closeActiveMemorySearchManagersCore();
       }
     },
+    "proxy-capture": finalizeActiveDebugProxyCaptures,
     "agent-databases": async () => {
       const { hasOpenClawAgentDatabaseAsyncResources } =
         await import("../state/openclaw-agent-db-resources.js");

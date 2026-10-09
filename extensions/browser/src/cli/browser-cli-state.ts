@@ -1,28 +1,21 @@
-/**
- * Browser CLI state commands for cookies, storage, viewport, emulation, and
- * HTTP context settings.
- */
 import type { Command } from "commander";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseBrowserViewportDimension, runBrowserResizeWithOutput } from "./browser-cli-resize.js";
+import { registerBrowserResizeCommand } from "./browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   printBrowserJsonResult,
   runBrowserCliCommand as runBrowserCommand,
+  runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
-import { danger, defaultRuntime, parseBooleanValue } from "./core-api.js";
-
-function parseOnOff(raw: string): boolean | null {
-  const parsed = parseBooleanValue(raw);
-  return parsed === undefined ? null : parsed;
-}
 
 function parseFiniteNumberOption(value: string | undefined, label: string): number | undefined {
   if (value === undefined) {
@@ -37,28 +30,6 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
   return parsed;
 }
 
-async function runBrowserSetRequest(params: {
-  parent: BrowserParentOpts;
-  path: string;
-  body: Record<string, unknown>;
-  successMessage: string;
-}) {
-  await runBrowserCommand(async () => {
-    const profile = params.parent?.browserProfile;
-    const result = await callBrowserRequest(params.parent, {
-      method: "POST",
-      path: params.path,
-      query: profile ? { profile } : undefined,
-      body: params.body,
-    });
-    if (printBrowserJsonResult(params.parent, result)) {
-      return;
-    }
-    defaultRuntime.log(params.successMessage);
-  });
-}
-
-/** Registers Browser state/configuration commands. */
 export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -67,55 +38,43 @@ export function registerBrowserStateCommands(
 
   const set = browser.command("set").description("Browser environment settings");
 
-  set
-    .command("viewport")
-    .description("Set viewport size (alias for resize)")
-    .argument("<width>", "Viewport width")
-    .argument("<height>", "Viewport height")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
-      const width = parseBrowserViewportDimension(widthRaw, "width");
-      const height = parseBrowserViewportDimension(heightRaw, "height");
-      if (width === undefined || height === undefined) {
-        return;
-      }
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserCommand(async () => {
-        await runBrowserResizeWithOutput({
+  registerBrowserResizeCommand(
+    set.command("viewport").description("Set viewport size (alias for resize)"),
+    parentOpts,
+    true,
+  );
+
+  const registerParsedSetting = (kind: "offline" | "media") => {
+    const offline = kind === "offline";
+    const choices = offline ? "on|off" : "dark|light|no-preference|none";
+    set
+      .command(kind)
+      .description(offline ? "Toggle offline mode" : "Emulate prefers-color-scheme")
+      .argument(`<${choices}>`, choices.replaceAll("|", "/"))
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+      .action(async (value: string, opts, cmd) => {
+        const parent = parentOpts(cmd);
+        const parsed = offline ? parseBooleanValue(value) : normalizeOptionalLowercaseString(value);
+        if (
+          parsed === undefined ||
+          (typeof parsed === "string" && !choices.split("|").includes(parsed))
+        ) {
+          defaultRuntime.error(danger(`Expected ${choices}`));
+          defaultRuntime.exit(1);
+          return;
+        }
+        await runBrowserCliRequest({
           parent,
-          profile,
-          width,
-          height,
-          targetId: opts.targetId,
-          successMessage: `viewport set: ${width}x${height}`,
+          path: `/set/${kind}`,
+          body: {
+            [offline ? "offline" : "colorScheme"]: parsed,
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+          successMessage: `${offline ? "offline" : "media colorScheme"}: ${parsed}`,
         });
       });
-    });
-
-  set
-    .command("offline")
-    .description("Toggle offline mode")
-    .argument("<on|off>", "on/off")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (value: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const offline = parseOnOff(value);
-      if (offline === null) {
-        defaultRuntime.error(danger("Expected on|off"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/offline",
-        body: {
-          offline,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `offline: ${offline}`,
-      });
-    });
+  };
+  registerParsedSetting("offline");
 
   set
     .command("headers")
@@ -167,7 +126,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/credentials",
         body: {
@@ -202,7 +161,7 @@ export function registerBrowserStateCommands(
         ) {
           return;
         }
-        await runBrowserSetRequest({
+        await runBrowserCliRequest({
           parent,
           path: "/set/geolocation",
           body: {
@@ -218,83 +177,33 @@ export function registerBrowserStateCommands(
       },
     );
 
-  set
-    .command("media")
-    .description("Emulate prefers-color-scheme")
-    .argument("<dark|light|no-preference|none>", "dark/light/no-preference/none")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (value: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const v = normalizeOptionalLowercaseString(value);
-      const colorScheme =
-        v === "dark" || v === "light" || v === "no-preference" || v === "none" ? v : null;
-      if (!colorScheme) {
-        defaultRuntime.error(danger("Expected dark|light|no-preference|none"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/media",
-        body: {
-          colorScheme,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `media colorScheme: ${colorScheme}`,
-      });
-    });
+  registerParsedSetting("media");
 
-  set
-    .command("timezone")
-    .description("Override timezone (CDP)")
-    .argument("<timezoneId>", "Timezone ID (e.g. America/New_York)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (timezoneId: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/timezone",
-        body: {
-          timezoneId,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `timezone: ${timezoneId}`,
+  for (const [command, description, parameter, argumentHelp] of [
+    ["timezone", "Override timezone (CDP)", "timezoneId", "Timezone ID (e.g. America/New_York)"],
+    ["locale", "Override locale (CDP)", "locale", "Locale (e.g. en-US)"],
+    [
+      "device",
+      'Apply a Playwright device descriptor (e.g. "iPhone 14")',
+      "name",
+      "Device name (Playwright devices)",
+    ],
+  ] as const) {
+    set
+      .command(command)
+      .description(description)
+      .argument(`<${parameter}>`, argumentHelp)
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+      .action(async (value: string, opts, cmd) => {
+        await runBrowserCliRequest({
+          parent: parentOpts(cmd),
+          path: `/set/${command}`,
+          body: {
+            [parameter]: value,
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+          successMessage: `${command}: ${value}`,
+        });
       });
-    });
-
-  set
-    .command("locale")
-    .description("Override locale (CDP)")
-    .argument("<locale>", "Locale (e.g. en-US)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (locale: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/locale",
-        body: {
-          locale,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `locale: ${locale}`,
-      });
-    });
-
-  set
-    .command("device")
-    .description('Apply a Playwright device descriptor (e.g. "iPhone 14")')
-    .argument("<name>", "Device name (Playwright devices)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (name: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/device",
-        body: {
-          name,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `device: ${name}`,
-      });
-    });
+  }
 }

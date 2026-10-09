@@ -7,6 +7,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import {
+  expectTranscriptLayoutCommitted,
   hostGroupedNativeCatalogs,
   resumableClaudeCatalog,
 } from "./claude-sessions.test-support.ts";
@@ -349,10 +350,11 @@ suite.define(() => {
         title: "claude --resume claude-termi…",
       });
       await expect.poll(() => connecting.count()).toBe(1);
+      const terminalOutput = "Claude Code ready\r\n";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "claude-terminal-e2e",
-        seq: 17,
-        data: "Claude Code ready\r\n",
+        seq: terminalOutput.length,
+        data: terminalOutput,
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
@@ -632,11 +634,21 @@ suite.define(() => {
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const expectCenteredLayout = async (screenshotName: string) => {
-      const [workbenchBox, threadBox, composerBox] = await Promise.all([
-        catalogPane.locator(".chat-workbench").boundingBox(),
-        catalogPane.locator(".chat-thread-inner").boundingBox(),
-        catalogPane.locator(".agent-chat__composer-shell").boundingBox(),
-      ]);
+      await expectTranscriptLayoutCommitted(thread);
+      // Sample all centers in one browser turn so they describe the same layout.
+      const [workbenchBox, threadBox, composerBox] = await catalogPane.evaluate((element) =>
+        [".chat-workbench", ".chat-thread-inner", ".agent-chat__composer-shell"].map((selector) => {
+          const target = element.querySelector(selector);
+          const box = target?.getBoundingClientRect();
+          return target &&
+            getComputedStyle(target).visibility === "visible" &&
+            box &&
+            box.width > 0 &&
+            box.height > 0
+            ? { x: box.x, width: box.width }
+            : null;
+        }),
+      );
       expect(workbenchBox).not.toBeNull();
       expect(threadBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
@@ -825,6 +837,10 @@ suite.define(() => {
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
       ).toEqual([2, 6, 22]);
+      for (const request of await gateway.getRequests("chat.history")) {
+        expect(request.params).toMatchObject({ limit: 1000 });
+        expect(request.params).not.toHaveProperty("maxBytes");
+      }
     } finally {
       await suite.closeBrowserContext(context);
       if (artifactDir && proofVideo) {

@@ -25,7 +25,7 @@ export class CloudWorkerConfigSave {
       note: string;
       canDispatch: () => boolean;
       failed: () => string;
-      success: () => string | void;
+      success: () => string;
     },
   ): Promise<boolean> {
     this.update({ busy: true, error: null, notice: null });
@@ -50,7 +50,7 @@ export class CloudWorkerConfigSave {
         this.update({ error: runtimeConfig.state.lastError ?? options.failed() });
         return false;
       }
-      this.update({ notice: options.success() ?? null });
+      this.update({ notice: options.success() });
       return true;
     } catch (error) {
       if (isCurrent()) {

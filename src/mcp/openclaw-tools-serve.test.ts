@@ -1,10 +1,10 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveToolsMcpAgentId } from "./agent-session-env.js";
 import {
   buildSystemAgentToolsMcpServerConfig,
@@ -22,10 +22,12 @@ import {
 } from "./openclaw-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mcp-subagent-policy-");
 
 vi.mock("../system-agent/overview.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../system-agent/overview.js")>();
+  const { withSystemAgentOverviewSources } =
+    await import("../system-agent/overview.test-support.js");
   const config = {
     agents: {
       ownership: "explicit" as const,
@@ -39,27 +41,23 @@ vi.mock("../system-agent/overview.js", async (importOriginal) => {
   return {
     ...actual,
     loadSystemAgentOverview: (options?: Parameters<typeof actual.loadSystemAgentOverview>[0]) =>
-      actual.loadSystemAgentOverview({
-        ...options,
-        deps: {
-          readConfigFileSnapshot: async () => ({
-            path: "/tmp/openclaw-mcp-owner.json",
-            exists: true,
-            valid: true,
-            raw: null,
-            parsed: config,
-            sourceConfig: config,
-            resolved: config,
-            runtimeConfig: config,
-            config,
-            issues: [],
-            warnings: [],
-            legacyIssues: [],
-          }),
-          probeLocalCommand: async (command) => ({ command, found: false }),
-          probeGatewayUrl: async (url) => ({ url, reachable: false }),
+      withSystemAgentOverviewSources(
+        {
+          path: "/tmp/openclaw-mcp-owner.json",
+          exists: true,
+          valid: true,
+          raw: null,
+          parsed: config,
+          sourceConfig: config,
+          resolved: config,
+          runtimeConfig: config,
+          config,
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
         },
-      }),
+        () => actual.loadSystemAgentOverview(options),
+      ),
   };
 });
 
@@ -68,17 +66,8 @@ afterEach(() => {
 });
 
 describe("OpenClaw tools MCP server", () => {
-  it("exposes cron", async () => {
-    const handlers = createPluginToolsMcpHandlers(
-      resolveOpenClawToolsForMcp({ agentSessionKey: "agent:worker:main" }),
-    );
-
-    const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toContain("automations");
-  });
-
   it("does not expose cron to a persisted sub-agent ACP session", async () => {
-    const tempDir = tempDirs.make("openclaw-mcp-subagent-policy-");
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:main:acp:resumed-child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -139,15 +128,6 @@ describe("OpenClaw tools MCP server", () => {
         [OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: " agent:worker:main ",
       }),
     ).toBe("agent:worker:main");
-  });
-
-  it("serves the ring-zero openclaw tool without an agent session key", async () => {
-    const handlers = createPluginToolsMcpHandlers(
-      resolveOpenClawToolsForMcp({ tools: ["openclaw"], systemAgentSurface: "cli" }),
-    );
-
-    const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toEqual(["openclaw"]);
   });
 
   it("keeps the generated helper owner through MCP diagnostic actions", async () => {

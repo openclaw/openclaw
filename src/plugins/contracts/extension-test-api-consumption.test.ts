@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { collectModuleReferencesFromSource } from "../../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const THIS_TEST_FILE = "src/plugins/contracts/extension-test-api-consumption.test.ts";
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 type ExtensionTestApi = {
   absoluteStem: string;
@@ -60,23 +64,22 @@ function objectStringProperty(node: ts.ObjectLiteralExpression, name: string): s
     }
     const propertyName = ts.isIdentifier(property.name)
       ? property.name.text
-      : ts.isStringLiteralLike(property.name)
+      : ts.isStringLiteralLikeNode(property.name)
         ? property.name.text
         : undefined;
-    if (propertyName === name && ts.isStringLiteralLike(property.initializer)) {
+    if (propertyName === name && ts.isStringLiteralLikeNode(property.initializer)) {
       return property.initializer.text;
     }
   }
   return undefined;
 }
 
-function collectTestApiSourceReferences(source: string, fileName = "source.ts") {
-  const moduleSpecifiers = ts
-    .preProcessFile(source, true, true)
-    .importedFiles.map((entry) => entry.fileName)
+function collectTestApiSourceReferences(sourceFile: ts.SourceFile) {
+  const moduleSpecifiers = collectModuleReferencesFromSource(sourceFile)
+    .filter((entry) => entry.kind !== "import-meta-url")
+    .map((entry) => entry.specifier)
     .toSorted();
   const pluginIds = new Set<string>();
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
 
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node)) {
@@ -89,7 +92,7 @@ function collectTestApiSourceReferences(source: string, fileName = "source.ts") 
       if (
         name === "loadQaRunnerBundledPluginTestApi" &&
         pluginId &&
-        ts.isStringLiteralLike(pluginId)
+        ts.isStringLiteralLikeNode(pluginId)
       ) {
         pluginIds.add(pluginId.text);
       }
@@ -99,7 +102,7 @@ function collectTestApiSourceReferences(source: string, fileName = "source.ts") 
         pluginIds.add(pluginId);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -127,6 +130,28 @@ function collectOrphanExtensionTestApiFiles(): string[] {
     testApis.filter((testApi) => testApi.packageExportsTestApi).map((testApi) => testApi.pluginId),
   );
   const testApiFiles = new Set(testApis.map((testApi) => testApi.repoPath));
+  const pendingSources: Array<{ fileName: string; text: string }> = [];
+
+  function consumePendingSources(): void {
+    if (pendingSources.length === 0) {
+      return;
+    }
+    const sources = pendingSources.splice(0);
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const references = collectTestApiSourceReferences(sourceFile);
+      for (const pluginId of references.pluginIds) {
+        if (testApis.some((testApi) => testApi.pluginId === pluginId)) {
+          consumed.add(pluginId);
+        }
+      }
+      for (const specifier of references.moduleSpecifiers) {
+        const pluginId = resolveTestApiPluginId(specifier, sourceFile.fileName, testApis);
+        if (pluginId) {
+          consumed.add(pluginId);
+        }
+      }
+    }
+  }
 
   for (const repoPath of listTrackedFiles(["src", "test", "extensions", "packages", "scripts"])) {
     if (
@@ -137,23 +162,23 @@ function collectOrphanExtensionTestApiFiles(): string[] {
       continue;
     }
     const absolutePath = resolve(REPO_ROOT, repoPath);
-    const source = fs.readFileSync(absolutePath, "utf8");
+    let source: string;
+    try {
+      source = fs.readFileSync(absolutePath, "utf8");
+    } catch (error) {
+      // Preserve earlier parse failures before reporting a later unreadable file.
+      consumePendingSources();
+      throw error;
+    }
     if (!source.includes("test-api") && !source.includes("loadQaRunnerBundledPluginTestApi")) {
       continue;
     }
-    const references = collectTestApiSourceReferences(source, absolutePath);
-    for (const pluginId of references.pluginIds) {
-      if (testApis.some((testApi) => testApi.pluginId === pluginId)) {
-        consumed.add(pluginId);
-      }
-    }
-    for (const specifier of references.moduleSpecifiers) {
-      const pluginId = resolveTestApiPluginId(specifier, absolutePath, testApis);
-      if (pluginId) {
-        consumed.add(pluginId);
-      }
+    pendingSources.push({ fileName: absolutePath, text: source });
+    if (pendingSources.length === 32) {
+      consumePendingSources();
     }
   }
+  consumePendingSources();
 
   return testApis
     .filter((testApi) => !consumed.has(testApi.pluginId))
@@ -164,24 +189,34 @@ function collectOrphanExtensionTestApiFiles(): string[] {
 describe("extension test API consumption", () => {
   it("ignores identifier text and generic loader implementations", () => {
     expect(
-      collectTestApiSourceReferences(`
+      collectTestApiSourceReferences(
+        parser.parseSourceFile(
+          "source.ts",
+          `
         const testing = {};
         function loadQaRunnerBundledPluginTestApi(pluginId: string) {
           return load({ pluginId, artifactBasename: "test-api.js" });
         }
-      `),
+      `,
+        ),
+      ),
     ).toStrictEqual({ moduleSpecifiers: [], pluginIds: [] });
   });
 
   it("collects real module edges and literal plugin loaders", () => {
     expect(
-      collectTestApiSourceReferences(`
+      collectTestApiSourceReferences(
+        parser.parseSourceFile(
+          "source.ts",
+          `
         import { testing } from "@openclaw/example/test-api.js";
         export { helper } from "../test-api.js";
         type TestApi = typeof import("./test-api.js");
         loadQaRunnerBundledPluginTestApi("matrix");
         loadBundledPluginFacade({ pluginId: "codex", artifactBasename: "test-api.js" });
-      `),
+      `,
+        ),
+      ),
     ).toStrictEqual({
       moduleSpecifiers: ["../test-api.js", "./test-api.js", "@openclaw/example/test-api.js"],
       pluginIds: ["codex", "matrix"],

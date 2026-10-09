@@ -1,27 +1,15 @@
-import { calculateUsageCost } from "@openclaw/llm-core";
+import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
-import { normalizeUsage } from "../agents/usage.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareModelPricingContext } from "../model-catalog/pricing.js";
+import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import { resolveModelCostConfig } from "../utils/usage-format.js";
-import type {
-  CostBreakdown,
-  CostUsageTotals,
-  ParsedTranscriptEntry,
-} from "./session-cost-usage.types.js";
-
-const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
-  value === "provider-billed" ? value : undefined;
+import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
   }
-  const record = usageRaw as Record<string, unknown>;
-  const cost = record.cost as Record<string, unknown> | undefined;
+  const cost = usageRaw.cost;
   if (!cost) {
     return undefined;
   }
@@ -37,7 +25,7 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     output: asFiniteNumber(cost.output),
     cacheRead: asFiniteNumber(cost.cacheRead),
     cacheWrite: asFiniteNumber(cost.cacheWrite),
-    totalOrigin: normalizeUsageCostTotalOrigin(cost.totalOrigin),
+    totalOrigin: cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined,
   };
 };
 
@@ -60,7 +48,9 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   return undefined;
 };
 
-const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptEntry | null => {
+export const parseUsageCostTranscriptRecord = (
+  entry: Record<string, unknown>,
+): ParsedTranscriptEntry | null => {
   const message = entry.message as Record<string, unknown> | undefined;
   if (!message || typeof message !== "object") {
     return null;
@@ -89,7 +79,6 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
   const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
 
   return {
-    message,
     role,
     timestamp: parseTimestamp(entry),
     durationMs,
@@ -120,126 +109,34 @@ export const computeUsageTokenTotals = (usage: NormalizedUsage) => {
     output,
     cacheRead,
     cacheWrite,
-    componentTotal,
     totalTokens: usage.total ?? componentTotal,
   };
 };
 
-export const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage): void => {
-  const usageTotals = computeUsageTokenTotals(usage);
-  totals.input += usageTotals.input;
-  totals.output += usageTotals.output;
-  totals.cacheRead += usageTotals.cacheRead;
-  totals.cacheWrite += usageTotals.cacheWrite;
-  totals.totalTokens += usageTotals.totalTokens;
-};
-
-export const applyCostBreakdown = (
-  totals: CostUsageTotals,
-  costBreakdown: CostBreakdown | undefined,
-): void => {
-  if (costBreakdown === undefined || costBreakdown.total === undefined) {
-    return;
-  }
-  totals.totalCost += costBreakdown.total;
-  totals.inputCost += costBreakdown.input ?? 0;
-  totals.outputCost += costBreakdown.output ?? 0;
-  totals.cacheReadCost += costBreakdown.cacheRead ?? 0;
-  totals.cacheWriteCost += costBreakdown.cacheWrite ?? 0;
-};
-
-// Legacy function for backwards compatibility (no cost breakdown available)
-export const applyCostTotal = (
-  totals: CostUsageTotals,
-  costTotal: number | undefined,
-  provider?: string,
-  model?: string,
-): void => {
-  if (costTotal === undefined) {
-    totals.missingCostEntries += 1;
-    const modelKey = `${normalizeOptionalString(provider) ?? "unknown"}/${normalizeOptionalString(model) ?? "unknown"}`;
-    totals.missingCostByModel ??= {};
-    totals.missingCostByModel[modelKey] = (totals.missingCostByModel[modelKey] ?? 0) + 1;
-    return;
-  }
-  totals.totalCost += costTotal;
-};
-
-// A resolved cost config only counts as "known" pricing when it carries at least one
-// positive per-token rate (or tiered pricing). An all-zero config is indistinguishable
-// from "pricing unknown": e.g. codex models ship cost {input:0,output:0,...} in the
-// generated models.json because the Codex backend exposes no per-token price. Treating
-// such a config as a real $0 makes usage-cost report confident zero spend, which
-// silently blinds every budget/spike safeguard that keys off totalCost.
-const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): boolean => {
-  if (!cost) {
-    return false;
-  }
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    return true;
-  }
-  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
-};
-
-const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
-  costBreakdown?.total === 0 &&
-  (costBreakdown.totalOrigin === "provider-billed" ||
-    [
-      costBreakdown.input,
-      costBreakdown.output,
-      costBreakdown.cacheRead,
-      costBreakdown.cacheWrite,
-    ].some((value) => value !== undefined && value !== 0));
-
 export type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
-}) => ReturnType<typeof resolveModelCostConfig>;
-
-export function createUsageCostResolver(params?: {
-  config?: OpenClawConfig;
-  agentDir?: string;
-}): UsageCostResolver {
-  const cache = new Map<string, ReturnType<typeof resolveModelCostConfig>>();
-  return ({ provider, model }) => {
-    const key = `${provider ?? ""}\0${model ?? ""}`;
-    if (cache.has(key)) {
-      return cache.get(key);
-    }
-    const cost = resolveModelCostConfig({
-      provider,
-      model,
-      config: params?.config,
-      agentDir: params?.agentDir,
-    });
-    cache.set(key, cost);
-    return cost;
-  };
-}
+}) => ModelCostConfig | undefined;
 
 type UsageCostEstimateEntry = ParsedTranscriptEntry & { usage: NormalizedUsage };
 
-function needsUsageCostEstimate(
+export function needsUsageCostEstimate(
   entry: ParsedTranscriptEntry | null,
 ): entry is UsageCostEstimateEntry {
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
-    !(
-      (entry?.costTotal ?? 0) > 0 ||
-      entry?.costBreakdown?.totalOrigin === "provider-billed" ||
-      shouldPreserveRecordedZeroCost(entry?.costBreakdown)
-    )
+    !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
   );
 }
 
-function estimateUsageCostEntry(
+export function applyUsageCostEstimate(
   entry: UsageCostEstimateEntry,
   resolveCost: UsageCostResolver,
 ): ParsedTranscriptEntry {
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
   const { totalTokens } = computeUsageTokenTotals(entry.usage);
-  if (!isModelPricingKnown(cost) && totalTokens > 0) {
+  if (!cost && totalTokens > 0) {
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
   } else if (entry.costTotal === undefined || totalTokens > 0) {
@@ -248,26 +145,4 @@ function estimateUsageCostEntry(
     entry.costTotal = entry.costBreakdown?.total;
   }
   return entry;
-}
-
-export function parseUsageCostTranscriptEntry(
-  parsed: Record<string, unknown>,
-  resolveCost: UsageCostResolver,
-): ParsedTranscriptEntry | null {
-  const entry = parseTranscriptEntry(parsed);
-  return needsUsageCostEstimate(entry) ? estimateUsageCostEntry(entry, resolveCost) : entry;
-}
-
-/** Diagnostic readers prepare only when a record actually needs an estimate. */
-export async function parseUsageCostTranscriptEntryAsync(
-  parsed: Record<string, unknown>,
-  resolveCost: UsageCostResolver,
-  config?: OpenClawConfig,
-): Promise<ParsedTranscriptEntry | null> {
-  const entry = parseTranscriptEntry(parsed);
-  if (!needsUsageCostEstimate(entry)) {
-    return entry;
-  }
-  await prepareModelPricingContext(config);
-  return estimateUsageCostEntry(entry, resolveCost);
 }

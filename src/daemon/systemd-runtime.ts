@@ -13,6 +13,7 @@ import {
 } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
+  resolveSystemdServiceStartRefusal,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
 import type {
@@ -35,101 +36,9 @@ import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { readSystemdServiceExecStart, resolveSystemdServiceName } from "./systemd-service-files.js";
 import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
-type SystemdServiceInfo = {
-  loadState?: string;
-  activeState?: string;
-  subState?: string;
-  mainPid?: number;
-  execMainStatus?: number;
-  execMainCode?: string;
-  result?: string;
-  nRestarts?: number;
-  startLimitBurst?: number;
-  unit?: string;
-  killMode?: string;
-  tasksCurrent?: number;
-  memoryCurrent?: number;
-};
-
-function parseSystemdShow(output: string): SystemdServiceInfo {
-  const entries = parseKeyValueOutput(output, "=");
-  const info: SystemdServiceInfo = {};
-  const loadState = entries.loadstate;
-  if (loadState) {
-    info.loadState = loadState;
-  }
-  const activeState = entries.activestate;
-  if (activeState) {
-    info.activeState = activeState;
-  }
-  const subState = entries.substate;
-  if (subState) {
-    info.subState = subState;
-  }
-  const mainPidValue = entries.mainpid;
-  if (mainPidValue) {
-    const pid = parseStrictPositiveInteger(mainPidValue);
-    if (pid !== undefined) {
-      info.mainPid = pid;
-    }
-  }
-  const execMainStatusValue = entries.execmainstatus;
-  if (execMainStatusValue) {
-    const status = parseStrictInteger(execMainStatusValue);
-    if (status !== undefined) {
-      info.execMainStatus = status;
-    }
-  }
-  const execMainCode = entries.execmaincode;
-  if (execMainCode) {
-    info.execMainCode = execMainCode;
-  }
-  const result = entries.result;
-  if (result) {
-    info.result = result;
-  }
-  const nRestartsValue = entries.nrestarts;
-  if (nRestartsValue) {
-    const nRestarts = parseStrictInteger(nRestartsValue);
-    if (nRestarts !== undefined) {
-      info.nRestarts = nRestarts;
-    }
-  }
-  const startLimitBurstValue = entries.startlimitburst;
-  if (startLimitBurstValue) {
-    const startLimitBurst = parseStrictInteger(startLimitBurstValue);
-    if (startLimitBurst !== undefined) {
-      info.startLimitBurst = startLimitBurst;
-    }
-  }
-  const unit = entries.id;
-  if (unit) {
-    info.unit = unit;
-  }
-  const killMode = entries.killmode;
-  if (killMode) {
-    info.killMode = killMode;
-  }
-  const tasksCurrentValue = entries.taskscurrent;
-  if (tasksCurrentValue) {
-    const tasksCurrent = parseStrictNonNegativeInteger(tasksCurrentValue);
-    if (tasksCurrent !== undefined) {
-      info.tasksCurrent = tasksCurrent;
-    }
-  }
-  const memoryCurrentValue = entries.memorycurrent;
-  if (memoryCurrentValue) {
-    const memoryCurrent = parseStrictNonNegativeInteger(memoryCurrentValue);
-    if (memoryCurrent !== undefined) {
-      info.memoryCurrent = memoryCurrent;
-    }
-  }
-  return info;
-}
-
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  const installed = await findInstalledSystemdGatewayScope(env);
+  const installed = await findInstalledSystemdGatewayScope(env, { timeoutMs: args.timeoutMs });
   if (!installed) {
     return false;
   }
@@ -155,7 +64,7 @@ export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env));
+  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env, opts));
   if (opts?.requireLoaded) {
     return await readLoadedSystemdServiceRuntime(
       env,
@@ -166,12 +75,18 @@ export async function readSystemdServiceRuntime(
     );
   }
   const timeoutMs = opts?.timeoutMs;
-  let commandInspectionFailure: GatewayServiceRuntime | undefined;
+  let commandInspectionFailure =
+    opts?.commandInspection?.kind === "unavailable"
+      ? createServiceRuntimeInspectionFailure(
+          sanitizeServiceInspectionError(opts.commandInspection.error),
+        )
+      : undefined;
   if (installed?.scope !== "system") {
     try {
       await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
       return {
+        ...commandInspectionFailure,
         status: "unknown",
         detail: formatErrorMessage(err),
         ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
@@ -208,7 +123,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,LoadState,UnitFileState,RefuseManualStart,CanStart,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
   ];
   const res =
     installed?.scope === "system"
@@ -225,17 +140,30 @@ export async function readSystemdServiceRuntime(
       ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     };
   }
-  const parsed = parseSystemdShow(res.stdout || "");
-  const loadState = normalizeLowercaseStringOrEmpty(parsed.loadState);
-  const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
+  const entries = parseKeyValueOutput(res.stdout || "", "=");
+  const loadState = normalizeLowercaseStringOrEmpty(entries.loadstate);
+  const activeState = normalizeLowercaseStringOrEmpty(entries.activestate);
+  const startRefusal = resolveSystemdServiceStartRefusal({
+    unit: unitName,
+    scope: installed?.scope,
+    loadState,
+    activeState,
+    unitFileState: entries.unitfilestate || undefined,
+    refuseManualStart: entries.refusemanualstart === "yes",
+    canStart: entries.canstart === "yes" ? true : entries.canstart === "no" ? false : undefined,
+  });
   if (loadState !== "loaded") {
     return {
       status: "unknown",
       missingUnit: false,
+      ...(startRefusal
+        ? { systemd: { scope: installed?.scope ?? "user", unit: unitName, startRefusal } }
+        : {}),
       detail:
-        loadState === "not-found"
+        startRefusal?.message ??
+        (loadState === "not-found"
           ? `Unit ${unitName} is not visible in the ${installed?.scope ?? "user"} systemd manager.`
-          : `Unit ${unitName} has an unverified systemd load state.`,
+          : `Unit ${unitName} has an unverified systemd load state.`),
     };
   }
   // Restart and shutdown transitions can still own or respawn the process.
@@ -249,21 +177,24 @@ export async function readSystemdServiceRuntime(
   return {
     ...commandInspectionFailure,
     status,
-    state: parsed.activeState,
-    subState: parsed.subState,
-    pid: parsed.mainPid,
-    lastExitStatus: parsed.execMainStatus,
-    lastExitReason: parsed.execMainCode,
+    ...(startRefusal ? { detail: startRefusal.message } : {}),
+    state: entries.activestate || undefined,
+    subState: entries.substate || undefined,
+    pid: parseStrictPositiveInteger(entries.mainpid),
+    lastExitStatus: parseStrictInteger(entries.execmainstatus),
+    lastExitReason: entries.execmaincode || undefined,
     systemd: {
       scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
-      unit: parsed.unit ?? unitName,
-      killMode: parsed.killMode,
-      tasksCurrent: parsed.tasksCurrent,
-      memoryCurrent: parsed.memoryCurrent,
-      result: parsed.result,
-      nRestarts: parsed.nRestarts,
-      startLimitBurst: parsed.startLimitBurst,
+      unit: entries.id || unitName,
+      ...(startRefusal ? { startRefusal } : {}),
+      controlGroup: entries.controlgroup || undefined,
+      killMode: entries.killmode || undefined,
+      tasksCurrent: parseStrictNonNegativeInteger(entries.taskscurrent),
+      memoryCurrent: parseStrictNonNegativeInteger(entries.memorycurrent),
+      result: entries.result || undefined,
+      nRestarts: parseStrictInteger(entries.nrestarts),
+      startLimitBurst: parseStrictInteger(entries.startlimitburst),
     },
   };
 }

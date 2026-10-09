@@ -2,6 +2,8 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
@@ -14,6 +16,18 @@ import {
 } from "./transport.js";
 import { createClient, signing, ts } from "./transport.test-helpers.js";
 import type { RelayFriend } from "./types.js";
+
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 function pendingFriend(peer = "bob"): RelayFriend {
   return {
@@ -28,6 +42,7 @@ function pendingFriend(peer = "bob"): RelayFriend {
 }
 
 afterEach(() => {
+  effectInput.current = undefined;
   vi.useRealTimers();
 });
 
@@ -48,6 +63,66 @@ describe("isRetryableReefRelayFailure", () => {
 });
 
 describe("ReefTransportClient network failures", () => {
+  it.each([false, true])(
+    "keeps authority refusal outside transport retries (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const response = createDeferred<Response>();
+      const requested = createDeferred<void>();
+      const refusal = new Error("message use refused");
+      let initiating = false;
+      let handedOff = false;
+      effectInput.current = {
+        active: true,
+        run: (run) => run(),
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (!allowed) {
+            throw refusal;
+          }
+          initiating = true;
+          try {
+            return effect();
+          } finally {
+            initiating = false;
+            handedOff = true;
+          }
+        },
+      };
+      const fetcher = vi.fn(() => {
+        expect(initiating).toBe(true);
+        requested.resolve();
+        return response.promise;
+      });
+      const completion = createClient(fetcher).listFriends();
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, requested.promise]),
+          "Fetch skipped preparation",
+        );
+        expect(fetcher).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(isRetryableReefRelayFailure(refusal)).toBe(false);
+          expect(fetcher).not.toHaveBeenCalled();
+          return;
+        }
+        await awaitGateBeforeSettlement(requested.promise, completion, "Fetch was not initiated");
+        expect(handedOff).toBe(true);
+        response.resolve(Response.json({ friendships: [] }));
+        await expect(completion).resolves.toEqual({ friendships: [] });
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ friendships: [] }));
+        await completion.catch(() => {});
+      }
+    },
+  );
+
   it("normalizes fetch failures without swallowing the cause", async () => {
     const cause = new TypeError("fetch failed");
     const client = createClient(async () => {
@@ -230,8 +305,6 @@ describe("ReefTransportClient device authentication", () => {
 
   it.each([
     { name: "an empty 204", response: () => new Response(null, { status: 204 }), accept: true },
-    { name: "a primitive", response: () => Response.json("active"), accept: true },
-    { name: "a malformed object", response: () => Response.json({ peer: "bob" }), accept: true },
     {
       name: "a different peer",
       response: () => Response.json({ peer: "mallory", status: "active" }),

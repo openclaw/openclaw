@@ -3,11 +3,12 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 
 const controls = process.env.AGENT_PLUGIN_E2E_FIXTURE_DIR;
 const phase = process.env.AGENT_PLUGIN_E2E_WRITE_PHASE;
 const signal = process.env.AGENT_PLUGIN_E2E_SIGNAL;
-if (!controls || !["fixture", "config", "install"].includes(phase)) {
+if (!controls || !["fixture", "config", "install", "runtime"].includes(phase)) {
   throw new Error("Missing synthetic cancellation fixture inputs");
 }
 if (signal) {
@@ -32,24 +33,11 @@ fsPromises.writeFile = async (file, ...args) => {
   }
   heldWrite = true;
   fs.writeFileSync(path.join(controls, "fixture-root"), path.dirname(path.dirname(name)));
-  await new Promise((resolve, reject) => {
-    const release = path.join(controls, "release");
-    const watcher = fs.watch(controls, () => {
-      if (fs.existsSync(release)) {
-        watcher.close();
-        resolve();
-      }
-    });
-    watcher.once("error", (error) => {
-      watcher.close();
-      reject(error);
-    });
-    process.stdout.write("fixture-write-ready\n");
-    if (fs.existsSync(release)) {
-      watcher.close();
-      resolve();
-    }
-  });
+  const release = path.join(controls, "release");
+  process.stdout.write("fixture-write-ready\n");
+  while (!fs.existsSync(release)) {
+    await setImmediate();
+  }
 };
 
 const spawn = childProcess.spawn.bind(childProcess);
@@ -77,11 +65,13 @@ childProcess.spawn = (command, args, options) => {
       ],
       options,
     );
-    if (phase === "install") {
+    if (phase === "install" || phase === "runtime") {
       fs.writeFileSync(
         path.join(controls, "fixture-root"),
         path.dirname(path.dirname(options.env.OPENCLAW_CONFIG_PATH)),
       );
+    }
+    if (phase === "install") {
       let output = "";
       const ready = (chunk) => {
         output += chunk.toString();
@@ -100,6 +90,15 @@ childProcess.spawn = (command, args, options) => {
   ) {
     const kind = entry === "scripts/e2e/mock-openai-server.mjs" ? "mock" : "gateway";
     fs.appendFileSync(path.join(controls, "launches"), `${kind}\n`);
+    if (phase === "runtime") {
+      if (kind === "mock") {
+        return spawn(command, ["--eval", "setInterval(() => {}, 1000)"], options);
+      }
+      fs.writeFileSync(
+        path.join(controls, "gateway-command"),
+        JSON.stringify({ command, hostExecPath: process.execPath }),
+      );
+    }
     throw new Error(`Synthetic service launch stopped at ${kind}`);
   }
   // The maintained tsx preload may start its compiler; no other launch is allowed.
@@ -115,5 +114,8 @@ childProcess.spawn = (command, args, options) => {
 };
 syncBuiltinESMExports();
 globalThis.fetch = async () => {
+  if (phase === "runtime") {
+    return new Response(null, { status: 200 });
+  }
   throw new Error("The cancellation fixture must not make HTTP requests");
 };

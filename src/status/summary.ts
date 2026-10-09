@@ -1,6 +1,3 @@
-// Builds the status summary used by human and JSON status output.
-// It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
@@ -26,10 +23,13 @@ import {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import type { SessionRowProjection } from "../gateway/session-row-projection.js";
+import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -45,8 +45,9 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { buildStatusCliProjection } from "./cli-projection.js";
 import {
   readStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
@@ -61,9 +62,6 @@ const channelPluginIdsModuleLoader = createLazyImportLoader(
   () => import("../plugins/channel-plugin-ids.js"),
 );
 const linkChannelModuleLoader = createLazyImportLoader(() => import("./link-channel.js"));
-const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
-  () => import("../tasks/task-registry.maintenance.js"),
-);
 const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
   const modelCatalog = await import("../agents/embedded-agent-runner/model.static-catalog.js");
   return {
@@ -93,8 +91,8 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (entry?.fastMode === "auto") {
-    flags.push("fast:auto");
+  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
+    flags.push(`fast:${entry.fastMode}`);
   } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
@@ -112,7 +110,7 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (entry?.abortedLastRun) {
     flags.push("aborted");
   }
-  const sessionId = entry?.sessionId as unknown;
+  const sessionId = entry.sessionId;
   if (typeof sessionId === "string" && sessionId.length > 0) {
     flags.push(`id:${sessionId}`);
   }
@@ -219,7 +217,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
         const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
-        const model = resolvedModel.model ?? configuredSessionModel ?? null;
+        const model = resolvedModel.model ?? configuredSessionModel;
         const lookupModel =
           resolveStatusModelLookupRef({
             provider: resolvedModel.provider,
@@ -267,7 +265,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           provider: lookupModel.provider,
           model: lookupModelId,
           ...modelContext,
-          fallbackContextTokens: configContextTokens ?? undefined,
+          fallbackContextTokens: configContextTokens,
           allowAsyncLoad: false,
         });
         const runtime = resolveSessionRuntime({
@@ -349,15 +347,17 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   };
 }
 
-/** Builds the aggregate status summary for agents, sessions, tasks, heartbeat, and channels. */
+/** Builds the aggregate status summary for agents, sessions, heartbeat, and channels. */
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
     includeChannelSummary?: boolean;
+    includeCliProjection?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
     hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
     sessionStores?: StatusSessionStores;
+    sessionRowProjection?: SessionRowProjection;
   } = {},
 ) {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -380,11 +380,11 @@ export async function getStatusSummary(
           resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
         )
     : null;
-  const agentList = listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent owner-route
-  // lookup below: outside it every resolveAgentConfig re-walks the roster and
+  const agentList = await listGatewayAgentsBasic(cfg);
+  // One roster-facts batch spans enrollment and the per-agent route inputs:
+  // outside it every resolveAgentConfig re-walks the roster and
   // a large fleet stalls the loop for the whole projection (#137570).
-  const heartbeatAgents: HeartbeatStatus[] = withAgentRosterFactsBatch(cfg, () => {
+  const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
     const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
       cfg,
       agentList.agents.map((agent) => agent.id),
@@ -392,6 +392,7 @@ export async function getStatusSummary(
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
       let waitingForRoute = false;
+      let ownerRoute: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0] | undefined;
       if (
         summary.enabled &&
         !agent.admissionRefusal &&
@@ -410,29 +411,39 @@ export async function getStatusSummary(
           sessionKey: heartbeatSession.sessionKey,
         })?.entry;
         const route = deliveryContextFromSession(entry);
-        // Owner status uses the runner's synchronous stage-1 decision.
-        waitingForRoute =
-          summary.target === "last"
-            ? !(route?.channel && route.to)
-            : !hasResolvableHeartbeatOwnerRoute({
-                cfg,
-                agentId: agent.id,
-                entry,
-                heartbeat: {
-                  ...cfg.agents?.defaults?.heartbeat,
-                  ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-                },
-              });
+        if (summary.target === "last") {
+          waitingForRoute = !(route?.channel && route.to);
+        } else {
+          ownerRoute = {
+            cfg,
+            agentId: agent.id,
+            entry,
+            heartbeat: {
+              ...cfg.agents?.defaults?.heartbeat,
+              ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+            },
+          };
+        }
       }
       return {
-        agentId: agent.id,
-        enabled: summary.enabled && !agent.admissionRefusal,
-        every: summary.every,
-        everyMs: summary.everyMs,
-        waitingForRoute,
-      } satisfies HeartbeatStatus;
+        status: {
+          agentId: agent.id,
+          enabled: summary.enabled && !agent.admissionRefusal,
+          every: summary.every,
+          everyMs: summary.everyMs,
+          waitingForRoute,
+        } satisfies HeartbeatStatus,
+        ownerRoute,
+      };
     });
   });
+  const heartbeatAgents: HeartbeatStatus[] = [];
+  for (const { status, ownerRoute } of heartbeatInputs) {
+    if (ownerRoute) {
+      status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute(ownerRoute));
+    }
+    heartbeatAgents.push(status);
+  }
   const channelSummary = needsChannelPlugins
     ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
         buildChannelSummary(cfg, {
@@ -442,43 +453,30 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  // Fleet status reads every main queue without selecting an ambient execution owner.
-  // Global session scope shares one queue, so include it only once.
-  const mainSessionKeys = new Set(
-    agentList.agents.map(({ id: agentId }) =>
-      resolveCanonicalMainSessionKey({
+  const queuedSystemEvents = agentList.agents.flatMap(({ id: agentId }) =>
+    peekSystemEvents(
+      resolveSystemEventQueueKey(
+        resolveCanonicalMainSessionKey({
+          agentId,
+          mainKey: cfg.session?.mainKey,
+          sessionScope: cfg.session?.scope,
+        }),
         agentId,
-        mainKey: cfg.session?.mainKey,
-        sessionScope: cfg.session?.scope,
-      }),
+      ),
     ),
   );
-  const queuedSystemEvents = [...mainSessionKeys].flatMap(peekSystemEvents);
-  const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
-  // Status may overlap a live Gateway, so task inspection must not initialize
-  // the writable process registry or its schema-owning shared-state handle.
-  const taskInspection = await taskMaintenanceModule.getInspectableTaskStatusSummaryReadOnly();
   const now = Date.now();
-  const { taskAudit, taskAuditRetainedLost } = taskInspection;
-  const tasks = {
-    ...taskInspection.tasks,
-    ...(taskInspection.state === "migration-required"
-      ? {
-          warning:
-            "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
-        }
-      : {}),
-  };
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
   const sessionStores =
     options.sessionStores ??
-    readStatusSessionStores(
+    (await readStatusSessionStores(
       cfg,
       agentList.agents,
       includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
-    );
+      options.sessionRowProjection,
+    ));
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
@@ -510,6 +508,9 @@ export async function getStatusSummary(
   const sqliteWal = readOpenClawStateWalHealth();
   return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    ...(options.includeCliProjection
+      ? { cliProjection: buildStatusCliProjection(cfg, agentList) }
+      : {}),
     sqliteWal: sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
     hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
@@ -528,28 +529,23 @@ export async function getStatusSummary(
     queuedSystemEvents,
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
-    secretEgressProxy: getSecretEgressCertificateStatus(),
+    installationReplacementWarning: getGatewayInstallationReplacement()?.message,
+    secretEgressProxy: await getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
-      ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
-        const redactedReason: string = redactSecretDegradationReason(reason);
-        return {
-          ownerKind,
-          ownerId,
-          state,
-          degradationState: degradationState ?? "cold",
-          paths: ownerPaths,
-          reason: redactedReason,
-        };
-      },
+      ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
+        ownerKind,
+        ownerId,
+        state,
+        degradationState: degradationState ?? "cold",
+        paths,
+        reason: redactSecretDegradationReason(reason),
+      }),
     ),
     degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
       pluginId,
       state,
       diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
     })),
-    tasks,
-    taskAudit,
-    ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
       paths: includeSensitive ? sessionStores.paths : [],
       count: sessionStores.count,
@@ -569,9 +565,13 @@ export type StatusSummary = Omit<
 > &
   Pick<
     GatheredStatusSummary,
-    "heartbeat" | "channelSummary" | "queuedSystemEvents" | "tasks" | "taskAudit" | "sessions"
+    "heartbeat" | "channelSummary" | "queuedSystemEvents" | "sessions"
   > & {
     runtimeVersion?: string | null;
+    childRuntime?: {
+      execPath: string;
+      available: boolean;
+    };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
     degradedSecretOwners?: Array<

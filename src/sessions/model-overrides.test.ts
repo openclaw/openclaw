@@ -252,13 +252,19 @@ describe("applyModelOverrideToSessionEntry", () => {
       modelOverrideSource: "default",
     };
 
-    applyModelOverrideToSessionEntry({
+    const result = applyModelOverrideToSessionEntry({
       entry,
       selection: { provider: "anthropic", model: "claude-sonnet-4-6" },
       selectionSource: "auto",
     });
 
-    expect(entry.modelOverrideSource).toBe("auto");
+    expect(result.updated).toBe(true);
+    expect(entry).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+    });
   });
 
   it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {
@@ -294,28 +300,6 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
-  it("marks non-default overrides with the provided source", () => {
-    const entry: SessionEntry = {
-      sessionId: "sess-5a",
-      updatedAt: Date.now() - 5_000,
-    };
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      },
-      selectionSource: "auto",
-    });
-
-    expect(result.updated).toBe(true);
-    expect(entry.providerOverride).toBe("anthropic");
-    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
-    expect(entry.modelOverrideSource).toBe("auto");
-    expect(entry.modelOverrideRouteResolution).toBe("resolved");
-  });
-
   it("sets liveModelSwitchPending only when explicitly requested", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5",
@@ -324,15 +308,16 @@ describe("applyModelOverrideToSessionEntry", () => {
       modelOverride: "claude-sonnet-4-6",
     };
 
+    const withoutFlagEntry: SessionEntry = { ...entry };
     const withoutFlag = applyModelOverrideToSessionEntry({
-      entry: { ...entry },
+      entry: withoutFlagEntry,
       selection: {
         provider: "openai",
         model: "gpt-5.4",
       },
     });
     expect(withoutFlag.updated).toBe(true);
-    expect(entry.liveModelSwitchPending).toBeUndefined();
+    expect(withoutFlagEntry.liveModelSwitchPending).toBeUndefined();
 
     const withFlagEntry: SessionEntry = { ...entry };
     const withFlag = applyModelOverrideToSessionEntry({
@@ -374,7 +359,6 @@ describe("applyModelOverrideToSessionEntry", () => {
 
   it.each([
     { preserveAuthProfileOverride: undefined, expectedProfile: undefined },
-    { preserveAuthProfileOverride: false, expectedProfile: undefined },
     { preserveAuthProfileOverride: true, expectedProfile: "openai:work" },
   ])(
     "keeps auth profile metadata only when preservation is $preserveAuthProfileOverride",

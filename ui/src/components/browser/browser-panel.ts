@@ -1,11 +1,3 @@
-// Dockable gateway browser panel for the Control UI shell.
-//
-// Renders the gateway-controlled browser (the same one agents drive through
-// the browser plugin) as a screenshot-backed remote view with tabs, a URL bar,
-// and two capture modes: annotate (freehand markup packaged into a chat
-// prompt + attachment) and inspect (element details at the pointer). Works in
-// any regular browser — no native webview required — and equally inside the
-// macOS app's dashboard.
 import { nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -25,12 +17,12 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import type { BrowserDashboardTarget } from "./browser-client.ts";
+import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
 import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome, type BrowserPanelDock } from "./browser-panel-render.ts";
+import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
 import {
@@ -41,7 +33,6 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-/** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
 class OpenClawBrowserPanel
   extends OpenClawLitElement
   implements BrowserPanelControllerHost, PanelHostedTabsElement
@@ -68,6 +59,7 @@ class OpenClawBrowserPanel
   @property({ type: Boolean }) refreshOnPresentation = true;
 
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) sessionTabs: BrowserTabTarget[] = [];
   @property({ attribute: false }) preferredTab?: BrowserTabSelection;
   /** A dashboard presents only its owned remote tab; its owner controls removal and restart. */
   @property({ attribute: false }) fixedTab?: BrowserTabTarget;
@@ -75,6 +67,7 @@ class OpenClawBrowserPanel
 
   private activeSessionKey = "";
   private activeDashboardKey: string | undefined;
+  private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
   private lastHostedTabsChangeKey?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
@@ -83,7 +76,6 @@ class OpenClawBrowserPanel
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private viewportResizeObserver: ResizeObserver | null = null;
   private observedViewportElement: Element | null = null;
 
@@ -97,7 +89,7 @@ class OpenClawBrowserPanel
   override connectedCallback(): void {
     super.connectedCallback();
     if (!this.embedded) {
-      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     }
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
@@ -109,7 +101,7 @@ class OpenClawBrowserPanel
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     this.viewportResizeObserver?.disconnect();
     this.viewportResizeObserver = null;
     this.observedViewportElement = null;
@@ -118,9 +110,9 @@ class OpenClawBrowserPanel
   override updated(changed: Map<string, unknown>): void {
     if (changed.has("embedded")) {
       if (this.embedded) {
-        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       } else {
-        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       }
     }
     if (changed.has("suppressed")) {
@@ -135,6 +127,12 @@ class OpenClawBrowserPanel
     const presentationChanged =
       this.embedded && (changed.has("embedded") || changed.has("presented"));
     const contextChanged = this.synchronizeBrowserContext();
+    const sessionTabsKey =
+      !this.dashboardTarget && this.sessionKey.trim()
+        ? JSON.stringify(browserRequestReferencedTabs(this.sessionTabs).map(browserTabKey))
+        : undefined;
+    const sessionTabsChanged = this.activeSessionTabsKey !== sessionTabsKey;
+    this.activeSessionTabsKey = sessionTabsKey;
     // Keep preferred metadata for the explicit handler to consume, but let the
     // pending toggle choose its route before any automatic follow or refresh.
     const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
@@ -146,7 +144,7 @@ class OpenClawBrowserPanel
       } else if (
         this.refreshOnPresentation &&
         !followedPreferred &&
-        (contextChanged || presentationChanged || gatewayAvailabilityChanged)
+        (contextChanged || presentationChanged || gatewayAvailabilityChanged || sessionTabsChanged)
       ) {
         void this.browserPanelController.refreshAll();
       }
@@ -168,7 +166,7 @@ class OpenClawBrowserPanel
     }
     this.browserPanelController.native.presentation.update();
     this.dockLayout.syncReservation();
-    this.browserPanelController.paintOverlay();
+    this.browserPanelController.input.paintOverlay();
     const viewportElement = this.renderRoot.querySelector(".bp-viewport");
     if (viewportElement !== this.observedViewportElement) {
       // The viewport is transient while the dock opens, closes, or becomes unavailable.
@@ -284,7 +282,7 @@ class OpenClawBrowserPanel
     }
   }
 
-  handleToggleRequest(event: Event): void {
+  readonly handleToggleRequest = (event: Event): void => {
     if (this.fixedTab) {
       return;
     }
@@ -297,69 +295,50 @@ class OpenClawBrowserPanel
     if (detail?.browserTab !== undefined && !browserTab) {
       return;
     }
+    const normalizedRequestedUrl =
+      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
+    let shouldRefresh = true;
     if (this.embedded) {
       if (!this.browserPanelIsOpen() || detail?.open === false || !this.available) {
         return;
       }
-      const normalizedRequestedUrl =
-        typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-      if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
-      } else if (browserTab) {
-        // Consume the current result so it cannot replace this explicit card choice.
-        this.consumedPreferredRevision = this.preferredRevision();
-        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
-      } else if (detail?.newTab === true) {
-        this.browserPanelController.beginNewTab();
-      } else if (!this.followPreferredTab()) {
-        void this.browserPanelController.refreshAll();
+    } else {
+      if (detail?.dock === "right" || detail?.dock === "bottom") {
+        this.dockLayout.setDock(detail.dock, false);
       }
-      return;
-    }
-    if (detail?.dock === "right" || detail?.dock === "bottom") {
-      this.dockLayout.setDock(detail.dock, false);
-    }
-    if (detail?.open === false) {
-      this.closePanel();
-      return;
-    }
-    const normalizedRequestedUrl =
-      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-    if (normalizedRequestedUrl || detail?.open === true) {
+      if (detail?.open === false) {
+        this.closePanel();
+        return;
+      }
+      if (!normalizedRequestedUrl && detail?.open !== true) {
+        this.toggle();
+        return;
+      }
       if (!this.available) {
         return;
       }
-      const wasOpen = this.dockLayout.open;
+      shouldRefresh = !this.dockLayout.open;
       this.dockLayout.setOpen(true);
-      if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
-      } else if (browserTab) {
-        // Consume the current result so it cannot replace this explicit card choice.
-        this.consumedPreferredRevision = this.preferredRevision();
-        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
-      } else if (detail?.newTab === true) {
-        this.browserPanelController.beginNewTab();
-      } else if (!wasOpen && !this.followPreferredTab()) {
-        void this.browserPanelController.refreshAll();
-      }
-      return;
     }
-    this.toggle();
-  }
+    if (normalizedRequestedUrl) {
+      void this.browserPanelController.openUrl(normalizedRequestedUrl, {
+        newTab: true,
+        native: detail?.native,
+      });
+    } else if (browserTab) {
+      // Consume the current result so it cannot replace this explicit card choice.
+      this.consumedPreferredRevision = this.preferredRevision();
+      void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
+    } else if (detail?.newTab === true) {
+      this.browserPanelController.beginNewTab();
+    } else if (shouldRefresh && !this.followPreferredTab()) {
+      void this.browserPanelController.refreshAll();
+    }
+  };
 
   private closePanel(): void {
     this.browserPanelController.suspendView();
     this.dockLayout.setOpen(false);
-  }
-
-  private setDock(dock: BrowserPanelDock): void {
-    this.dockLayout.setDock(dock);
   }
 
   override render() {
@@ -371,7 +350,7 @@ class OpenClawBrowserPanel
       this.dockLayout.dock,
       this.dockLayout.height,
       this.dockLayout.width,
-      (dock) => this.setDock(dock),
+      (dock) => this.dockLayout.setDock(dock),
       () => this.closePanel(),
       this.dockLayout.renderResizer("bp", t("browser.resize")),
       this.embedded,
@@ -380,8 +359,6 @@ class OpenClawBrowserPanel
   }
 }
 
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
 if (!customElements.get("openclaw-browser-panel")) {
   customElements.define("openclaw-browser-panel", OpenClawBrowserPanel);
 }

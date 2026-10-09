@@ -1,15 +1,10 @@
-// Gateway chat display sanitizer.
-// Removes OpenClaw-only envelopes before messages are shown in UI/RPC results.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
-import { stripEnvelope } from "../shared/chat-envelope.js";
-
-// Gateway chat history display strips internal/user envelopes while preserving
-// sender labels for UI rows. The helpers return original object identities when
-// nothing changes so callers can avoid unnecessary snapshot churn.
-export { stripEnvelope };
+import { projectChatWorkContextForDisplay } from "../chat/work-context.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
+export { stripEnvelope } from "../shared/chat-envelope.js";
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
   // Sender labels can be explicit fields or embedded in text/envelope content.
@@ -45,11 +40,9 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
 // inbound envelopes while assistant/tool content may carry internal metadata.
 function stripEnvelopeFromContentWithRole(content: unknown[], role: string): unknown[] {
   const stripUserEnvelope = role === "user";
-  let next: unknown[] | undefined;
-  for (let index = 0; index < content.length; index++) {
-    const item = content[index];
+  return mapChatDisplayMessages(content, (item) => {
     if (!item || typeof item !== "object") {
-      continue;
+      return item;
     }
     const entry = item as Record<string, unknown>;
     const isRoleTextBlock =
@@ -57,29 +50,22 @@ function stripEnvelopeFromContentWithRole(content: unknown[], role: string): unk
       (role === "user" && entry.type === "input_text") ||
       (role === "assistant" && (entry.type === "input_text" || entry.type === "output_text"));
     if (!isRoleTextBlock || typeof entry.text !== "string") {
-      continue;
+      return item;
     }
     const stripped = stripUserEnvelope
       ? stripUserEnvelopeForDisplay(entry.text)
       : stripInternalMetadataForDisplay(entry.text);
-    if (stripped === entry.text) {
-      continue;
-    }
-    next ??= content.slice();
-    next[index] = {
-      ...entry,
-      text: stripped,
-    };
-  }
-  return next ?? content;
+    return stripped === entry.text ? item : { ...entry, text: stripped };
+  });
 }
 
 /** Strips OpenClaw envelope metadata from one display message without mutating it. */
-export function stripEnvelopeFromMessage(message: unknown): unknown {
+function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
   }
-  const entry = message as Record<string, unknown>;
+  const projected = projectChatWorkContextForDisplay(message);
+  const entry = projected as Record<string, unknown>;
   const role = typeof entry.role === "string" ? normalizeLowercaseStringOrEmpty(entry.role) : "";
   const stripUserEnvelope = role === "user";
 
@@ -90,43 +76,25 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     next = { ...entry, senderLabel };
   }
 
-  if (typeof entry.content === "string") {
-    const stripped = stripUserEnvelope
-      ? stripUserEnvelopeForDisplay(entry.content)
-      : stripInternalMetadataForDisplay(entry.content);
-    if (stripped !== entry.content) {
+  const field =
+    typeof entry.content === "string" || Array.isArray(entry.content) ? "content" : "text";
+  const content = entry[field];
+  if (typeof content === "string" || (field === "content" && Array.isArray(content))) {
+    const stripped = Array.isArray(content)
+      ? stripEnvelopeFromContentWithRole(content, role)
+      : stripUserEnvelope
+        ? stripUserEnvelopeForDisplay(content)
+        : stripInternalMetadataForDisplay(content);
+    if (stripped !== content) {
       next ??= { ...entry };
-      next.content = stripped;
-    }
-  } else if (Array.isArray(entry.content)) {
-    const updated = stripEnvelopeFromContentWithRole(entry.content, role);
-    if (updated !== entry.content) {
-      next ??= { ...entry };
-      next.content = updated;
-    }
-  } else if (typeof entry.text === "string") {
-    const stripped = stripUserEnvelope
-      ? stripUserEnvelopeForDisplay(entry.text)
-      : stripInternalMetadataForDisplay(entry.text);
-    if (stripped !== entry.text) {
-      next ??= { ...entry };
-      next.text = stripped;
+      next[field] = stripped;
     }
   }
 
-  return next ?? message;
+  return next ?? projected;
 }
 
 /** Strips envelope metadata from a message array, preserving the original array when unchanged. */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
-  let next: unknown[] | undefined;
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    const stripped = stripEnvelopeFromMessage(message);
-    if (stripped !== message) {
-      next ??= messages.slice();
-      next[index] = stripped;
-    }
-  }
-  return next ?? messages;
+  return mapChatDisplayMessages(messages, stripEnvelopeFromMessage);
 }

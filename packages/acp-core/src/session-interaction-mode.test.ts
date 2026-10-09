@@ -1,4 +1,3 @@
-// ACP Core tests cover session interaction mode behavior.
 import { describe, expect, it } from "vitest";
 import {
   isParentOwnedBackgroundAcpSession,
@@ -13,45 +12,10 @@ describe("isParentOwnedBackgroundAcpSession", () => {
     expect(isParentOwnedBackgroundAcpSession(undefined)).toBe(false);
   });
 
-  it("returns parent-owned-background for persistent sessions with spawnedBy set", () => {
-    expect(
-      isParentOwnedBackgroundAcpSession({
-        acp: { mode: "persistent" } as never,
-        spawnedBy: parentKey,
-      }),
-    ).toBe(true);
-  });
-
   it("returns interactive for persistent ACP sessions without parent linkage", () => {
     expect(
       isParentOwnedBackgroundAcpSession({
-        acp: { mode: "persistent" } as never,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns parent-owned-background for oneshot sessions with spawnedBy set", () => {
-    expect(
-      isParentOwnedBackgroundAcpSession({
-        acp: { mode: "oneshot" } as never,
-        spawnedBy: parentKey,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns parent-owned-background for oneshot sessions with parentSessionKey set", () => {
-    expect(
-      isParentOwnedBackgroundAcpSession({
-        acp: { mode: "oneshot" } as never,
-        parentSessionKey: parentKey,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns interactive for a oneshot session without any parent linkage", () => {
-    expect(
-      isParentOwnedBackgroundAcpSession({
-        acp: { mode: "oneshot" } as never,
+        acp: { mode: "persistent" },
       }),
     ).toBe(false);
   });
@@ -59,7 +23,7 @@ describe("isParentOwnedBackgroundAcpSession", () => {
 
 describe("isRequesterParentOfBackgroundAcpSession", () => {
   const backgroundEntry = {
-    acp: { mode: "oneshot" } as never,
+    acp: { mode: "oneshot" },
     spawnedBy: parentKey,
     parentSessionKey: parentKey,
   };
@@ -67,7 +31,7 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
   it("returns true when requester matches spawnedBy", () => {
     expect(
       isRequesterParentOfBackgroundAcpSession(
-        { acp: { mode: "oneshot" } as never, spawnedBy: parentKey },
+        { acp: { mode: "oneshot" }, spawnedBy: parentKey },
         parentKey,
       ),
     ).toBe(true);
@@ -76,7 +40,7 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
   it("returns true when requester matches parentSessionKey", () => {
     expect(
       isRequesterParentOfBackgroundAcpSession(
-        { acp: { mode: "oneshot" } as never, parentSessionKey: parentKey },
+        { acp: { mode: "oneshot" }, parentSessionKey: parentKey },
         parentKey,
       ),
     ).toBe(true);
@@ -94,7 +58,7 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
   it("returns true when target is parent-owned persistent ACP session", () => {
     expect(
       isRequesterParentOfBackgroundAcpSession(
-        { acp: { mode: "persistent" } as never, spawnedBy: parentKey },
+        { acp: { mode: "persistent" }, spawnedBy: parentKey },
         parentKey,
       ),
     ).toBe(true);

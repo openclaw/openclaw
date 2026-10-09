@@ -54,6 +54,10 @@ struct Registry {
     version: u32,
     profiles: Vec<SavedGateway>,
     selected: Option<String>,
+    #[serde(default)]
+    keep_computer_awake: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    desktop_sharing_enabled: Option<bool>,
 }
 
 impl Default for Registry {
@@ -62,6 +66,8 @@ impl Default for Registry {
             version: 1,
             profiles: Vec::new(),
             selected: None,
+            keep_computer_awake: false,
+            desktop_sharing_enabled: None,
         }
     }
 }
@@ -81,8 +87,9 @@ fn credential_error(error: keyring::Error) -> String {
     {
         if let Some(cause) = cause.downcast_ref::<security_framework::base::Error>() {
             return match cause.code() {
-                -25307 => "Saved Gateways are unavailable because macOS has no default login keychain. Open Keychain Access to configure or restore it, then try again.".to_string(),
-                -25294 => "Saved Gateways are unavailable because the login keychain could not be found. Open Keychain Access to restore it, then try again.".to_string(),
+                // Isolated launch environments can hide an existing user keychain.
+                -25307 => "Saved Gateways are unavailable because OpenClaw-Tauri could not find a default keychain in its current launch environment (macOS error -25307). Quit and reopen the app from Finder, then try again.".to_string(),
+                -25294 => "Saved Gateways are unavailable because OpenClaw-Tauri could not find the configured keychain in its current launch environment (macOS error -25294). Quit and reopen the app from Finder. If this persists, check the keychain configuration in Keychain Access.".to_string(),
                 -25291 => "macOS Keychain is unavailable. Try again after your login session is ready.".to_string(),
                 -25308 | -25293 => "macOS denied access to the login keychain. Unlock it in Keychain Access or approve OpenClaw-Tauri access, then try again.".to_string(),
                 -128 => "Access to saved Gateways was canceled. Try again and approve Keychain access when prompted.".to_string(),
@@ -223,21 +230,49 @@ impl GatewayProfiles {
         self.commit(&mut cache, next)
     }
 
+    pub fn keep_computer_awake(&self) -> Result<bool, String> {
+        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
+        Ok(self.load(&mut cache)?.keep_computer_awake)
+    }
+
+    pub fn set_keep_computer_awake(&self, enabled: bool) -> Result<(), String> {
+        self.set_preference(|next| Ok((&mut next.keep_computer_awake, enabled)))
+    }
+
     pub fn selected(&self) -> Result<Option<String>, String> {
         let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
         Ok(self.load(&mut cache)?.selected.clone())
     }
 
+    pub fn desktop_sharing_enabled(&self) -> Result<Option<bool>, String> {
+        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
+        Ok(self.load(&mut cache)?.desktop_sharing_enabled)
+    }
+
+    pub fn set_desktop_sharing_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.set_preference(|next| Ok((&mut next.desktop_sharing_enabled, Some(enabled))))
+    }
+
     pub fn remember(&self, id: Option<&str>) -> Result<(), String> {
+        self.set_preference(|next| {
+            if id.is_some_and(|id| !next.profiles.iter().any(|profile| profile.id == id)) {
+                return Err(NOT_FOUND.to_string());
+            }
+            Ok((&mut next.selected, id.map(str::to_string)))
+        })
+    }
+
+    fn set_preference<T: PartialEq>(
+        &self,
+        field: impl FnOnce(&mut Registry) -> Result<(&mut T, T), String>,
+    ) -> Result<(), String> {
         let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
         let mut next = self.load(&mut cache)?.clone();
-        if id.is_some_and(|id| !next.profiles.iter().any(|profile| profile.id == id)) {
-            return Err(NOT_FOUND.to_string());
-        }
-        if next.selected.as_deref() == id {
+        let (current, value) = field(&mut next)?;
+        if *current == value {
             return Ok(());
         }
-        next.selected = id.map(str::to_string);
+        *current = value;
         self.commit(&mut cache, next)
     }
 
@@ -304,28 +339,19 @@ fn canonical_request(
     mut request: RemoteGatewayRequest,
 ) -> Result<(RemoteGatewayRequest, String), String> {
     remote_gateway::validate_request(&request)?;
-    request.token = request
-        .token
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    request.password = request
-        .password
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    request.token = remote_gateway::normalize_optional(request.token);
+    request.password = remote_gateway::normalize_optional(request.password);
     let url = request
         .url
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(remote_gateway::normalize_gateway_url)
         .transpose()?;
-    if request.tls_fingerprint.is_some() {
-        // Explicit pins use the pure validation branch; saved profiles never
-        // inherit credentials or pins from the primary Gateway configuration.
-        let validation_url = url
-            .clone()
-            .unwrap_or_else(|| tauri::Url::parse("ws://127.0.0.1:18789").expect("loopback URL"));
-        remote_gateway::resolve_remote_tls_fingerprint(&mut request, &validation_url)?;
-    }
+    request.tls_fingerprint = request
+        .tls_fingerprint
+        .as_deref()
+        .map(remote_gateway::normalize_tls_fingerprint)
+        .transpose()?;
     request.url = url.as_ref().map(ToString::to_string);
     let endpoint = if request.transport == "ssh" {
         let (target, port) = remote_gateway::validate_ssh_target(
@@ -401,12 +427,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn keep_awake_defaults_off_and_preserves_profiles_selection_and_credentials() {
+        let vault = MemoryCredential::default();
+        // Existing registry bytes have no power preference; reading must not rewrite them.
+        vault.0.lock().unwrap().value =
+            Some(br#"{"version":1,"profiles":[],"selected":null}"#.to_vec());
+        let before = vault.0.lock().unwrap().value.clone();
+        let profiles = store(&vault);
+        assert!(!profiles.keep_computer_awake().unwrap());
+        assert_eq!(vault.0.lock().unwrap().value, before);
+        let profile = profiles
+            .save(
+                "Studio",
+                None,
+                request("https://studio.example", Some("synthetic-token")),
+            )
+            .unwrap();
+        profiles.remember(Some(&profile.id)).unwrap();
+        profiles.set_keep_computer_awake(true).unwrap();
+        let restarted = store(&vault);
+        assert!(restarted.keep_computer_awake().unwrap());
+        assert_eq!(
+            restarted.selected().unwrap().as_deref(),
+            Some(profile.id.as_str())
+        );
+        assert_eq!(
+            restarted.get(&profile.id).unwrap().request.token.as_deref(),
+            Some("synthetic-token")
+        );
+        restarted.set_keep_computer_awake(false).unwrap();
+        assert!(!store(&vault).keep_computer_awake().unwrap());
+        assert_eq!(store(&vault).list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn failed_keep_awake_save_preserves_the_vault_and_cached_preference() {
+        let vault = MemoryCredential::default();
+        let profiles = store(&vault);
+        profiles.set_keep_computer_awake(true).unwrap();
+        let bytes = vault.0.lock().unwrap().value.clone();
+        vault.0.lock().unwrap().fail_write = true;
+        assert!(profiles.set_keep_computer_awake(false).is_err());
+        assert!(profiles.keep_computer_awake().unwrap());
+        assert!(store(&vault).keep_computer_awake().unwrap());
+        assert_eq!(vault.0.lock().unwrap().value, bytes);
+    }
+
+    #[test]
+    fn desktop_preference_preserves_absence_and_persists_independently_of_keep_awake() {
+        let vault = MemoryCredential::default();
+        vault.0.lock().unwrap().value = Some(
+            br#"{"version":1,"profiles":[],"selected":null,"keep_computer_awake":true}"#.to_vec(),
+        );
+        let profiles = store(&vault);
+        let before = vault.0.lock().unwrap().value.clone();
+        assert_eq!(profiles.desktop_sharing_enabled().unwrap(), None);
+        assert_eq!(vault.0.lock().unwrap().value, before);
+        profiles.set_desktop_sharing_enabled(false).unwrap();
+        let restarted = store(&vault);
+        assert_eq!(restarted.desktop_sharing_enabled().unwrap(), Some(false));
+        assert!(restarted.keep_computer_awake().unwrap());
+        vault.0.lock().unwrap().fail_write = true;
+        assert!(restarted.set_desktop_sharing_enabled(true).is_err());
+        assert_eq!(restarted.desktop_sharing_enabled().unwrap(), Some(false));
+        assert_eq!(
+            store(&vault).desktop_sharing_enabled().unwrap(),
+            Some(false)
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
-    fn credential_errors_distinguish_missing_keychains_from_denied_access() {
+    fn credential_errors_scope_missing_keychains_to_the_app_and_distinguish_denied_access() {
         for (code, no_storage_access, guidance, may_suggest_unlock) in [
-            (-25307, false, "no default login keychain", false),
-            (-25294, true, "login keychain could not be found", false),
+            (-25307, false, "default keychain", false),
+            (-25294, true, "configured keychain", false),
             (-25291, true, "Keychain is unavailable", false),
             (-25308, false, "Unlock", true),
             (-25293, false, "Unlock", true),
@@ -424,6 +520,17 @@ mod tests {
                 message.contains(guidance),
                 "wrong guidance for OSStatus {code}"
             );
+            if matches!(code, -25307 | -25294) {
+                assert!(message.contains("current launch environment"));
+                assert!(message.contains(&code.to_string()));
+                assert!(message.contains("Finder"));
+                assert!(!message.contains("restore"));
+                assert!(!message.contains("macOS has no"));
+            }
+            if code == -25294 {
+                assert!(message.contains("If this persists"));
+                assert!(message.contains("Keychain Access"));
+            }
             if !may_suggest_unlock {
                 assert!(!message.to_lowercase().contains("unlock"));
             }

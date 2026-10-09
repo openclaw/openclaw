@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -8,45 +7,37 @@ import {
   readWorkerProjectPreparation,
   type WorkerProviderPreparedIntent,
 } from "./preparation-identity.js";
+import {
+  createPreparedPoolPresence,
+  isSupersededPresenceReserve,
+  matchingPreparedPoolPresenceDemand,
+  type PreparedPoolPresenceOptions,
+} from "./prepared-pool-presence.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import type {
+  createWorkerProviderIntent,
+  WorkerProviderIntentPreparationOptions,
+} from "./provider-intent.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
-import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 const DEFAULT_READY_WORKERS = 1;
 const DEFAULT_MAX_TOTAL = 4;
 const PREPARATION_CONCURRENCY = 2;
 
-type PoolOptions = {
-  store: WorkerEnvironmentStore;
-  getConfig: () => OpenClawConfig;
+type PoolOptions = Omit<PreparedPoolPresenceOptions, "schedule" | "prepareIntent"> & {
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareIntent: (
     profileId: string,
-    options: {
-      projectPath?: string;
-      projectCommit?: string;
-      projectRepository?: RepositoryWorkerProjectSnapshot;
-      runSetupScript?: boolean;
-      machineClass?: string;
-      os?: string;
-      executionMode?: "worker-turn" | "remote-exec";
-      setupAuthorized?: boolean;
-      signal?: AbortSignal;
-    },
+    options: WorkerProviderIntentPreparationOptions,
   ) => Promise<WorkerProviderPreparedIntent>;
-  assertIntentCurrent: (profileId: string, intent: WorkerProviderPreparedIntent) => void;
-  prepareRetention: (
-    record: WorkerEnvironmentRecord,
-    signal: AbortSignal,
-  ) => Promise<{ assertCurrent: () => void } | undefined>;
+  prepareRetention: ReturnType<typeof createWorkerProviderIntent>["prepareRetention"];
   reconcile: (
     record: WorkerEnvironmentRecord,
     signal: AbortSignal,
     beforeReconcile: () => void,
   ) => Promise<void>;
-  now: () => number;
-  signal: AbortSignal;
   warn: (message: string) => void;
 };
 
@@ -55,23 +46,33 @@ export function createPreparedWorkerPool(options: PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
   let requested = false;
+  let presenceInFlight: Promise<void> | undefined;
+  let presenceAdmitted = false;
   const preparations = new Map<string, AbortController>();
   const current = () => signal.throwIfAborted();
-  const policy = (record: Pick<WorkerEnvironmentRecord, "profileId" | "providerId">) => {
+  const configuredPolicy = (profileId: string) => {
     const config = options.getConfig().cloudWorkers;
-    const profile = config?.profiles?.[record.profileId];
-    const configured =
-      profile && normalizeCapabilityProviderId(profile.provider) === record.providerId;
+    const profile = config?.profiles?.[profileId];
     return {
-      configured: Boolean(configured),
-      target: configured ? (profile.readyWorkers ?? DEFAULT_READY_WORKERS) : 0,
+      providerId: profile ? normalizeCapabilityProviderId(profile.provider) : undefined,
+      target: profile ? (profile.readyWorkers ?? DEFAULT_READY_WORKERS) : 0,
       maxTotal: config?.preparedPool?.maxTotal ?? DEFAULT_MAX_TOTAL,
+    };
+  };
+  const policy = (record: Pick<WorkerEnvironmentRecord, "profileId" | "providerId">) => {
+    const config = configuredPolicy(record.profileId);
+    const configured = config.providerId === record.providerId;
+    return {
+      configured,
+      target: configured ? config.target : 0,
+      maxTotal: config.maxTotal,
     };
   };
   const groupKey = (record: WorkerEnvironmentRecord) => {
     const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
     return project ? JSON.stringify([record.providerId, record.profileId, project.key]) : undefined;
   };
+  const presence = createPreparedPoolPresence({ ...options, schedule: () => schedule() });
   // Failed claims inherit only the original preparation window; success records
   // a separate fact that survives teardown and placement retirement.
   const demandAt = (record: WorkerEnvironmentRecord) =>
@@ -96,9 +97,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     return settings;
   };
   const runPass = async () => {
+    await store.ready();
     current();
+    const activePresenceDemand = presence.current();
+    const presenceDeferred = !presenceAdmitted;
     const inventory = store.list();
     const sources = new Map<string, { record: WorkerEnvironmentRecord; demandAtMs: number }>();
+    const activationByGeneration = new Map<string, number>();
     const buildingKeys = new Set<string>();
     for (const record of inventory) {
       const demandAtMs = demandAt(record);
@@ -112,11 +117,34 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       if (key && build && record.state !== "ready") {
         buildingKeys.add(key);
       }
+      // Exclude superseded presence generations before choosing the newest
+      // demand, so a later old-base activation cannot hide current reserves.
+      // Consumed workers remain owned by their active placements.
       if (
-        key &&
-        demandAtMs !== undefined &&
-        readWorkerProjectPreparation(record.profileSnapshot.project)
+        activePresenceDemand &&
+        (activePresenceDemand.retireAtMs ?? Infinity) > now() &&
+        activePresenceDemand.profileId === record.profileId &&
+        activePresenceDemand.project.key ===
+          readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
+        activePresenceDemand.preparationKey !== record.preparation?.key
       ) {
+        continue;
+      }
+      if (isSupersededPresenceReserve(record, activePresenceDemand)) {
+        continue;
+      }
+      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      if (key && demandAtMs !== undefined && preparation) {
+        if (record.lastActivatedAtMs !== null) {
+          const generationKey = JSON.stringify([key, preparation.key]);
+          activationByGeneration.set(
+            generationKey,
+            Math.max(
+              activationByGeneration.get(generationKey) ?? record.lastActivatedAtMs,
+              record.lastActivatedAtMs,
+            ),
+          );
+        }
         const previous = sources.get(key);
         if (
           !previous ||
@@ -134,11 +162,20 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         preparationKey: string;
         demandAtMs: number;
         expiresAtMs: number;
-        retention?: { assertCurrent: () => void };
+        retention?: { isCurrent: () => boolean };
+        deferred?: boolean;
+        activationEligible?: boolean;
+        presenceOwned?: boolean;
         intent?: WorkerProviderPreparedIntent;
         slots?: number;
       }
     >();
+    const defer = (generation: NonNullable<ReturnType<typeof eligible.get>>, error: unknown) => {
+      generation.deferred = true;
+      options.warn(
+        `Prepared worker maintenance deferred (${generation.source.profileId}); retaining unused capacity until its original expiry: ${boundedWorkerError(error)}`,
+      );
+    };
     for (const [key, { record, demandAtMs }] of sources) {
       const limits = policy(record);
       if (
@@ -148,35 +185,74 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       ) {
         continue;
       }
+      const preparationKey = readWorkerProjectPreparation(record.profileSnapshot.project)!.key;
       try {
-        const timeout = options
-          .resolveProvider(record.providerId)
-          ?.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
-        if (
+        const provider = options.resolveProvider(record.providerId);
+        if (!provider) {
+          throw new Error(`Worker provider is unavailable (${record.providerId})`);
+        }
+        const timeout = provider.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
+        const presenceOwned = matchingPreparedPoolPresenceDemand(record, activePresenceDemand);
+        const presenceExpiresAtMs = activePresenceDemand?.retireAtMs ?? Number.MAX_SAFE_INTEGER;
+        // A newer spare may supply the snapshot, but only this exact generation's
+        // real activation can supply its independent foreground demand deadline.
+        const activationDemandAtMs = presenceOwned
+          ? activationByGeneration.get(JSON.stringify([key, preparationKey]))
+          : demandAtMs;
+        const activationExpiresAtMs =
+          activationDemandAtMs !== undefined &&
           Number.isSafeInteger(timeout) &&
           timeout &&
-          timeout > 0 &&
-          demandAtMs + timeout > now()
-        ) {
+          timeout > 0
+            ? activationDemandAtMs + timeout
+            : undefined;
+        const activationEligible =
+          activationExpiresAtMs !== undefined && activationExpiresAtMs > now();
+        if ((presenceOwned && presenceExpiresAtMs > now()) || activationEligible) {
           eligible.set(key, {
             source: record,
-            preparationKey: readWorkerProjectPreparation(record.profileSnapshot.project)!.key,
-            demandAtMs,
-            expiresAtMs: demandAtMs + timeout,
+            preparationKey,
+            demandAtMs: presenceOwned
+              ? Math.max(presenceOwned.lastPresentAtMs, demandAtMs)
+              : demandAtMs,
+            expiresAtMs: Math.max(
+              presenceOwned ? presenceExpiresAtMs : 0,
+              activationExpiresAtMs ?? 0,
+            ),
+            presenceOwned: Boolean(presenceOwned),
+            deferred: Boolean(presenceOwned && presenceDeferred && !activationEligible),
+            activationEligible,
           });
         }
-      } catch {
+      } catch (error) {
         current();
-        options.warn(
-          `Prepared worker policy is unavailable (${record.profileId}); unused workers will retire`,
-        );
+        // Unknown provider policy cannot renew demand or invalidate an already owned lease.
+        const expiresAtMs = inventory.reduce((latest, reserved) => {
+          const preparation = reserved.preparation;
+          return preparation?.consumedAtMs === null &&
+            preparation.key === preparationKey &&
+            groupKey(reserved) === key &&
+            reserved.destroyRequestedAtMs === null &&
+            !["failed", "destroyed"].includes(reserved.state)
+            ? Math.max(latest, preparation.expiresAtMs)
+            : latest;
+        }, 0);
+        const generation = { source: record, preparationKey, demandAtMs, expiresAtMs };
+        defer(generation, error);
+        if (expiresAtMs > now()) {
+          eligible.set(key, generation);
+        }
       }
     }
-    const assertGenerationCurrent = (generation: NonNullable<ReturnType<typeof eligible.get>>) => {
+    const isGenerationCurrent = (generation: NonNullable<ReturnType<typeof eligible.get>>) => {
       current();
-      generation.retention!.assertCurrent();
-      if (generation.intent) {
-        options.assertIntentCurrent(generation.source.profileId, generation.intent);
+      if (generation.presenceOwned && !generation.activationEligible) {
+        if (!activePresenceDemand || !presence.matchesCurrentPolicy(activePresenceDemand)) {
+          return false;
+        }
+        if (!presenceAdmitted || !presence.isPresent()) {
+          throw new Error("Authenticated human presence is unavailable for preparation");
+        }
       }
       if (
         !isDeepStrictEqual(
@@ -184,11 +260,20 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           generation.source.profileSnapshot,
         )
       ) {
-        throw new Error("Prepared worker source changed during maintenance");
+        return false;
       }
+      if (!generation.retention?.isCurrent()) {
+        return false;
+      }
+      if (generation.intent) {
+        options.assertIntentCurrent(generation.source.profileId, generation.intent);
+      }
+      return true;
     };
     const reconcile = async (record: WorkerEnvironmentRecord) => {
       current();
+      let retirementReason: "expired" | "invalidated" | undefined;
+      let retirement: ReturnType<typeof retire>;
       const beforeReconcile = () => {
         current();
         const owned = store.get(record.environmentId);
@@ -202,28 +287,46 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         const key = groupKey(owned);
         const generation = key ? eligible.get(key) : undefined;
         if (owned.preparation.expiresAtMs <= now()) {
-          retire(owned, "expired");
+          retirementReason = "expired";
         } else if (
-          !generation?.retention ||
+          !generation ||
           generation.preparationKey !== owned.preparation.key ||
           !store.isPreparedIntentWithinCapacity({
             environmentId: owned.environmentId,
             ...policy(owned),
           })
         ) {
-          retire(owned, "invalidated");
+          retirementReason = "invalidated";
+        } else if (generation.deferred) {
+          throw new Error("Prepared worker maintenance is deferred");
         } else {
           try {
-            assertGenerationCurrent(generation);
-          } catch {
+            if (!isGenerationCurrent(generation)) {
+              retirementReason = "invalidated";
+            }
+          } catch (error) {
             current();
-            // Queued allocation may already own a lease. Preserve its cleanup
-            // obligation even when local policy or admission changed while waiting.
-            retire(owned, "invalidated");
+            defer(generation, error);
+            throw error;
           }
         }
+        if (retirementReason) {
+          retirement ??= retire(owned, retirementReason);
+          // Queue before lifecycle cleanup writes; the operation is joined on unwind below.
+          void retirement?.catch(() => {});
+          throw new Error("Prepared worker no longer satisfies its maintenance policy");
+        }
       };
-      beforeReconcile();
+      try {
+        beforeReconcile();
+      } catch (error) {
+        if (!retirementReason) {
+          throw error;
+        }
+        await retirement;
+        retirement = undefined;
+        retirementReason = undefined;
+      }
       const latest = store.get(record.environmentId);
       if (latest?.preparation?.consumedAtMs === null) {
         const controller = new AbortController();
@@ -234,8 +337,17 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             AbortSignal.any([signal, controller.signal]),
             beforeReconcile,
           );
+        } catch (error) {
+          if (retirement) {
+            const retiring = await retirement;
+            if (retiring) {
+              await options.reconcile(retiring, signal, current);
+            }
+          }
+          throw error;
         } finally {
           preparations.delete(record.environmentId);
+          await retirement;
         }
       }
     };
@@ -252,7 +364,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         },
       });
     const cleaned = new Set<string>();
-    const retain = (requireRetention: boolean) => {
+    const retain = async (requireRetention: boolean) => {
       const kept = new Map<string, number>();
       let totalKept = 0;
       const cleanup: WorkerEnvironmentRecord[] = [];
@@ -274,16 +386,17 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         const generation = key ? eligible.get(key) : undefined;
         const limits = policy(record);
         const count = key ? (kept.get(key) ?? 0) : 0;
-        const expired = record.preparation.expiresAtMs <= now();
+        const expired = (generation?.expiresAtMs ?? record.preparation.expiresAtMs) <= now();
         const valid =
+          !isSupersededPresenceReserve(record, activePresenceDemand) &&
           !expired &&
           generation?.preparationKey === record.preparation.key &&
-          (!requireRetention || generation.retention !== undefined) &&
+          (!requireRetention || generation.retention !== undefined || generation.deferred) &&
           ((record.preparation.purpose === "build" && record.state !== "ready") ||
             count < limits.target) &&
           totalKept < limits.maxTotal;
         if (record.destroyRequestedAtMs === null && !valid) {
-          retire(record, expired ? "expired" : "invalidated");
+          await retire(record, expired ? "expired" : "invalidated");
         } else if (record.destroyRequestedAtMs === null && key) {
           kept.set(key, count + 1);
           totalKept += 1;
@@ -294,7 +407,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             cleaned.add(record.environmentId);
             cleanup.push(latest);
           }
-        } else {
+        } else if (
+          !generation?.deferred &&
+          (!generation?.presenceOwned || generation.activationEligible || presence.isPresent())
+        ) {
           work.push(latest);
         }
       }
@@ -302,26 +418,29 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     };
     // Expiry and disabled/surplus capacity need no source or artifact admission.
     // Drain that cleanup first so unrelated GitHub latency cannot hold its owner.
-    await reconcileAll(retain(false).cleanup);
+    await reconcileAll((await retain(false)).cleanup);
     for (const [key, generation] of eligible) {
+      if (presenceDeferred && generation.presenceOwned && !generation.activationEligible) {
+        continue;
+      }
       try {
         generation.retention = await options.prepareRetention(generation.source, signal);
         current();
         if (!generation.retention) {
           eligible.delete(key);
         }
-      } catch {
+      } catch (error) {
         current();
-        eligible.delete(key);
-        options.warn(
-          `Prepared worker contents are no longer compatible (${generation.source.profileId}); unused workers will retire`,
-        );
+        defer(generation, error);
       }
     }
-    await reconcileAll(retain(true).cleanup);
+    await reconcileAll((await retain(true)).cleanup);
     let plannedTotal = 0;
     for (const [key, generation] of eligible) {
       current();
+      if (generation.deferred) {
+        continue;
+      }
       const { source } = generation;
       const limits = policy(source);
       const project = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
@@ -331,7 +450,14 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         ...limits,
         maxTotal: Math.max(0, limits.maxTotal - plannedTotal),
       });
-      if (slots === 0 || generation.expiresAtMs <= now()) {
+      if (
+        slots === 0 ||
+        generation.expiresAtMs <= now() ||
+        (!presence.isPresent() &&
+          activePresenceDemand &&
+          generation.preparationKey === activePresenceDemand.preparationKey &&
+          !generation.activationEligible)
+      ) {
         continue;
       }
       try {
@@ -363,15 +489,14 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         generation.intent = intent;
         generation.slots = slots;
         plannedTotal += slots;
-      } catch {
+      } catch (error) {
         current();
-        eligible.delete(key);
         options.warn(
-          `Prepared worker source is unavailable (${source.profileId}); unused workers will retire`,
+          `Prepared worker refill deferred (${source.profileId}): ${boundedWorkerError(error)}`,
         );
       }
     }
-    const retained = retain(true);
+    const retained = await retain(true);
     await reconcileAll(retained.cleanup);
     const work = retained.work;
     for (const generation of eligible.values()) {
@@ -383,7 +508,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       const project = readWorkerProjectSnapshot(intent.profileSnapshot.project)!;
       for (let index = 0; index < generation.slots!; index += 1) {
         current();
-        const admitted = store.ensurePreparedIntent({
+        const admitted = await store.ensurePreparedIntent({
           intent: {
             ...deriveEnvironmentIntent(`prepared:${randomUUID()}`),
             providerId: intent.providerId,
@@ -399,7 +524,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           projectKey: project.key,
           ...limits,
           assertCurrent: () => {
-            assertGenerationCurrent(generation);
+            if (!isGenerationCurrent(generation)) {
+              throw new Error("Prepared worker contents changed before allocation");
+            }
             if (!isDeepStrictEqual(policy(source), limits)) {
               throw new Error("Prepared worker admission policy changed");
             }
@@ -413,7 +540,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
     await reconcileAll(work);
   };
-  const schedule = () => {
+  const scheduleInventory = () => {
     if (signal.aborted) {
       return Promise.resolve();
     }
@@ -428,6 +555,35 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         inFlight = undefined;
       }
     })());
+  };
+  const schedule = async () => {
+    if (signal.aborted) {
+      return;
+    }
+    await store.ready();
+    await presence.ready();
+    current();
+    // Repository admission has one owner and one in-flight operation, but cannot
+    // hold inventory cleanup or independently authorized project refill hostage.
+    const admission = (presenceInFlight ??= (async () => {
+      presenceAdmitted = false;
+      const previousDemand = presence.current();
+      try {
+        await presence.maintain();
+        presenceAdmitted = true;
+      } finally {
+        presenceInFlight = undefined;
+        if (previousDemand || presence.current()) {
+          await scheduleInventory();
+        }
+      }
+    })());
+    const results = await Promise.allSettled([admission, scheduleInventory()]);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
   };
   const noteDemand = async (environmentId: string) => {
     current();
@@ -453,6 +609,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     intent.preparationKey
       ? store.list().filter((record) => {
           const limits = policy(record);
+          const presenceDemand = presence.current();
           return (
             limits.target > 0 &&
             limits.maxTotal > 0 &&
@@ -461,7 +618,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             record.preparation !== null &&
             record.preparation.key === intent.preparationKey &&
             record.preparation.consumedAtMs === null &&
-            record.preparation.expiresAtMs > now() &&
+            ((presenceDemand?.project.key ===
+              readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
+              (presenceDemand!.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
+              record.preparation.expiresAtMs > now()) &&
             record.destroyRequestedAtMs === null &&
             record.sharedHost === false &&
             record.nodeDeviceId !== null &&
@@ -480,9 +640,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         }
       });
     }
-    await schedule().catch(() => {
+    await schedule().catch((error: unknown) => {
       if (!signal.aborted) {
-        options.warn("Prepared worker maintenance failed; cleanup will retry");
+        options.warn(`Prepared worker maintenance will retry: ${boundedWorkerError(error)}`);
       }
     });
   };
@@ -490,6 +650,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     const demandAtMs = demandAt(record);
     if (demandAtMs === undefined || !readWorkerProjectPreparation(record.profileSnapshot.project)) {
       return true;
+    }
+    const presenceDemand = matchingPreparedPoolPresenceDemand(record, presence.current());
+    if (presenceDemand) {
+      return presenceDemand.retireAtMs !== null && presenceDemand.retireAtMs <= nowMs;
     }
     // Unavailable policy cannot prove expiry. Retain metadata only; physical
     // cleanup is independent and must not wait for a provider to return.
@@ -507,13 +671,28 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       return false;
     }
   };
-  const cancelPreparation = (environmentId: string) => {
+  const cancelPreparation = async (environmentId: string) => {
+    await store.ready();
     const record = store.get(environmentId);
-    if (record?.preparation && retire(record, "invalidated")) {
+    const controller = preparations.get(environmentId);
+    if (record?.preparation && (await retire(record, "invalidated"))) {
       // The durable cancellation fences readiness; the lifecycle retains provider
       // custody until its aborted operation and physical cleanup actually settle.
-      preparations.get(environmentId)?.abort();
+      controller?.abort();
     }
   };
-  return { schedule, noteDemand, candidates, maintain, canPruneDemand, cancelPreparation };
+  return {
+    schedule,
+    noteDemand,
+    candidates,
+    maintain,
+    canPruneDemand,
+    cancelPreparation,
+    summary: () => ({
+      maxTotal: options.getConfig().cloudWorkers?.preparedPool?.maxTotal ?? DEFAULT_MAX_TOTAL,
+      reservedEnvironmentIds: store.preparedReservationEnvironmentIds(),
+    }),
+    target: (profileId: string) => configuredPolicy(profileId).target,
+    setHumanPresence: presence.set,
+  };
 }

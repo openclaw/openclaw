@@ -1,5 +1,3 @@
-// Gateway auxiliary method handlers.
-// Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../agents/mcp-codex-tool-approval.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -16,6 +14,7 @@ import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
@@ -73,9 +72,9 @@ type GatewayAuxHandlerLogger = {
   debug?: (message: string) => void;
 };
 
-/** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(
   params: GatewaySecretsReloaderParams & {
+    scheduler: GatewayScheduler;
     log: GatewayAuxHandlerLogger;
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (
@@ -115,15 +114,16 @@ export function createGatewayAuxHandlers(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
     resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null,
-    retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
+    retainPlacementStandingGrantAsync?: PlacementStandingGrantRuntime["retainAsync"],
   ) =>
     new ExecApprovalManager<TPayload>({
+      scheduler: params.scheduler,
       approvalKind,
       persistence: approvalPersistence,
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
-      ...(retainPlacementStandingGrant ? { retainPlacementStandingGrant } : {}),
+      ...(retainPlacementStandingGrantAsync ? { retainPlacementStandingGrantAsync } : {}),
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
@@ -181,24 +181,23 @@ export function createGatewayAuxHandlers(
     { cacheRejections: true },
   );
   const reloadSecrets = createGatewaySecretsReloader(params);
-  const loadSecretsModule = createLazyPromise(() => import("./server-methods/secrets.js"), {
-    cacheRejections: true,
-  });
   const loadSecretStoreWriteService = createLazyPromise(
     async () => {
-      const { createSecretStoreWriteService } = await loadSecretsModule();
+      const { createSecretStoreWriteService } = await import("./server-methods/secrets.js");
       return createSecretStoreWriteService({ reloadSecrets, log: params.log });
     },
     { cacheRejections: true },
   );
-  const questionManager = new QuestionManager();
+  const questionManager = new QuestionManager(params.scheduler, () =>
+    params.log.warn?.("Question terminal publication failed; answer state retained."),
+  );
   const loadQuestionHandlers = createLazyPromise(
     async () => {
       const [{ createQuestionHandlers }, storeWriteService] = await Promise.all([
         import("./server-methods/question.js"),
         loadSecretStoreWriteService(),
       ]);
-      return createQuestionHandlers(questionManager, storeWriteService);
+      return createQuestionHandlers(questionManager, storeWriteService, params.scheduler);
     },
     { cacheRejections: true },
   );
@@ -229,7 +228,7 @@ export function createGatewayAuxHandlers(
       }
       return { kind: "placement", ...request.placementGrant };
     },
-    placementStandingGrants.retain,
+    placementStandingGrants.retainAsync,
   );
   const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
     "system-agent",
@@ -290,20 +289,18 @@ export function createGatewayAuxHandlers(
     (authority, approvalReason) => {
       for (const manager of approvalManagers) {
         const kind = manager.approvalKind;
-        try {
-          cancelAgentRuntimeBoundApprovals<ApprovalPayload>({
-            authority,
-            reason: approvalReason,
-            manager,
-            publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
-          });
-        } catch (error) {
+        void cancelAgentRuntimeBoundApprovals<ApprovalPayload>({
+          authority,
+          reason: approvalReason,
+          manager,
+          publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
+        }).catch((error: unknown) => {
           params.log.error?.(
             `${kind} approvals: authority-close settlement failed: ${String(error)}`,
           );
-        }
+        });
       }
-      questionManager.cancelClosedAuthorities();
+      questionManager.cancelClosedAuthorities(authority.operationalRunInstance);
       params.onAgentRunAuthorityClosed?.(authority, approvalReason);
     },
   );
@@ -311,38 +308,32 @@ export function createGatewayAuxHandlers(
     (claim) => {
       for (const manager of approvalManagers) {
         const kind = manager.approvalKind;
-        try {
-          cancelWorkerTurnClaimBoundApprovals<ApprovalPayload>({
-            claim,
-            manager,
-            publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
-          });
-        } catch (error) {
+        void cancelWorkerTurnClaimBoundApprovals<ApprovalPayload>({
+          claim,
+          manager,
+          publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
+        }).catch((error: unknown) => {
           params.log.error?.(`${kind} approvals: worker-claim settlement failed: ${String(error)}`);
-        }
+        });
       }
-      questionManager.cancelClosedAuthorities();
+      questionManager.cancelClosedAuthorities({ runId: claim.runId });
     },
   );
-  const unregisterApprovalAuthorityObserver = () => {
-    unregisterWorkerTurnClaimClosedObserver?.();
-    unregisterApprovalAuthorityClosedObserver();
-  };
   const cancelRunBoundApprovals = (
     target: string | AgentRunDelegatedAuthority,
     context: GatewayRequestContext,
-  ): number => {
+  ): Promise<number> => {
     if (presentationWork.isClosing) {
-      return 0;
+      return Promise.resolve(0);
     }
-    let cancelled = 0;
+    const cancellations: Promise<number>[] = [];
     for (const manager of approvalManagers) {
       const kind = manager.approvalKind;
       const publish = (
         record: PendingAuthorityPublication["record"],
         liveRecord: PendingAuthorityPublication["liveRecord"],
       ) => publishResolution({ kind, record, liveRecord }, context, "run-abort");
-      cancelled +=
+      cancellations.push(
         typeof target === "string"
           ? cancelUnboundRunApprovals<ApprovalPayload>({ runId: target, manager, publish })
           : cancelAgentRuntimeBoundApprovals<ApprovalPayload>({
@@ -350,9 +341,12 @@ export function createGatewayAuxHandlers(
               reason: "permission-change",
               manager,
               publish,
-            });
+            }),
+      );
     }
-    return cancelled;
+    return Promise.all(cancellations).then((counts) =>
+      counts.reduce((sum, count) => sum + count, 0),
+    );
   };
   const loadPluginApprovalHandlers = createLazyPromise(
     () =>
@@ -381,7 +375,7 @@ export function createGatewayAuxHandlers(
   const loadSecretsHandlers = createLazyPromise(
     async () => {
       const [{ createSecretsHandlers }, storeWriteService] = await Promise.all([
-        loadSecretsModule(),
+        import("./server-methods/secrets.js"),
         loadSecretStoreWriteService(),
       ]);
       return createSecretsHandlers({
@@ -423,12 +417,14 @@ export function createGatewayAuxHandlers(
       stopPromise = (async () => {
         // Preserve the existing authority-observer stop boundary. Retirement is
         // local only; pending durable approvals belong to next-start epoch recovery.
-        unregisterApprovalAuthorityObserver();
+        unregisterWorkerTurnClaimClosedObserver?.();
+        unregisterApprovalAuthorityClosedObserver();
         beginCloseApprovalObservers();
         for (const manager of approvalManagers) {
           manager.retire();
         }
         questionManager.close();
+        await questionManager.drain();
         await Promise.all(approvalManagers.map((manager) => manager.drain()));
         await presentationWork.drain();
         await execApprovalForwarder.stop();
@@ -447,10 +443,22 @@ export function createGatewayAuxHandlers(
     }),
   );
 
+  const bindLazyHandlers = (load: Parameters<typeof createLazyHandler>[1]) => (method: string) =>
+    createLazyHandler(method, load);
+  const execApprovalHandler = bindLazyHandlers(loadExecApprovalHandlers);
+  const pluginApprovalHandler = bindLazyHandlers(loadPluginApprovalHandlers);
+  const approvalHandler = bindLazyHandlers(loadApprovalHandlers);
+  const questionHandler = bindLazyHandlers(loadQuestionHandlers);
+  const secretsHandler = bindLazyHandlers(loadSecretsHandlers);
+
   return {
     execApprovalManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
+    forwardExecApprovalRequest: execApprovalForwarder.handleRequested,
+    forwardSystemAgentApprovalRequest: execApprovalForwarder.handleSystemAgentApprovalRequested,
+    forwardSystemAgentApprovalResolved: execApprovalForwarder.handleSystemAgentApprovalResolved,
+    execApprovalIosPushDelivery,
     approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
@@ -461,48 +469,30 @@ export function createGatewayAuxHandlers(
     stopOperatorInteractions,
     questionManager,
     extraHandlers: {
-      "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),
-      "exec.approval.list": createLazyHandler("exec.approval.list", loadExecApprovalHandlers),
-      "exec.approval.request": createLazyHandler("exec.approval.request", loadExecApprovalHandlers),
-      "exec.approval.waitDecision": createLazyHandler(
-        "exec.approval.waitDecision",
-        loadExecApprovalHandlers,
-      ),
-      "exec.approval.resolve": createLazyHandler("exec.approval.resolve", loadExecApprovalHandlers),
-      "exec.approval.grants.list": createLazyHandler(
-        "exec.approval.grants.list",
-        loadExecApprovalHandlers,
-      ),
-      "exec.approval.grants.revoke": createLazyHandler(
-        "exec.approval.grants.revoke",
-        loadExecApprovalHandlers,
-      ),
-      "plugin.approval.list": createLazyHandler("plugin.approval.list", loadPluginApprovalHandlers),
-      "plugin.approval.request": createLazyHandler(
-        "plugin.approval.request",
-        loadPluginApprovalHandlers,
-      ),
-      "plugin.approval.waitDecision": createLazyHandler(
-        "plugin.approval.waitDecision",
-        loadPluginApprovalHandlers,
-      ),
-      "plugin.approval.resolve": createLazyHandler(
-        "plugin.approval.resolve",
-        loadPluginApprovalHandlers,
-      ),
-      "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
-      "approval.history": createLazyHandler("approval.history", loadApprovalHandlers),
-      "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
-      "question.request": createLazyHandler("question.request", loadQuestionHandlers),
-      "question.waitAnswer": createLazyHandler("question.waitAnswer", loadQuestionHandlers),
-      "question.resolve": createLazyHandler("question.resolve", loadQuestionHandlers),
-      "question.get": createLazyHandler("question.get", loadQuestionHandlers),
-      "question.list": createLazyHandler("question.list", loadQuestionHandlers),
-      "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
-      "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
-      "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
-      "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
-      "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
+      "exec.approval.get": execApprovalHandler("exec.approval.get"),
+      "exec.approval.list": execApprovalHandler("exec.approval.list"),
+      "exec.approval.request": execApprovalHandler("exec.approval.request"),
+      "exec.approval.waitDecision": execApprovalHandler("exec.approval.waitDecision"),
+      "exec.approval.resolve": execApprovalHandler("exec.approval.resolve"),
+      "exec.approval.grants.list": execApprovalHandler("exec.approval.grants.list"),
+      "exec.approval.grants.revoke": execApprovalHandler("exec.approval.grants.revoke"),
+      "plugin.approval.list": pluginApprovalHandler("plugin.approval.list"),
+      "plugin.approval.request": pluginApprovalHandler("plugin.approval.request"),
+      "plugin.approval.waitDecision": pluginApprovalHandler("plugin.approval.waitDecision"),
+      "plugin.approval.resolve": pluginApprovalHandler("plugin.approval.resolve"),
+      "approval.get": approvalHandler("approval.get"),
+      "approval.history": approvalHandler("approval.history"),
+      "approval.resolve": approvalHandler("approval.resolve"),
+      "question.request": questionHandler("question.request"),
+      "question.waitAnswer": questionHandler("question.waitAnswer"),
+      "question.resolve": questionHandler("question.resolve"),
+      "question.get": questionHandler("question.get"),
+      "question.list": questionHandler("question.list"),
+      "secrets.reload": secretsHandler("secrets.reload"),
+      "secrets.resolve": secretsHandler("secrets.resolve"),
+      "secrets.store.list": secretsHandler("secrets.store.list"),
+      "secrets.store.set": secretsHandler("secrets.store.set"),
+      "secrets.store.delete": secretsHandler("secrets.store.delete"),
     },
   };
 }

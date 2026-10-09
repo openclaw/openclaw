@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { icons } from "./icons.ts";
+import { currentThemeBranding } from "./neutral-mark.ts";
 
 const SAVED_VISIBLE_MS = 2_000;
 
@@ -17,6 +18,16 @@ export type SettingsSaveIndicatorProps = {
   onReload: () => void;
   onApply: () => void;
 };
+
+function renderAction(label: string, onClick: () => void) {
+  return html`<button
+    class="btn btn--xs settings-save-indicator__action"
+    type="button"
+    @click=${onClick}
+  >
+    ${label}
+  </button>`;
+}
 
 class SettingsSaveIndicator extends LitElement {
   override createRenderRoot() {
@@ -56,7 +67,7 @@ class SettingsSaveIndicator extends LitElement {
 
   private renderClaw(modifier: string) {
     return html`<span class="settings-save-indicator__claw ${modifier}" aria-hidden="true"
-      >${icons.claw}</span
+      >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
     >`;
   }
 
@@ -80,46 +91,36 @@ class SettingsSaveIndicator extends LitElement {
     } else if (props.status === "recovery") {
       modifier = " settings-save-indicator--danger settings-save-indicator--recovery";
       content = html`<span>${props.lastError}</span>
-        <button
-          class="btn btn--xs settings-save-indicator__action"
-          type="button"
-          @click=${props.onReload}
-        >
-          ${t("configView.recoveryReload")}
-        </button>`;
+        ${renderAction(t("configView.recoveryReload"), props.onReload)}`;
+    } else if (props.status === "rejected") {
+      modifier = " settings-save-indicator--rejected";
+      content = html`<span>${t("configView.autoSaveRejected")}</span>
+        <span>${t("configView.autoSaveRejectedHint")}</span>
+        ${
+          props.lastError
+            ? html`<details>
+                <summary>${t("configView.rejectionDetails")}</summary>
+                <span>${props.lastError}</span>
+              </details>`
+            : nothing
+        }
+        ${renderAction(t("configView.retry"), props.onRetry)}
+        ${renderAction(t("configView.recoveryReload"), props.onReload)}`;
     } else if (props.status === "error") {
       title = props.lastError?.trim() ?? "";
       label = title ? `${t("configView.autoSaveFailed")}: ${title}` : "";
       modifier = " settings-save-indicator--danger";
       content = html` <span>${t("configView.autoSaveFailed")}</span>
-        <button
-          class="btn btn--xs settings-save-indicator__action"
-          type="button"
-          @click=${props.onRetry}
-        >
-          ${t("configView.retry")}
-        </button>`;
+        ${renderAction(t("configView.retry"), props.onRetry)}`;
     } else if (props.status === "paused") {
       // Reconnect latch: autosave is off for this draft until an explicit
       // Save; without this row the form silently never saves again.
       content = html` <span>${t("configView.autoSavePaused")}</span>
-        <button
-          class="btn btn--xs settings-save-indicator__action"
-          type="button"
-          @click=${props.onSave}
-        >
-          ${t("configView.saveNow")}
-        </button>`;
+        ${renderAction(t("configView.saveNow"), props.onSave)}`;
     } else if (props.status === "conflict") {
       modifier = " settings-save-indicator--danger";
       content = html` <span>${t("configView.autoSaveConflict")}</span>
-        <button
-          class="btn btn--xs settings-save-indicator__action"
-          type="button"
-          @click=${props.onReload}
-        >
-          ${t("common.reload")}
-        </button>`;
+        ${renderAction(t("common.reload"), props.onReload)}`;
     } else if (this.savedVisible) {
       modifier = " settings-save-indicator--saved";
       content = html` ${this.renderClaw("settings-save-indicator__claw--saved")}

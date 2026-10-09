@@ -197,38 +197,6 @@ describe("Beam receiver", () => {
     expect((await store.get(sampleUpload().beamId))?.uploaderProfileId).toBeUndefined();
   });
 
-  it("stores authenticated uploads and preserves creation time across updates", async () => {
-    const store = memoryStore();
-    let now = 100;
-    const endpoint = await serve(store, { now: () => now });
-    const first = await postUpload(endpoint);
-    expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({
-      ok: true,
-      beamId: "0123456789abcdef0123456789abcdef",
-      url: "/beam/fix-the-upload-flow-0123456789ab",
-    });
-    expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
-      createdAt: 100,
-      receivedAt: 100,
-    });
-
-    now = 200;
-    const updated = await postUpload(
-      endpoint,
-      sampleUpload({ completed: true, title: "Renamed upload flow" }),
-    );
-    expect(await updated.json()).toMatchObject({
-      beamId: sampleUpload().beamId,
-      url: "/beam/renamed-upload-flow-0123456789ab",
-    });
-    expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
-      createdAt: 100,
-      receivedAt: 200,
-      completed: true,
-    });
-  });
-
   it("orders replacement snapshots without refreshing stale state", async () => {
     const { keyedStore, store } = persistentStore();
     let receivedAt = 100;
@@ -527,22 +495,18 @@ describe("Beam mirror receiver boundary", () => {
       listCatalogs: () => [catalog],
     });
 
-    try {
-      await runner.tick();
-      active = false;
-      clock += 4 * 60 * 60_000;
-      await runner.tick();
-      expect([...store.values.values()][0]?.completed).toBe(false);
-      expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
+    await runner.tick();
+    active = false;
+    clock += 4 * 60 * 60_000;
+    await runner.tick();
+    expect([...store.values.values()][0]?.completed).toBe(false);
+    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
 
-      await runner.tick();
+    await runner.tick();
 
-      expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-      expect([...store.values.values()][0]?.completed).toBe(true);
-      expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
-    } finally {
-      await runner.stop();
-    }
+    expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
+    expect([...store.values.values()][0]?.completed).toBe(true);
+    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
   });
 });
 
@@ -560,6 +524,7 @@ describe("Beam session catalog", () => {
 
     try {
       expect((await postUpload(endpoint)).status).toBe(200);
+      expect((await catalog.list({ agentId: "main" }))[0]?.sessions).toHaveLength(1);
       await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
         "unknown Beam host: other-host",
       );

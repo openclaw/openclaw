@@ -8,6 +8,8 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
   accent: "settings-appearance-accent",
+  typography: "settings-appearance-typography",
+  tabIcon: "settings-appearance-tab-icon",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
@@ -15,7 +17,7 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   connection: "settings-appearance-connection",
 } as const;
 
-const appearanceSettingsRouteTarget = (targetId: string) =>
+export const appearanceSettingsRouteTarget = (targetId: string) =>
   ({ routeId: "appearance", search: "?section=__appearance__", hash: `#${targetId}` }) as const;
 
 export const SETTINGS_ROUTE_TARGETS = {
@@ -28,15 +30,7 @@ export const SETTINGS_ROUTE_TARGETS = {
   sessionSources: appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.sessionSources),
 } as const;
 
-export type ConfigRouteData = {
-  pathname: string;
-  search: string;
-  hash: string;
-  section: string | null;
-  advanced: boolean;
-  /** Raw `?tab=`; curated hub pages normalize it against their own tab set. */
-  tab: string | null;
-  targetBlockId: string | null;
+export type ConfigRouteData = ReturnType<typeof configRouteData> & {
   /** Memory URL intent is applied only if a newer sidebar choice has not superseded it. */
   agentSelectionIntent?: { owner: AgentSelectionCapability; revision: number };
 };
@@ -52,7 +46,7 @@ export function configTargetIdFromHash(hash: string): string | null {
   }
 }
 
-export function configRouteData(location: RouteLocation): ConfigRouteData {
+export function configRouteData(location: RouteLocation) {
   const searchParams = new URLSearchParams(location.search);
   const pathname = searchParams.get(INTERNAL_MEMORY_PATH_PARAM) ?? location.pathname;
   searchParams.delete(INTERNAL_MEMORY_PATH_PARAM);
@@ -64,6 +58,7 @@ export function configRouteData(location: RouteLocation): ConfigRouteData {
     hash: location.hash,
     section,
     advanced: searchParams.get("advanced") === "1",
+    /** Raw `?tab=`; curated hub pages normalize it against their own tab set. */
     tab: searchParams.get("tab")?.trim() || null,
     targetBlockId: configTargetIdFromHash(location.hash),
   };

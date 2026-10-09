@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   registerRealtimeVoiceSelection,
@@ -47,14 +47,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private idleTimer: ReturnType<typeof setInterval> | undefined;
   private voiceSelection: RealtimeVoiceSelectionHandle | undefined;
   private voiceOverride: string | undefined;
-  private voiceChangeSettled: Promise<void> | undefined;
+  private changingVoice = false;
   private readonly callAbort = new AbortController();
   private readonly candidates = new Set<DiscordRealtimeSpeakerSession>();
-  private readonly detachedSessions = new Set<DiscordRealtimeSpeakerSession>();
-  private readonly activeAgentTurns = new Map<DiscordRealtimeSpeakerSession, number>();
 
   constructor(private readonly params: DiscordRealtimeSessionParams) {
-    this.player = new DiscordRealtimePlayer(params.entry.player);
+    this.player = new DiscordRealtimePlayer(params.entry.audio);
   }
 
   async connect(): Promise<void> {
@@ -104,7 +102,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       void this.closeSpeaker(session, disposition);
     }
     this.candidates.clear();
-    this.detachedSessions.clear();
     this.speakers.clear();
     this.sessions.clear();
     if (this.closingSpeakers.size > 0) {
@@ -121,7 +118,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (this.closed) {
       throw new Error("Discord realtime voice session is closed");
     }
-    if (this.voiceChangeSettled) {
+    if (this.changingVoice) {
       throw new Error(
         "Discord voice is reconnecting. Please speak again when the voice change finishes.",
       );
@@ -189,35 +186,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         const signal = turn.signal
           ? AbortSignal.any([turn.signal, this.callAbort.signal])
           : this.callAbort.signal;
-        this.activeAgentTurns.set(session, (this.activeAgentTurns.get(session) ?? 0) + 1);
-        try {
-          const text = await this.params.runAgentTurn({
-            ...turn,
-            signal,
-            voiceSelection: this.voiceSelection,
-          });
-          signal.throwIfAborted();
-          if (
-            turn.deliveryOwner !== "consult" &&
-            this.detachedSessions.has(session) &&
-            text.trim()
-          ) {
-            await this.voiceChangeSettled;
-            signal.throwIfAborted();
-            if (!this.closed) {
-              (this.speakers.get(turn.userId)?.session ?? this.currentSession()).notify(text);
-            }
-          }
-          return text;
-        } finally {
-          const remaining = (this.activeAgentTurns.get(session) ?? 1) - 1;
-          if (remaining === 0) {
-            this.activeAgentTurns.delete(session);
-            this.detachedSessions.delete(session);
-          } else {
-            this.activeAgentTurns.set(session, remaining);
-          }
-        }
+        const text = await this.params.runAgentTurn({
+          ...turn,
+          signal,
+          voiceSelection: this.voiceSelection,
+        });
+        signal.throwIfAborted();
+        return text;
       },
       onTerminalError: (error) => this.handleSpeakerFailure(session, error),
     });
@@ -229,7 +204,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     if (this.warmSession === session) {
-      this.params.onTerminalError(error instanceof Error ? error : new Error(String(error)));
+      this.params.onTerminalError(toStringifiedError(error));
       return;
     }
     for (const speaker of this.sessions) {
@@ -292,7 +267,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       DiscordRealtimeSpeakerSession,
       RealtimeVoiceTranscriptEntry | undefined
     >();
-    const settlement = createDeferred<void>();
     let retired = false;
     let adopted = false;
     const assertOriginals = () => {
@@ -380,22 +354,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       signal.throwIfAborted();
       request.assertCurrent();
       assertOriginals();
-      this.voiceChangeSettled = settlement.promise;
+      this.changingVoice = true;
       retired = true;
-      const retiring = new Set([
-        ...originals,
-        ...originalSessions.map((speaker) => speaker.session),
-      ]);
-      for (const original of retiring) {
-        if (this.activeAgentTurns.has(original)) {
-          this.detachedSessions.add(original);
-        }
-      }
       // Provider close drains final speech, not accepted agent work. The source harness retains
       // that completed history so replacements can include tails delivered during cleanup.
       const pendingDrains: Promise<void>[] = [];
       this.player.transition(() => {
-        for (const original of retiring) {
+        for (const original of originals) {
           pendingDrains.push(Promise.resolve(this.closeSpeaker(original, "detach")));
         }
       });
@@ -439,39 +404,33 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       if (!adopted) {
         await discardCandidates();
       }
-      if (this.voiceChangeSettled === settlement.promise) {
-        this.voiceChangeSettled = undefined;
+      if (retired) {
+        this.changingVoice = false;
       }
-      settlement.resolve();
     }
   }
 
   private async connectCandidate(
     session: DiscordRealtimeSpeakerSession,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<void> {
-    signal?.throwIfAborted();
-    let abort: (() => void) | undefined;
+    signal.throwIfAborted();
+    const cancelled = createDeferred<never>();
+    const abort = () => {
+      void this.closeSpeaker(session);
+      cancelled.reject(toErrorObject(signal.reason, "Discord voice change cancelled"));
+    };
     try {
-      await Promise.race([
-        session.connect(),
-        new Promise<never>((_resolve, reject) => {
-          abort = () => {
-            void this.closeSpeaker(session);
-            reject(toErrorObject(signal?.reason, "Discord voice change cancelled"));
-          };
-          signal?.addEventListener("abort", abort, { once: true });
-        }),
-      ]);
+      const connecting = session.connect();
+      signal.addEventListener("abort", abort, { once: true });
+      await Promise.race([connecting, cancelled.promise]);
     } finally {
-      if (abort) {
-        signal?.removeEventListener("abort", abort);
-      }
+      signal.removeEventListener("abort", abort);
     }
   }
 
   private releaseIdleSpeakers(): void {
-    if (this.voiceChangeSettled) {
+    if (this.changingVoice) {
       return;
     }
     const cutoff = Date.now() - REALTIME_SPEAKER_IDLE_MS;

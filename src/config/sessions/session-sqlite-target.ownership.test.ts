@@ -67,27 +67,36 @@ describe("explicit SQLite session target ownership", () => {
     },
   );
 
-  it("rejects a read when the unique registry owner disagrees with the physical store", async () => {
-    await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const storePath = path.join(home, "shared.sqlite");
-      openOpenClawAgentDatabase({ agentId: "ops", env, path: storePath });
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
-      unregisterOpenClawAgentDatabase({ agentId: "ops", env, path: storePath });
-      registerOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
+  it.each([
+    { locator: "shared.sqlite", database: "shared.sqlite", ownerSource: "database-registry" },
+    { locator: "shared.json", database: "shared.sqlite", ownerSource: "database-registry" },
+    { locator: "shared.json", database: "shared.main.sqlite", ownerSource: "registered-suffixed" },
+  ])(
+    "rejects a mismatched physical owner for $locator in $database",
+    async ({ locator, database, ownerSource }) => {
+      await withTempHome(async (home) => {
+        const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+        const storePath = path.join(home, locator);
+        const databasePath = path.join(home, database);
+        openOpenClawAgentDatabase({ agentId: "ops", env, path: databasePath });
+        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+        unregisterOpenClawAgentDatabase({ agentId: "ops", env, path: databasePath });
+        registerOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
 
-      expect(resolveSqliteTargetFromSessionStorePath(storePath, { env })).toMatchObject({
-        agentId: "main",
-        ownerSource: "database-registry",
-      });
-      expect(() =>
-        loadSessionEntryReadOnly({
+        expect(resolveSqliteTargetFromSessionStorePath(storePath, { env })).toMatchObject({
           agentId: "main",
-          env,
-          storePath,
-          sessionKey: "agent:main:main",
-        }),
-      ).toThrow("belongs to agent ops; requested agent main");
-    });
-  });
+          ownerSource,
+          path: databasePath,
+        });
+        expect(() =>
+          loadSessionEntryReadOnly({
+            agentId: "main",
+            env,
+            storePath,
+            sessionKey: "agent:main:main",
+          }),
+        ).toThrow("belongs to agent ops; requested agent main");
+      });
+    },
+  );
 });

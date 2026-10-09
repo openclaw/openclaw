@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,7 +15,14 @@ const row = {
   displayName: "Temporary research",
   incognito: true,
   updatedAt: 1,
-};
+} satisfies GatewaySessionRow;
+const sessionList = {
+  ts: 1,
+  path: "",
+  count: 1,
+  defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+  sessions: [row],
+} satisfies SessionsListResult;
 const transcript = "This temporary conversation is available until the Gateway restarts.";
 const history = {
   sessionKey,
@@ -32,11 +40,13 @@ suite.define(() => {
     "reconciles an established session after reconnect (missing: $missing, width: $width)",
     async ({ missing, width, height }) => {
       await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
         const gateway = await installMockGateway(page, {
           sessionKey,
           methodResponses: {
             "sessions.resolve": { ok: true, ...row },
-            "sessions.list": { sessions: [row] },
+            "sessions.list": sessionList,
             "chat.startup": history,
             "chat.history": history,
           },
@@ -51,7 +61,11 @@ suite.define(() => {
 
         // A filtered roster omits both surviving and expired sessions. Only the
         // exact Gateway resolution may retire the established route.
-        await gateway.setMethodResponse("sessions.list", { sessions: [] });
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessionList,
+          count: 0,
+          sessions: [],
+        } satisfies SessionsListResult);
         await gateway.setMethodResponse(
           "sessions.resolve",
           missing ? { ok: false } : { ok: true, ...row },
@@ -79,6 +93,7 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe("Keep my unsent research question.");
           expect(await page.locator(".session-route-not-found").count()).toBe(0);
         }
+        expect(pageErrors).toEqual([]);
       });
     },
   );

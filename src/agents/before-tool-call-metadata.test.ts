@@ -1,7 +1,9 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   prepareBeforeToolCallExecutionParams,
   rewrapToolWithBeforeToolCallHook,
@@ -15,6 +17,10 @@ import {
 } from "./before-tool-call-metadata.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import {
+  getGatewayToolCallerIdentity,
+  wrapToolWithGatewayCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 function createTool(): AnyAgentTool {
   return {
@@ -27,6 +33,55 @@ function createTool(): AnyAgentTool {
 }
 
 describe("before-tool-call metadata across plugin views", () => {
+  it.each(["execute", "prepare"] as const)(
+    "preserves caller authority and cancellation during rebuilt %s preparation",
+    async (phase) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const owner = new PluginInstance("wrapped-authority");
+      const source = createTool();
+      let callerSession: string | undefined;
+      source.prepareBeforeToolCallParams = async (params) => {
+        callerSession = getGatewayToolCallerIdentity()?.sessionKey;
+        entered.resolve();
+        await release.promise;
+        return params;
+      };
+      const original = wrapToolWithAbortSignal(
+        wrapToolWithGatewayCallerIdentity(wrapToolWithBeforeToolCallHook(source), {
+          agentId: "main",
+          sessionKey: "agent:main:wrapper-authority",
+        }),
+        controller.signal,
+      );
+      const rebuilt = rewrapToolWithBeforeToolCallHook(owner.wrap(original), {
+        runId: "new-hooks",
+      });
+      const pending =
+        phase === "execute"
+          ? rebuilt.execute("canceled-preparation", {})
+          : getInternalToolExecutionPreparer(rebuilt)!({
+              toolCallId: "canceled-preparation",
+              args: {},
+            });
+      await entered.promise;
+      controller.abort();
+      try {
+        expect(callerSession).toBe("agent:main:wrapper-authority");
+        await expect(pending).rejects.toThrow("Aborted");
+        expect(source.execute).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        const result = await pending.catch(() => undefined);
+        if (result && "dispose" in result) {
+          result.dispose();
+        }
+        await owner.dispose();
+      }
+    },
+  );
+
   it("recognizes wrapper metadata after module reevaluation and object spread", async () => {
     const source = createTool();
     const context = { runId: "cross-module-metadata" };

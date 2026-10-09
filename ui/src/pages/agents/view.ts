@@ -1,95 +1,34 @@
-// Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import type {
-  AgentIdentityResult,
-  AgentsFilesListResult,
-  AgentsListResult,
-  ChannelsStatusSnapshot,
-  CronJob,
-  CronStatus,
-  ModelCatalogEntry,
-  SkillStatusReport,
-  ToolsCatalogResult,
-  ToolsEffectiveResult,
-} from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsNavRow,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
-import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { t } from "../../i18n/index.ts";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import { t } from "../../i18n/index.ts";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
+import {
+  currentConfigObject,
+  type RuntimeConfigState,
+} from "../../lib/config/config-state-model.ts";
+import type { AgentConfigActions } from "./config-actions.ts";
+import { renderAgentFiles } from "./panels-files.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
-import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
-import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
+import { renderAgentSkills } from "./panels-skills.ts";
+import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
+import { renderAgentTools } from "./panels-tools-skills.ts";
 
-type ConfigState = {
-  form: Record<string, unknown> | null;
-  loading: boolean;
-  saving: boolean;
-  dirty: boolean;
-  error: string | null;
-};
-
-type ChannelsState = {
-  snapshot: ChannelsStatusSnapshot | null;
-  loading: boolean;
-  error: string | null;
-  lastSuccess: number | null;
-};
-
-type CronState = {
-  status: CronStatus | null;
-  jobs: CronJob[];
-  jobsTotal: number;
-  jobsHasMore: boolean;
-  jobsLoadingMore: boolean;
-  scopedTotal: number | null;
-  scopedNextWakeAtMs: number | null;
-  loading: boolean;
-  error: string | null;
-};
-
-type AgentFilesState = {
-  list: AgentsFilesListResult | null;
-  loading: boolean;
-  error: string | null;
-  active: string | null;
-  contents: Record<string, string>;
-  drafts: Record<string, string>;
-  saving: boolean;
-  conflict: string | null;
-};
-
-type AgentSkillsState = {
-  report: SkillStatusReport | null;
-  loading: boolean;
-  error: string | null;
-  agentId: string | null;
-  filter: string;
-};
-
-type ToolsCatalogState = {
-  loading: boolean;
-  error: string | null;
-  result: ToolsCatalogResult | null;
-};
-
-type ToolsEffectiveState = {
-  loading: boolean;
-  error: string | null;
-  result: ToolsEffectiveResult | null;
-};
+const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
 type AgentsProps = {
   access: {
@@ -106,64 +45,72 @@ type AgentsProps = {
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
   activePanel: AgentsPanel;
-  config: ConfigState;
-  channels: ChannelsState;
-  cron: CronState;
-  agentFiles: AgentFilesState;
-  agentIdentityLoading: boolean;
-  agentIdentityError: string | null;
+  config: Pick<
+    RuntimeConfigState,
+    | "configForm"
+    | "configSnapshot"
+    | "configLoading"
+    | "configSaving"
+    | "configFormDirty"
+    | "lastError"
+  >;
+  channels: Omit<
+    Parameters<typeof renderAgentChannels>[0],
+    "context" | "configForm" | "onSelectPanel"
+  >;
+  cron: Omit<
+    Parameters<typeof renderAgentCron>[0],
+    "basePath" | "context" | "canRunNow" | "onSelectPanel"
+  >;
+  agentFiles: Omit<Parameters<typeof renderAgentFiles>[0], "agentId" | "canWrite">;
   agentIdentityById: Record<string, AgentIdentityResult>;
-  identityDraft: AgentIdentityDraft;
-  identityAvatarLoader: IdentityAvatarLoader;
-  identitySaving: boolean;
-  identityError: string | null;
-  agentSkills: AgentSkillsState;
-  toolsCatalog: ToolsCatalogState;
-  toolsEffective: ToolsEffectiveState;
-  githubIdentity: GitHubIdentityController;
-  onOpenGitHubConnections: () => void;
-  runtimeSessionKey: string;
-  runtimeSessionMatchesSelectedAgent: boolean;
-  modelCatalog: ModelCatalogEntry[];
-  modelCatalogStatus: PanelRefreshStatus;
+  overview: Omit<
+    Parameters<typeof renderAgentOverview>[0],
+    | keyof AgentConfigActions
+    | "agent"
+    | "defaultId"
+    | "configForm"
+    | "agentFilesList"
+    | "agentIdentity"
+    | "canUpdateIdentity"
+    | "onSelectPanel"
+  >;
+  agentSkills: Omit<
+    Parameters<typeof renderAgentSkills>[0],
+    keyof AgentConfigActions | "agentId" | "configForm" | "canPatchConfig"
+  >;
+  tools: Omit<
+    Parameters<typeof renderAgentTools>[0],
+    keyof AgentConfigActions | "agentId" | "configForm"
+  >;
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
   onCreateAgent: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
-  onLoadFiles: (agentId: string) => void;
-  onSelectFile: (name: string) => void;
-  onFileDraftChange: (name: string, content: string) => void;
-  onFileReset: (name: string) => void;
-  onFileSave: (name: string) => void;
-  onFileReload: (name: string) => void;
-  onFileOverwrite: (name: string) => void;
-  onToolsProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
-  onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
-  onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
-  onIdentityAvatarSelect: (file: File) => void;
-  onIdentitySave: () => void;
-  onModelChange: (agentId: string, modelId: string | null) => void;
-  onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-  onModelCatalogOpen: () => void;
-  onChannelsRefresh: () => void;
   onOpenMemoryImport?: () => void;
   onOpenMemorySettings?: () => void;
   onOpenAgentDefaults: () => void;
-  onCronRefresh: () => void;
-  onCronLoadMore: () => void;
-  onCronRunNow: (jobId: string) => void;
-  onSkillsFilterChange: (next: string) => void;
-  onSkillsRefresh: () => void;
-  onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-  onAgentSkillsClear: (agentId: string) => void;
-  onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
 };
 
+export function renderAgentsPageHeader() {
+  return html`
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
+      <div>
+        <div class="page-title">${titleForRoute("agents")}</div>
+        <div class="page-subtitle">
+          ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 export function renderAgents(props: AgentsProps) {
+  const config = currentConfigObject(props.config);
   const agents = props.agentsList?.agents ?? [];
   const defaultId = props.agentsList?.selectionRequired
     ? null
@@ -173,7 +120,7 @@ export function renderAgents(props: AgentsProps) {
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
   const selectedSkillCount =
-    selectedId && props.agentSkills.agentId === selectedId
+    selectedId && props.agentSkills.activeAgentId === selectedId
       ? (props.agentSkills.report?.skills?.length ?? null)
       : null;
 
@@ -182,10 +129,98 @@ export function renderAgents(props: AgentsProps) {
     : null;
   const cronJobCount = selectedId ? props.cron.jobsTotal : null;
   const tabCounts: Record<string, number | null> = {
-    files: props.agentFiles.list?.files?.length ?? null,
+    files: props.agentFiles.agentFilesList?.files?.length ?? null,
     skills: selectedSkillCount,
     channels: channelEntryCount,
     cron: cronJobCount || null,
+  };
+
+  const renderSelectedPanel = (agent: AgentsListResult["agents"][number]) => {
+    const configActions = {
+      configForm: config,
+      configLoading: props.config.configLoading,
+      configSaving: props.config.configSaving,
+      configDirty: props.config.configFormDirty,
+      canUpdateConfig: props.access.canUpdateConfig,
+      onConfigReload: props.onConfigReload,
+      onConfigSave: props.onConfigSave,
+    };
+    switch (props.activePanel) {
+      case "overview":
+        return keyed(
+          agent.id,
+          renderAgentOverview({
+            ...props.overview,
+            ...configActions,
+            agent,
+            defaultId,
+            agentFilesList: props.agentFiles.agentFilesList,
+            agentIdentity: props.agentIdentityById[agent.id] ?? null,
+            canUpdateIdentity: props.access.canUpdateIdentity,
+            onSelectPanel: props.onSelectPanel,
+          }),
+        );
+      case "files":
+        return renderAgentFiles({
+          ...props.agentFiles,
+          agentId: agent.id,
+          canWrite: props.access.canWriteFiles,
+        });
+      case "tools":
+        return renderAgentTools({
+          ...props.tools,
+          ...configActions,
+          agentId: agent.id,
+        });
+      case "skills":
+        return renderAgentSkills({
+          ...props.agentSkills,
+          ...configActions,
+          agentId: agent.id,
+          canPatchConfig: props.access.canPatchConfig,
+        });
+      case "channels":
+      case "cron": {
+        const context = buildAgentContext(
+          agent,
+          config,
+          props.agentFiles.agentFilesList,
+          defaultId,
+          props.agentIdentityById[agent.id] ?? null,
+        );
+        return props.activePanel === "channels"
+          ? renderAgentChannels({
+              ...props.channels,
+              context,
+              configForm: config,
+              onSelectPanel: props.onSelectPanel,
+            })
+          : renderAgentCron({
+              ...props.cron,
+              basePath: props.basePath,
+              context,
+              canRunNow: props.access.canRunCron,
+              onSelectPanel: props.onSelectPanel,
+            });
+      }
+      case "memory":
+        return html`
+          <div class="settings-group agent-memory-import-row">
+            ${renderSettingsNavRow({
+              title: t("tabs.memory"),
+              description: t("subtitles.memory"),
+              onClick: () => props.onOpenMemorySettings?.(),
+            })}
+            ${renderSettingsNavRow({
+              title: t("tabs.memoryImport"),
+              description: t("subtitles.memoryImport"),
+              onClick: () => props.onOpenMemoryImport?.(),
+            })}
+          </div>
+          <openclaw-agent-memory-panel .agentId=${agent.id}></openclaw-agent-memory-panel>
+        `;
+    }
+    return nothing;
   };
 
   return html`
@@ -281,11 +316,24 @@ export function renderAgents(props: AgentsProps) {
                 renderSettingsEmpty(t("agents.selectSubtitle")),
               )
             : html`
-                ${renderAgentTabs(
-                  props.activePanel,
-                  (panel) => props.onSelectPanel(panel),
-                  tabCounts,
-                )}
+                ${renderHubTabs({
+                  id: "agents",
+                  active: props.activePanel,
+                  tabs: (
+                    [
+                      ["overview", "agents.tabs.overview"],
+                      ["files", "agents.tabs.files"],
+                      ["tools", "agents.tabs.tools"],
+                      ["skills", "agents.tabs.skills"],
+                      ["channels", "agents.tabs.channels"],
+                      ["cron", "agents.tabs.cronJobs"],
+                      ["memory", "agents.tabs.memory"],
+                    ] as const
+                  ).map(([value, key]) => ({ value, label: t(key), count: tabCounts[value] })),
+                  ariaLabel: t("tabs.agents"),
+                  panelId: "agent-panel",
+                  onSelect: props.onSelectPanel,
+                })}
                 <div
                   id="agent-panel"
                   class="settings-stack"
@@ -293,224 +341,17 @@ export function renderAgents(props: AgentsProps) {
                   aria-labelledby=${`agents-tab-${props.activePanel}`}
                 >
                   ${
-                    props.config.error
-                      ? html`<div class="callout danger" role="alert">${props.config.error}</div>`
+                    props.config.lastError
+                      ? html`<div class="callout danger" role="alert">
+                          ${props.config.lastError}
+                        </div>`
                       : nothing
                   }
-                  ${
-                    props.activePanel === "overview"
-                      ? keyed(
-                          selectedAgent.id,
-                          renderAgentOverview({
-                            agent: selectedAgent,
-                            basePath: props.basePath,
-                            defaultId,
-                            configForm: props.config.form,
-                            agentFilesList: props.agentFiles.list,
-                            agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
-                            agentIdentityError: props.agentIdentityError,
-                            agentIdentityLoading: props.agentIdentityLoading,
-                            identityDraft: props.identityDraft,
-                            identityAvatarLoader: props.identityAvatarLoader,
-                            identitySaving: props.identitySaving,
-                            identityError: props.identityError,
-                            canUpdateConfig: props.access.canUpdateConfig,
-                            canUpdateIdentity: props.access.canUpdateIdentity,
-                            configLoading: props.config.loading,
-                            configSaving: props.config.saving,
-                            configDirty: props.config.dirty,
-                            modelCatalog: props.modelCatalog,
-                            modelCatalogStatus: props.modelCatalogStatus,
-                            onConfigReload: props.onConfigReload,
-                            onConfigSave: props.onConfigSave,
-                            onIdentityFieldChange: props.onIdentityFieldChange,
-                            onIdentityAvatarSelect: props.onIdentityAvatarSelect,
-                            onIdentitySave: props.onIdentitySave,
-                            onModelChange: props.onModelChange,
-                            onModelFallbacksChange: props.onModelFallbacksChange,
-                            onModelCatalogOpen: props.onModelCatalogOpen,
-                            onSelectPanel: props.onSelectPanel,
-                          }),
-                        )
-                      : nothing
-                  }
-                  ${
-                    props.activePanel === "files"
-                      ? renderAgentFiles({
-                          agentId: selectedAgent.id,
-                          agentFilesList: props.agentFiles.list,
-                          agentFilesLoading: props.agentFiles.loading,
-                          agentFilesError: props.agentFiles.error,
-                          agentFileActive: props.agentFiles.active,
-                          agentFileContents: props.agentFiles.contents,
-                          agentFileDrafts: props.agentFiles.drafts,
-                          agentFileSaving: props.agentFiles.saving,
-                          agentFileConflict: props.agentFiles.conflict,
-                          canWrite: props.access.canWriteFiles,
-                          onLoadFiles: props.onLoadFiles,
-                          onSelectFile: props.onSelectFile,
-                          onFileDraftChange: props.onFileDraftChange,
-                          onFileReset: props.onFileReset,
-                          onFileSave: props.onFileSave,
-                          onFileReload: props.onFileReload,
-                          onFileOverwrite: props.onFileOverwrite,
-                        })
-                      : nothing
-                  }
-                  ${
-                    props.activePanel === "tools"
-                      ? renderAgentTools({
-                          agentId: selectedAgent.id,
-                          configForm: props.config.form,
-                          configLoading: props.config.loading,
-                          configSaving: props.config.saving,
-                          configDirty: props.config.dirty,
-                          toolsCatalogLoading: props.toolsCatalog.loading,
-                          toolsCatalogError: props.toolsCatalog.error,
-                          toolsCatalogResult: props.toolsCatalog.result,
-                          toolsEffectiveLoading: props.toolsEffective.loading,
-                          toolsEffectiveError: props.toolsEffective.error,
-                          toolsEffectiveResult: props.toolsEffective.result,
-                          runtimeSessionKey: props.runtimeSessionKey,
-                          runtimeSessionMatchesSelectedAgent:
-                            props.runtimeSessionMatchesSelectedAgent,
-                          canUpdateConfig: props.access.canUpdateConfig,
-                          githubIdentity: props.githubIdentity,
-                          onOpenGitHubConnections: props.onOpenGitHubConnections,
-                          onProfileChange: props.onToolsProfileChange,
-                          onOverridesChange: props.onToolsOverridesChange,
-                          onConfigReload: props.onConfigReload,
-                          onConfigSave: props.onConfigSave,
-                        })
-                      : nothing
-                  }
-                  ${
-                    props.activePanel === "skills"
-                      ? renderAgentSkills({
-                          agentId: selectedAgent.id,
-                          report: props.agentSkills.report,
-                          loading: props.agentSkills.loading,
-                          error: props.agentSkills.error,
-                          activeAgentId: props.agentSkills.agentId,
-                          configForm: props.config.form,
-                          configLoading: props.config.loading,
-                          configSaving: props.config.saving,
-                          configDirty: props.config.dirty,
-                          filter: props.agentSkills.filter,
-                          canPatchConfig: props.access.canPatchConfig,
-                          canUpdateConfig: props.access.canUpdateConfig,
-                          onFilterChange: props.onSkillsFilterChange,
-                          onRefresh: props.onSkillsRefresh,
-                          onToggle: props.onAgentSkillToggle,
-                          onClear: props.onAgentSkillsClear,
-                          onDisableAll: props.onAgentSkillsDisableAll,
-                          onConfigReload: props.onConfigReload,
-                          onConfigSave: props.onConfigSave,
-                        })
-                      : nothing
-                  }
-                  ${
-                    props.activePanel === "channels"
-                      ? renderAgentChannels({
-                          context: buildAgentContext(
-                            selectedAgent,
-                            props.config.form,
-                            props.agentFiles.list,
-                            defaultId,
-                            props.agentIdentityById[selectedAgent.id] ?? null,
-                          ),
-                          configForm: props.config.form,
-                          snapshot: props.channels.snapshot,
-                          loading: props.channels.loading,
-                          error: props.channels.error,
-                          lastSuccess: props.channels.lastSuccess,
-                          onRefresh: props.onChannelsRefresh,
-                          onSelectPanel: props.onSelectPanel,
-                        })
-                      : nothing
-                  }
-                  ${
-                    props.activePanel === "cron"
-                      ? renderAgentCron({
-                          basePath: props.basePath,
-                          context: buildAgentContext(
-                            selectedAgent,
-                            props.config.form,
-                            props.agentFiles.list,
-                            defaultId,
-                            props.agentIdentityById[selectedAgent.id] ?? null,
-                          ),
-                          agentId: selectedAgent.id,
-                          jobs: props.cron.jobs,
-                          jobsTotal: props.cron.jobsTotal,
-                          jobsHasMore: props.cron.jobsHasMore,
-                          jobsLoadingMore: props.cron.jobsLoadingMore,
-                          status: props.cron.status,
-                          scopedTotal: props.cron.scopedTotal,
-                          scopedNextWakeAtMs: props.cron.scopedNextWakeAtMs,
-                          loading: props.cron.loading,
-                          error: props.cron.error,
-                          canRunNow: props.access.canRunCron,
-                          onRefresh: props.onCronRefresh,
-                          onLoadMore: props.onCronLoadMore,
-                          onRunNow: props.onCronRunNow,
-                          onSelectPanel: props.onSelectPanel,
-                        })
-                      : nothing
-                  }
-                  ${
-                    props.activePanel === "memory"
-                      ? html`
-                          <div class="settings-group agent-memory-import-row">
-                            ${renderSettingsNavRow({
-                              title: t("tabs.memory"),
-                              description: t("subtitles.memory"),
-                              onClick: () => props.onOpenMemorySettings?.(),
-                            })}
-                            ${renderSettingsNavRow({
-                              title: t("tabs.memoryImport"),
-                              description: t("subtitles.memoryImport"),
-                              onClick: () => props.onOpenMemoryImport?.(),
-                            })}
-                          </div>
-                          <openclaw-agent-memory-panel
-                            .agentId=${selectedAgent.id}
-                          ></openclaw-agent-memory-panel>
-                        `
-                      : nothing
-                  }
+                  ${renderSelectedPanel(selectedAgent)}
                 </div>
               `
         }
       </section>
     </div>
   `;
-}
-
-function renderAgentTabs(
-  active: AgentsPanel,
-  onSelect: (panel: AgentsPanel) => void,
-  counts: Record<string, number | null>,
-) {
-  const tabs: Array<{ id: AgentsPanel; label: string }> = [
-    { id: "overview", label: t("agents.tabs.overview") },
-    { id: "files", label: t("agents.tabs.files") },
-    { id: "tools", label: t("agents.tabs.tools") },
-    { id: "skills", label: t("agents.tabs.skills") },
-    { id: "channels", label: t("agents.tabs.channels") },
-    { id: "cron", label: t("agents.tabs.cronJobs") },
-    { id: "memory", label: t("agents.tabs.memory") },
-  ];
-  return renderHubTabs({
-    id: "agents",
-    active,
-    tabs: tabs.map((tab) => ({
-      value: tab.id,
-      label: tab.label,
-      count: counts[tab.id],
-    })),
-    ariaLabel: t("tabs.agents"),
-    panelId: "agent-panel",
-    onSelect,
-  });
 }

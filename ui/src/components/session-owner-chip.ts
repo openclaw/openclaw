@@ -106,8 +106,8 @@ export function renderSessionOwnerAvatar(
 
 /**
  * Session-owner avatar. The owner may be reassigned; live viewing only changes
- * avatar saturation. Render only when the Gateway's complete owner facet has 2+
- * identities (solo mode shows no attribution chrome). Human actors use the durable
+ * avatar saturation. Sidebar rows show attribution only with multiple known humans
+ * among owners and participants. Human actors use the durable
  * profile projection carried by the session record; typed agents share the agent face fallback.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
