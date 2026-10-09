@@ -1,7 +1,7 @@
 /** Proves the per-turn send-budget notice reaches a real Code Mode guest program. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
@@ -55,7 +55,7 @@ function createSendDeps() {
   }));
   return {
     callGateway: callGatewayMock as never,
-    resolveConversation: (() => conversation) as never,
+    readConversation: (async () => conversation) as never,
     callGatewayMock,
   };
 }
@@ -66,9 +66,9 @@ describe("Code Mode guest receives the conversations_send budget notice", () => 
     registerReefTestPlugin();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     resetTurnSendLedgerForTest();
     resetPluginRuntimeStateForTest();
   });
@@ -98,9 +98,6 @@ describe("Code Mode guest receives the conversations_send budget notice", () => 
     applyCodeModeCatalog({
       tools: [...codeModeTools, sendTool],
       config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
       catalogRef,
     });
 

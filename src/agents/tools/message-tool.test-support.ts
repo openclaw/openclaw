@@ -4,7 +4,11 @@
 // exact plugin shape the main suite exercises instead of a divergent copy.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
-import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 
 // Shape of the object the message tool passes into runMessageAction. Shared by both
 // suites so their runner-mock assertions read the same fields the production call site
@@ -65,10 +69,6 @@ type MessageToolSchema = NonNullable<ReturnType<DescribeMessageTool>>["schema"];
 
 export function createChannelPlugin(params: {
   id: string;
-  label: string;
-  docsPath: string;
-  blurb: string;
-  aliases?: string[];
   actions?: ChannelMessageActionName[];
   capabilities?: readonly ChannelMessageCapability[];
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
@@ -80,21 +80,11 @@ export function createChannelPlugin(params: {
   outbound?: ChannelPlugin["outbound"];
 }): ChannelPlugin {
   return {
-    id: params.id as ChannelPlugin["id"],
-    meta: {
+    ...createChannelTestPluginBase({
       id: params.id as ChannelPlugin["id"],
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: params.blurb,
-      aliases: params.aliases,
-    },
-    capabilities: { chatTypes: ["direct", "group"], media: true },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      ...params.config,
-    },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: params.config,
+    }),
     ...(params.message ? { message: params.message } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
     ...(params.outbound ? { outbound: params.outbound } : {}),
