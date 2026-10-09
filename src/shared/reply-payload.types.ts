@@ -25,6 +25,12 @@ export type ReplyMediaAttachment = {
 export type ReplyPayloadTtsSupplement = {
   spokenText: string;
   visibleTextAlreadyDelivered?: boolean;
+  /**
+   * Optional audio that repeats an answer already delivered, fenced only by an
+   * in-memory writer authority. Delivery must not persist it for replay: recovery
+   * cannot rebuild that fence, so a restart would send it past a replaced writer.
+   */
+  liveOnly?: boolean;
 };
 
 /** Channel-agnostic assistant reply payload. */
