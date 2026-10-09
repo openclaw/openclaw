@@ -413,6 +413,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.delivery-format.test.ts",
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",
+  "src/auto-reply/reply/get-reply.gateway-authority.test.ts",
   "src/auto-reply/reply/get-reply.maintenance-conflict.test.ts",
   "src/auto-reply/reply/get-reply.timeout.test.ts",
   "src/auto-reply/reply/get-reply.workspace-failure.test.ts",

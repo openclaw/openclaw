@@ -38,6 +38,27 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+// Channel incarnations on one Gateway root supersede each other across registries;
+// distinct Gateway roots keep independent owners for the same channel id.
+const currentChannelRecordByGatewayRoot = new WeakMap<object, Map<string, PluginRecord>>();
+const supersededChannelRecords = new WeakSet<PluginRecord>();
+
+function claimGatewayRootChannelSlot(gatewayRoot: object | undefined, record: PluginRecord) {
+  if (!gatewayRoot) {
+    return;
+  }
+  let current = currentChannelRecordByGatewayRoot.get(gatewayRoot);
+  if (!current) {
+    current = new Map();
+    currentChannelRecordByGatewayRoot.set(gatewayRoot, current);
+  }
+  const previous = current.get(record.id);
+  if (previous && previous !== record) {
+    supersededChannelRecords.add(previous);
+  }
+  current.set(record.id, record);
+}
+
 // A completed reaction must retain only the emptied holder, not the caller's registry closure.
 function createRuntimeRegistryRelease(held: PluginRegistry[]) {
   return () => {
@@ -119,13 +140,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     if (
       (record.origin !== "bundled" && record.trustedOfficialInstall !== true) ||
       !registry.channels.some((entry) => entry.pluginId === record.id) ||
-      !isPluginRecordActive(registry, record)
+      !isPluginRecordActive(registry, record) ||
+      supersededChannelRecords.has(record)
     ) {
       return channel;
     }
     let closed = false;
     const ownsLiveRegistrySlot = () =>
       !closed &&
+      !supersededChannelRecords.has(record) &&
       registeredRuntimeRecordById.get(record.id) === record &&
       isPluginRecordActive(registry, record);
     const previousRecord = registeredRuntimeRecordById.get(record.id);
@@ -136,6 +159,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     }
     registeredRuntimeRecordById.set(record.id, record);
     const resolveGatewayContext = getGatewayContextResolver(registryParams.runtime.subagent);
+    claimGatewayRootChannelSlot(
+      resolveGatewayContext && getCanonicalGatewayContextResolver(resolveGatewayContext),
+      record,
+    );
     const scopedGatewayContext = resolveGatewayContext
       ? () => (ownsLiveRegistrySlot() ? resolveGatewayContext() : undefined)
       : undefined;
