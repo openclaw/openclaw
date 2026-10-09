@@ -424,14 +424,16 @@ describe("ClickClack discussion service", () => {
   it("attaches a channel to the current incarnation when the session resets during open", async () => {
     const harness = createHarness({ sessionId: "session-old", label: "Reset race" });
     const sessionKey = "agent:main:reset-race";
-    vi.mocked(harness.runtime.agent.session.getSessionEntry)
-      .mockReturnValueOnce({ sessionId: "session-old", label: "Reset race", updatedAt: 1 })
-      .mockReturnValue({
-        sessionId: "session-new",
-        label: "Current reset race",
-        category: "Current sessions",
-        updatedAt: 2,
-      });
+    const replacement = {
+      sessionId: "session-new",
+      label: "Current reset race",
+      category: "Current sessions",
+      updatedAt: 2,
+    };
+    vi.mocked(harness.runtime.agent.session.getSessionEntry).mockReturnValue(replacement);
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync)
+      .mockResolvedValueOnce({ sessionId: "session-old", label: "Reset race", updatedAt: 1 })
+      .mockResolvedValue(replacement);
 
     await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
     expect(harness.updateChannel).toHaveBeenCalledWith(

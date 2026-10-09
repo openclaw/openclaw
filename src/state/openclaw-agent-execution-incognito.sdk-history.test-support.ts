@@ -7,7 +7,7 @@ import {
 import { readSessionTranscriptModelContextAsync } from "../config/sessions/session-transcript-context-read.js";
 import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import { prepareSessionEntryPresenceRead } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -44,7 +44,7 @@ export function registerIncognitoSdkHistoryTests(fixture: HistoryWiringFixture) 
         },
       });
       assert(changed.ok);
-      await waitForSessionTranscriptIndexReconcile({
+      await reconcileSessionTranscriptIndexes({
         agentId: actor.agentId,
         path: actor.path,
         env,

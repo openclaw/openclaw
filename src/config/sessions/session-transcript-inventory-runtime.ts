@@ -21,13 +21,13 @@ import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 
 export async function listSessionTranscriptArchivesInWorker(input: SessionArchiveInventoryScope) {
+  const source = captureIncognitoSessionSource(input);
   const scope = {
     ...input,
     env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
     sessionIds: [...new Set(input.sessionIds ?? [])],
     archiveNames: [...new Set(input.archiveNames ?? [])],
   };
-  const source = captureIncognitoSessionSource(scope);
   if (source) {
     // Actor transcripts never create durable archive artifacts.
     await Promise.resolve();
@@ -120,7 +120,7 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
     return [];
   }
   const storePath = resolveSessionStorePathForScope(scope);
-  const binding = captureIncognitoSessionSource({ ...scope, storePath });
+  const binding = captureIncognitoSessionSource({ ...input, storePath });
   if (binding && "kind" in binding) {
     resolveMemorySessionSince(scope.since);
     await Promise.resolve();
