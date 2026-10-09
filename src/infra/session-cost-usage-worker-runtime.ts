@@ -403,13 +403,13 @@ async function runPreparedUsageCostWorker(
       }
       return binding;
     };
-    const sources = new Map<string, ReturnType<typeof createMemoryTranscriptProjectionSource>>();
+    let memorySource:
+      | { key: string; source: ReturnType<typeof createMemoryTranscriptProjectionSource> }
+      | undefined;
     const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     scope.retainCleanup(async () => {
-      for (const source of sources.values()) {
-        source.clear();
-      }
-      sources.clear();
+      memorySource?.source.clear();
+      memorySource = undefined;
       pruneRows.length = 0;
     });
     const hostLock =
@@ -572,19 +572,25 @@ async function runPreparedUsageCostWorker(
                     throw new Error("Usage memory transcript is no longer available");
                   }
                   const key = JSON.stringify(request.input);
-                  let source = sources.get(key);
-                  if (!source) {
-                    source = createMemoryTranscriptProjectionSource(
-                      binding.database,
-                      binding.options,
-                      request.input,
-                    );
-                    sources.set(key, source);
+                  if (memorySource?.key !== key) {
+                    // Usage scans await one reader at a time; a new page retires the old cursor.
+                    memorySource?.source.clear();
+                    memorySource = {
+                      key,
+                      source: createMemoryTranscriptProjectionSource(
+                        binding.database,
+                        binding.options,
+                        request.input,
+                      ),
+                    };
                   }
-                  const frame = source.read(request.input.marker.sessionId);
+                  const frame = memorySource.source.read(request.input.marker.sessionId);
                   output = frame;
                   if (frame.type === "source-frame") {
                     transferList.push(frame.bytes.buffer);
+                  } else {
+                    memorySource.source.clear();
+                    memorySource = undefined;
                   }
                   break;
                 }
