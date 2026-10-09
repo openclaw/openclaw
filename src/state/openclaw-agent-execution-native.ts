@@ -432,6 +432,8 @@ export function createAgentDatabaseNativeGeneration(
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
             },
+            // A failed pooled worker also retires proof lent by its other agent actors.
+            onNativeLost: () => invalidateOpenClawAgentDatabaseValidation(pathname),
           },
         );
         // Keep the native owner reachable if registration publication fails after open.

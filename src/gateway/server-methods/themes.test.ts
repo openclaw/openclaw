@@ -17,6 +17,7 @@ import {
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userPreferences from "../../state/user-preferences.js";
@@ -123,16 +124,12 @@ async function invoke(
 }
 
 function beforeWorkerCommit(checkpoint: () => void) {
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          checkpoint();
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      checkpoint();
+    }
+    admit(request, grant);
+  });
 }
 
 function changePreferencesAfterSnapshot(entries: Record<string, unknown>) {

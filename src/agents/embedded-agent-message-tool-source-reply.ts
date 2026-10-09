@@ -101,16 +101,14 @@ export function isDeliveredMessagingToolResult(params: {
   }
   const nonDelivery = hasSignal("nonDelivery");
   const noOp = hasSignal("noOp");
-  if (
+  return (
     !nonDelivery &&
     !noOp &&
-    isMessagingToolDeliveryAction(normalizedToolName, args) &&
-    action !== "broadcast" &&
-    hasSignal("ok")
-  ) {
-    return true;
-  }
-  return !nonDelivery && !noOp && hasSignal("delivery");
+    ((isMessagingToolDeliveryAction(normalizedToolName, args) &&
+      action !== "broadcast" &&
+      hasSignal("ok")) ||
+      hasSignal("delivery"))
+  );
 }
 
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {

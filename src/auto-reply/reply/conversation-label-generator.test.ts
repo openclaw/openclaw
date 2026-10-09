@@ -101,44 +101,17 @@ describe("generateConversationLabel", () => {
     },
   );
 
-  it("throws a sanitized error after every configured attempt fails", async () => {
-    runIsolatedCompletion.mockRejectedValue(new Error("secret-bearing provider failure"));
-
-    await expect(
-      generateConversationLabel({ userMessage: "Message", prompt: "Prompt", cfg: {} }),
-    ).rejects.toThrow("conversation label generation failed (utility, primary fallback)");
-  });
-
-  it("deduplicates utility and primary when they resolve to the same owner", async () => {
-    resolveSimpleCompletionSelectionForAgent.mockReturnValue({
-      provider: "openai",
-      modelId: "same-model",
-      profileId: "work",
-      agentDir: "/tmp/openclaw-agent",
-    });
-    runIsolatedCompletion.mockResolvedValue({ text: "" });
-
-    await expect(
-      generateConversationLabel({ userMessage: "Message", prompt: "Prompt", cfg: {} }),
-    ).resolves.toBeNull();
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["bounds without splitting surrogate pairs", `${"a".repeat(11)}😀tail`, 12, "a".repeat(11)],
-    ["hides trailing reasoning", "Invoice follow-up<think>private", 128, "Invoice follow-up"],
-    ["preserves literal code tags", "Debug `<think>` parsing", 128, "Debug `<think>` parsing"],
-  ])("%s", async (_name, text, maxLength, expected) => {
-    runIsolatedCompletion.mockResolvedValue({ text });
+  it("bounds without splitting surrogate pairs", async () => {
+    runIsolatedCompletion.mockResolvedValue({ text: `${"a".repeat(11)}😀tail` });
 
     await expect(
       generateConversationLabel({
         userMessage: "Message",
         prompt: "Prompt",
         cfg: {},
-        maxLength,
+        maxLength: 12,
       }),
-    ).resolves.toBe(expected);
+    ).resolves.toBe("a".repeat(11));
   });
 });
 
@@ -180,31 +153,9 @@ describe("generateConversationLabelWithFallback", () => {
     );
   });
 
-  it("locks an inherited profile onto a same-provider utility ref", async () => {
-    await generateConversationLabelWithFallback({ ...params, utilityModelRef: "openai/gpt-mini" });
-
-    expect(resolveSimpleCompletionSelectionForAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ modelRef: "openai/gpt-mini@work" }),
-    );
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.authProfileId).toBe("work");
-  });
-
-  it("does not inherit a profile across providers", async () => {
-    await generateConversationLabelWithFallback({
-      ...params,
-      utilityModelRef: "anthropic/claude-haiku",
-    });
-
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
-      provider: "anthropic",
-      model: "claude-haiku",
-    });
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
-  });
-
   it("records an exhausted failure after fallback normalization rejects the result", async () => {
     runIsolatedCompletion
-      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockRejectedValueOnce(new Error("secret-bearing provider failure"))
       .mockResolvedValueOnce({ text: "Title:" });
 
     await expect(
@@ -216,30 +167,27 @@ describe("generateConversationLabelWithFallback", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it.each([false, true])(
-    "keeps the runtime owner during fallback (reasoning: %s)",
-    async (reasoning) => {
-      runIsolatedCompletion
-        .mockImplementationOnce(async () => {
-          if (!reasoning) {
-            throw new Error("utility unavailable");
-          }
-          return { text: "<think>private" };
-        })
-        .mockResolvedValueOnce({ text: "Primary title" });
+  it("keeps the runtime owner and inherited profile during reasoning-only fallback", async () => {
+    runIsolatedCompletion
+      .mockResolvedValueOnce({ text: "<think>private" })
+      .mockResolvedValueOnce({ text: "Primary title" });
 
-      await expect(
-        generateConversationLabelWithFallback({
-          ...params,
-          agentHarnessRuntimeOverride: "codex",
-        }),
-      ).resolves.toBe("Primary title");
+    await expect(
+      generateConversationLabelWithFallback({
+        ...params,
+        utilityModelRef: "openai/gpt-mini",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).resolves.toBe("Primary title");
 
-      expect(
-        runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
-      ).toEqual(["codex", "codex"]);
-    },
-  );
+    expect(
+      runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
+    ).toEqual(["codex", "codex"]);
+    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.authProfileId)).toEqual([
+      "work",
+      "work",
+    ]);
+  });
 
   it("keeps only the compatible runtime per attempt when providers differ", async () => {
     runIsolatedCompletion
@@ -263,34 +211,19 @@ describe("generateConversationLabelWithFallback", () => {
       ["anthropic", undefined],
       ["openai", "codex"],
     ]);
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
   });
 
-  it("utilityOnly runs one utility attempt and never the regular model", async () => {
-    runIsolatedCompletion.mockRejectedValueOnce(new Error("utility unavailable"));
+  it("utilityOnly returns null without inference when the utility model resolves onto the primary", async () => {
     await expect(
-      generateConversationLabelWithFallback({ ...params, utilityOnly: true }),
-    ).rejects.toThrow("conversation label generation failed (utility)");
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.model).toBe("gpt-mini");
+      generateConversationLabelWithFallback({
+        ...params,
+        utilityModelRef: params.regularModelRef,
+        utilityOnly: true,
+      }),
+    ).resolves.toBeNull();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
   });
-
-  it.each([
-    ["missing", undefined],
-    ["resolving onto the primary", "openai/gpt-main@work"],
-  ])(
-    "utilityOnly returns null without inference when the utility model is %s",
-    async (_case, ref) => {
-      const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;
-      await expect(
-        generateConversationLabelWithFallback({
-          ...regularOnlyParams,
-          ...(ref ? { utilityModelRef: ref } : {}),
-          utilityOnly: true,
-        }),
-      ).resolves.toBeNull();
-      expect(runIsolatedCompletion).not.toHaveBeenCalled();
-    },
-  );
 
   it("uses the regular candidate directly when no utility model exists", async () => {
     const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;

@@ -43,6 +43,7 @@ import {
   listDevicePairingReadOnly,
   removePairedDevice,
 } from "./device-pairing.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -148,23 +149,15 @@ test.each([0, 1])(
     }
     let current = true;
     const revoked = new Error("setup cleanup owner revoked after native result");
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const delivery = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce((context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                current = false;
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const delivery = probe.command(
+      stateWorker,
+      async (command, executeOptions, scope) => {
+        const result = await scope.execute(command, executeOptions);
+        current = false;
+        return result;
+      },
+      { once: true },
+    );
     try {
       const pruning = executeDevicePairingMutation(
         { type: "bootstrap.prune", input: { nowMs: 1_000 } },

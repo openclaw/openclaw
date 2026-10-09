@@ -67,9 +67,7 @@ export function formatBillingErrorMessage(
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
   const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
   if (isSubscriptionAuth) {
-    return providerLabel
-      ? `⚠️ ${providerLabel} returned a billing error — check your account for subscription or usage limits, then try again.`
-      : "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
+    return `⚠️ ${providerLabel ?? "API provider"} returned a billing error — check your account for subscription or usage limits, then try again.`;
   }
   return providerLabel
     ? `⚠️ ${providerLabel} returned a billing error — check your account's balance and usage limits before trying again.`

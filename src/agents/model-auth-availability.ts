@@ -229,31 +229,28 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return runtime;
     }
-    if (
-      credential.type === "api_key" &&
-      runtime.type === "api_key" &&
-      sameSecretRef(
-        parseSecretRef(credential.keyRef ?? credential.key, params.cfg.secrets?.defaults),
-        parseSecretRef(runtime.keyRef, params.cfg.secrets?.defaults),
-      ) &&
-      hasSecret(runtime.key)
-    ) {
-      hydratedProfileIds.add(profileId);
-      return { ...credential, key: runtime.key };
+    if (credential.type === "oauth" || runtime.type === "oauth") {
+      return credential;
     }
+    const configuredRef =
+      credential.type === "api_key"
+        ? (credential.keyRef ?? credential.key)
+        : (credential.tokenRef ?? credential.token);
+    const runtimeRef = runtime.type === "api_key" ? runtime.keyRef : runtime.tokenRef;
+    const value = runtime.type === "api_key" ? runtime.key : runtime.token;
     if (
-      credential.type === "token" &&
-      runtime.type === "token" &&
-      sameSecretRef(
-        parseSecretRef(credential.tokenRef ?? credential.token, params.cfg.secrets?.defaults),
-        parseSecretRef(runtime.tokenRef, params.cfg.secrets?.defaults),
-      ) &&
-      hasSecret(runtime.token)
+      !sameSecretRef(
+        parseSecretRef(configuredRef, params.cfg.secrets?.defaults),
+        parseSecretRef(runtimeRef, params.cfg.secrets?.defaults),
+      ) ||
+      !hasSecret(value)
     ) {
-      hydratedProfileIds.add(profileId);
-      return { ...credential, token: runtime.token };
+      return credential;
     }
-    return credential;
+    hydratedProfileIds.add(profileId);
+    return credential.type === "api_key"
+      ? { ...credential, key: value }
+      : { ...credential, token: value };
   };
   const orderProfiles = runtimeStore
     ? Object.fromEntries(

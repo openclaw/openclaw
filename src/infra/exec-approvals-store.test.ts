@@ -54,6 +54,7 @@ import {
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const loggerWarn = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", async (importOriginal) => ({
@@ -326,17 +327,13 @@ describe("exec approvals SQLite store", () => {
     const before = await ensureExecApprovalsSnapshot();
     let current = true;
     let commitObserved = false;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            commitObserved = true;
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        commitObserved = true;
+        current = false;
+      }
+      admit(request, grant);
+    });
     await expect(
       updateExecApprovals({
         baseHash: before.hash,
@@ -355,16 +352,12 @@ describe("exec approvals SQLite store", () => {
   it("mints one socket token and reuses it on later initialization", async () => {
     const first = (await ensureExecApprovalsSnapshot()).file;
     const transactions = vi.fn();
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            transactions();
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        transactions();
+      }
+      admit(request, grant);
+    });
     const second = (await ensureExecApprovalsSnapshot()).file;
     expect(transactions).not.toHaveBeenCalled();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
@@ -790,16 +783,12 @@ describe("exec approvals SQLite store", () => {
       },
     };
     let canceled = false;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            canceled = true;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        canceled = true;
+      }
+      admit(request, grant);
+    });
     const [revoked, current] = await Promise.allSettled([
       commitExecAuthorizations(input, () => {
         if (canceled) {

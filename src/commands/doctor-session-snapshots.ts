@@ -347,9 +347,6 @@ export async function noteSessionSnapshotHealth(params: SessionSnapshotScanOptio
         )} -> ${shortenHomePath(finding.expectedPath)}`,
       );
       shown += 1;
-      if (shown >= 10) {
-        break;
-      }
     }
     if (shown >= 10) {
       break;

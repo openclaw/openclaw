@@ -67,40 +67,27 @@ export async function detectUiProtocolFreshnessIssues(): Promise<
     if (!canBuild) {
       return [];
     }
-    const changesSinceBuild = await collectProtocolSchemaChangesSince(
-      root,
-      (await fs.stat(uiIndexPath)).mtime,
+    const uiMtime = (await fs.stat(uiIndexPath)).mtime;
+    const gitLog = await runCommandWithTimeout(
+      [
+        "git",
+        "-C",
+        root,
+        "log",
+        `--since=${uiMtime.toISOString()}`,
+        "--format=%h %s",
+        "packages/gateway-protocol/src",
+      ],
+      { timeoutMs: 5000 },
     );
-    if (changesSinceBuild === null || changesSinceBuild.length === 0) {
+    const output = gitLog.code === 0 ? gitLog.stdout.trim() : "";
+    if (!output) {
       return [];
     }
-    return [{ ...issue, kind: "stale-assets", changesSinceBuild }];
+    return [{ ...issue, kind: "stale-assets", changesSinceBuild: output.split("\n") }];
   } catch {
     return [];
   }
-}
-
-async function collectProtocolSchemaChangesSince(
-  root: string,
-  uiMtime: Date,
-): Promise<readonly string[] | null> {
-  const gitLog = await runCommandWithTimeout(
-    [
-      "git",
-      "-C",
-      root,
-      "log",
-      `--since=${uiMtime.toISOString()}`,
-      "--format=%h %s",
-      "packages/gateway-protocol/src",
-    ],
-    { timeoutMs: 5000 },
-  ).catch(() => null);
-  if (!gitLog || gitLog.code !== 0) {
-    return null;
-  }
-  const output = gitLog.stdout.trim();
-  return output ? output.split("\n") : [];
 }
 
 export function uiProtocolFreshnessIssueToHealthFinding(
