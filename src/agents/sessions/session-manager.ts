@@ -40,6 +40,7 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
+import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import {
   sessionManagerReadInitialContext,
   sessionManagerReadTranscriptStart,
@@ -51,6 +52,7 @@ import {
   readSessionManagerModelContextAsync,
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
+import { openSessionManagerBoundedView } from "./session-manager-reload.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -61,6 +63,7 @@ import type {
   SessionManagerBoundedContext,
   SessionManagerBoundedContextLimits,
   SessionManagerPersistenceTarget,
+  SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
 import {
   appendSessionTranscriptNote,
@@ -537,6 +540,25 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   /** Reads an existing store's bounded view under the history worker's database custody. */
+  static async [sessionManagerOpenTranscriptCohort](
+    target: SessionTranscriptRuntimeTarget,
+    options: SessionManagerBoundedContextLimits & { cwd?: string; signal?: AbortSignal },
+    selection: SessionManagerTranscriptCohort["selection"],
+    consume: (
+      manager: SessionManager,
+      ...prepared: Parameters<SessionManagerTranscriptCohort["consume"]>
+    ) => void,
+  ): Promise<SessionManager> {
+    return openSessionManagerBoundedView(
+      target,
+      options,
+      (cwd, captured, context, limits) =>
+        new SessionManager(cwd, captured, context.events, { ...context, limits }),
+      { selection, consume, captureView: (manager) => manager.captureTranscriptView() },
+    );
+  }
+
+  /** Reads an existing store's bounded view under the history worker's database custody. */
   static async openBoundedAsync(
     target: SessionTranscriptRuntimeTarget,
     options: SessionManagerBoundedContextLimits & {
@@ -545,35 +567,12 @@ export class SessionManager extends SessionManagerBranching {
       signal?: AbortSignal;
     },
   ): Promise<SessionManager> {
-    const { cwd, onTruncated, signal, ...limits } = options;
-    const fallbackCwd = cwd ?? process.cwd();
-    const hydration = prepareSessionManagerHydration(target, limits, signal);
-    const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
-    assertOwned();
-    const prepared = await hydration.read().catch((error: unknown) => {
-      // Callers may interpret typed absence; that result still needs its live owner.
-      assertOwned();
-      throw error;
-    });
-    signal?.throwIfAborted();
-    assertOwned();
-    hydration.assertCurrent();
-    if (prepared.kind !== "bounded") {
-      throw new Error("Expected a bounded transcript snapshot");
-    }
-    const context = prepared.snapshot;
-    if (context.truncated) {
-      onTruncated?.();
-    }
-    signal?.throwIfAborted();
-    assertOwned();
-    hydration.assertCurrent();
-    const entries = context.events;
-    const header = findSessionTranscriptHeader(entries);
-    return new SessionManager(cwd ?? header?.cwd ?? fallbackCwd, hydration.target, entries, {
-      ...context,
-      limits,
-    });
+    return openSessionManagerBoundedView(
+      target,
+      options,
+      (cwd, captured, context, limits) =>
+        new SessionManager(cwd, captured, context.events, { ...context, limits }),
+    );
   }
 
   private static detachBounded(source: SessionManager) {

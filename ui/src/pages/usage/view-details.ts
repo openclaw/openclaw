@@ -25,17 +25,14 @@ function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
 }
 
-/** Normalize a log timestamp to milliseconds (handles seconds vs ms). */
-function normalizeLogTimestamp(ts: number): number {
-  return ts < 1e12 ? ts * 1000 : ts;
-}
-
 function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
   // Keep undated entries visible; interval totals count dated entries separately.
   if (!(log.timestamp > 0)) {
     return true;
   }
-  const ts = normalizeLogTimestamp(log.timestamp);
+  // Log timestamps can be seconds or milliseconds.
+  const timestamp = log.timestamp;
+  const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 

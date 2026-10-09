@@ -14,7 +14,7 @@ import {
   policyEvidenceRuleFindings,
   type PolicyEvidenceRule,
 } from "./policy-evidence-finding.js";
-import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
+import { agentScopedPolicyTargets, scopedAgentEvidenceMatches } from "./policy-scope.js";
 import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
@@ -47,7 +47,9 @@ export function toolPostureFindings(
         target.overlay.tools,
         policyDocName,
         requirementBase,
-        entries.filter((entry) => scopedToolAgentMatches(entry, target.agentId, entries)),
+        entries.filter((entry) =>
+          scopedAgentEvidenceMatches(entry, target.agentId, entries, entry.scope === "global"),
+        ),
       ),
     );
   }
@@ -248,92 +250,79 @@ function toolMetadataFinding(
   };
 }
 
-export function toolRiskFindings(
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  return (evidence.tools ?? [])
-    .filter((tool) => tool.risk === undefined)
-    .map((tool) =>
-      toolMetadataFinding(
-        tool,
-        policyDocName,
-        CHECK_IDS.policyMissingToolRisk,
-        `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
-        "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
-      ),
-    );
-}
+type ToolMetadataIssue = readonly [
+  checkId: (typeof POLICY_CHECK_IDS)[number],
+  message: string,
+  fixHint: string,
+];
 
-export function toolUnknownRiskFindings(
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  return (evidence.tools ?? [])
-    .filter(
-      (tool) =>
-        tool.risk !== undefined &&
-        !KNOWN_RISK_LEVELS.includes(tool.risk as (typeof KNOWN_RISK_LEVELS)[number]),
-    )
-    .map((tool) =>
-      toolMetadataFinding(
-        tool,
-        policyDocName,
-        CHECK_IDS.policyUnknownToolRisk,
-        `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
-        `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
-      ),
-    );
-}
-
-export function toolSensitivityFindings(
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  return (evidence.tools ?? []).flatMap((tool): HealthFinding[] => {
-    if (tool.sensitivity === undefined) {
-      return [
-        toolMetadataFinding(
-          tool,
-          policyDocName,
+const TOOL_METADATA_CHECKS: readonly {
+  metadata: string;
+  issue: (tool: PolicyToolEvidence) => ToolMetadataIssue | undefined;
+}[] = [
+  {
+    metadata: "risk",
+    issue: (tool) =>
+      tool.risk === undefined
+        ? [
+            CHECK_IDS.policyMissingToolRisk,
+            `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
+            "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
+          ]
+        : undefined,
+  },
+  {
+    metadata: "risk",
+    issue: (tool) =>
+      tool.risk !== undefined && !KNOWN_RISK_LEVELS.some((risk) => risk === tool.risk)
+        ? [
+            CHECK_IDS.policyUnknownToolRisk,
+            `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
+            `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
+          ]
+        : undefined,
+  },
+  {
+    metadata: "sensitivity",
+    issue: (tool) => {
+      if (tool.sensitivity === undefined) {
+        return [
           CHECK_IDS.policyMissingToolSensitivity,
           `AGENTS.md tool '${tool.id}' has no declared artifact sensitivity.`,
           `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
-        ),
-      ];
-    }
-    if (
-      KNOWN_SENSITIVITY_LEVELS.includes(
-        tool.sensitivity as (typeof KNOWN_SENSITIVITY_LEVELS)[number],
-      )
-    ) {
-      return [];
-    }
-    return [
-      toolMetadataFinding(
-        tool,
-        policyDocName,
-        CHECK_IDS.policyUnknownToolSensitivity,
-        `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
-        `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
-      ),
-    ];
-  });
-}
+        ];
+      }
+      return KNOWN_SENSITIVITY_LEVELS.some((level) => level === tool.sensitivity)
+        ? undefined
+        : [
+            CHECK_IDS.policyUnknownToolSensitivity,
+            `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
+            `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+          ];
+    },
+  },
+  {
+    metadata: "owner",
+    issue: (tool) =>
+      tool.owner === undefined
+        ? [
+            CHECK_IDS.policyMissingToolOwner,
+            `AGENTS.md tool '${tool.id}' has no declared owner.`,
+            "Declare owner:<team-or-person> for this tool.",
+          ]
+        : undefined,
+  },
+];
 
-export function toolOwnerFindings(
+export function toolMetadataFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
+  required: ReadonlySet<string>,
 ): readonly HealthFinding[] {
-  return (evidence.tools ?? [])
-    .filter((tool) => tool.owner === undefined)
-    .map((tool) =>
-      toolMetadataFinding(
-        tool,
-        policyDocName,
-        CHECK_IDS.policyMissingToolOwner,
-        `AGENTS.md tool '${tool.id}' has no declared owner.`,
-        "Declare owner:<team-or-person> for this tool.",
-      ),
-    );
+  return TOOL_METADATA_CHECKS.filter((check) => required.has(check.metadata)).flatMap((check) =>
+    (evidence.tools ?? []).flatMap((tool) => {
+      const issue = check.issue(tool);
+      return issue === undefined ? [] : [toolMetadataFinding(tool, policyDocName, ...issue)];
+    }),
+  );
 }

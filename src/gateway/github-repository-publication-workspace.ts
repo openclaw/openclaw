@@ -20,13 +20,7 @@ import { withSessionRepositoryCheckpoint } from "./worker-environments/session-r
 
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
   const current = await prepareGitHubPublicationWorkspaceOwner(session);
-  return () => {
-    const owner = current.currentRepository();
-    if (owner.kind !== "repository") {
-      throw new Error("GitHub publication repository owner changed.");
-    }
-    return owner;
-  };
+  return current.currentRepository;
 }
 
 export function resolveReceiptOwner(

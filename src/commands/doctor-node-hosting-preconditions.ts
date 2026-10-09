@@ -83,10 +83,10 @@ export async function collectNodeHostingPreconditionFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
+  const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
+    findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });
   if (lacksNodeOnboardingPlugin(cfg)) {
-    findings.push({
-      checkId: CHECK_ID,
-      severity: "warning",
+    warn({
       message:
         "The device-pair plugin is not enabled; node onboarding join codes and openclaw connect are unavailable.",
       path: "plugins.entries.device-pair.enabled",
@@ -96,9 +96,7 @@ export async function collectNodeHostingPreconditionFindings(
     });
   }
   if (lacksDeviceCapableRuntimeRoute(cfg)) {
-    findings.push({
-      checkId: CHECK_ID,
-      severity: "warning",
+    warn({
       message:
         "No configured agent/model route resolves to a runtime that supports paired-device placement.",
       path: "agents",
@@ -108,9 +106,7 @@ export async function collectNodeHostingPreconditionFindings(
     });
   }
   if (usesIdentityHeadersWithoutMachineCredentials(cfg)) {
-    findings.push({
-      checkId: CHECK_ID,
-      severity: "warning",
+    warn({
       message:
         "Gateway identity-header auth has no configured token/password path for machine clients; new node hosts cannot authenticate or become worker hosts.",
       path: "gateway.auth",
@@ -120,9 +116,7 @@ export async function collectNodeHostingPreconditionFindings(
     });
   }
   if (await lacksNodeOnboardingUrl(cfg)) {
-    findings.push({
-      checkId: CHECK_ID,
-      severity: "warning",
+    warn({
       message: PAIRING_GATEWAY_LOOPBACK_ERROR,
       path: "gateway.bind",
       requirement: "node-onboarding-url",

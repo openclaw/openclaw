@@ -266,17 +266,14 @@ export function renderPluginDeclaredCapabilities(
     [
       ...overviewContractFamilies
         .filter((family) => contracts?.[family]?.length)
-        .map((family) => ({
-          name: t(`pluginsPage.capabilityFamilies.${family}.name`),
-          description: t(`pluginsPage.capabilityFamilies.${family}.description`),
-        })),
+        .map((family) => `capabilityFamilies.${family}`),
       ...PLUGIN_UI_CAPABILITIES.filter((capability) => uiCapabilities?.includes(capability)).map(
-        (capability) => ({
-          name: t(`pluginsPage.uiCapabilities.${capability}.name`),
-          description: t(`pluginsPage.uiCapabilities.${capability}.description`),
-        }),
+        (capability) => `uiCapabilities.${capability}`,
       ),
-    ],
+    ].map((key) => ({
+      name: t(`pluginsPage.${key}.name`),
+      description: t(`pluginsPage.${key}.description`),
+    })),
     icons.layers,
   );
 }

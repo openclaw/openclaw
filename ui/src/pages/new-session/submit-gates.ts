@@ -219,12 +219,12 @@ export function resolveNewSessionSubmitBlock(
     if (place.remotePlacement || draft.pendingPlacement.sessionKey) {
       return { gate: "device", reason: t("newSession.terminalPlacementUnsupported") };
     }
-  }
-  if (kind === "terminal" && draft.capabilities.toolOverrides !== null) {
-    return {
-      gate: "terminal-capabilities",
-      reason: t("newSession.terminalCapabilityOverridesUnsupported"),
-    };
+    if (draft.capabilities.toolOverrides !== null) {
+      return {
+        gate: "terminal-capabilities",
+        reason: t("newSession.terminalCapabilityOverridesUnsupported"),
+      };
+    }
   }
   if (place.folderSubmissionBlocked()) {
     return { gate: "folder", reason: t("newSession.checkingPlace") };

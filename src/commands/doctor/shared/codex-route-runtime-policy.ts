@@ -164,10 +164,8 @@ function modelIdMatchesProviderModelEntry(params: {
     return true;
   }
   const slash = entryId.indexOf("/");
-  if (slash <= 0) {
-    return false;
-  }
   return (
+    slash > 0 &&
     normalizeProviderId(entryId.slice(0, slash)) === normalizeProviderId(params.provider) &&
     entryId.slice(slash + 1).trim() === params.modelId
   );
@@ -318,10 +316,7 @@ export function ensureCodexRuntimePolicy(params: {
       targetRuntimeId,
     });
   }
-  if (pinnedRuntimeId || legacyModelRuntimeId) {
-    return;
-  }
-  if (preRepairRuntimePin?.source === "model") {
+  if (pinnedRuntimeId || legacyModelRuntimeId || preRepairRuntimePin?.source === "model") {
     return;
   }
   setModelRuntimePolicy({

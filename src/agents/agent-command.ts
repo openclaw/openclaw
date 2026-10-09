@@ -183,6 +183,7 @@ async function agentCommandInternal(
     // queue behind that mutation or reset would wait on the run holding the queue.
     sessionWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath ?? `agent:${sessionAgentId}`,
+      isSettling: opts.isTerminalOutcomeObserved,
       identities: [sessionKey, sessionId],
       signal: opts.abortSignal,
       onInterrupt: (reason) => lifecycleAbortController.abort(reason),

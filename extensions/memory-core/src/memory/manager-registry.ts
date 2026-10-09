@@ -1,5 +1,6 @@
 // Memory Core plugin module owns manager cache and close serialization.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
@@ -91,7 +92,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   private readonly cache = new Map<string, T>();
   private readonly scopeOperations = new Map<string, Promise<void>>();
   private closePromise: Promise<void> | null = null;
-  private closeFailed = false;
   private readonly managers = new Map<T, ManagerOwnership>();
   constructor(private readonly lifecycle: MemoryManagerLifecycle = {}) {
     lifecycle.prepare = (reload) => this.prepareManagersForReload(reload);
@@ -182,12 +182,10 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       // Overlapping reloads join the manager's existing close; retirement alone
       // does not mean its cleanup has completed.
       const selected = [...this.managers].filter(
-        ([, owner]) =>
+        ([manager, owner]) =>
           owner.retiring ||
           reload.retireRuntime ||
-          [...owner.pending.values(), ...owner.providers.values(), ...owner.failedAdapters].some(
-            (adapter) => reload.adapters.has(adapter),
-          ),
+          this.getProbeOwners(manager).some((adapter) => reload.adapters.has(adapter)),
       );
       for (const [manager, owner] of selected) {
         owner.retiring = true;
@@ -216,10 +214,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   ): Promise<T | null> {
     // A detached search handoff may race global teardown. Decline late
     // maintenance acquisition so closing the default manager cannot wait on itself.
-    if (
-      params.purpose === "maintenance" &&
-      (this.reload?.retireRuntime || this.closePromise || this.closeFailed)
-    ) {
+    if (params.purpose === "maintenance" && (this.reload?.retireRuntime || this.closePromise)) {
       return null;
     }
     if (this.reload?.retireRuntime) {
@@ -228,9 +223,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     return await this.runScopeOperation(params, async () => {
       if (this.reload?.retireRuntime) {
         throw new MemoryManagerReloadError();
-      }
-      if (this.closeFailed) {
-        await this.retryFailedGlobalClose();
       }
       const prepared = await callbacks.prepare();
       if (!prepared) {
@@ -284,7 +276,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
 
   async closeAll(): Promise<void> {
     const previous = this.closePromise ?? Promise.resolve();
-    const operation = () => this.retryFailedGlobalClose();
+    const operation = () => this.closeAllUnlocked();
     const closePromise = previous.then(operation, operation);
     this.closePromise = closePromise;
     await closePromise;
@@ -308,16 +300,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     }
   }
 
-  private async retryFailedGlobalClose(): Promise<void> {
-    try {
-      await this.closeAllUnlocked();
-      this.closeFailed = false;
-    } catch (err) {
-      this.closeFailed = true;
-      throw err;
-    }
-  }
-
   private async runScopeOperation<R>(
     params: { agentId: string; purpose: MemoryIndexManagerPurpose },
     operation: () => Promise<R>,
@@ -332,21 +314,11 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         }
       }
     }
-    const scopeKey = JSON.stringify([params.agentId, params.purpose]);
-    const previousOperation = this.scopeOperations.get(scopeKey) ?? Promise.resolve();
-    const result = previousOperation.then(operation, operation);
-    const tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.scopeOperations.set(scopeKey, tail);
-    try {
-      return await result;
-    } finally {
-      if (this.scopeOperations.get(scopeKey) === tail) {
-        this.scopeOperations.delete(scopeKey);
-      }
-    }
+    return await enqueueKeyedTask({
+      tails: this.scopeOperations,
+      key: JSON.stringify([params.agentId, params.purpose]),
+      task: operation,
+    });
   }
 
   private async closeAllUnlocked(): Promise<void> {

@@ -185,7 +185,9 @@ async function prepareNextPackage(
   });
 }
 
-async function interruptedPublication(phase: "publishing" | "publication-complete" = "publishing") {
+async function interruptedPublication(
+  phase: "prepared" | "publishing" | "publication-complete" = "publishing",
+) {
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
   fs.writeFileSync(
@@ -247,6 +249,17 @@ async function interruptedPublication(phase: "publishing" | "publication-complet
         },
       ],
     });
+    if (phase === "prepared") {
+      // An external install selected the candidate without advancing the journal.
+      fs.renameSync(f.packageRoot, path.join(preparation.anchor, "previous"));
+      fs.renameSync(path.join(preparation.anchor, "candidate"), f.packageRoot);
+      fs.unlinkSync(f.launcher);
+      fs.symlinkSync(
+        fs.readlinkSync(path.join(preparation.anchor, "launchers/openclaw")),
+        f.launcher,
+      );
+      return preparation;
+    }
     const rename = fsp.rename.bind(fsp);
     const interruption = vi.spyOn(fsp, "rename").mockImplementation(async (source, destination) => {
       await rename(source, destination);
@@ -294,38 +307,50 @@ async function interruptedPublication(phase: "publishing" | "publication-complet
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
-  it("settles a completed publication while preserving changed previous-package evidence", async () => {
-    const f = await interruptedPublication("publication-complete");
-    const previousFile = path.join(f.anchor, "previous/dist/index.js");
-    const link = path.join(fixtureRoot, "retained-runtime-link");
-    fs.linkSync(previousFile, link);
-    fs.unlinkSync(link);
-    fs.appendFileSync(previousFile, "// preserved recovery evidence\n");
-    const previousIdentity = packageActivationIdentity(path.join(f.anchor, "previous"), true);
-    const previousBytes = fs.readFileSync(previousFile);
-    const liveBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
-    const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
-    const launcherIdentity = packageActivationIdentity(f.launcher, "launcher");
+  it.each(["prepared", "publication-complete"] as const)(
+    "settles a %s operation whose live package serves the candidate while preserving changed previous-package evidence",
+    async (phase) => {
+      const f = await interruptedPublication(phase);
+      const previousFile = path.join(f.anchor, "previous/dist/index.js");
+      const link = path.join(fixtureRoot, "retained-runtime-link");
+      fs.linkSync(previousFile, link);
+      fs.unlinkSync(link);
+      fs.appendFileSync(previousFile, "// preserved recovery evidence\n");
+      const previousIdentity = packageActivationIdentity(path.join(f.anchor, "previous"), true);
+      const previousBytes = fs.readFileSync(previousFile);
+      const liveBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
+      const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
+      const launcherIdentity = packageActivationIdentity(f.launcher, "launcher");
 
-    await repair();
+      await repair();
 
-    const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
-    expect(readArchivedSettlement(f.anchor, f.record.descriptor.operationId)).toMatchObject({
-      phase: "superseded",
-      intent: { kind: "publication-settled-external-change", settled: true },
-      descriptor: f.record.descriptor,
-    });
-    expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-    expect(packageActivationIdentity(path.join(retained, "previous"), true)).toBe(previousIdentity);
-    expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
-    expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
-    expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(liveBytes);
-    expect(packageActivationIdentity(f.launcher, "launcher")).toBe(launcherIdentity);
-    await prepareNextPackage(f);
-    expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
-    expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
-  });
+      const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
+      expect(readArchivedSettlement(f.anchor, f.record.descriptor.operationId)).toMatchObject({
+        phase: "superseded",
+        intent: { kind: "publication-settled-external-change", settled: true },
+        descriptor: f.record.descriptor,
+      });
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(getUpdateRun(f.record.descriptor.operationId)).toMatchObject({
+        status: "succeeded",
+        reason: "publication-settled-external-change",
+      });
+      expect(packageActivationIdentity(f.packageRoot, true)).toBe(
+        f.record.descriptor.candidate.identity,
+      );
+      expect(packageActivationIdentity(path.join(retained, "previous"), true)).toBe(
+        previousIdentity,
+      );
+      expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
+      expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
+      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(liveBytes);
+      expect(packageActivationIdentity(f.launcher, "launcher")).toBe(launcherIdentity);
+      await prepareNextPackage(f);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+      expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
+    },
+  );
 
   it("removes settled control records from admission without deleting their evidence", async () => {
     const f = await interruptedPublication();
@@ -452,19 +477,15 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"), "utf8")).toBe("export {};\n");
     expect(fs.readlinkSync(f.launcher)).toBe("../lib/node_modules/openclaw/openclaw.mjs");
     expect(fs.readFileSync(f.launcher, "utf8")).toBe('import "./dist/index.js";\n');
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("publication-settled-external-change"),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/index.js.bak"));
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/extra-link"));
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Root package.json was field-verified, not content-verified."),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Entry targets outside dist were checked for resolution, not content.",
-      ),
-    );
+    for (const detail of [
+      "publication-settled-external-change",
+      "dist/index.js.bak",
+      "dist/extra-link",
+      "Root package.json was field-verified, not content-verified.",
+      "Entry targets outside dist were checked for resolution, not content.",
+    ]) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(detail));
+    }
     expect(getUpdateRun(f.record.descriptor.operationId)).toMatchObject({
       status: "succeeded",
       reason: "publication-settled-external-change",
@@ -473,15 +494,13 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
           step: "reconcile:settle",
           detail: expect.stringContaining("dist/index.js.bak"),
         }),
+        expect.objectContaining({
+          detail: expect.stringContaining(
+            "Root package.json was field-verified, not content-verified.",
+          ),
+        }),
       ]),
     });
-    expect(getUpdateRun(f.record.descriptor.operationId)?.steps).toContainEqual(
-      expect.objectContaining({
-        detail: expect.stringContaining(
-          "Root package.json was field-verified, not content-verified.",
-        ),
-      }),
-    );
     await prepareNextPackage(f);
     expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
     expect(openPackageActivationJournal(f.anchor).read().descriptor.operationId).not.toBe(
@@ -490,21 +509,38 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it("verifies the published candidate under a replaced lease database", async () => {
-    const f = await interruptedPublication();
-    const databasePath = f.record.descriptor.authority.databasePath;
-    fs.renameSync(databasePath, `${databasePath}.previous`);
-    fs.copyFileSync(`${databasePath}.previous`, databasePath);
-    fs.chmodSync(databasePath, 0o600);
-    await repair();
-    expect(readArchivedSettlement(f.anchor, f.record.descriptor.operationId).intent).toMatchObject({
-      kind: "publication-settled-external-change",
-      settled: true,
-    });
-    expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-    await prepareNextPackage(f);
-    expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
-  });
+  it.each([
+    { phase: "publishing", lease: "replaced" },
+    { phase: "publication-complete", lease: "missing" },
+    { phase: "publication-complete", lease: "recreated parent" },
+    { phase: "publication-complete", lease: "replaced" },
+  ] as const)(
+    "verifies the $phase candidate under a $lease lease database",
+    async ({ phase, lease }) => {
+      const f = await interruptedPublication(phase);
+      const databasePath = f.record.descriptor.authority.databasePath;
+      if (lease === "recreated parent") {
+        fs.renameSync(path.dirname(databasePath), `${path.dirname(databasePath)}.previous`);
+        fs.mkdirSync(path.dirname(databasePath), { mode: 0o700 });
+      } else {
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        if (lease === "replaced") {
+          fs.copyFileSync(`${databasePath}.previous`, databasePath);
+          fs.chmodSync(databasePath, 0o600);
+        }
+      }
+      await repair();
+      expect(
+        readArchivedSettlement(f.anchor, f.record.descriptor.operationId).intent,
+      ).toMatchObject({
+        kind: "publication-settled-external-change",
+        settled: true,
+      });
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      await prepareNextPackage(f);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+    },
+  );
 
   it.each(["helper changed", "helper missing", "anchor replaced"] as const)(
     "preserves historical evidence and admits the next update with %s",
@@ -696,7 +732,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
   );
 
   it.each(
-    (["publishing", "publication-complete"] as const).flatMap((phase) =>
+    (["prepared", "publishing", "publication-complete"] as const).flatMap((phase) =>
       (
         [
           "content mismatch",
@@ -874,7 +910,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     { selected: "candidate", lease: "current" },
     { selected: "candidate", lease: "missing" },
   ] as const)(
-    "preserves original recovery for an unpublished $selected package with $lease lease",
+    "preserves original recovery for an unverified $selected package with $lease lease",
     async ({ selected, lease }) => {
       const f = await preparedOwnershipMismatch();
       if (selected === "candidate") {
@@ -889,7 +925,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       }
       const journal = fs.readFileSync(f.journal);
 
-      await expect(repair()).rejects.toThrow(/publication|recovery|launcher|lease/iu);
+      await expect(repair()).rejects.toThrow(
+        selected === "candidate" ? /ENOENT.*dist\//u : /launcher/iu,
+      );
 
       expect(fs.readFileSync(f.journal)).toEqual(journal);
       expect(fs.readFileSync(f.helper)).toEqual(f.helperBytes);

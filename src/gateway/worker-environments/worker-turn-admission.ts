@@ -5,7 +5,7 @@ import type { LocalTurnPlacementClaim } from "../../agents/session-placement-adm
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-read-ordered.js";
+import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";

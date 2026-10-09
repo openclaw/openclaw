@@ -24,6 +24,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "renew" | "release";
 
 export type OpenClawStateLeaseWorkerAuthority = {
+  signal?: AbortSignal;
   assertCurrent(this: void): void;
   beforeCommit?(this: void): void;
 };

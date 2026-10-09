@@ -33,27 +33,20 @@ export function hasSlackAccountCredentials(params: {
   return params.appTokenConfigured;
 }
 
-export function isSlackPluginAccountConfigured(account: SlackCredentialAccount): boolean {
-  const identityToken = account.identity === "user" ? account.userToken : account.botToken;
-  return hasSlackAccountCredentials({
-    config: account.config,
-    identityTokenConfigured: Boolean(identityToken?.trim()),
-    appTokenConfigured: Boolean(account.appToken?.trim()),
-  });
+function createSlackAccountConfiguredChecker(allowSecretRefs: boolean) {
+  return (account: SlackCredentialAccount): boolean => {
+    const hasToken = (key: "botToken" | "appToken" | "userToken") =>
+      Boolean(account[key]?.trim()) ||
+      (allowSecretRefs &&
+        account.config.mode !== "relay" &&
+        hasConfiguredSecretInput(account.config[key]));
+    return hasSlackAccountCredentials({
+      config: account.config,
+      identityTokenConfigured: hasToken(account.identity === "user" ? "userToken" : "botToken"),
+      appTokenConfigured: hasToken("appToken"),
+    });
+  };
 }
 
-export function isSlackSetupAccountConfigured(account: SlackCredentialAccount): boolean {
-  if (account.config.mode === "relay") {
-    return isSlackPluginAccountConfigured(account);
-  }
-  const identityToken = account.identity === "user" ? account.userToken : account.botToken;
-  const configuredIdentityToken =
-    account.identity === "user" ? account.config.userToken : account.config.botToken;
-  return hasSlackAccountCredentials({
-    config: account.config,
-    identityTokenConfigured:
-      Boolean(identityToken?.trim()) || hasConfiguredSecretInput(configuredIdentityToken),
-    appTokenConfigured:
-      Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken),
-  });
-}
+export const isSlackPluginAccountConfigured = createSlackAccountConfiguredChecker(false);
+export const isSlackSetupAccountConfigured = createSlackAccountConfiguredChecker(true);

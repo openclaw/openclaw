@@ -90,14 +90,13 @@ export async function collectHeartbeatTaskMigrationFindings(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const findings: HealthFinding[] = [];
   for (const agent of resolveHeartbeatTaskMigrationAgents(cfg)) {
+    const finding = { ...MIGRATION_FINDING_DEFAULTS, path: storePath, target: agent.agentId };
     let monitor: ReturnType<typeof readHeartbeatMonitorScratchReadOnly>;
     try {
       monitor = readHeartbeatMonitorScratchReadOnly(storePath, agent.agentId, { env });
     } catch (error) {
       findings.push({
-        ...MIGRATION_FINDING_DEFAULTS,
-        path: storePath,
-        target: agent.agentId,
+        ...finding,
         requirement: "heartbeat-task-migration-blocked",
         severity: "error",
         message: `Agent "${agent.agentId}" heartbeat scratch cannot be inspected: ${errorMessage(error)}`,
@@ -115,17 +114,13 @@ export async function collectHeartbeatTaskMigrationFindings(
     try {
       validateTasks(document.tasks, document.taskEntryCount);
       findings.push({
-        ...MIGRATION_FINDING_DEFAULTS,
-        path: storePath,
-        target: agent.agentId,
+        ...finding,
         requirement: "heartbeat-tasks-in-scratch",
         message: `Agent "${agent.agentId}" has ${document.tasks.length} heartbeat task${document.tasks.length === 1 ? "" : "s"} that must become cron jobs.`,
       });
     } catch (error) {
       findings.push({
-        ...MIGRATION_FINDING_DEFAULTS,
-        path: storePath,
-        target: agent.agentId,
+        ...finding,
         requirement: "heartbeat-task-migration-blocked",
         severity: "error",
         message: `Agent "${agent.agentId}" heartbeat tasks cannot be migrated: ${errorMessage(error)}`,
@@ -273,9 +268,7 @@ function reserveSortOrder(snapshot: CronPlanningSnapshot, existing?: CronJob): n
   if (persisted !== undefined) {
     return persisted;
   }
-  const sortOrder = snapshot.nextSortOrder;
-  snapshot.nextSortOrder += 1;
-  return sortOrder;
+  return snapshot.nextSortOrder++;
 }
 
 function readScratchRevision(db: DatabaseSync, storeKey: string, jobId: string): number {
@@ -477,7 +470,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     );
     const legacyState = session.entry?.heartbeatTaskState ?? {};
     const jobPlans: TaskJobPlan[] = [];
-    let blocked = false;
     for (const { task, intervalMs, occurrenceIndex } of validatedTasks) {
       const declarationKey = heartbeatTaskDeclarationKey(agent.agentId, task.name, occurrenceIndex);
       const matches = snapshot.jobs.filter((job) => job.declarationKey === declarationKey);
@@ -492,7 +484,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         warnings.push(
           `Agent "${agent.agentId}" task ${JSON.stringify(task.name)} collides with an incompatible cron declaration; scratch was left unchanged.`,
         );
-        blocked = true;
         break;
       }
       const legacyLastRun = legacyState[task.name];
@@ -517,7 +508,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         sortOrder,
       });
     }
-    if (blocked) {
+    if (jobPlans.length !== validatedTasks.length) {
       continue;
     }
 

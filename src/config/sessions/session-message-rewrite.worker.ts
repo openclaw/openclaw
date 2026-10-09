@@ -10,10 +10,7 @@ import {
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
@@ -70,7 +67,10 @@ import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
-import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  createSessionWorkerOperationContext,
+  transferSessionEntryWorkerCandidate,
+} from "./session-entry-patch.worker.js";
 import {
   compactManualTranscript,
   type ManualCompactInput,
@@ -79,7 +79,7 @@ import { SqliteTranscriptMutationConflictError } from "./session-mutation-confli
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -173,31 +173,12 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
     throw new Error("Transcript rewrite lost its canonical database owner");
   }
-  const context: AgentWorkerOperationContext = {
+  const context = createSessionWorkerOperationContext(
+    database,
     options,
-    open: () => database,
-    admit(stage, publication) {
-      bound.admit(stage, (request, dispatch) => {
-        if (!isRecord(request.facts)) {
-          throw new Error("Transcript rewrite admission omitted its database identity");
-        }
-        dispatch({ ...request, facts: { ...request.facts, publication } });
-      });
-    },
-    writeTransaction(operationLabel, owner, write) {
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== bound.database) {
-            throw new Error(`${owner} lost its canonical database owner`);
-          }
-          context.admit("transaction");
-          return write(current);
-        },
-        options,
-        { operationLabel },
-      );
-    },
-  };
+    bound,
+    "Transcript rewrite",
+  );
   return {
     execute(command) {
       switch (command.type) {
@@ -339,7 +320,7 @@ function commitLockedTranscript(
         context.admit("transaction", {
           kind: "session-transcript-lock-source",
           fresh,
-          refusedSource: readRefusedSessionSource(database, sources),
+          sourceValidation: readSessionSourceValidation(database, sources),
         });
       assertSources(false, input.sources);
       const entry = assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);

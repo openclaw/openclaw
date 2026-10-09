@@ -91,7 +91,10 @@ type CreateLaneTextDelivererParams = {
   markDelivered: () => void;
 };
 
-type DeliverLaneTextParams = {
+type DeliverLaneTextParams = Omit<
+  TelegramSendPayloadOptions,
+  "afterAcceptedDraft" | "silent" | "textMode"
+> & {
   laneName: LaneName;
   text: string;
   payload: ReplyPayload;
@@ -100,13 +103,7 @@ type DeliverLaneTextParams = {
   infoKind: string;
   buttons?: TelegramInlineButtons;
   finalizePreview?: boolean;
-  durable?: boolean;
   allowStream?: boolean;
-  promptContextSequence?: TelegramPromptContextProjectionSequence;
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertPlatformSendAuthorized?: () => void;
-  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 };
 
 export type LaneTextDeliverer = (params: DeliverLaneTextParams) => Promise<LaneDeliveryResult>;

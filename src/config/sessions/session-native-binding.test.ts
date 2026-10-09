@@ -9,6 +9,7 @@ import { loadSubagentRunsForSessionsInDatabase } from "../../agents/subagents/re
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
@@ -61,16 +62,12 @@ function observeNativeGrants(
     publication: Record<string, unknown>,
   ) => void,
 ) {
-  const create = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      create((request, grant) => {
-        if (isRecord(request.facts) && isRecord(request.facts.publication)) {
-          observe(request, request.facts.publication);
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(admission, (request, grant, admit) => {
+    if (isRecord(request.facts) && isRecord(request.facts.publication)) {
+      observe(request, request.facts.publication);
+    }
+    admit(request, grant);
+  });
 }
 
 const bindingWrites = (queries: readonly string[]) =>

@@ -175,28 +175,6 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   });
 }
 
-function formatTelegramCommandArgMenuTitle(params: {
-  command: NonNullable<ReturnType<typeof findCommandByNativeName>>;
-  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
-  currentThinkingLevel?: string;
-  currentFastModeStatus?: string;
-}): string {
-  const title = formatCommandArgMenuTitle({ command: params.command, menu: params.menu });
-  if (params.command.key === "think" && params.currentThinkingLevel) {
-    return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
-  }
-  if (params.command.key === "fast" && params.currentFastModeStatus) {
-    const options = params.menu.choices
-      .map((choice) => choice.label.trim())
-      .filter(Boolean)
-      .join(", ");
-    return options
-      ? `${params.currentFastModeStatus}\nOptions: ${options}.`
-      : params.currentFastModeStatus;
-  }
-  return title;
-}
-
 export type TelegramBuiltinCommandResult = "handled" | "handled-clear-buttons" | "fall-through";
 
 export async function executeTelegramBuiltinCommand(
@@ -293,25 +271,31 @@ export async function executeTelegramBuiltinCommand(
     if (params.shouldSkip?.()) {
       return "handled";
     }
-    const title = formatTelegramCommandArgMenuTitle({
-      command: commandDefinition,
-      menu,
-      currentThinkingLevel:
-        commandDefinition.key === "think"
-          ? await resolveTelegramThinkMenuCurrentLevel({
-              cfg: dispatch.runtimeCfg,
-              agentId: dispatch.route.agentId,
-              ...menuModelContext,
-              catalog: menuModelCatalog ?? [],
-            })
-          : undefined,
-      currentFastModeStatus:
-        commandDefinition.key === "fast"
-          ? formatFastModeCurrentStatus(
-              fastCommandState ?? resolveTelegramFastCommandState(menuContextParams),
-            )
-          : undefined,
-    });
+    const currentThinkingLevel =
+      commandDefinition.key === "think"
+        ? await resolveTelegramThinkMenuCurrentLevel({
+            cfg: dispatch.runtimeCfg,
+            agentId: dispatch.route.agentId,
+            ...menuModelContext,
+            catalog: menuModelCatalog ?? [],
+          })
+        : undefined;
+    const currentFastModeStatus =
+      commandDefinition.key === "fast"
+        ? formatFastModeCurrentStatus(
+            fastCommandState ?? resolveTelegramFastCommandState(menuContextParams),
+          )
+        : undefined;
+    let title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
+    if (commandDefinition.key === "think" && currentThinkingLevel) {
+      title = `Current thinking level: ${currentThinkingLevel}.\n${title}`;
+    } else if (commandDefinition.key === "fast" && currentFastModeStatus) {
+      const options = menu.choices
+        .map((choice) => choice.label.trim())
+        .filter(Boolean)
+        .join(", ");
+      title = options ? `${currentFastModeStatus}\nOptions: ${options}.` : currentFastModeStatus;
+    }
     const rows: Array<Array<{ text: string; callback_data: string }>> = [];
     for (let index = 0; index < menu.choices.length; index += 2) {
       rows.push(

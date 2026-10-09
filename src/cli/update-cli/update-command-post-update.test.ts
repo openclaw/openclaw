@@ -135,6 +135,7 @@ import { registerBoundaryFinalizationControls } from "./update-command-post-upda
 import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
+import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-session-receipt.test-support.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -183,6 +184,7 @@ describe("successful update finalization ordering", () => {
   });
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
+  registerStaleSessionReceiptUpdateTest(mocks);
   registerCurrentCoreServiceReceiptTests({
     makeHome: () => tempDirs.make("current-core-service-receipt-"),
     mocks,

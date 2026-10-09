@@ -49,14 +49,13 @@ export class ConnectionPage extends OpenClawLightDomElement {
   @state() private gatewaySecretVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
-  @state() private systemInfoLoading = false;
   @state() private ping: ConnectionPingSummary | null = null;
   @state() private pingFailed = false;
   private pingSamples: SparklineSample[] = [];
   private pingRequest: AbortController | null = null;
   @state() private statusHistory: GatewayStatusSample[] = [];
   @state() private statusFailed = false;
-  private systemInfoRequest: AbortController | null = null;
+  @state() private systemInfoRequest: AbortController | null = null;
 
   private sessionKeyBaseline = "";
   private sessionGatewayUrl = "";
@@ -111,7 +110,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.gateway.invalidate();
         this.systemInfoRequest?.abort();
         this.systemInfoRequest = null;
-        this.systemInfoLoading = false;
         this.systemInfo = null;
         this.statusFailed = true;
       }
@@ -132,7 +130,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.pingRequest = null;
     this.systemInfoRequest?.abort();
     this.systemInfoRequest = null;
-    this.systemInfoLoading = false;
   }
 
   private resetDiagnostics() {
@@ -231,7 +228,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
     }
     const request = new AbortController();
     this.systemInfoRequest = request;
-    this.systemInfoLoading = true;
     const isCurrent = () =>
       this.systemInfoRequest === request &&
       this.isConnected &&
@@ -271,7 +267,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
     } finally {
       if (this.systemInfoRequest === request) {
         this.systemInfoRequest = null;
-        this.systemInfoLoading = false;
       }
     }
   }
@@ -348,7 +343,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       secret: this.settings.token || this.password,
       lastError: gateway.lastError,
       systemInfo: this.systemInfo,
-      systemInfoLoading: this.systemInfoLoading,
+      systemInfoLoading: this.systemInfoRequest !== null,
       systemInfoUnavailable: this.systemInfoUnavailable,
       ping: this.ping,
       pingFailed: this.pingFailed,

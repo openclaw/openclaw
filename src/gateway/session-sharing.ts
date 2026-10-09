@@ -25,6 +25,7 @@ import {
   isSessionArchiveMutation,
   isRequiredSessionTargetMethod,
   isSessionProfileDependentMethod,
+  mayCreateSessionTarget,
 } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -377,8 +378,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           }
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
-      ...(!target &&
-      ["chat.send", "sessions.send", "sessions.create", "sessions.patch"].includes(params.method)
+      ...(!target && mayCreateSessionTarget(params.method)
         ? {
             absentTarget: consuming.sharing
               ? consuming.sharing.storageTarget

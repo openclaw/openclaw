@@ -22,7 +22,9 @@ export type IncognitoAcpSessionMutation = {
 };
 
 export type IncognitoAcpSessionAccess = {
-  prepareEntryRead(params: IncognitoAcpSessionParams): Promise<PreparedAcpSessionEntryRead>;
+  prepareEntryRead(
+    params: IncognitoAcpSessionParams & { signal?: AbortSignal },
+  ): Promise<PreparedAcpSessionEntryRead>;
   readEntry(params: IncognitoAcpSessionParams): Promise<SessionEntry | undefined>;
   upsertMeta(
     params: IncognitoAcpSessionParams & IncognitoAcpSessionMutation,

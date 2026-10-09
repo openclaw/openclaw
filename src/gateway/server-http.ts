@@ -54,7 +54,10 @@ import {
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
 } from "./http-common.js";
-import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
+import {
+  finishGatewayHttpAuthorityError,
+  runGatewayHttpRequest,
+} from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
@@ -183,13 +186,10 @@ export function createGatewayHttpServer(opts: {
     expectation?: "continue" | "reject",
   ) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runHttpConnectionRequest(
-      req,
-      () =>
-        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-          handleRequest(req, res, expectation),
-        ),
-      res,
+    void runGatewayHttpRequest(req, res, opts.getGatewayRequestContext?.(), () =>
+      runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+        handleRequest(req, res, expectation),
+      ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
       if (!res.destroyed) {
@@ -219,7 +219,7 @@ export function createGatewayHttpServer(opts: {
     req: IncomingMessage,
     res: ServerResponse,
     expectation?: "continue" | "reject",
-  ) {
+  ): Promise<"failed" | undefined> {
     // Legacy ports retain their plugin's raw URLs and wire responses, not Gateway endpoints.
     if (getWebhookLegacyListener(req)) {
       try {
@@ -228,10 +228,14 @@ export function createGatewayHttpServer(opts: {
           res.end();
         }
       } catch (error) {
+        if (finishGatewayHttpAuthorityError(res, error)) {
+          return undefined;
+        }
         console.error("[gateway-http] legacy plugin request failed:", error);
         res.destroy(error instanceof Error ? error : undefined);
+        return "failed";
       }
-      return;
+      return undefined;
     }
     // Read only the published snapshot: even liveness and rejection responses need
     // current headers without depending on config IO or auth resolution.
@@ -241,7 +245,7 @@ export function createGatewayHttpServer(opts: {
     if (expectation === "reject") {
       res.writeHead(417);
       res.end();
-      return;
+      return undefined;
     }
     if (expectation === "continue") {
       res.writeContinue();
@@ -249,21 +253,21 @@ export function createGatewayHttpServer(opts: {
 
     // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
     if (isWebSocketUpgradeRequest(req)) {
-      return;
+      return undefined;
     }
     if (req.headers.upgrade !== undefined) {
       res.statusCode = 400;
       res.setHeader("Connection", "close");
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Bad Request");
-      return;
+      return undefined;
     }
 
     try {
       const requestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
       if (requestPath === undefined) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
-        return;
+        return undefined;
       }
       if (classifyGatewayProbePath(requestPath) === "live") {
         await handleGatewayProbeRequest(
@@ -277,7 +281,7 @@ export function createGatewayHttpServer(opts: {
           getReadiness,
           getStartup,
         );
-        return;
+        return undefined;
       }
 
       const configSnapshot = loadGatewayConfig();
@@ -306,7 +310,7 @@ export function createGatewayHttpServer(opts: {
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
-        return;
+        return undefined;
       }
       if (scopedNodeCapability.rewrittenUrl) {
         // Scoped capability URLs are normalized before auth/routing so built-in handlers,
@@ -326,10 +330,10 @@ export function createGatewayHttpServer(opts: {
             gatewayRequestClientIp: ingressAttribution.remoteAddress,
           }))
         ) {
-          return;
+          return undefined;
         }
         sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
-        return;
+        return undefined;
       }
       const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
@@ -722,7 +726,7 @@ export function createGatewayHttpServer(opts: {
       // A completed or disconnected response owns the request even when a stage reports fallthrough.
       for (const stage of requestStages) {
         if ((await stage()) || res.destroyed || res.writableEnded) {
-          return;
+          return undefined;
         }
       }
 
@@ -732,16 +736,18 @@ export function createGatewayHttpServer(opts: {
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("Retry-After", "1");
         respondPlainText(res, 503, "Plugin runtime is starting");
-        return;
+        return undefined;
       }
 
       respondNotFound(res);
+      return undefined;
     } catch (err) {
       if (finishGatewayHttpAuthorityError(res, err)) {
-        return;
+        return undefined;
       }
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
+      return "failed";
     }
   }
 

@@ -132,10 +132,7 @@ export function isFeishuGroupReadEnabled(
   account: ResolvedFeishuAccount,
   chatId: string,
 ): boolean {
-  if (resolveFeishuReadGroupPolicy(cfg, account) === "disabled") {
-    return false;
-  }
-  return resolveFeishuGroupConfig({ cfg: account.config, groupId: chatId })?.enabled !== false;
+  return isFeishuGroupReadAllowed(cfg, account, chatId, true);
 }
 
 export function canEnumerateAllFeishuPeers(account: ResolvedFeishuAccount): boolean {
@@ -213,20 +210,16 @@ export async function readFeishuChatInfoWithAuthorization<
   } catch (error) {
     if (params.preliminary.decision === "needs-metadata") {
       assertFeishuChatReadAllowed({
-        cfg: params.cfg,
-        account: params.account,
+        ...params,
         chatId: params.preliminary.chatId,
-        ctx: params.ctx,
       });
     }
     throw error;
   }
   assertFeishuChatReadAllowed({
-    cfg: params.cfg,
-    account: params.account,
+    ...params,
     chatId: params.preliminary.chatId,
     chatType: resolveFeishuChatType(chat),
-    ctx: params.ctx,
   });
   return chat;
 }

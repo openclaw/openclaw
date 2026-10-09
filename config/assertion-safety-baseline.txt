@@ -32,7 +32,7 @@ extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
-extensions/browser/src/browser-proxy-upload.ts	2
+extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
 extensions/browser/src/browser-tool.actions.ts	9
@@ -235,7 +235,7 @@ extensions/discord/src/internal/api.users.ts	3
 extensions/discord/src/internal/api.webhooks.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	1
-extensions/discord/src/internal/commands.ts	5
+extensions/discord/src/internal/commands.ts	3
 extensions/discord/src/internal/components.message.ts	8
 extensions/discord/src/internal/components.modal.ts	1
 extensions/discord/src/internal/embeds.ts	1
@@ -354,7 +354,7 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts	2
 extensions/file-transfer/src/shared/policy.ts	6
 extensions/file-transfer/src/tools/dir-fetch-tool.ts	1
 extensions/file-transfer/src/tools/dir-list-tool.ts	2
-extensions/file-transfer/src/tools/file-fetch-tool.ts	2
+extensions/file-transfer/src/tools/file-fetch-tool.ts	1
 extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
@@ -439,7 +439,7 @@ extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
-extensions/matrix/src/approval-handler.runtime.ts	7
+extensions/matrix/src/approval-handler.runtime.ts	3
 extensions/matrix/src/approval-native.ts	6
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
@@ -550,7 +550,6 @@ extensions/memory-core/src/short-term-promotion-apply.ts	1
 extensions/memory-core/src/short-term-promotion-memory-write.ts	2
 extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
-extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/doctor-contract-api.ts	1
@@ -665,13 +664,12 @@ extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	1
 extensions/pixverse/video-generation-provider.ts	1
 extensions/policy/src/cli.ts	1
-extensions/policy/src/doctor/automatic-repairs.ts	7
+extensions/policy/src/doctor/automatic-repairs.ts	4
 extensions/policy/src/doctor/evaluation.ts	3
 extensions/policy/src/doctor/exec-approval-findings.ts	1
 extensions/policy/src/doctor/policy-runtime.ts	2
 extensions/policy/src/doctor/routing-shapes.ts	1
 extensions/policy/src/doctor/strictness.ts	3
-extensions/policy/src/doctor/tool-findings.ts	2
 extensions/policy/src/policy-routing.ts	2
 extensions/policy/src/policy-state-tools.ts	1
 extensions/qa-channel/src/bus-client.ts	3
@@ -705,7 +703,7 @@ extensions/qa-lab/src/live-transports/discord/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/discord/scenario-environment.ts	3
 extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-environment.ts	6
-extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.ts	7
+extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.ts	6
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-config.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.ts	2
@@ -729,7 +727,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.approval-checkpoint.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.capture.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.codex-approval.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.config.ts	2
-extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
+extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	6
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
@@ -812,8 +810,6 @@ extensions/slack/src/action-runtime.ts	1
 extensions/slack/src/actions.ts	3
 extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
-extensions/slack/src/approval-native-gates.ts	1
-extensions/slack/src/approval-native.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
@@ -832,7 +828,7 @@ extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
 extensions/slack/src/monitor/events/home.ts	1
 extensions/slack/src/monitor/events/interactions.block-actions.ts	12
-extensions/slack/src/monitor/events/interactions.modal.ts	4
+extensions/slack/src/monitor/events/interactions.modal.ts	2
 extensions/slack/src/monitor/events/message-subtype-handlers.ts	2
 extensions/slack/src/monitor/events/messages.ts	11
 extensions/slack/src/monitor/events/pins.ts	1
@@ -841,7 +837,7 @@ extensions/slack/src/monitor/ingress.ts	8
 extensions/slack/src/monitor/media.ts	1
 extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	5
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
-extensions/slack/src/monitor/provider-support.ts	3
+extensions/slack/src/monitor/provider-support.ts	2
 extensions/slack/src/monitor/provider.ts	4
 extensions/slack/src/monitor/reconnect-policy.ts	6
 extensions/slack/src/monitor/relay-source.ts	1
@@ -854,7 +850,7 @@ extensions/slack/src/reply-action-ids.ts	1
 extensions/slack/src/reply-blocks.ts	7
 extensions/slack/src/secret-contract.ts	1
 extensions/slack/src/security-audit.ts	6
-extensions/slack/src/send.ts	3
+extensions/slack/src/send.ts	1
 extensions/slack/src/setup-core.ts	4
 extensions/slack/src/setup-surface.ts	1
 extensions/slack/src/streaming.ts	3
@@ -886,7 +882,6 @@ extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
-extensions/telegram/src/bot-message-context.session.ts	1
 extensions/telegram/src/bot-message-context.ts	2
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
@@ -917,7 +912,7 @@ extensions/telegram/src/request-timeouts.ts	1
 extensions/telegram/src/rich-message.ts	1
 extensions/telegram/src/security-audit.ts	3
 extensions/telegram/src/send-actions.ts	2
-extensions/telegram/src/send-context.ts	2
+extensions/telegram/src/send-context.ts	1
 extensions/telegram/src/send-edit.ts	1
 extensions/telegram/src/send-location.ts	2
 extensions/telegram/src/send-outbound.ts	1
@@ -967,7 +962,7 @@ extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
-extensions/whatsapp/src/auth-store.ts	2
+extensions/whatsapp/src/auth-store.ts	1
 extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
@@ -1060,7 +1055,7 @@ packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	1
 packages/ai/src/providers/anthropic.ts	3
 packages/ai/src/providers/azure-openai-responses.ts	1
-packages/ai/src/providers/clean-for-gemini.ts	5
+packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	3
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
@@ -1071,15 +1066,15 @@ packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
-packages/ai/src/providers/openai-tool-schema-compat.ts	3
-packages/ai/src/providers/openai-tool-schema.ts	3
-packages/ai/src/providers/schema-keyword-strip.ts	2
+packages/ai/src/providers/openai-tool-schema-compat.ts	2
+packages/ai/src/providers/openai-tool-schema.ts	2
+packages/ai/src/providers/schema-keyword-strip.ts	1
 packages/ai/src/providers/simple-options.ts	1
 packages/ai/src/providers/tool-result-text.ts	2
 packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
-packages/ai/src/transports/anthropic-payload-policy.ts	7
+packages/ai/src/transports/anthropic-payload-policy.ts	6
 packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
@@ -1097,12 +1092,12 @@ packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
 packages/ai/src/transports/openai-responses-replay-messages-internal.ts	8
-packages/ai/src/transports/openai-responses-stream-internal.ts	2
+packages/ai/src/transports/openai-responses-stream-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
 packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	2
 packages/ai/src/transports/openai-responses-websocket.ts	3
-packages/ai/src/transports/openai-transport-params.ts	3
+packages/ai/src/transports/openai-transport-params.ts	2
 packages/ai/src/transports/openai-transport-shared.ts	2
 packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
@@ -1714,7 +1709,7 @@ src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
-src/cli/plugins-authoring-command.ts	5
+src/cli/plugins-authoring-command.ts	4
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	6
 src/cli/program/action-reparse.ts	1
@@ -1755,7 +1750,7 @@ src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	6
 src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	1
-src/commands/channels/add.ts	2
+src/commands/channels/add.ts	1
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
@@ -1765,7 +1760,7 @@ src/commands/docs.ts	2
 src/commands/doctor-agent-memory-schema.ts	1
 src/commands/doctor-auth-flat-profiles.ts	1
 src/commands/doctor-auth-migration-receipts.ts	3
-src/commands/doctor-auth-profile-config.ts	4
+src/commands/doctor-auth-profile-config.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	4
@@ -1773,14 +1768,12 @@ src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
-src/commands/doctor-retired-phone-control.ts	1
 src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
-src/commands/doctor-session-incognito-key-repair-state.ts	8
+src/commands/doctor-session-incognito-key-repair-state.ts	4
 src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-recover-report.ts	1
-src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	4
 src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
@@ -1796,12 +1789,12 @@ src/commands/doctor/cron/legacy-repair.ts	4
 src/commands/doctor/cron/store-migration.ts	2
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
-src/commands/doctor/shared/channel-doctor.ts	4
+src/commands/doctor/shared/channel-doctor.ts	2
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
-src/commands/doctor/shared/empty-allowlist-scan.ts	4
+src/commands/doctor/shared/empty-allowlist-scan.ts	3
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
@@ -1817,7 +1810,6 @@ src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2
 src/commands/doctor/shared/stale-auth-order.ts	4
 src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
-src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
@@ -1887,7 +1879,7 @@ src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	4
+src/config/sessions/session-accessor.sqlite-read.ts	2
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
@@ -2003,7 +1995,7 @@ src/gateway/node-registry.ts	1
 src/gateway/openai-agent-run-usage.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/plugin-activation-runtime-config.ts	2
-src/gateway/probe.ts	2
+src/gateway/probe.ts	1
 src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
 src/gateway/server-broadcast.ts	1
@@ -2072,7 +2064,6 @@ src/gateway/server-reload-restart.ts	2
 src/gateway/server-reload-utils.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	2
 src/gateway/server-runtime-state-prepare.ts	1
-src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-post-attach.ts	1
 src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	7
@@ -2648,7 +2639,7 @@ src/tui/embedded-backend.ts	2
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
-src/tui/tui-event-handlers.ts	5
+src/tui/tui-event-handlers.ts	1
 src/tui/tui-formatters.ts	2
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
@@ -2753,7 +2744,7 @@ ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-app-view.ts	5
 ui/src/components/mcp-server-form.ts	1
-ui/src/components/model-picker.ts	2
+ui/src/components/model-picker.ts	1
 ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
 ui/src/components/select-picker.ts	2
@@ -2818,7 +2809,7 @@ ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
-ui/src/pages/chat/components/chat-composer.ts	5
+ui/src/pages/chat/components/chat-composer.ts	4
 ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
@@ -2852,7 +2843,6 @@ ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
-ui/src/pages/config/config-sections.ts	1
 ui/src/pages/config/language-select.ts	2
 ui/src/pages/config/memory-dreaming.ts	1
 ui/src/pages/config/memory-memories.ts	1
@@ -2861,7 +2851,7 @@ ui/src/pages/config/security.ts	1
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/settings-select-row.ts	1
 ui/src/pages/config/view-appearance-preferences.ts	2
-ui/src/pages/config/view-diff.ts	4
+ui/src/pages/config/view-diff.ts	2
 ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	3
 ui/src/pages/connection/view.ts	3

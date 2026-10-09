@@ -465,6 +465,7 @@ function startRetainedOpenClawStateRead(
     mapError,
     preferIndependentWarmRead,
     onChunk,
+    onChunkAsync,
   }: OpenClawStateReadOptions,
 ): OpenClawStateReadCompletion {
   const currentRead = current || live;
@@ -501,6 +502,7 @@ function startRetainedOpenClawStateRead(
       preserveArtifacts,
       preferIndependentWarmRead,
       onChunk,
+      onChunkAsync,
       controller,
       signal: readSignal,
       receipt,

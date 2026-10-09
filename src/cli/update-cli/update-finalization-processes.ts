@@ -59,16 +59,14 @@ export function inspectUpdateFinalizationChildren() {
     childrenByParent.set(child.parentPid, children);
   }
   const parents = new Set([process.pid]);
-  const pending = [process.pid];
   const childProcesses: typeof processes = [];
   // Follow ancestry, including native grandchildren that are outside the command runner.
-  for (const parentPid of pending) {
+  for (const parentPid of parents) {
     for (const child of childrenByParent.get(parentPid) ?? []) {
       if (parents.has(child.pid) || child.pid === result.pid) {
         continue;
       }
       parents.add(child.pid);
-      pending.push(child.pid);
       childProcesses.push(child);
     }
   }

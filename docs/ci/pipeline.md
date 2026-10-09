@@ -1016,6 +1016,11 @@ package and plugin metadata, explicit schema and build metadata inputs, and
 the compiler's recorded source files. Editing an unrelated CI script does not
 rebuild declarations. Resolution topology still participates in the cache key,
 and an unresolved generator import stops the build instead of trusting a cache.
+Full builds finish isolated plugin runtime and source-asset generation before
+capturing declaration inputs. Runtime cleanup preserves canonical declarations
+while discarding their staging-only `dist-runtime` copies, which postbuild
+recreates. Retained cache inputs therefore do not depend on leftover plugin
+artifacts from an earlier build; package output changes still invalidate them.
 
 Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
 builds. The orchestrator passes the resolved heap budget to every child process,

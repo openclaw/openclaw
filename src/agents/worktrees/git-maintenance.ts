@@ -27,10 +27,9 @@ type MaintenanceParams = {
   shouldDeferRepository?: (repoRoot: string) => string | undefined;
 };
 
-/** Repair pack lookup even when the repository's broader maintenance is suspended. */
-export async function repairWorktreePackIndex(
+async function maintainWorktreePacks(
   repoRoot: string,
-  params: Pick<MaintenanceParams, "signal" | "commitGuard"> & { consolidate?: boolean } = {},
+  params: Pick<MaintenanceParams, "signal" | "commitGuard">,
 ): Promise<void> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -44,7 +43,7 @@ export async function repairWorktreePackIndex(
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
   };
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
-  // Fetch and snapshot repair must not replace the MIDX between batch publication and expiry.
+  // Fetch must not replace the MIDX between batch publication and expiry.
   await enqueueGitRefMutation(
     repoRoot,
     commonDir,
@@ -67,10 +66,8 @@ export async function repairWorktreePackIndex(
             input: `${indexes.join("\n")}\n`,
           });
         }
-        if (params.consolidate) {
-          await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
-          await consolidatePacks(repoRoot, packDirectory, packs, options);
-        }
+        await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+        await consolidatePacks(repoRoot, packDirectory, packs, options);
       }, params.signal),
     params.signal,
   );
@@ -218,8 +215,8 @@ async function consolidatePacks(
 }
 
 export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
-  // A failed repository needs operator repair, not another hourly attempt.
-  const failed = new Set<string>();
+  // Suspend failed tasks without letting graph failures stop bounded pack convergence.
+  const failed = new Map<string, "packs" | "maintenance">();
   return async (params: MaintenanceParams): Promise<void> => {
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -229,18 +226,23 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
     if (params.retryDeferred) {
       failed.clear();
     }
-    const live = await readRegistryWorktrees(env, { liveOnly: true }).catch((error: unknown) => {
+    const records = await readRegistryWorktrees(env).catch((error: unknown) => {
       assertCurrent();
       log.warn(`worktree Git maintenance inventory failed: ${String(error)}`);
       return [];
     });
-    for (const repoRoot of new Set(live.map((record) => record.repoRoot))) {
+    for (const repoRoot of new Set(records.map((record) => record.repoRoot))) {
       assertCurrent();
-      if (failed.has(repoRoot) || params.shouldDeferRepository?.(repoRoot)) {
+      if (failed.get(repoRoot) === "packs" || params.shouldDeferRepository?.(repoRoot)) {
         continue;
       }
+      let stage: "packs" | "maintenance" = "packs";
       try {
-        await repairWorktreePackIndex(repoRoot, { ...params, consolidate: true });
+        await maintainWorktreePacks(repoRoot, params);
+        stage = "maintenance";
+        if (failed.has(repoRoot)) {
+          continue;
+        }
         await withContentGitSlot(
           () =>
             requireGit(
@@ -260,12 +262,10 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         );
       } catch (error) {
         assertCurrent();
-        if (!failed.has(repoRoot)) {
-          failed.add(repoRoot);
-          log.warn(
-            `worktree Git maintenance suspended for ${repoRoot}: ${String(error)}\nRepair the repository, then run openclaw worktrees gc --retry-deferred or restart the Gateway to retry.`,
-          );
-        }
+        failed.set(repoRoot, stage);
+        log.warn(
+          `worktree Git maintenance suspended (${stage}) for ${repoRoot}: ${String(error)}\nRepair the repository, then run openclaw worktrees gc --retry-deferred or restart the Gateway to retry.`,
+        );
       }
     }
   };

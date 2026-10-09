@@ -1,10 +1,10 @@
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
-import { hasSessionTranscriptMessageInDatabase } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { hasSessionTranscriptMessageInDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {

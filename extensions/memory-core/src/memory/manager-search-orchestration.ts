@@ -18,7 +18,6 @@ import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
-import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
@@ -34,7 +33,7 @@ import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
-import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
+import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -537,7 +536,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         });
         // Decay and importance can reverse the order returned by vector retrieval.
         const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
+        return applyRetrievalRanking(decayed, activeProjects)
           .filter((entry) => entry.score >= minScore)
           .toSorted(
             (left, right) =>
@@ -611,13 +610,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     indexState: MemoryRetrievalIndexState,
     signal?: AbortSignal,
   ): Promise<Array<MemoryRetrievalResult & { id: string }>> {
-    const results = await searchVector({
-      vectorTable: VECTOR_TABLE,
+    const query = {
       providerModel: providerIdentity.model,
       providerModelAliases: providerIdentity.aliases,
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
+    };
+    const results = await searchVector({
+      vectorTable: VECTOR_TABLE,
+      ...query,
       signal,
       ensureVectorReady: async (dimensions) => {
         if (!this.vector.enabled) {
@@ -642,11 +644,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             databasePath: resolveUserPath(this.settings.store.databasePath),
           },
           {
-            providerModel: providerIdentity.model,
-            providerModelAliases: providerIdentity.aliases,
-            queryVec,
-            limit,
-            snippetMaxChars: SNIPPET_MAX_CHARS,
+            ...query,
             sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
           },
           signal,

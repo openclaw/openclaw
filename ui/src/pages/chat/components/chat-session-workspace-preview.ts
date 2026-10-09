@@ -92,8 +92,7 @@ export function openWorkspaceItem<T>(
       return;
     }
     setSessionWorkspaceError(workspace, message, read);
-    const unavailable = { kind: "unavailable" as const, message };
-    preview.content = unavailable;
+    preview.content = { kind: "unavailable", message };
     read.published = capturePreview(preview);
     workspace.previews = [...workspace.previews];
   };

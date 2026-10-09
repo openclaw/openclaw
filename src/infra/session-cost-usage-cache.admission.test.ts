@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -459,6 +459,55 @@ it.each([false, true])(
         await releasing;
         await owner.release();
       }
+    });
+  },
+);
+
+it.for(["rollup", "prune"] as const)(
+  "cancels a queued usage %s before the active writer settles",
+  async (operation, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-canceled-admission";
+      const options = { agentId, env: state.env };
+      const database = openOpenClawAgentDatabase(options);
+      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
+      expect(await owner.acquire()).toBe(true);
+      const row = {
+        rollupId: "retained",
+        previousValueJson: null,
+        valueJson: Buffer.from("{}"),
+        blob: null,
+        updatedAt: 1,
+      };
+      expect(await owner.writeRollup(row)).toBe(true);
+      const before = readSessionCostUsageRollupRows(agentId, database.path);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const held = runOpenClawAgentWorkerWrite(options, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      const controller = new AbortController();
+      const cancellation = new Error("Usage callback deadline expired");
+      const writing =
+        operation === "rollup"
+          ? owner.writeRollup({ ...row, rollupId: "canceled" }, controller.signal)
+          : owner.pruneRows(before, controller.signal);
+      const outcome = writing.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      controller.abort(cancellation);
+      try {
+        expect(await withinTest(outcome, signal)).toBe(cancellation);
+        expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual(before);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, writing]);
+        await owner.release();
+      }
+      expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual(before);
     });
   },
 );
