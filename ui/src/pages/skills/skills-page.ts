@@ -40,7 +40,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
+import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
 import {
   renderSkillLibrary,
@@ -404,11 +404,10 @@ class SkillsPage extends OpenClawLightDomElement {
     );
   }
 
-  private selectHubTab(tab: PluginsHubTab) {
-    if (tab === "skills") {
-      return;
-    }
-    this.context.navigate(tab);
+  private navigateSkills(route: "skills" | "skill-settings") {
+    this.context.navigate(route, {
+      search: this.skillsAgentId ? `?agent=${encodeURIComponent(this.skillsAgentId)}` : "",
+    });
   }
 
   override render() {
@@ -419,16 +418,15 @@ class SkillsPage extends OpenClawLightDomElement {
         this.surface === "discovery"
           ? renderPluginsHubHeader({
               active: "skills",
-              onSelect: (tab) => this.selectHubTab(tab),
+              onSelect: (tab) => {
+                if (tab !== "skills") {
+                  this.context.navigate(tab);
+                }
+              },
               secondaryAction: {
                 label: t("skillDiscovery.settings"),
                 icon: icons.settings,
-                onClick: () =>
-                  this.context.navigate("skill-settings", {
-                    search: this.skillsAgentId
-                      ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                      : "",
-                  }),
+                onClick: () => this.navigateSkills("skill-settings"),
               },
             })
           : renderSettingsPageHeader({
@@ -459,12 +457,7 @@ class SkillsPage extends OpenClawLightDomElement {
                       <button
                         type="button"
                         class="btn"
-                        @click=${() =>
-                          this.context.navigate("skills", {
-                            search: this.skillsAgentId
-                              ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                              : "",
-                          })}
+                        @click=${() => this.navigateSkills("skills")}
                       >
                         ${icons.search} ${t("skillDiscovery.search")}
                       </button>

@@ -92,9 +92,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
-    previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
-    previous.senderSession?.agentId === next.senderSession?.agentId &&
-    previous.senderSession?.label === next.senderSession?.label &&
+    sameFields(previous.senderSession, next.senderSession, CHAT_ITEM_FIELDS.senderSession) &&
     messageClientSourcesKey(previous.sourceClients ?? []) ===
       messageClientSourcesKey(next.sourceClients ?? []) &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
@@ -121,6 +119,22 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   );
 }
 
+const CHAT_ITEM_FIELDS = {
+  message: ["message", "duplicateCount"],
+  notice: ["text", "label", "handoffBoundary", "startsTurn", "boundaryId", "timestamp"],
+  divider: ["compaction", "compactionId", "label", "metric", "description", "timestamp"],
+  question: ["questionId", "startedAt"],
+  senderSession: ["sessionKey", "agentId", "label"],
+} as const;
+
+function sameFields<T extends object>(
+  previous: T | null | undefined,
+  next: T | null | undefined,
+  fields: readonly (keyof T)[],
+): boolean {
+  return fields.every((field) => previous?.[field] === next?.[field]);
+}
+
 function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
   if (previous.kind !== next.kind || previous.key !== next.key) {
     return false;
@@ -129,31 +143,11 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
     case "group":
       return previous.kind === "group" && sameMessageGroup(previous, next);
     case "message":
-      return (
-        previous.kind === "message" &&
-        previous.message === next.message &&
-        previous.duplicateCount === next.duplicateCount
-      );
+      return previous.kind === "message" && sameFields(previous, next, CHAT_ITEM_FIELDS.message);
     case "notice":
-      return (
-        previous.kind === "notice" &&
-        previous.text === next.text &&
-        previous.label === next.label &&
-        previous.handoffBoundary === next.handoffBoundary &&
-        previous.startsTurn === next.startsTurn &&
-        previous.boundaryId === next.boundaryId &&
-        previous.timestamp === next.timestamp
-      );
+      return previous.kind === "notice" && sameFields(previous, next, CHAT_ITEM_FIELDS.notice);
     case "divider":
-      return (
-        previous.kind === "divider" &&
-        previous.compaction === next.compaction &&
-        previous.compactionId === next.compactionId &&
-        previous.label === next.label &&
-        previous.metric === next.metric &&
-        previous.description === next.description &&
-        previous.timestamp === next.timestamp
-      );
+      return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
     case "stream":
       return (
         previous.kind === "stream" &&
@@ -176,11 +170,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.boundaryId === next.boundaryId
       );
     case "question":
-      return (
-        previous.kind === "question" &&
-        previous.questionId === next.questionId &&
-        previous.startedAt === next.startedAt
-      );
+      return previous.kind === "question" && sameFields(previous, next, CHAT_ITEM_FIELDS.question);
   }
   return false;
 }
@@ -237,9 +227,7 @@ function stabilizeChatItems(
         prior.role !== item.role ||
         prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
-        prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
-        prior.senderSession?.agentId !== item.senderSession?.agentId ||
-        prior.senderSession?.label !== item.senderSession?.label ||
+        !sameFields(prior.senderSession, item.senderSession, CHAT_ITEM_FIELDS.senderSession) ||
         messageClientSourcesKey(prior.sourceClients ?? []) !==
           messageClientSourcesKey(item.sourceClients ?? []) ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)

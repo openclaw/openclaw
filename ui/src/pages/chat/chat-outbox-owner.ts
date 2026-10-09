@@ -34,7 +34,6 @@ import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
-  updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
@@ -126,9 +125,7 @@ class ChatOutboxGatewayOwner {
           entries.delete(id);
         }
       }
-      if (!entries.size) {
-        this.live.delete(key);
-      }
+      this.pruneLiveScope(key, entries);
     }
     this.prune(host);
     this.publishAttention();
@@ -159,12 +156,15 @@ class ChatOutboxGatewayOwner {
       (live?.submissionIsCurrent && !live.submissionIsCurrent())
     ) {
       entries.delete(id);
-      if (!entries.size) {
-        this.live.delete(key);
-      }
+      this.pruneLiveScope(key, entries);
       return undefined;
     }
     return live;
+  }
+  private pruneLiveScope(key: string, entries: ReadonlyMap<string, LiveProjection>): void {
+    if (!entries.size) {
+      this.live.delete(key);
+    }
   }
   private observeDurable(id: string): void {
     // Admission supersedes every retained copy, even an offscreen pane now using
@@ -254,11 +254,10 @@ class ChatOutboxGatewayOwner {
                   sendState: "unconfirmed",
                 });
               if (
-                !updateStoredChatComposerQueueItem(
+                !updateStoredChatComposerQueueItems(
                   host,
                   outbox.sessionKey,
-                  parked ? current : item,
-                  { ...current, ...result.update },
+                  [{ expected: parked ? current : item, next: { ...current, ...result.update } }],
                   outbox.agentId,
                 )
               ) {
@@ -277,11 +276,10 @@ class ChatOutboxGatewayOwner {
                 : {}),
             });
           } else {
-            updateStoredChatComposerQueueItem(
+            updateStoredChatComposerQueueItems(
               host,
               outbox.sessionKey,
-              current,
-              failOutboxPayload(current, result.reason),
+              [{ expected: current, next: failOutboxPayload(current, result.reason) }],
               outbox.agentId,
             );
           }
@@ -656,9 +654,7 @@ class ChatOutboxGatewayOwner {
       this.live.set(key, live);
     } else {
       live.delete(id);
-      if (!live.size) {
-        this.live.delete(key);
-      }
+      this.pruneLiveScope(key, live);
     }
     this.publish(host);
     this.prune(host);

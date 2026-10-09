@@ -30,6 +30,7 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import { createGatewayMetadataCloseFixture } from "../gateway/server-close.metadata.test-support.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { buildConversationRef } from "../routing/conversation-ref.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -363,6 +364,126 @@ it.each([
         sql.restore();
       }
       expect(messageIds(scope)).toEqual(stale && !replay ? [] : ["prepared-grant"]);
+    });
+  },
+);
+
+it.each(["owned", "fresh"] as const)(
+  "accepts worker conversation matches before checking %s locked authority",
+  async (authorityKind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = await seed(env);
+      const conversationRef = buildConversationRef({
+        channel: "reef",
+        accountId: "default",
+        kind: "direct",
+        peerId: "locked-unbound",
+      });
+      let inSourceGrant = false;
+      let checkedSourceGrant = false;
+      let acceptedMatches: readonly number[] | undefined;
+      const prepared = await withSessionEntryReadOnlyInWorker(
+        scope,
+        () => {},
+        async (read, owner) => {
+          assert(read.ok && read.value);
+          const captured = captureSessionEntryCurrentRead(scope, owner);
+          assert(captured.kind === "file");
+          return {
+            assertCurrent() {
+              captured.assertSourceCurrent();
+              if (inSourceGrant && acceptedMatches) {
+                expect(acceptedMatches).toEqual([1]);
+                checkedSourceGrant = true;
+              }
+            },
+            checks: [
+              {
+                predicate: {
+                  source: captured.source,
+                  sessionKey: captured.source.sessionKey,
+                  fields: ["sessionId"],
+                  expected: read.value,
+                  conversationAlternatives: [
+                    [{ conversationRef, sessionKey: scope.sessionKey }],
+                    [{ conversationRef, sessionKey: null }],
+                  ],
+                },
+                acceptConversationMatches(matches: readonly number[]) {
+                  acceptedMatches = matches;
+                  return [...matches];
+                },
+                refuse() {
+                  throw new Error("Locked conversation source changed");
+                },
+              },
+            ],
+          } satisfies PreparedSessionSourceAuthority;
+        },
+      );
+      const create = admission.createSqliteWorkerOperationAdmission;
+      using _ = vi
+        .spyOn(admission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((authorize, attachment) =>
+          create((request, grant) => {
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+            inSourceGrant =
+              request.stage === "transaction" &&
+              isRecord(publication) &&
+              publication.kind === "session-transcript-lock-source" &&
+              publication.fresh === (authorityKind === "fresh");
+            if (inSourceGrant) {
+              acceptedMatches = undefined;
+              checkedSourceGrant = false;
+            }
+            try {
+              authorize(request, () => {
+                if (inSourceGrant) {
+                  expect(acceptedMatches).toEqual([1]);
+                  expect(checkedSourceGrant).toBe(true);
+                }
+                return grant();
+              });
+            } finally {
+              inSourceGrant = false;
+            }
+          }, attachment),
+        );
+      let sourcePrepared = false;
+      const guard: SessionSourceAssertion = Object.assign(
+        () => {
+          if (sourcePrepared) {
+            throw new Error("Locked source used its native callback after preparation");
+          }
+          prepared.assertCurrent();
+        },
+        {
+          prepareSessionSource: async () => {
+            sourcePrepared = true;
+            return prepared;
+          },
+        },
+      );
+      const write = () =>
+        withSessionTranscriptWriteLock(scope, (locked) =>
+          locked.appendMessage({
+            eventId: "matched-source",
+            message: { role: "assistant", content: "authorized conversation" },
+            ...(authorityKind === "fresh" ? { beforeFreshMessageCommit: guard } : {}),
+          }),
+        );
+      const sql = observeHostDataSql();
+      try {
+        await (authorityKind === "owned"
+          ? withSessionTranscriptWriteAssertion(scope, guard, write)
+          : write());
+        expect(checkedSourceGrant).toBe(true);
+        expect(acceptedMatches).toEqual([1]);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(messageIds(scope)).toEqual(["matched-source"]);
     });
   },
 );

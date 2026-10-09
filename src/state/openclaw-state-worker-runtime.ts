@@ -37,6 +37,7 @@ import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journ
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
+  recordAgentProvenanceInDatabase,
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
@@ -187,7 +188,8 @@ export function executeSharedStateCommand(
   if (
     command.type === "workspace.snapshotAndRegister" ||
     command.type === "workspace.mergeSetup" ||
-    command.type === "workspace.expire"
+    command.type === "workspace.expire" ||
+    command.type === "workspace.delete"
   ) {
     return executeWorkspaceStateCommand(command, database, writeOptions);
   }
@@ -229,6 +231,14 @@ export function executeSharedStateCommand(
     return command.type === "agentProvenance.readBatch"
       ? readAgentProvenanceBatchInDatabase(database.db, command.input.agentIds)
       : listAgentProvenanceInDatabase(database.db);
+  }
+  if (command.type === "agentProvenance.record") {
+    ensureAgentProvenanceSchema(writeOptions);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => recordAgentProvenanceInDatabase(db, command.input),
+      writeOptions,
+      { operationLabel: "agent-provenance.record" },
+    );
   }
   if (
     command.type === "sessionUpstream.current" ||

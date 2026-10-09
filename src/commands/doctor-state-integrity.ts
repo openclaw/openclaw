@@ -94,60 +94,51 @@ type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
-export type StateIntegrityHealthIssue =
+export type StateIntegrityHealthIssue = { path: string } & (
   | {
       kind: "mac-cloud-state-dir";
-      path: string;
       storage: string;
     }
   | {
       kind: "windows-cloud-state-dir";
-      path: string;
       storage: string;
     }
   | {
       kind: "linux-sd-state-dir";
-      path: string;
       mountPoint: string;
       fsType: string;
       source: string;
     }
   | {
       kind: "linux-volatile-state-dir";
-      path: string;
       mountPoint: string;
       fsType: string;
     }
   | {
       kind: "missing-state-dir";
-      path: string;
     }
   | {
       kind: "state-dir-not-writable";
-      path: string;
       hint?: string;
     }
   | {
       kind: "state-dir-too-open";
-      path: string;
       mode: number;
     }
   | {
       kind: "config-file-too-open";
-      path: string;
       mode: number;
     }
   | {
       kind: "missing-runtime-dir";
       label: "OAuth dir";
-      path: string;
     }
   | {
       kind: "runtime-dir-not-writable";
       label: RuntimeDirLabel;
-      path: string;
       hint?: string;
-    };
+    }
+);
 
 function tryResolveNativeRealPath(targetPath: string): string | null {
   try {
@@ -949,10 +940,8 @@ export async function noteStateIntegrity(
               sessionKeys,
               storePath: sqliteStorePath,
               update: (currentEntries) => {
-                const replacements = currentEntries.flatMap(({ entry, sessionKey }) =>
-                  clearWedgedSubagentRecoveryAbort(entry, repairedAt)
-                    ? [{ entry, sessionKey }]
-                    : [],
+                const replacements = currentEntries.filter(({ entry }) =>
+                  clearWedgedSubagentRecoveryAbort(entry, repairedAt),
                 );
                 return { replacements, result: replacements.length };
               },

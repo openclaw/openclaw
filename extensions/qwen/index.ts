@@ -1,3 +1,4 @@
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
@@ -14,7 +15,6 @@ import {
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanThinkingOnlyModelId,
-  QWEN_BASE_URL,
   QWEN_DEFAULT_MODEL_REF,
   QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
@@ -61,6 +61,29 @@ function resolveConfiguredQwenBaseUrl(
     }
   }
   return undefined;
+}
+
+async function resolveQwenCatalog(
+  ctx: ProviderCatalogContext,
+  providerId: typeof PROVIDER_ID | typeof QWEN_TOKEN_PLAN_PROVIDER_ID,
+) {
+  const auth = ctx.resolveProviderApiKey(providerId);
+  if (!auth.apiKey) {
+    return null;
+  }
+  const baseUrl = resolveConfiguredQwenBaseUrl(
+    ctx.config,
+    providerId === PROVIDER_ID ? [PROVIDER_ID, LEGACY_PROVIDER_ID] : [providerId],
+  );
+  const buildProvider = providerId === PROVIDER_ID ? buildQwenProvider : buildQwenTokenPlanProvider;
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId,
+    providerConfig: buildProvider({ baseUrl }),
+    apiKey: auth.apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+  });
 }
 
 function createQwenAuthMethod(
@@ -198,23 +221,7 @@ export default defineSingleProviderPluginEntry({
       createQwenAuthMethod("coding", "global"),
     ],
     catalog: {
-      run: async (ctx) => {
-        const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!auth.apiKey) {
-          return null;
-        }
-        const baseUrl =
-          resolveConfiguredQwenBaseUrl(ctx.config, [PROVIDER_ID, LEGACY_PROVIDER_ID]) ??
-          QWEN_BASE_URL;
-        return await buildOpenAICompatibleLiveProviderCatalog({
-          discoveryMode: "strict",
-          providerId: PROVIDER_ID,
-          providerConfig: buildQwenProvider({ baseUrl }),
-          apiKey: auth.apiKey,
-          discoveryApiKey: auth.discoveryApiKey,
-          profileId: auth.profileId,
-        });
-      },
+      run: (ctx) => resolveQwenCatalog(ctx, PROVIDER_ID),
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     wrapStreamFn: wrapQwenProviderStream,
@@ -240,21 +247,7 @@ export default defineSingleProviderPluginEntry({
       auth: [createQwenTokenPlanAuthMethod("global"), createQwenTokenPlanAuthMethod("cn")],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const auth = ctx.resolveProviderApiKey(QWEN_TOKEN_PLAN_PROVIDER_ID);
-          if (!auth.apiKey) {
-            return null;
-          }
-          const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config, [QWEN_TOKEN_PLAN_PROVIDER_ID]);
-          return await buildOpenAICompatibleLiveProviderCatalog({
-            discoveryMode: "strict",
-            providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
-            providerConfig: buildQwenTokenPlanProvider({ baseUrl }),
-            apiKey: auth.apiKey,
-            discoveryApiKey: auth.discoveryApiKey,
-            profileId: auth.profileId,
-          });
-        },
+        run: (ctx) => resolveQwenCatalog(ctx, QWEN_TOKEN_PLAN_PROVIDER_ID),
       },
       staticCatalog: {
         order: "simple",

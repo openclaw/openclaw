@@ -13,9 +13,7 @@ import {
 } from "../daemon/service-types.js";
 
 export function formatServiceConfigIssues(issues: ServiceConfigIssue[]): string[] {
-  return issues.map((issue) =>
-    issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
-  );
+  return issues.map(({ message, detail }) => `- ${message}${detail ? ` (${detail})` : ""}`);
 }
 
 export function reportServiceDefinitionDrift(audit: ServiceConfigAudit) {

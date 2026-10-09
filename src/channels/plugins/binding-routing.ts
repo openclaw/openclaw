@@ -91,15 +91,8 @@ export function resolveConfiguredBindingRoute(
       cfg: params.cfg,
       conversation: resolveConfiguredBindingConversationRef(params),
     }) ?? null;
-  if (!bindingResolution) {
-    return {
-      bindingResolution: null,
-      route: projectConfiguredConversationBindingRouteFacts(params.route),
-    };
-  }
-
-  const boundSessionKey = bindingResolution.statefulTarget.sessionKey.trim();
-  if (!boundSessionKey) {
+  const boundSessionKey = bindingResolution?.statefulTarget.sessionKey.trim();
+  if (!bindingResolution || !boundSessionKey) {
     return {
       bindingResolution,
       route: projectConfiguredConversationBindingRouteFacts(params.route),
@@ -175,23 +168,16 @@ export function inspectRuntimeConversationBindingRoute(
     conversation
       ? withConversationBindingRouteFacts(route, selection, baseRoute.agentId, conversation)
       : route;
-  if (selection.kind === "none") {
-    if (selection.ignoredCronSessionKey) {
+  if (selection.kind !== "agent") {
+    if (selection.kind === "none" && selection.ignoredCronSessionKey) {
       logVerbose(
         `ignored runtime conversation binding to isolated cron run session ${selection.ignoredCronSessionKey}`,
       );
     }
     return {
       bindingOwnerAvailable: true,
-      bindingRecord: null,
-      route: observe({ ...baseRoute }),
-    };
-  }
-  if (selection.kind === "plugin") {
-    return {
-      bindingOwnerAvailable: true,
-      bindingRecord: selection.binding,
-      pluginId: selection.pluginId,
+      bindingRecord,
+      ...(selection.kind === "plugin" ? { pluginId: selection.pluginId } : {}),
       route: observe({ ...baseRoute }),
     };
   }

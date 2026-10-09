@@ -45,22 +45,25 @@ const CHROMIUM_BUNDLE_IDS = new Set([
   "company.thebrowser.Browser", // Arc
 ]);
 
+const CHROMIUM_LINUX_NAMES = [
+  "google-chrome",
+  "google-chrome-beta",
+  "google-chrome-unstable",
+  "brave-browser",
+  "microsoft-edge",
+  "microsoft-edge-beta",
+  "microsoft-edge-dev",
+  "microsoft-edge-canary",
+  "chromium",
+  "chromium-browser",
+  "vivaldi",
+  "vivaldi-stable",
+  "opera",
+  "opera-gx",
+  "yandex-browser",
+];
 const CHROMIUM_DESKTOP_IDS = new Set([
-  "google-chrome.desktop",
-  "google-chrome-beta.desktop",
-  "google-chrome-unstable.desktop",
-  "brave-browser.desktop",
-  "microsoft-edge.desktop",
-  "microsoft-edge-beta.desktop",
-  "microsoft-edge-dev.desktop",
-  "microsoft-edge-canary.desktop",
-  "chromium.desktop",
-  "chromium-browser.desktop",
-  "vivaldi.desktop",
-  "vivaldi-stable.desktop",
-  "opera.desktop",
-  "opera-gx.desktop",
-  "yandex-browser.desktop",
+  ...CHROMIUM_LINUX_NAMES.map((name) => `${name}.desktop`),
   "org.chromium.Chromium.desktop",
 ]);
 
@@ -79,26 +82,12 @@ const CHROMIUM_EXE_NAMES = new Set([
   "google chrome canary",
   "brave browser",
   "microsoft edge",
-  "chromium",
   "chrome",
   "brave",
   "msedge",
-  "brave-browser",
-  "google-chrome",
   "google-chrome-stable",
-  "google-chrome-beta",
-  "google-chrome-unstable",
-  "microsoft-edge",
-  "microsoft-edge-beta",
-  "microsoft-edge-dev",
-  "microsoft-edge-canary",
-  "chromium-browser",
-  "vivaldi",
-  "vivaldi-stable",
-  "opera",
   "opera-stable",
-  "opera-gx",
-  "yandex-browser",
+  ...CHROMIUM_LINUX_NAMES,
 ]);
 
 function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {

@@ -36,14 +36,14 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
@@ -67,6 +67,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
@@ -700,6 +701,7 @@ it.skipIf(process.platform !== "linux")(
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       vi.spyOn(performance, "now").mockImplementation(() => Date.now());
       stop("SIGTERM");
+      await withinTest(waitForAbortSignal(getGatewayRestartDrainSignal()), signal);
       await vi.advanceTimersByTimeAsync(29_999);
       expect(operation.abortSignal.aborted).toBe(false);
       expect(close).not.toHaveBeenCalled();

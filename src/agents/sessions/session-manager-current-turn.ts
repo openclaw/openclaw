@@ -114,7 +114,7 @@ export async function prepareCurrentTurnReplaySelection(
   const version = { ...view.version };
   const entryCount = view.entries.size;
   const assertOwned = captureOwnedTranscriptWriteAssertion(view.target);
-  const reader = prepareSessionManagerHydration(view.target, undefined, signal, manager);
+  const reader = prepareSessionManagerHydration(view.target, { signal, manager });
   const assertCurrent = () => {
     signal?.throwIfAborted();
     assertOwned();

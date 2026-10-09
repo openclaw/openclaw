@@ -450,7 +450,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
 
-  @litState() protected headerEditing = false;
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
@@ -485,9 +484,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  @litState() protected resetConfirmationOpen = false;
-  protected deferredSessionHydrationRequestVersion = 0;
-  protected resetConfirmation:
+  @litState() protected resetConfirmation:
     | {
         scopeKey: string;
         promise: Promise<boolean>;
@@ -519,6 +516,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
   >();
   protected headerRenameInitialValue = "";
+  @litState({ hasChanged: (next, previous) => Boolean(next) !== Boolean(previous) })
   protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
     null;
   protected headerCopiedTimer: number | null = null;
@@ -529,7 +527,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
    * so reused session keys can never inherit another checkout's path. */
   protected readonly headerWorktreePaths = new Map<
     string,
-    { loaded?: boolean; loading?: boolean; path?: string | null }
+    { loading?: boolean; path?: string | null }
   >();
   /** HEAD keyed by the resolved root directory it was read from — a branch is
    * a fact about a checkout, so root transitions miss instead of going stale. */
@@ -568,12 +566,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverRoot: HTMLElement | null = null;
   protected historyObserverSentinel: HTMLElement | null = null;
   protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
-  protected historyIntentConsumed = false;
   protected historyIntentTimer: number | null = null;
   protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;

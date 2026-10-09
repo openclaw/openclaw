@@ -9,6 +9,7 @@ import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -47,45 +48,40 @@ describe("client voice session lifecycle", () => {
   const harness = useClientVoiceDigestHarness();
   const { sendDurableMessageBatch } = harness;
 
-  it("does not replay or mark a partially delivered digest after expiry and re-record", async ({
-    signal,
-  }) => {
-    const sessionKey = "agent:main:main";
-    await seedSession(sessionKey, { channel: "discord", to: "channel:partial-digest" });
-    const voiceSessionId = await createCompletedMutationSession();
-    const sent = createDeferred();
-    sendDurableMessageBatch.mockImplementationOnce(async () => {
-      sent.resolve();
-      return {
+  it("does not replay or mark a partially delivered digest after expiry and re-record", async () => {
+    await withClientVoiceDigestSettlement(async (settle) => {
+      const sessionKey = "agent:main:main";
+      await seedSession(sessionKey, { channel: "discord", to: "channel:partial-digest" });
+      const voiceSessionId = await createCompletedMutationSession();
+      sendDurableMessageBatch.mockImplementationOnce(async () => ({
         status: "partial_failed",
         results: [],
         sentBeforeError: true,
         receipt: { platformMessageIds: ["partial-message"], parts: [], sentAt: 123 },
         error: new Error("partial delivery"),
-      };
+      }));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await closeClientVoiceSession({ agentId: "main", sessionKey, voiceSessionId, config: {} });
+        await settle();
+        await vi.advanceTimersByTimeAsync(
+          clientVoiceSessionTesting.digestDeliveryPolicy.failureRetentionMs + 1,
+        );
+        await closeClientVoiceSession({ agentId: "main", sessionKey, voiceSessionId, config: {} });
+        await closeStaleClientVoiceSessions({ agentId: "main", config: {} });
+        await settle();
+        expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
+        expect(
+          clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
+        ).toBeUndefined();
+        expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
+          active: 0,
+          retained: 1,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      await closeClientVoiceSession({ agentId: "main", sessionKey, voiceSessionId, config: {} });
-      await withinTest(sent.promise, signal);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(
-        clientVoiceSessionTesting.digestDeliveryPolicy.failureRetentionMs + 1,
-      );
-      await closeClientVoiceSession({ agentId: "main", sessionKey, voiceSessionId, config: {} });
-      await closeStaleClientVoiceSessions({ agentId: "main", config: {} });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
-      expect(
-        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
-      ).toBeUndefined();
-      expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
-        active: 0,
-        retained: 1,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("joins accepted digest delivery beyond both slots after the closing caller returns", async ({
@@ -252,70 +248,74 @@ describe("client voice session lifecycle", () => {
   );
 
   it("records post-close effects and defers the digest until the last consult completes", async () => {
-    await seedSession("agent:main:main", {
-      channel: "discord",
-      to: "channel:voice-updates",
-    });
-    const voiceSessionId = createVoiceSession();
-    for (const runId of ["run-1", "run-2"]) {
-      registerClientVoiceConsultRun({
+    await withClientVoiceDigestSettlement(async (settle) => {
+      await seedSession("agent:main:main", {
+        channel: "discord",
+        to: "channel:voice-updates",
+      });
+      const voiceSessionId = createVoiceSession();
+      for (const runId of ["run-1", "run-2"]) {
+        registerClientVoiceConsultRun({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          voiceSessionId,
+          runId,
+        });
+      }
+
+      await closeClientVoiceSession({
         agentId: "main",
         sessionKey: "agent:main:main",
         voiceSessionId,
-        runId,
+        config: {},
       });
-    }
+      expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+      expect(resolveClientVoiceRunBinding("run-1")).toMatchObject({ voiceSessionId });
 
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
+      for (const runId of ["run-1", "run-2"]) {
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.started",
+          runId,
+          toolCallId: "call-1",
+          toolName: "message",
+          mutatingAction: true,
+        });
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.completed",
+          runId,
+          toolCallId: "call-1",
+          toolName: "message",
+          durationMs: 5,
+        });
+      }
+      expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.effects).toEqual([
+        expect.objectContaining({ runId: "run-1", status: "succeeded" }),
+        expect.objectContaining({ runId: "run-2", status: "succeeded" }),
+      ]);
+
+      await completeRun("run-1");
+      expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+      await completeRun("run-2");
+      await settle();
+      expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+      expect(sendDurableMessageBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloads: [{ text: "Voice call changes\n- message: succeeded\n- message: succeeded" }],
+        }),
+      );
+      expect(
+        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
+      ).toEqual(expect.any(Number));
+
+      await closeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        voiceSessionId,
+        config: {},
+      });
+      await settle();
+      expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     });
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-    expect(resolveClientVoiceRunBinding("run-1")).toMatchObject({ voiceSessionId });
-
-    for (const runId of ["run-1", "run-2"]) {
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId,
-        toolCallId: "call-1",
-        toolName: "message",
-        mutatingAction: true,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.completed",
-        runId,
-        toolCallId: "call-1",
-        toolName: "message",
-        durationMs: 5,
-      });
-    }
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.effects).toEqual([
-      expect.objectContaining({ runId: "run-1", status: "succeeded" }),
-      expect.objectContaining({ runId: "run-2", status: "succeeded" }),
-    ]);
-
-    await completeRun("run-1");
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-    await completeRun("run-2");
-    await vi.waitFor(() => expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1));
-    expect(sendDurableMessageBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text: "Voice call changes\n- message: succeeded\n- message: succeeded" }],
-      }),
-    );
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt).toEqual(
-      expect.any(Number),
-    );
-
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-    });
-    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
   });
 
   it("retries a deferred digest on the next lifecycle trigger after run completion", async () => {
@@ -698,31 +698,37 @@ describe("client voice session lifecycle", () => {
       expect(repaired?.createdActor).toBeUndefined();
     });
 
-    it("does not create a chat when browser startup closes while its write is queued", async () => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      const blocker = patchSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:voice-write-blocker" },
-        async () => {
-          entered.resolve();
-          await release.promise;
-          return null;
-        },
-        { fallbackEntry: { sessionId: "voice-write-blocker", updatedAt: 1 } },
-      );
-      await entered.promise;
-      const target = { agentId: "main", sessionKey: "agent:main:voice-write-cancelled" };
-      const controller = new AbortController();
-      const creating = ensureClientVoiceAgentSessionEntry({
-        ...target,
-        assertCommitAllowed: () => controller.signal.throwIfAborted(),
-      });
-      controller.abort(new Error("browser disconnected"));
-      const rejected = expect(creating).rejects.toThrow("browser disconnected");
-      release.resolve();
-      await blocker;
-      await rejected;
-      expect(loadSessionEntry(target)).toBeUndefined();
-    });
+    it.each(["opaque", "prepared"] as const)(
+      "does not create a chat when browser startup closes while its write is queued (%s authority)",
+      async (authority) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        const blocker = patchSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:voice-write-blocker" },
+          async () => {
+            entered.resolve();
+            await release.promise;
+            return null;
+          },
+          { fallbackEntry: { sessionId: "voice-write-blocker", updatedAt: 1 } },
+        );
+        await entered.promise;
+        const target = { agentId: "main", sessionKey: "agent:main:voice-write-cancelled" };
+        const controller = new AbortController();
+        const assertOpen = () => controller.signal.throwIfAborted();
+        const creating = ensureClientVoiceAgentSessionEntry({
+          ...target,
+          deadlineAt: Date.now() + 60_000,
+          assertCommitAllowed:
+            authority === "prepared" ? composeSessionSourceAssertion([], assertOpen) : assertOpen,
+        });
+        controller.abort(new Error("browser disconnected"));
+        const rejected = expect(creating).rejects.toThrow("browser disconnected");
+        release.resolve();
+        await blocker;
+        await rejected;
+        expect(loadSessionEntry(target)).toBeUndefined();
+      },
+    );
   });
 });

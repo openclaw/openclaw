@@ -20,8 +20,9 @@ import type {
 import type { IncognitoEntryCreationOperations } from "./session-incognito-entry-creation-contract.js";
 import type {
   IncognitoEntryPatchOperations,
-  IncognitoEntryPatchResult,
+  IncognitoEntryPatchAuthorizer,
 } from "./session-incognito-entry-patch-contract.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 
 export type IncognitoEntryOperations = IncognitoEntryCreationOperations &
   IncognitoEntryPatchOperations;
@@ -49,7 +50,7 @@ export function readIncognitoGrantFacts(
 /** Entry receipts publish the paired kernel's acknowledged result without replay. */
 export function incognitoEntryPublication<Key extends keyof IncognitoEntryOperations>(
   type: Key,
-  authorizePrepared?: (refused?: IncognitoEntryPatchResult["refusedSource"]) => void,
+  authorizePrepared?: IncognitoEntryPatchAuthorizer,
 ) {
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
   let transferId: number | undefined;
@@ -101,7 +102,11 @@ export function incognitoEntryPublication<Key extends keyof IncognitoEntryOperat
         throw new Error("Session source refusal was not rejected");
       }
       if (isRecord(facts) && facts.guarded === true) {
-        authorizePrepared?.();
+        authorizePrepared?.(
+          undefined,
+          // SAFETY: The paired entry kernel supplies the source validation for this grant.
+          facts.sourceValidation as SessionSourceValidation | undefined,
+        );
       }
     },
     decodeReceipt(receipt: unknown): IncognitoSessionOperations[Key]["output"] {

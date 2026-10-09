@@ -59,6 +59,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
+import { revalidateAgentDatabaseTerminalOpenAsync } from "./openclaw-agent-db-terminal.js";
 import {
   captureOpenClawAgentDatabaseAliasPublication,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -275,6 +276,9 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     assertAgentDatabaseWriteAllowed(pathname);
     options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
     options.path = pathname;
+    if (cache.terminal.peek(pathname)) {
+      await revalidateAgentDatabaseTerminalOpenAsync(pathname, assertCurrent, signal);
+    }
     const cached = cache.databases.get(pathname);
     const schema = getOpenClawAgentDatabaseValidationForTransfer({
       agentId,
@@ -357,6 +361,9 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
     assertAgentDatabaseWriteAllowed(pathname);
+    if (cache.terminal.peek(pathname)) {
+      await revalidateAgentDatabaseTerminalOpenAsync(pathname);
+    }
     const existing = cache.pending.get(pathname);
     if (existing) {
       if (existing.agentId !== agentId) {

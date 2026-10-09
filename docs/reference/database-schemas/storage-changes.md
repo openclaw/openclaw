@@ -854,8 +854,9 @@ Agent creation provenance displayed by the agents CLI, Gateway roster, and local
 TUI is read by the shared-state worker. JSON CLI output reads only its configured
 agent IDs; tree and Gateway output retain full ordered enumeration and enum
 validation. Cold reads retain database creation and feature schema initialization.
-Synchronous incarnation checks, provenance writes, and connection-bound deletion
-remain with their lifecycle owners; collection and retention are unchanged.
+Provenance recording and retirement deletion execute through the shared-state
+writer. Synchronous incarnation checks and final-effect guards remain with their
+lifecycle owners; collection and retention are unchanged.
 Incarnation checks read current committed rows without joining a worker's writer
 lock or inheriting a discovery snapshot. They do not create state or ensure
 schema: absent optional provenance remains empty, while a missing mandatory

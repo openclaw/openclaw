@@ -99,6 +99,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | Metric                                                    | Type      | Labels                                                                                    |
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
+| `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
@@ -219,6 +220,16 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+### HTTP cancellations
+
+`openclaw_gateway_http_cancelled_total` counts HTTP requests cancelled before
+completion, with `source="client"` for disconnected clients and
+`source="shutdown"` for Gateway shutdown. These expected cancellations do not
+produce unhandled-request error logs. The metric carries no request URLs, file
+paths, or client identifiers and follows the existing diagnostics enablement
+and asynchronous queue limits.
+Normal HTTP cancellations are not retained in the stability event buffer.
 
 ### Worktree preparation
 

@@ -1,5 +1,5 @@
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,

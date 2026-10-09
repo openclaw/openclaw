@@ -78,6 +78,10 @@ import type {
   SessionTranscriptWriteLockAccessorContext,
 } from "./session-accessor.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -332,7 +336,7 @@ export function appendTranscriptEventSnapshotSync(
   view?: TranscriptWriteViewGuard,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
-  return runTranscriptWriteSnapshotSync(
+  return runTranscriptWriteSnapshotSync<TranscriptEventAppendResult>(
     scope,
     (database, resolved) => {
       const resolvedEvent = resolveTranscriptEventAppendParent(
@@ -416,18 +420,21 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
         workerOptions,
       );
       const result = committed?.result;
-      return {
-        result,
-        visibleTailEntryId:
-          committed?.visibleTailEntryId ??
-          (result
-            ? readTranscriptVisibleTailEntryIdInTransaction(
-                database,
-                resolved.sessionId,
-                result.messageId,
-              )
-            : null),
-      };
+      return retainTranscriptAppendPostimage(
+        {
+          result,
+          visibleTailEntryId:
+            committed?.visibleTailEntryId ??
+            (result
+              ? readTranscriptVisibleTailEntryIdInTransaction(
+                  database,
+                  resolved.sessionId,
+                  result.messageId,
+                )
+              : null),
+        },
+        readTranscriptAppendPostimage(committed),
+      );
     },
     undefined,
     options.expectedMutationAt,
@@ -600,16 +607,18 @@ async function runNativeTranscriptWriteLock<T>(
                 fencedScope,
               )?.lifecycleRevision;
               const options = prepare?.(writeDatabase) ?? requested;
-              result = appendTranscriptMessageInTransaction(
+              const appended = appendTranscriptMessageInTransaction(
                 writeDatabase,
                 resolved,
                 options,
-              )?.result;
+              );
+              result = appended?.result;
               if (result) {
                 rememberCommittedTranscriptMessageSequencesInTransaction(
                   writeDatabase,
                   resolved.sessionId,
                   [result],
+                  readTranscriptAppendPostimage(appended),
                 );
                 messageSeq = readCommittedTranscriptMessageSequence(result);
               }

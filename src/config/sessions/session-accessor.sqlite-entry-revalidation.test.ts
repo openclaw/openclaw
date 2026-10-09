@@ -12,6 +12,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
   registerOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -161,6 +162,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       : patchSessionEntryTarget(
           {
             agentId: scope.agentId,
+            env: scope.env,
             storePath: database.path,
             target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
           },
@@ -639,9 +641,10 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it("commits an unchanged persisted row after reopening during preparation", async () => {
-    const persisted = await patchEntry("ordinary", async () => {
-      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+  it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
+    const persisted = await patchEntry("ordinary", () => {
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.db.isOpen).toBe(false);
       return { label: "renamed" };
     });
     expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
@@ -706,16 +709,17 @@ describe("SQLite session entry patch commit revalidation", () => {
     expect(loadExactSessionEntry(scope)?.entry.label).toBe("exact replacement");
   });
 
-  it("rejects a no-op lifecycle patch after reopening with invalidated unrelated lineage", async () => {
+  it("rejects a no-op lifecycle patch after host eviction with invalidated unrelated lineage", async () => {
     await upsertSessionEntryCore(
       { ...scope, sessionKey: "agent:main:main" },
       { sessionId: "main-session", updatedAt: 10 },
     );
     await expect(
-      patchEntry("lifecycle", async () => {
+      patchEntry("lifecycle", () => {
         setCanonicalSqliteSessionMainKey(database, "work");
         setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-        expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        expect(database.db.isOpen).toBe(false);
         return null;
       }),
     ).rejects.toThrow("openclaw doctor --fix");
@@ -822,6 +826,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       patchSessionEntryTarget(
         {
           agentId: scope.agentId,
+          env: scope.env,
           storePath: database.path,
           target: { canonicalKey: "agent:main:different-target", storeKeys: [sessionKey] },
         },

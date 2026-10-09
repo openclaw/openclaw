@@ -1,3 +1,7 @@
+import {
+  prepareSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import {
   captureIncognitoSessionBinding,
@@ -9,16 +13,16 @@ import {
   type SessionSourceAssertion,
   type SessionSourcePredicateFacts,
 } from "../config/sessions/session-source-authority.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
-import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import {
+  captureSessionStoreCandidateIdentities,
+  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "../config/sessions/session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../infra/sqlite-worker-identity.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../state/openclaw-agent-db-resources.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
@@ -119,10 +123,23 @@ export async function prepareSessionSharingSource(
     };
   }
   const locators = captureSessionStoreReadCandidates(target.storePath);
-  const candidate = captureSessionStoreReadCandidate(
-    target.readSource?.path ??
-      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
-  );
+  const identities = captureSessionStoreCandidateIdentities(locators);
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
+  assertCallerCurrent();
+  const resolved =
+    target.readSource ??
+    toDatabaseOptions(
+      await prepareSqliteScope({
+        agentId: target.agentId,
+        sessionKey: target.storeKey,
+        storePath: target.storePath,
+        env,
+      }),
+    );
+  if (!resolved.path) {
+    throw new Error("Session sharing source is unavailable");
+  }
+  const candidate = captureSessionStoreReadCandidate(resolved.path);
   if (
     !locators.some((locator) =>
       matchesAgentDatabaseReadCandidatePath(
@@ -133,12 +150,12 @@ export async function prepareSessionSharingSource(
   ) {
     throw new Error("Session sharing source changed");
   }
-  const identity = readDatabasePathIdentitySync(candidate.physicalPath);
-  if (!target.readSource && !identity.key.startsWith("file:")) {
+  const identity = identities.get(candidate.physicalPath);
+  if (!identity?.key.startsWith("file:")) {
     throw new Error("Session sharing source is unavailable");
   }
   const source: CapturedSessionEntryReadSource = target.readSource ?? {
-    agentId: target.agentId,
+    agentId: resolved.agentId,
     path: candidate.physicalPath,
     databaseIdentity: identity.key.slice("file:".length),
     databaseBirthtime: identity.birthtime,
@@ -154,20 +171,11 @@ export async function prepareSessionSharingSource(
       `file:${databaseIdentity}`,
       source.databaseBirthtime,
     );
-    if (captureSessionStoreReadCandidate(candidate.path).physicalPath !== candidate.physicalPath) {
+    if (![candidate, ...locators].every(isSessionStoreReadCandidateCurrent)) {
       throw new Error("Session sharing source changed");
-    }
-    for (const locator of locators) {
-      if (
-        captureSessionStoreReadCandidate(locator.path, locator.scope).physicalPath !==
-        locator.physicalPath
-      ) {
-        throw new Error("Session sharing source changed");
-      }
     }
   };
   assertSourceCurrent();
-  const env = captureSessionTranscriptStorageEnvironment(process.env);
   const retained = retainSessionHistoryWorkerDatabase({
     agentId: source.agentId,
     path: source.path,

@@ -36,6 +36,7 @@ import {
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 
 type SessionArchivePublicationStorage = {
+  assertCurrent?(): void;
   prepare(
     requested: readonly SessionLifecycleArchivedTranscript[],
   ): Promise<TranscriptArchivePublishPlan[]>;
@@ -199,15 +200,19 @@ async function publishPreparedSessionStateArchives(
   );
   let includeRequested = true;
   while (true) {
+    storage.assertCurrent?.();
     const requestedForPass = includeRequested ? requestedArchives : [];
     const plans = await storage.prepare(requestedForPass);
+    storage.assertCurrent?.();
     includeRequested = false;
     if (plans.length === 0) {
       break;
     }
 
     const results = await runSqliteTranscriptArchivePublishWorker(plans, signal);
+    storage.assertCurrent?.();
     await storage.record(results);
+    storage.assertCurrent?.();
 
     const planByIdentity = new Map(
       plans.map((plan) => [transcriptArchiveIdentityKey(plan.sessionId, plan.generation), plan]),

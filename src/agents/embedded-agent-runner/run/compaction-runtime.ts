@@ -1,5 +1,7 @@
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -281,14 +283,17 @@ export function createEmbeddedRunCompactionRuntime(input: {
       ? params.sessionManager
       : undefined;
   const detached = params.sessionPersistence === "detached";
-  const assertAdmittedActive = () => {
-    // Preserve the caller's reason before a closed admission can replace it.
-    abortSignal?.throwIfAborted();
-    if (!admittedAssertion) {
-      throw new Error("compaction recovery requires an active admitted run");
-    }
-    admittedAssertion();
-  };
+  const assertAdmittedActive = composeSessionSourceAssertion(
+    [admittedAssertion],
+    (assertSource) => {
+      // Preserve the caller's reason before a closed admission can replace it.
+      abortSignal?.throwIfAborted();
+      if (!admittedAssertion) {
+        throw new Error("compaction recovery requires an active admitted run");
+      }
+      assertSource();
+    },
+  );
   const assertRecoveryTarget = (
     target: ContextEngineSessionTarget | undefined,
     sessionId = sessionPromptState.sessionId,
@@ -337,34 +342,64 @@ export function createEmbeddedRunCompactionRuntime(input: {
     const sessionFile = sessionPromptState.sessionFile;
     const writerFence = sessionPromptState.sessionWriterFence;
     const target = { ...getPreparedTarget(), ...writerFence };
-    const assertActive = () => {
-      assertRecoveryTarget(target, sessionId, writerFence);
-      const current = sessionPromptState.sessionTarget;
-      if (
-        sessionPromptState.sessionId !== sessionId ||
-        sessionPromptState.sessionFile !== sessionFile ||
-        current?.agentId !== target.agentId ||
-        current?.sessionKey !== target.sessionKey ||
-        current?.storePath !== target.storePath
-      ) {
-        throw new Error("active session changed after recovery transcript preparation");
-      }
-    };
+    const source =
+      !memoryManager && !detached
+        ? captureSessionEntrySourceAssertion({
+            scope: target,
+            expected: {
+              sessionId,
+              lifecycleRevision: writerFence?.expectedLifecycleRevision,
+              activeWriterRunId: writerFence?.expectedWriterRunId,
+            },
+            fields: ["sessionId", "lifecycleRevision", "activeWriterRunId"],
+            assertCurrent: () => assertRecoveryTarget(target, sessionId, writerFence),
+            assertHostCurrent: () => {
+              if (!writerFence || writerFence.expectedWriterRunId !== runId) {
+                throw new SessionTranscriptWriterClaimReboundError();
+              }
+            },
+            refuse: () => {
+              throw new SessionTranscriptWriterClaimReboundError();
+            },
+          })
+        : undefined;
+    const assertActive = composeSessionSourceAssertion(
+      [assertAdmittedActive, source],
+      (assertSources) => {
+        assertSources();
+        const current = sessionPromptState.sessionTarget;
+        if (
+          sessionPromptState.sessionId !== sessionId ||
+          sessionPromptState.sessionFile !== sessionFile ||
+          current?.agentId !== target.agentId ||
+          current?.sessionKey !== target.sessionKey ||
+          current?.storePath !== target.storePath
+        ) {
+          throw new Error("active session changed after recovery transcript preparation");
+        }
+      },
+    );
     return {
       session: { id: sessionId, file: sessionFile, target },
       ...(memoryManager ? { sessionManager: memoryManager } : {}),
       assertActive,
       withTranscriptWrites: <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
-        const assertInvocationActive = () => {
-          signal?.throwIfAborted();
-          assertActive();
-        };
-        const assertCommitAllowed = () => {
-          assertInvocationActive();
-          if (detached || memoryManager) {
-            throw new Error("detached recovery cannot persist a session transcript");
-          }
-        };
+        const assertInvocationActive = composeSessionSourceAssertion(
+          [assertActive],
+          (assertSource) => {
+            signal?.throwIfAborted();
+            assertSource();
+          },
+        );
+        const assertCommitAllowed = composeSessionSourceAssertion(
+          [assertInvocationActive],
+          (assertSource) => {
+            assertSource();
+            if (detached || memoryManager) {
+              throw new Error("detached recovery cannot persist a session transcript");
+            }
+          },
+        );
         // Bind the original owner and the safety wrapper's child signal to every
         // nested write, including callbacks retained beyond the backend result.
         return withOwnedSessionTranscriptWrites(

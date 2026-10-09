@@ -435,6 +435,7 @@ describe("X publication production-owner composition", () => {
         controlUiBasePath: "",
         getRuntimeConfig: cfg,
         getGatewayRequestContext: () => gateway,
+        httpRequestLifetime: gateway,
       },
     });
     const channel = api.runtime.channel;

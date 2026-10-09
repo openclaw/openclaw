@@ -7,6 +7,8 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -28,7 +30,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -59,29 +61,41 @@ describe("SQLite session participants", () => {
         recordSessionParticipant(scope, { identity: remote("before"), promptedAt: 1 });
         listSessionEntriesCore({ ...scope, projection: "list" });
         const database = openOpenClawAgentDatabase(scope);
-        await patchSessionEntryCore(
-          scope,
-          () => {
-            const connection = writer === "foreign" ? new DatabaseSync(database.path) : database.db;
-            try {
-              connection
-                .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
-                .run("after", scope.sessionKey);
-            } finally {
-              if (writer === "foreign") {
-                connection.close();
-              }
-            }
-            return { label: "committed" };
-          },
-          { skipMaintenance: true },
-        );
-        // Gateway row projections borrow this committed cache without another freshness read.
-        expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)).toMatchObject({
-          label: "committed",
-          participants: [{ identity: remote("after") }],
-          participantCount: 1,
+        let published: ReturnType<typeof readPreparedSessionEntryChange>;
+        const unsubscribe = sessionChanges.subscribeProjection((change) => {
+          if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+            published = readPreparedSessionEntryChange(change, scope.sessionKey);
+          }
         });
+        try {
+          await patchSessionEntryCore(
+            scope,
+            () => {
+              const connection =
+                writer === "foreign" ? new DatabaseSync(database.path) : database.db;
+              try {
+                connection
+                  .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
+                  .run("after", scope.sessionKey);
+              } finally {
+                if (writer === "foreign") {
+                  connection.close();
+                }
+              }
+              return { label: "committed" };
+            },
+            { skipMaintenance: true },
+          );
+          const expected = {
+            label: "committed",
+            participants: [{ identity: remote("after") }],
+            participantCount: 1,
+          };
+          expect(published?.entry).toMatchObject(expected);
+          expect(loadSessionEntry(scope)).toMatchObject(expected);
+        } finally {
+          unsubscribe();
+        }
       });
     },
   );
@@ -131,6 +145,14 @@ describe("SQLite session participants", () => {
       await upsertSessionEntryCore(scope, { sessionId: "prepared", updatedAt: 1 });
       recordSessionParticipant(scope, { identity: remote("before"), promptedAt: 1 });
       expect(listSessionEntriesCore(scope)).toHaveLength(1);
+      let published: ReturnType<typeof readPreparedSessionEntryChange>;
+      let factsInvalidated: true | "category" | undefined;
+      const unsubscribe = sessionChanges.subscribeProjection((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          factsInvalidated = change.factsInvalidated;
+          published = readPreparedSessionEntryChange(change, scope.sessionKey);
+        }
+      });
       const prepared = createDeferred();
       const resume = createDeferred();
       const patch = patchSessionEntryCore(
@@ -151,6 +173,13 @@ describe("SQLite session participants", () => {
           .run('{"type":"profile","extra":true}', scope.sessionKey);
         resume.resolve();
         await expect(patch).resolves.toMatchObject({ sessionId: "prepared", label: "committed" });
+        expect(factsInvalidated).toBe(true);
+        expect(published?.entry).toBeUndefined();
+        expect(published?.projection).toBeUndefined();
+        expect(published?.sharing?.sessionId).toBe("prepared");
+        expect(published?.source.identity).toBe(
+          readOpenClawAgentDatabaseIdentity(database).identity,
+        );
         expect(() => listSessionEntriesCore(scope)).toThrow(
           "Session participant identity is invalid; run openclaw doctor --fix.",
         );
@@ -159,6 +188,7 @@ describe("SQLite session participants", () => {
       } finally {
         resume.resolve();
         await patch.catch(() => {});
+        unsubscribe();
       }
     });
   });

@@ -28,7 +28,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import { hasOpenClawAgentCanonicalValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -170,7 +170,7 @@ export function openOpenClawAgentDatabaseReadOnly(
   // Verified-corrupt generations stay quarantined for reads as well as writes:
   // the process terminal latch and the persisted generation-aware quarantine
   // row must both clear before any fresh read-only physical open proceeds.
-  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  revalidateAgentDatabaseTerminalOpen(pathname);
   const persistedQuarantine = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
     env: options.env,
   });

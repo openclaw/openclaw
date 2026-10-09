@@ -187,18 +187,13 @@ function renderLibrary(snapshot: WorkshopSnapshot, props: SkillWorkshopViewProps
           mode: "buttons",
           ariaLabel: t("skillWorkshop.skills.filterAria"),
           value: props.filter,
-          options: [
-            {
-              value: "active",
-              label: html`${t("skillWorkshop.skills.active")}
-                <span class="settings-count">${list.skills.length}</span>`,
-            },
-            {
-              value: "archived",
-              label: html`${t("skillWorkshop.skills.archived")}
-                <span class="settings-count">${archived.length}</span>`,
-            },
-          ],
+          options: (["active", "archived"] as const).map((value) => ({
+            value,
+            label: html`${t(`skillWorkshop.skills.${value}`)}
+              <span class="settings-count"
+                >${value === "active" ? list.skills.length : archived.length}</span
+              >`,
+          })),
           onChange: props.onFilter,
         })}
         ${

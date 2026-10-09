@@ -35,7 +35,7 @@ import {
 } from "./session-entry-read-runtime.js";
 import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 function createEntryFixture(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -278,7 +278,7 @@ it("keeps source refusal outside the ordinary row-error result", async () => {
 it("propagates raw worker failure without calling the optional-data consumer", async () => {
   await withOpenClawTestState({ label: "readonly-entry-transport" }, async ({ env, path }) => {
     const failure = new Error("worker could not start");
-    const run = vi.spyOn(projectionLane.pool, "run").mockRejectedValueOnce(failure);
+    const run = vi.spyOn(targetDiscoveryLane.pool, "run").mockRejectedValueOnce(failure);
     const consume = vi.fn(async () => undefined);
     try {
       await expect(
@@ -320,7 +320,7 @@ it.each(["consumer", "cleanup"] as const)(
         const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
         writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
       }
-      const pool = projectionLane.pool;
+      const pool = targetDiscoveryLane.pool;
       const rotate = pool.rotate.bind(pool);
       const closeResources = pool.closeResources.bind(pool);
       let cleanupCalled = false;

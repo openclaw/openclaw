@@ -4,7 +4,6 @@
  * Tracks runtime and browser containers in the shared state DB.
  */
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { withFileLock } from "../../infra/file-lock.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import {
@@ -21,7 +20,7 @@ import {
   withSandboxRegistrySettlement,
 } from "./registry-lifecycle.js";
 import {
-  assertSandboxRegistryReservationCurrent,
+  assertSandboxRegistryGenerationCurrent,
   shouldPruneSandboxRegistryEntry,
   type SandboxRegistryOperations,
   type SandboxRegistryPrune,
@@ -169,15 +168,7 @@ export function assertSandboxRegistryEntryCurrent(entry: SandboxRegistryEntry): 
     withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
       readSandboxRegistryEntryInDatabase(db, entry.containerName),
     ) ?? null;
-  assertSandboxRegistryReservationCurrent(current, entry);
-  if (
-    current.createdAtMs !== entry.createdAtMs ||
-    current.workspaceDir !== entry.workspaceDir ||
-    current.configHash !== entry.configHash ||
-    !isDeepStrictEqual(current.backendTarget, entry.backendTarget)
-  ) {
-    throw new Error("Sandbox runtime generation changed");
-  }
+  assertSandboxRegistryGenerationCurrent(current, entry);
 }
 
 /** Publish only a still-current reservation, or forget a provider-confirmed terminal generation. */

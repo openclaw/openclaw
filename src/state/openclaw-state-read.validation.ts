@@ -136,13 +136,23 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.backendId === undefined || typeof input.command.backendId === "string")) ||
       input.command.type === "acpSessions.list" ||
       input.command.type === "backup.runs" ||
+      (input.command.type === "restartSentinel.reportReceipt" &&
+        typeof input.command.input === "string") ||
       ((input.command.type === "restartSentinel.current" ||
         input.command.type === "restartSentinel.snapshot" ||
         input.command.type === "restartSentinel.installReceipt" ||
         input.command.type === "plugins.deferredMigrations.read" ||
+        input.command.type === "legacySessionMigration.readLedger" ||
         input.command.type === "config.health.read") &&
         "input" in input.command &&
         input.command.input === undefined) ||
+      (input.command.type === "agentRecovery.creationJournal" &&
+        "input" in input.command &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.agentId === "string") ||
+      (input.command.type === "agentRecovery.holds" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.statePath === "string") ||
       (input.command.type === "claws.packageOwnership" &&
         typeof input.command.includeInstalls === "boolean" &&
         (input.command.agentId === undefined || typeof input.command.agentId === "string")) ||
@@ -279,11 +289,33 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           (pin) =>
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
+      (input.command.type === "agentLifecycle.read" && typeof input.command.input === "string") ||
+      (input.command.type === "agentDeletion.sessionStoreBlocker" &&
+        isRecord(input.command.input) &&
+        isRecord(input.command.input.config) &&
+        typeof input.command.input.agentId === "string" &&
+        input.command.input.databasePath === input.databasePath &&
+        isRecord(input.command.input.targets) &&
+        isStringArray(input.command.input.targets.stores) &&
+        Array.isArray(input.command.input.targets.candidates) &&
+        input.command.input.targets.candidates.every(
+          (candidate) =>
+            isRecord(candidate) &&
+            typeof candidate.path === "string" &&
+            isRecord(candidate.identity) &&
+            typeof candidate.identity.key === "string" &&
+            typeof candidate.identity.canonicalPath === "string" &&
+            (candidate.identity.birthtime === undefined ||
+              typeof candidate.identity.birthtime === "string"),
+        ) &&
+        isRecord(input.command.input.env) &&
+        Object.values(input.command.input.env).every(
+          (value) => value === undefined || typeof value === "string",
+        )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "agentDatabaseDeletion.snapshot" &&
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
-      ((input.command.type === "agentDeletionJournal.status" ||
-        input.command.type === "agentDeletionJournal.authority") &&
+      (input.command.type === "agentDeletionJournal.status" &&
         typeof input.command.agentId === "string") ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||

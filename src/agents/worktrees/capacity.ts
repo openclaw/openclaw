@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { resolveStateDir } from "../../config/paths.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "../../infra/git-worker.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { releaseOpenClawStateLeaseBestEffort } from "../../state/openclaw-state-lease-storage.js";
@@ -137,14 +138,16 @@ export function createWorktreeDiskAdmission(params: {
       demands: readonly { path: string; bytes: number }[],
       purpose: string,
       snapshot = false,
+      signal: AbortSignal | undefined = params.workerAuthority.signal,
     ): Promise<void> => {
       if (closed) {
         throw new Error("Managed worktree disk admission has closed");
       }
+      signal?.throwIfAborted();
       params.assertCurrent();
       if (pendingCapacityReleases.size > 0) {
         // Failed retries still count against admission; unrelated writes can use remaining space.
-        await retryWorktreeCapacityReleases(params.env);
+        await racePromiseWithAbortSignal(retryWorktreeCapacityReleases(params.env), signal);
         params.assertCurrent();
       }
       reserved = true;
@@ -152,6 +155,7 @@ export function createWorktreeDiskAdmission(params: {
         leaseSet,
         request: { key, owner, demands, purpose, snapshot },
         predicates,
+        signal,
         assertCurrent: () => {
           context.admission.assertCurrent();
           assertWorkerCurrent?.();

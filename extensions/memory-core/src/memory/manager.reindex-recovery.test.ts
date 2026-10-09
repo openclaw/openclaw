@@ -20,8 +20,9 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./test-runtime-mocks.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import "./test-runtime-mocks.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { resetMemoryDatabase } from "./manager-db.js";
@@ -157,7 +158,11 @@ describe("memory manager reindex recovery", () => {
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
     const { getMemorySearchManager } = await import("./index.js");
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }

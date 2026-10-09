@@ -130,11 +130,7 @@ function resolveGitDirectoryMarker(dir: string): string | null {
       return null;
     }
     const content = fs.readFileSync(marker, "utf8").trim();
-    const match = /^gitdir:\s*(.+)$/i.exec(content);
-    if (!match) {
-      return null;
-    }
-    const gitDir = match[1]?.trim();
+    const gitDir = /^gitdir:\s*(.+)$/i.exec(content)?.[1]?.trim();
     if (!gitDir) {
       return null;
     }
@@ -160,12 +156,12 @@ function hasTrustedGitWorkspace(root: string): boolean {
   }
 }
 
-function hasGitWorkspace(workspaceDir?: string): boolean {
+function resolveLocalPluginRoots(workspaceDir?: string): string[] {
   const roots = [process.cwd()];
   if (workspaceDir && workspaceDir !== process.cwd()) {
     roots.push(workspaceDir);
   }
-  return roots.some((root) => hasTrustedGitWorkspace(root));
+  return roots;
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
@@ -224,10 +220,7 @@ function resolveLocalPath(params: {
     return null;
   }
   const candidates = new Set<string>();
-  const bases = [process.cwd()];
-  if (params.workspaceDir && params.workspaceDir !== process.cwd()) {
-    bases.push(params.workspaceDir);
-  }
+  const bases = resolveLocalPluginRoots(params.workspaceDir);
   for (const base of bases) {
     const realBase = resolveRealDirectory(base);
     if (!realBase) {
@@ -298,7 +291,6 @@ function resolveInstallDefaultChoice(params: {
 }): InstallChoice {
   const { cfg, entry, localPath, bundledLocalPath, hasClawHubSpec, hasNpmSpec } = params;
   const hasRemoteSpec = hasClawHubSpec || hasNpmSpec;
-  const entryDefault = entry.install.defaultChoice;
   const remoteDefault = (): InstallChoice =>
     resolvePluginInstallSources(entry.install)[0]?.source ?? "skip";
 
@@ -311,23 +303,18 @@ function resolveInstallDefaultChoice(params: {
   if (bundledLocalPath) {
     return "local";
   }
-  const updateChannel = cfg.update?.channel;
   // Dev builds prefer checked-out local plugins; stable/beta prefer published
   // artifacts so installed records match the user's release channel.
-  if (updateChannel === "dev") {
-    return "local";
+  switch (cfg.update?.channel) {
+    case "dev":
+      return "local";
+    case "stable":
+    case "extended-stable":
+    case "beta":
+      return remoteDefault();
+    default:
+      return entry.install.defaultChoice === "local" ? "local" : remoteDefault();
   }
-  if (
-    updateChannel === "stable" ||
-    updateChannel === "extended-stable" ||
-    updateChannel === "beta"
-  ) {
-    return remoteDefault();
-  }
-  if (entryDefault === "local") {
-    return "local";
-  }
-  return remoteDefault();
 }
 
 async function promptInstallChoice(params: {
@@ -802,7 +789,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       }),
     );
   }
-  const allowLocal = hasGitWorkspace(workspaceDir);
+  const allowLocal = resolveLocalPluginRoots(workspaceDir).some(hasTrustedGitWorkspace);
   const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
   const localPath = bundledLocalPath ?? resolveLocalPath({ entry, workspaceDir, allowLocal });
   const rawClawHubSpec = entry.install.clawhubSpec?.trim();

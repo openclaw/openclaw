@@ -86,13 +86,11 @@ function formatDirectoryProblemLine(
   if (health === "present" || health === "missing") {
     return null;
   }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
+  const problem =
+    health === "not_directory"
+      ? "exists but is not a directory."
+      : `is not ${health === "unreadable" ? "readable" : "writable"} by this user.`;
+  return `- ${label}: ${display} ${problem}`;
 }
 
 function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
@@ -127,10 +125,10 @@ function resolveClaudeCliWorkspaceTargets(params: {
     });
     return {
       agentId,
-      workspaceDir,
-      projectDir,
-      workspaceHealth: probeDirectoryHealth(workspaceDir),
-      projectDirHealth: probeDirectoryHealth(projectDir),
+      directories: [
+        [workspaceDir, probeDirectoryHealth(workspaceDir), "workspace"],
+        [projectDir, probeDirectoryHealth(projectDir), "Claude project dir"],
+      ] as const,
     };
   });
 }
@@ -195,31 +193,22 @@ export function noteClaudeCliHealth(
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    for (const [dirPath, health, label, fixHint, repairReadonly] of [
-      [
-        target.workspaceDir,
-        target.workspaceHealth,
-        agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s workspace` : "the workspace"
-        } a readable, writable directory for the gateway user.`,
-        true,
-      ],
-      [
-        target.projectDir,
-        target.projectDirHealth,
-        agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
-        } readable, or remove the broken path and let Claude recreate it.`,
-        false,
-      ],
-    ] as const) {
+    for (const [dirPath, health, subject] of target.directories) {
+      const workspace = subject === "workspace";
+      const label = agentLabel
+        ? `Agent ${agentLabel} ${subject}`
+        : workspace
+          ? "Workspace"
+          : subject;
       const problem = formatDirectoryProblemLine(dirPath, health, label);
       if (problem) {
         lines.push(problem);
-        if (repairReadonly || health !== "readonly") {
-          fixHints.push(fixHint);
+        if (workspace || health !== "readonly") {
+          const targetLabel = agentLabel ? `agent ${agentLabel}'s ${subject}` : `the ${subject}`;
+          const remedy = workspace
+            ? "a readable, writable directory for the gateway user."
+            : "readable, or remove the broken path and let Claude recreate it.";
+          fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
         }
       }
     }

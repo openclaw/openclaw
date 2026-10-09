@@ -153,7 +153,7 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     topicAgentId: scopedConfig.topicConfig?.agentId,
   });
-  const { route, bindingMode } = inspectedRoute;
+  const { route } = inspectedRoute;
   const targetSessionKey = resolveTelegramTargetSession({
     cfg,
     route,
@@ -311,7 +311,6 @@ async function resolveTelegramCommandAuth(params: {
     senderIsOwner,
     assertOwnerCurrent,
     route,
-    bindingMode,
     targetSessionKey,
     inspectedRoute,
     ownerContext,
@@ -344,7 +343,7 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const { route, bindingMode } = auth;
+  const { route, bindingMode } = auth.inspectedRoute;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
   await touchTelegramConversationRoute(auth.inspectedRoute);

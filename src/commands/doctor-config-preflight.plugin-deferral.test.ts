@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
@@ -384,7 +385,9 @@ describe("configured plugin migration deferral", () => {
     });
   });
 
-  it("keeps failed doctor inspection debt after the artifact disappears", async () => {
+  it("settles inspection-only debt when the installed plugin has no migration contract", async () => {
+    const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+    onTestFinished(() => note.mockRestore());
     await withDoctorConfigPreflightHome(async (home) => {
       const pluginRoot = path.join(home, "inspection-plugin");
       const pluginId = "inspection-fixture";
@@ -407,13 +410,32 @@ describe("configured plugin migration deferral", () => {
         ]);
         await fs.unlink(path.join(pluginRoot, "doctor-contract-api.cjs"));
         await installStatelessFixture(pluginRoot, pluginId);
-        await runDoctorConfigPreflight(options);
-        expect(readDeferredPluginMigrations()).toEqual([
-          expect.objectContaining({ pluginId, requiresDoctorInspection: true }),
-        ]);
-        await installStatelessFixture(pluginRoot, pluginId, "config-only");
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const original = await fs.readFile(configPath, "utf8");
         await runDoctorConfigPreflight(options);
         expect(readDeferredPluginMigrations()).toEqual([]);
+        expect(note).toHaveBeenCalledWith(
+          '- Plugin "inspection-fixture" version "1.0.0": no plugin migration contract. No migration ran; existing data and settings have been kept.',
+          "Doctor warnings",
+        );
+        const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
+        const { DatabaseSync } = requireNodeSqlite();
+        const database = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          const row = database
+            .prepare("SELECT status, report_json FROM migration_runs WHERE id = ?")
+            .get(`deferred-plugin-migration:${pluginId}`);
+          expect(row?.status).toBe("completed");
+          expect(JSON.parse(String(row?.report_json))).toMatchObject({
+            reason: expect.stringContaining("no plugin migration contract"),
+          });
+        } finally {
+          database.close();
+        }
+        await runDoctorConfigPreflight(options);
+        expect(readDeferredPluginMigrations()).toEqual([]);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
         expect((await readConfigFileSnapshot()).warnings).toEqual([]);
       });
     });

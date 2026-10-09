@@ -6,10 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { detectSharedAuthStoreMigration } from "../infra/state-migrations.shared-auth-store.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   readAgentDatabaseDeletionSnapshot,
   readAgentDeletionJournalStatusInDatabase,
@@ -27,6 +24,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
 import { listAuthProfileRepairCandidates } from "./doctor-auth-legacy-paths.js";

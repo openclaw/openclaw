@@ -190,6 +190,11 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
   agentId?: string;
   providerUsed?: string;
   modelUsed?: string;
+  usageCommit?: {
+    storePath: string;
+    sessionKey: string;
+    entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "liveModelSwitchPending">;
+  };
 }): Promise<void> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const cfg = params.cfg;
@@ -208,6 +213,15 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
     agentId: params.agentId,
   });
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  if (
+    params.usageCommit?.storePath === storePath &&
+    params.usageCommit.sessionKey === sessionKey &&
+    !params.usageCommit.entry.liveModelSwitchPending
+  ) {
+    // This completed turn owed no switch cleanup at its usage commit. A later
+    // /model request belongs to the next turn; these facts never authorize a write.
+    return;
+  }
   await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {

@@ -11,7 +11,12 @@ import type {
   SystemdServiceReadTarget,
 } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
-import { readSystemdBusCall, readSystemdUnitObjectPath } from "./systemd-bus-query.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdMachineBroker } from "./systemd-peer-native.js";
 import { SYSTEMD_DEFAULT_STOP_TIMEOUT_MS } from "./systemd-time-span.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
@@ -68,12 +73,7 @@ async function inspectIdentity(
     throw unavailable();
   }
   const managerUid = await call("GetConnectionUnixUser", ["s", managerOwner], "u");
-  if (
-    typeof managerUid !== "number" ||
-    !Number.isInteger(managerUid) ||
-    managerUid < 0 ||
-    managerUid >= 0xffffffff
-  ) {
+  if (!isSystemdManagerUid(managerUid)) {
     throw unavailable();
   }
   if (
@@ -86,15 +86,7 @@ async function inspectIdentity(
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   const unit = await broker.query(
-    [
-      "call",
-      managerOwner,
-      MANAGER_PATH,
-      `${MANAGER}.Manager`,
-      expected ? "LoadUnit" : "GetUnit",
-      "s",
-      target.unitName,
-    ],
+    systemdUnitCallArgs(managerOwner, target.unitName, expected ? "LoadUnit" : "GetUnit"),
     ["o"],
     deadline,
   );

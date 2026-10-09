@@ -28,6 +28,7 @@ import {
   projectOpenAIAccountModels,
 } from "./account-models.js";
 import {
+  OPENAI_CODEX_MODELS_ENDPOINT,
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
@@ -106,35 +107,38 @@ const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
-const OPENAI_GPT_55_PRO_CONTEXT_WINDOW = 1_050_000;
-const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
-const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CHAT_LATEST_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
-const OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
-  OPENAI_GPT_54_PRO_MODEL_ID,
-  OPENAI_GPT_54_MODEL_ID,
-] as const;
-// Repair an already-authorized model before borrowing an older family template;
-// remote discovery must not be needed to restore its native image capability.
-const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_55_MODEL_ID] as const;
-const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = [
-  OPENAI_GPT_54_PRO_MODEL_ID,
-  OPENAI_GPT_55_PRO_MODEL_ID,
-] as const;
-const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MINI_MODEL_ID, "gpt-5-mini"] as const;
-const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = [
-  OPENAI_GPT_54_NANO_MODEL_ID,
-  "gpt-5-nano",
-  "gpt-5-mini",
-] as const;
-const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
-  OPENAI_GPT_55_MODEL_ID,
-  OPENAI_GPT_54_MODEL_ID,
-] as const;
-const OPENAI_GPT_56_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
+const OPENAI_CATALOG_AUGMENTATIONS = [
+  {
+    id: OPENAI_GPT_55_PRO_MODEL_ID,
+    templateIds: [OPENAI_GPT_54_PRO_MODEL_ID, OPENAI_GPT_54_MODEL_ID],
+    contextWindow: 1_050_000,
+    contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+  },
+  // Repair an already-authorized model before borrowing an older family template;
+  // remote discovery must not be needed to restore its native image capability.
+  {
+    id: OPENAI_GPT_54_MODEL_ID,
+    templateIds: [OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_55_MODEL_ID],
+    contextWindow: 1_050_000,
+  },
+  {
+    id: OPENAI_GPT_54_PRO_MODEL_ID,
+    templateIds: [OPENAI_GPT_54_PRO_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID],
+    contextWindow: 1_050_000,
+  },
+  {
+    id: OPENAI_GPT_54_MINI_MODEL_ID,
+    templateIds: [OPENAI_GPT_54_MINI_MODEL_ID, "gpt-5-mini"],
+    contextWindow: 400_000,
+  },
+  {
+    id: OPENAI_GPT_54_NANO_MODEL_ID,
+    templateIds: [OPENAI_GPT_54_NANO_MODEL_ID, "gpt-5-nano", "gpt-5-mini"],
+    contextWindow: 400_000,
+  },
+];
 
 const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   providerId: PROVIDER_ID,
@@ -400,13 +404,10 @@ async function buildOpenAICodexLiveProviderConfig(params: {
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
-  // Lazy like the catalog runtime: npm lookup code loads only for ChatGPT discovery.
-  const { resolveOpenAICodexModelsEndpoint } = await import("./codex-client-version.runtime.js");
-  const endpoint = await resolveOpenAICodexModelsEndpoint({ fetchGuard: params.fetchGuard });
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
-      endpoint,
+      endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
@@ -421,7 +422,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       cacheKeyParts: [
         PROVIDER_ID,
         "codex-model-rows",
-        endpoint,
+        OPENAI_CODEX_MODELS_ENDPOINT,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],
@@ -602,7 +603,7 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
   },
   {
     match: [OPENAI_CHAT_LATEST_MODEL_ID],
-    templateIds: OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS,
+    templateIds: [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_54_MODEL_ID],
     patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
   },
   {
@@ -612,32 +613,16 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
       OPENAI_GPT_56_TERRA_MODEL_ID,
       OPENAI_GPT_56_LUNA_MODEL_ID,
     ],
-    templateIds: OPENAI_GPT_56_TEMPLATE_MODEL_IDS,
+    templateIds: [OPENAI_GPT_55_MODEL_ID],
   },
   {
     match: [OPENAI_GPT_55_MODEL_ID],
     templateIds: [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_54_MODEL_ID],
   },
-  {
-    match: [OPENAI_GPT_55_PRO_MODEL_ID],
-    templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
-  },
-  {
-    match: [OPENAI_GPT_54_MODEL_ID],
-    templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
-  },
-  {
-    match: [OPENAI_GPT_54_PRO_MODEL_ID],
-    templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
-  },
-  {
-    match: [OPENAI_GPT_54_MINI_MODEL_ID],
-    templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-  },
-  {
-    match: [OPENAI_GPT_54_NANO_MODEL_ID],
-    templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
-  },
+  ...OPENAI_CATALOG_AUGMENTATIONS.map(({ id, templateIds }) => ({
+    match: [id],
+    templateIds,
+  })),
 ] satisfies Parameters<typeof buildFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
@@ -959,35 +944,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {
-      const models = [
-        {
-          id: OPENAI_GPT_55_PRO_MODEL_ID,
-          templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
-          contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
-          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-        },
-        {
-          id: OPENAI_GPT_54_MODEL_ID,
-          templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
-          contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
-        },
-        {
-          id: OPENAI_GPT_54_PRO_MODEL_ID,
-          templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
-          contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
-        },
-        {
-          id: OPENAI_GPT_54_MINI_MODEL_ID,
-          templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-          contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
-        },
-        {
-          id: OPENAI_GPT_54_NANO_MODEL_ID,
-          templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
-          contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
-        },
-      ];
-      return models.flatMap(({ templateIds, ...model }) => {
+      return OPENAI_CATALOG_AUGMENTATIONS.flatMap(({ templateIds, ...model }) => {
         const template = findCatalogTemplate({
           entries: ctx.entries,
           providerId: PROVIDER_ID,

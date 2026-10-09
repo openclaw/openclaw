@@ -62,6 +62,7 @@ function createPublicGateway(basePath = "", config: OpenClawConfig = TEST_CONFIG
       controlUiBasePath: basePath,
       getRuntimeConfig: () => config,
       getGatewayRequestContext: () => context,
+      httpRequestLifetime: context,
     },
   });
   servers.add(server);

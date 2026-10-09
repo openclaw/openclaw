@@ -79,6 +79,18 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+### Pending text phases
+
+Transports that resolve commentary at the tool boundary withhold durable block
+replies until the phase is known. Chat Completions and native Ollama (`api:
+"ollama"`, `/api/chat`) wait until the assistant message finishes, including with
+`blockStreamingBreak: "text_end"`: earlier text can still become tool narration.
+A long tool-free answer therefore produces no durable chunks during generation.
+
+Ordinary final answers and length-limited partial answers remain deliverable.
+The independent live assistant/preview stream can still update while generating
+when enabled and supported by the channel.
+
 ### Media delivery with block streaming
 
 When a plugin uses `before_agent_finalize` to validate the built-in runtime's

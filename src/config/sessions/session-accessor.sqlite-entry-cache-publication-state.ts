@@ -4,6 +4,7 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -145,6 +146,20 @@ export function recordCommittedSessionOwnerPublication(
   }
 }
 
+function applySessionEntryOwnerChange(
+  entry: SessionEntry,
+  change: Extract<SessionRowFacts, { kind: "owner" }>,
+): SessionEntry | undefined {
+  if (
+    entry.sessionId !== change.sessionId ||
+    (entry.lifecycleRevision ?? null) !== change.lifecycleRevision
+  ) {
+    return undefined;
+  }
+  const { owner: _previousOwner, ...metadata } = entry;
+  return freezeJsonSnapshot({ ...metadata, ...(change.owner ? { owner: change.owner } : {}) });
+}
+
 /** Commit receipts remain current only until their stored fields are superseded. */
 export function readCurrentSessionEntryProjection(
   owner: PendingSessionEntryPublication,
@@ -178,7 +193,7 @@ export function isSessionEntryReplacementIdentityCurrent(
   );
 }
 
-export function prepareSessionEntryReplacementChanges(
+function prepareSessionEntryReplacementChanges(
   owner: PendingSessionEntryPublication,
   replacement: SessionEntryReplacementPublication,
   databaseIdentity: string,
@@ -193,7 +208,12 @@ export function prepareSessionEntryReplacementChanges(
     source: replacement.source,
     entries: new Map(
       [...replacement.current]
-        .filter(([key]) => current(key) && !owner.metadataSuperseded.has(key))
+        .filter(
+          ([key]) =>
+            current(key) &&
+            !owner.metadataSuperseded.has(key) &&
+            !replacement.unavailableParticipantKeys?.includes(key),
+        )
         .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
     ),
     sharing: new Map(
@@ -227,20 +247,81 @@ export function applyPendingSessionEntryOwnerChanges(
   const current = new Map(replacement.current);
   for (const [sessionKey, change] of ownerChanges) {
     const entry = current.get(sessionKey);
-    if (
-      !entry ||
-      entry.sessionId !== change.sessionId ||
-      (entry.lifecycleRevision ?? null) !== change.lifecycleRevision
-    ) {
-      continue;
+    const updated = entry && applySessionEntryOwnerChange(entry, change);
+    if (updated) {
+      current.set(sessionKey, updated);
     }
-    const { owner: _previousOwner, ...metadata } = entry;
-    current.set(
-      sessionKey,
-      freezeJsonSnapshot({ ...metadata, ...(change.owner ? { owner: change.owner } : {}) }),
-    );
   }
   return { ...replacement, current };
+}
+
+/** Capture acknowledged facts while their existing publication owner keeps delivery current. */
+export function prepareSessionEntryPublicationFacts(params: {
+  replacement: SessionEntryReplacementPublication | undefined;
+  owner: PendingSessionEntryPublication;
+  foldedOwnerChanges: PendingSessionEntryPublication["ownerChanges"];
+  databaseIdentity: string;
+  unknown: boolean;
+  transcriptVersion: number | undefined;
+}) {
+  const { replacement, owner, foldedOwnerChanges, databaseIdentity, unknown, transcriptVersion } =
+    params;
+  const current = (key: string) => !owner.superseded.has(key);
+  const transcriptUnchanged = transcriptVersion === readSessionTranscriptUpdateVersion();
+  const prepared =
+    !unknown && replacement
+      ? prepareSessionEntryReplacementChanges(
+          owner,
+          replacement,
+          databaseIdentity,
+          transcriptUnchanged,
+        )
+      : undefined;
+  const currentMetadata = (key: string) =>
+    current(key) &&
+    !owner.metadataSuperseded.has(key) &&
+    replacement !== undefined &&
+    isSessionEntryReplacementFactKnown(replacement, key);
+  const readCurrent = (key: string) => {
+    if (!currentMetadata(key)) {
+      return undefined;
+    }
+    const selected = prepared?.entries.get(key);
+    const mutation = owner.ownerChanges.get(key);
+    const entry =
+      selected && mutation && mutation !== foldedOwnerChanges.get(key)
+        ? applySessionEntryOwnerChange(selected, mutation)
+        : selected;
+    if (!entry) {
+      const metadata = replacement?.unavailableParticipantKeys?.includes(key)
+        ? replacement.current.get(key)
+        : undefined;
+      const currentSharingMetadata =
+        metadata && mutation && mutation !== foldedOwnerChanges.get(key)
+          ? applySessionEntryOwnerChange(metadata, mutation)
+          : metadata;
+      // Missing participant display cannot erase acknowledged identity or certify an empty row.
+      return currentSharingMetadata
+        ? {
+            entry: undefined,
+            projection: undefined,
+            sharing: projectSessionSharingEntry(currentSharingMetadata),
+          }
+        : undefined;
+    }
+    const projection = readCurrentSessionEntryProjection(owner, replacement, key)
+      ? prepared?.projection?.get(key)
+      : undefined;
+    return {
+      entry,
+      projection:
+        projection?.activitySummaryWatermark === undefined ||
+        transcriptVersion === readSessionTranscriptUpdateVersion()
+          ? projection
+          : undefined,
+    };
+  };
+  return { prepared, currentMetadata, readCurrent };
 }
 
 export function publishRetainedSessionEntryChange(
@@ -518,12 +599,16 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
     return undefined;
   }
   const { prepared } = record;
-  const entry = prepared.entries.get(sessionKey);
+  const current = record.readCurrent?.(sessionKey);
+  const entry = record.readCurrent ? current?.entry : prepared.entries.get(sessionKey);
+  // A withheld postimage must still identify the store that committed the change.
   return {
     source: prepared.source,
     entry,
-    sharing:
-      prepared.sharing?.get(sessionKey) ?? (entry ? projectSessionSharingEntry(entry) : undefined),
-    projection: prepared.projection?.get(sessionKey),
+    sharing: record.readCurrent
+      ? (current?.sharing ?? (current?.entry && projectSessionSharingEntry(current.entry)))
+      : (prepared.sharing?.get(sessionKey) ??
+        (entry ? projectSessionSharingEntry(entry) : undefined)),
+    projection: record.readCurrent ? current?.projection : prepared.projection?.get(sessionKey),
   };
 }

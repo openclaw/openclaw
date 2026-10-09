@@ -207,9 +207,9 @@ export class GatewayClient {
     const deviceAuthDeps: Pick<
       GatewayClientHostDeps,
       "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
-    > = deviceAuthScope
-      ? {
-          loadDeviceAuthToken: async (params) => {
+    > = {
+      loadDeviceAuthToken: deviceAuthScope
+        ? async (params) => {
             if (readOnly) {
               return suppressStoredAuth
                 ? null
@@ -221,38 +221,29 @@ export class GatewayClient {
               onSnapshot: observe(params),
             });
             return suppressStoredAuth ? null : load;
-          },
-          storeDeviceAuthToken: readOnly
-            ? () => {}
-            : (params) =>
-                storeOriginDeviceToken({
-                  ...params,
-                  gatewayScope: deviceAuthScope,
-                  ...writeFence(params),
-                }),
-          clearDeviceAuthToken: readOnly
-            ? () => {}
-            : (params) =>
-                clearOriginDeviceToken({
-                  ...params,
-                  gatewayScope: deviceAuthScope,
-                  ...clearFence(params),
-                }),
-        }
-      : readOnly
-        ? {
-            loadDeviceAuthToken: suppressStoredAuth ? () => null : loadDeviceAuthTokenReadOnly,
-            storeDeviceAuthToken: () => {},
-            clearDeviceAuthToken: () => {},
           }
-        : {
-            loadDeviceAuthToken: (params) =>
-              loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
-            storeDeviceAuthToken: (params) =>
-              storeDeviceAuthToken({ ...params, ...writeFence(params) }),
-            clearDeviceAuthToken: (params) =>
-              clearDeviceAuthToken({ ...params, ...clearFence(params) }),
-          };
+        : readOnly
+          ? suppressStoredAuth
+            ? () => null
+            : loadDeviceAuthTokenReadOnly
+          : (params) => loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
+      storeDeviceAuthToken: readOnly
+        ? () => {}
+        : (params) => {
+            const request = { ...params, ...writeFence(params) };
+            return deviceAuthScope
+              ? storeOriginDeviceToken({ ...request, gatewayScope: deviceAuthScope })
+              : storeDeviceAuthToken(request);
+          },
+      clearDeviceAuthToken: readOnly
+        ? () => {}
+        : (params) => {
+            const request = { ...params, ...clearFence(params) };
+            return deviceAuthScope
+              ? clearOriginDeviceToken({ ...request, gatewayScope: deviceAuthScope })
+              : clearDeviceAuthToken(request);
+          },
+    };
     const preparedDeviceAuthDeps = preparedDeviceAuth
       ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
       : deviceAuthDeps;

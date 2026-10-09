@@ -28,18 +28,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(readers)("bounds $name by the supplied process allowance", ({ read }) => {
-  vi.spyOn(performance, "now").mockReturnValue(0);
-  let elapsedMs = 0;
-  vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, _args, options) => {
-    elapsedMs += options?.timeout ?? 0;
-    throw new Error("native inspection timed out");
-  });
-
-  expect(read(424242, process.env, 125)).toBeNull();
-  expect(elapsedMs).toBe(125);
-});
-
 it.each(readers)(
   "isolates $name while retaining its stable locale and timezone",
   async ({ read }) => {

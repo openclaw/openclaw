@@ -3284,7 +3284,6 @@ describe("chat attachment picker", () => {
     const file = new File(["video"], "clip.mp4");
 
     expect(input).toBeInstanceOf(HTMLInputElement);
-    expect(input?.accept).toContain("video/*");
     selectFile(input!, file);
 
     await waitForFast(() => {

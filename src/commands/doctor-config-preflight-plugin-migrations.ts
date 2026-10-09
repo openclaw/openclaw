@@ -76,15 +76,13 @@ export function createDoctorPluginMigrationPreparation(params: {
       }),
     );
     expectedPending = structuredClone(deferred);
-    for (const entry of deferred) {
-      previousById.set(entry.pluginId, entry);
-    }
+    remember();
     previousLoaded = true;
   };
   let prepared = false;
   const completedIds = new Set<string>();
   const reported = new Map<string, LegacyStateMigrationStepReceipt>();
-  let statelessPluginIds = new Set<string>();
+  let statelessPlugins = new Map<string, string | undefined>();
   let runtimePluginAliases = new Set<string>();
   let unavailablePluginIds = new Set<string>();
   let replacementPluginIds: Readonly<Record<string, string>> = {};
@@ -105,7 +103,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     if (!inspection) {
       return;
     }
-    statelessPluginIds = new Set(inspection.statelessPluginIds);
+    statelessPlugins = new Map(inspection.statelessPlugins.map(({ id, version }) => [id, version]));
     runtimePluginAliases = new Set(inspection.runtimePluginAliases);
     unavailablePluginIds = new Set(inspection.unavailablePluginIds);
     replacementPluginIds = inspection.replacementPluginIds ?? {};
@@ -194,7 +192,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       previousById.clear();
       deferred = error.pending;
       completedIds.clear();
-      statelessPluginIds.clear();
+      statelessPlugins.clear();
       runtimePluginAliases.clear();
       unavailablePluginIds.clear();
       replacementPluginIds = {};
@@ -285,6 +283,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         sourceSnapshot?.sourceConfigBeforeMigrations ?? sourceSnapshot?.sourceConfig;
       const settlements: NonNullable<DeferredPluginMigrationRecordInput["settlements"]>[number][] =
         [];
+      const warnings: string[] = [];
       const resolvedPluginIds = [...previousById.values()]
         .filter((plugin) => {
           if (completedIds.has(plugin.pluginId)) {
@@ -333,19 +332,24 @@ export function createDoctorPluginMigrationPreparation(params: {
           if (inspectedStatelessPluginIds.has(plugin.pluginId)) {
             return true;
           }
+          if (statelessPlugins.has(plugin.pluginId)) {
+            const reason = `Plugin "${plugin.pluginId}" version "${statelessPlugins.get(plugin.pluginId) ?? "unknown"}": no plugin migration contract. No migration ran; existing data and settings have been kept.`;
+            settlements.push({ pluginId: plugin.pluginId, status: "completed", reason });
+            warnings.push(reason);
+            return true;
+          }
           if (plugin.requiresDoctorInspection) {
             return false;
           }
           // A runtime name has no plugin-owned inputs; the old collector could retain the
           // shared session locator even when no plugin migration existed for that name.
           return (
-            statelessPluginIds.has(plugin.pluginId) ||
-            (runtimePluginAliases.has(plugin.pluginId) &&
-              !plugin.validationExcludedPaths?.length &&
-              (plugin.configPaths ?? []).every(
-                (segments) =>
-                  segments.length === 2 && segments[0] === "session" && segments[1] === "store",
-              ))
+            runtimePluginAliases.has(plugin.pluginId) &&
+            !plugin.validationExcludedPaths?.length &&
+            (plugin.configPaths ?? []).every(
+              (segments) =>
+                segments.length === 2 && segments[0] === "session" && segments[1] === "store",
+            )
           );
         })
         .map((plugin) => plugin.pluginId);
@@ -423,8 +427,11 @@ export function createDoctorPluginMigrationPreparation(params: {
       if (settlements.length > 0) {
         params.report({
           changes: [],
-          warnings: [],
-          notices: settlements.map((entry) => `Plugin "${entry.pluginId}": ${entry.reason}`),
+          warnings,
+          warningDisposition: "recoverable",
+          notices: settlements
+            .filter((entry) => !statelessPlugins.has(entry.pluginId))
+            .map((entry) => `Plugin "${entry.pluginId}": ${entry.reason}`),
         });
       }
       for (const plugin of pending) {

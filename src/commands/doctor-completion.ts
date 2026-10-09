@@ -159,10 +159,6 @@ export function shellCompletionStatusToRepairEffects(
   return effects;
 }
 
-type DoctorCompletionOptions = {
-  nonInteractive?: boolean;
-};
-
 /**
  * Repairs shell completion setup when doctor runs interactively.
  *
@@ -171,26 +167,20 @@ type DoctorCompletionOptions = {
  */
 export async function doctorShellCompletion(
   prompter: DoctorPrompter,
-  options: DoctorCompletionOptions = {},
+  options: { nonInteractive?: boolean } = {},
 ): Promise<void> {
   const status = await checkShellCompletionStatus(CLI_NAME);
   const regenerate = !status.usesSlowPattern && status.profileInstalled;
+  const [finding] = shellCompletionStatusToHealthFindings(status);
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
-  if (status.usesSlowPattern) {
+  if (finding) {
     note(
-      `Your ${status.shell} profile uses slow dynamic completion (source <(...)).\nUpgrading to cached completion for faster shell startup...`,
-      "Shell completion",
-    );
-  } else if (status.profileInstalled) {
-    if (status.cacheExists) {
-      return;
-    }
-    note(
-      `Shell completion is configured in your ${status.shell} profile but the cache is missing.\nRegenerating cache...`,
+      `${finding.message}\n${status.usesSlowPattern ? "Upgrading to cached completion for faster shell startup..." : "Regenerating cache..."}`,
       "Shell completion",
     );
   } else if (
+    status.profileInstalled ||
     options.nonInteractive ||
     !(await prompter.confirm({
       message: `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
