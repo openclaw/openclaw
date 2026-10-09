@@ -40,7 +40,9 @@ operation identity and a monotonically increasing commit sequence, so identical
 successive commits remain distinct and duplicate or older deliveries cannot
 restore prior facts. Native settlement and result delivery remain separate:
 retained commit evidence survives a lost reply, while missing or conflicting
-evidence stays unknown. Unknown writes are never automatically repeated.
+evidence stays unknown. A confirmed identity mutation still notifies lifecycle
+observers when native settlement is unknown; retained read facts remain fenced.
+Unknown writes are never automatically repeated.
 
 This is a scoped completeness contract, not global writer certification. Session
 transcript/context coverage, conversation and plugin-state writers, approvals,

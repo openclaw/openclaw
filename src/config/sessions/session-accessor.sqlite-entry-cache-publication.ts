@@ -498,10 +498,9 @@ export function retainSessionEntryWorkerPublication(params: {
       const initialization =
         receipt?.kind === "session-transcript-initialized" ? receipt : undefined;
       const current = (sessionKey: string) => !owner.superseded.has(sessionKey);
-      const known = (sessionKey: string) =>
-        !unknown &&
-        replacement !== undefined &&
-        isSessionEntryReplacementFactKnown(replacement, sessionKey);
+      const hasCommittedFact = (sessionKey: string) =>
+        replacement !== undefined && isSessionEntryReplacementFactKnown(replacement, sessionKey);
+      const known = (sessionKey: string) => !unknown && hasCommittedFact(sessionKey);
       const currentIdentity = (sessionKey: string) =>
         isSessionEntryReplacementIdentityCurrent(owner, replacement, sessionKey);
       // A later native metadata write cannot restore membership omitted by an alias move.
@@ -706,13 +705,18 @@ export function retainSessionEntryWorkerPublication(params: {
           );
         }
         sessionChanges.emitBatch(changes);
-        return replacement && !unknown
+        // Unknown settlement fences retained facts, not an acknowledged identity mutation.
+        return replacement
           ? {
               previous: new Map(
-                [...replacement.previous].filter(([key]) => known(key) && currentIdentity(key)),
+                [...replacement.previous].filter(
+                  ([key]) => hasCommittedFact(key) && currentIdentity(key),
+                ),
               ),
               current: new Map(
-                [...replacement.current].filter(([key]) => known(key) && currentIdentity(key)),
+                [...replacement.current].filter(
+                  ([key]) => hasCommittedFact(key) && currentIdentity(key),
+                ),
               ),
               prepared,
             }

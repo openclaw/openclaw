@@ -100,7 +100,7 @@ it.each(["fresh", "replay"])(
 );
 
 it.each(["worker", "native"] as const)(
-  "records a new Goal's committed store before a %s postcommit failure",
+  "retains a new Goal's committed store through a %s postcommit failure",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = {
@@ -111,7 +111,7 @@ it.each(["worker", "native"] as const)(
       };
       const failure = new Error("synthetic postcommit failure");
       const sourceCommitted = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>();
-      await expect(
+      const persistence = expect(
         withSessionTranscriptSourcePublication(scope, sourceCommitted, () =>
           persistSessionTranscriptTurn(scope, {
             expectedSessionId: scope.sessionId,
@@ -157,7 +157,12 @@ it.each(["worker", "native"] as const)(
               : {}),
           }),
         ),
-      ).rejects.toBe(failure);
+      );
+      if (writer === "worker") {
+        await persistence.rejects.toBe(failure);
+      } else {
+        await persistence.resolves.toMatchObject({ appendedCount: 1 });
+      }
       const database = openOpenClawAgentDatabase({
         agentId: scope.agentId,
         path: scope.storePath,

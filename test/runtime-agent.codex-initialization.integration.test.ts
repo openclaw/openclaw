@@ -381,7 +381,9 @@ describe("Codex initialization through the registered session deletion owner", (
           );
         }
         expect(linkGrantReads).toBe(0);
-        expect(result).toMatchObject({ status: "failed" });
+        expect(result).toMatchObject({
+          status: failure === "readiness publication" ? "created" : "failed",
+        });
         const identity = {
           kind: "session" as const,
           agentId: "main",
