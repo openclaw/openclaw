@@ -166,11 +166,11 @@ describe("Dockerfile", () => {
 
   it("uses the Docker target platform for both frozen installs", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
-    const installs = dockerfile.match(/^RUN .*pnpm install[^\n]+/gm) ?? [];
+    const installs = dockerfile.match(/^RUN .*pnpm(?: "\$@")? install[^\n]+/gm) ?? [];
 
     expect(installs).toHaveLength(2);
     for (const install of installs) {
-      expect(install).toContain("pnpm install --frozen-lockfile");
+      expect(install).toMatch(/pnpm(?: "\$@")? install --frozen-lockfile/);
       expect(install).toContain("--config.supportedArchitectures.os=linux");
       expect(install).toContain(
         "--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"",
@@ -208,11 +208,12 @@ describe("Dockerfile", () => {
 
     const workspaceDeps = dockerfile.slice(workspaceDepsStart, workspaceDepsEnd);
     const extractionIndex = workspaceDeps.indexOf(
-      'RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}"',
+      'RUN mkdir -p /out/packages /out/examples "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}"',
     );
     const inputCopies = [
       "COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs",
       "COPY packages /tmp/packages",
+      "COPY examples /tmp/examples",
       "COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}",
     ];
 
@@ -227,7 +228,7 @@ describe("Dockerfile", () => {
 
   it("copies install workspace manifests before pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.search(/pnpm(?: "\$@")? install --frozen-lockfile/);
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
     const prepareIndex = dockerfile.indexOf("scripts/prepare-git-hooks.mjs");
     const distImportHelperIndex = dockerfile.indexOf(
@@ -239,18 +240,25 @@ describe("Dockerfile", () => {
     const extensionManifestIndex = dockerfile.indexOf(
       "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
     );
+    const exampleManifestIndex = dockerfile.indexOf(
+      "COPY --from=workspace-deps /out/examples/ ./examples/",
+    );
 
     expect(postinstallIndex).toBeGreaterThan(-1);
     expect(prepareIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
-    expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
+    expect(exampleManifestIndex).toBeGreaterThan(-1);
+    expect(dockerfile).toContain(
+      'for manifest in /tmp/packages/*/package.json /tmp/examples/*/package.json "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}"/*/package.json',
+    );
     expect(dockerfile).toContain(
       'node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS"',
     );
     expect(dockerfile).toContain("done < /tmp/openclaw-workspace-plugin-dirs");
-    expect(dockerfile).toContain(`if [ -f "$ext_dir/package.json" ]; then`);
+    expect(dockerfile).toContain('[ -f "$manifest" ] || continue');
+    expect(dockerfile).toContain('cp "$manifest" "/out/$relative"');
     expect(dockerfile).toContain(
       "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs",
     );
@@ -259,6 +267,7 @@ describe("Dockerfile", () => {
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);
+    expect(exampleManifestIndex).toBeLessThan(installIndex);
   });
 
   it("keeps validated plugin selection outside the build-context copy destination", async () => {
@@ -440,7 +449,10 @@ describe("Dockerfile", () => {
       const inputs = stages.get("dependency-inputs");
       expect(inputs?.parent).toBe("${OPENCLAW_NODE_BOOKWORM_IMAGE}");
       expect(inputs?.body).not.toMatch(/pnpm install|COPY \. \./);
-      expect(production?.body).toContain("pnpm install --frozen-lockfile --prod");
+      expect(production?.body).toContain('pnpm "$@" install --frozen-lockfile --prod');
+      expect(production?.body).toContain("set -- --filter . --filter ./ui --filter './packages/*'");
+      expect(production?.body).toContain('--filter "./${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"');
+      expect(production?.body).toContain("done < /tmp/openclaw-workspace-plugin-dirs");
       expect(production?.body).not.toMatch(/--ignore-scripts|COPY .*node_modules/);
       expect(dockerfile).not.toContain("pnpm prune");
 
@@ -601,7 +613,7 @@ describe("Dockerfile", () => {
 
   it("keeps package manager metadata in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
-    const installProd = "pnpm install --frozen-lockfile --prod";
+    const installProd = 'pnpm "$@" install --frozen-lockfile --prod';
     const finalWorkspaceCopy =
       "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
