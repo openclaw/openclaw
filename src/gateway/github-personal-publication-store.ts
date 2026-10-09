@@ -154,7 +154,12 @@ export function claimPersonalGitHubPublication(
         throw new Error("My GitHub publication execution changed.");
       }
       stageGitHubPublicationRow(db, "personal", updated);
-      return updated;
+      return {
+        ...updated,
+        status: "publishing",
+        gateway_instance_id: instanceId,
+        execution_id: executionId,
+      };
     },
     undefined,
     { operationLabel: "github-personal-publication.claim" },

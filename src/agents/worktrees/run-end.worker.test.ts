@@ -30,6 +30,7 @@ import {
   readLiveRegistryWorktreeByOwner,
   readRegistryWorktree,
 } from "./registry-read.js";
+import { worktreeGcRevision } from "./registry-read.kernel.js";
 import { deferWorktreeCleanup, retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   abortWorktreeRemovalRow,
@@ -524,19 +525,31 @@ it("preserves retirement commits when combined facts or the recovery result exce
     return result;
   });
   try {
-    // The command stays small: branch is persisted fixture data, not an input to retirement.
+    // The command stays small: large values are persisted fixture data, not retirement inputs.
     for (const bytes of [
       SQLITE_WORKER_MAX_MESSAGE_BYTES / 2 + 1024,
       SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024,
     ]) {
+      const combined = bytes < SQLITE_WORKER_MAX_MESSAGE_BYTES;
       database.db
-        .prepare("UPDATE worktrees SET branch = ?, removed_at = NULL WHERE id = ?")
-        .run("x".repeat(bytes), observed.id);
+        .prepare(
+          "UPDATE worktrees SET branch = ?, gc_protection_json = ?, removed_at = NULL WHERE id = ?",
+        )
+        .run(
+          combined ? observed.branch : "x".repeat(bytes),
+          combined
+            ? JSON.stringify({
+                revision: worktreeGcRevision({ ...observed, removedAt: 2 }),
+                reason: "x".repeat(bytes),
+              })
+            : null,
+          observed.id,
+        );
       publications.length = 0;
       const retirement = retireMissingRegistryWorktree(env, observed, 2);
-      if (bytes < SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+      if (combined) {
         const result = await retirement;
-        expect(result.record?.branch.length).toBe(bytes);
+        expect(result.record?.gcProtection?.length).toBe(bytes);
       } else {
         await expect(retirement).rejects.toThrow(
           "retirement committed but its result is unavailable",
