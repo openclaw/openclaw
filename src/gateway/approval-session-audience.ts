@@ -93,7 +93,7 @@ function resolveApprovalSessionAudience(
         ? "kind" in binding
           ? (binding.assertCurrent(), undefined)
           : topology?.entries
-              .find((source) => source.agentId === target.agentId)
+              .find((candidate) => candidate.agentId === target.agentId)
               ?.facts.readSharing(sessionKey)?.entry
         : loadSessionEntryReadOnly({
             ...target,
@@ -151,7 +151,9 @@ export async function resolveApprovalSessionAudienceWithFallback(
   binding?.admissionSignal?.throwIfAborted();
   claim?.assertCurrent();
   topology?.assertCurrent();
-  if (binding && "kind" in binding) binding.assertCurrent();
+  if (binding && "kind" in binding) {
+    binding.assertCurrent();
+  }
   try {
     return resolveApprovalSessionAudience(
       getRuntimeConfig(),

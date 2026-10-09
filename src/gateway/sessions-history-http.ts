@@ -441,7 +441,7 @@ async function serveAuthorizedSessionHistory(
     cursor,
     snapshot: historySnapshot,
   });
-  const streamClosed = createDeferredCore<void>();
+  const streamClosed = createDeferredCore();
   let streamStopped = false;
   let streamQueue = Promise.resolve();
   let pendingRefresh: (() => Promise<void>) | undefined;

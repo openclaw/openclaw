@@ -13,7 +13,7 @@ import type { loadGatewaySessionEntry } from "./session-utils-store.js";
 
 export type NodeEventSessionSource = {
   loaded: ReturnType<typeof loadGatewaySessionEntry>;
-  assertCurrent(): void;
+  assertCurrent(this: void): void;
   pending: Promise<unknown>[];
 };
 
@@ -113,8 +113,8 @@ export async function withNodeEventSessionSource(
         },
       );
     } finally {
-      for (let index = 0; index < pending.length; index += 1) {
-        await Promise.allSettled([pending[index]]);
+      for (const work of pending) {
+        await Promise.allSettled([work]);
       }
     }
   });

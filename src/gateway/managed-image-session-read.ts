@@ -124,23 +124,23 @@ export async function withManagedImageSessionRead<T>(
 ): Promise<T | null> {
   const { cfg, sessionKey, agentId, stateDir } = params;
   params.assertCurrent();
-  const scope = {
+  const incognitoScope = {
     agentId,
     sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(sessionKey),
     storePath: cfg.session?.store,
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   };
-  const binding = captureIncognitoSessionSource(scope);
+  const binding = captureIncognitoSessionSource(incognitoScope);
   if (binding) {
     return withIncognitoSessionEntry(
       binding,
-      scope.sessionKey,
+      incognitoScope.sessionKey,
       params.assertCurrent,
       async (entry, assertCurrent) =>
         entry && !("kind" in binding)
           ? consume(
               {
-                ...scope,
+                ...incognitoScope,
                 storePath: binding.actor.path,
                 sessionEntry: entry,
                 sessionId: entry.sessionId,

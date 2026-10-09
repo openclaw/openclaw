@@ -168,8 +168,11 @@ export async function handleChannelAvatarHttpRequest(
       requestAuth.assertCurrent();
       assertSourceCurrent();
     };
-    return withIncognitoSessionEntry(source, sessionKey, assertCurrent, (entry, assertCurrent) =>
-      serve(sessionDeliveryOrigin(entry)?.avatar, assertCurrent),
+    return withIncognitoSessionEntry(
+      source,
+      sessionKey,
+      assertCurrent,
+      (entry, assertReadCurrent) => serve(sessionDeliveryOrigin(entry)?.avatar, assertReadCurrent),
     );
   }
   let reference: string | undefined;

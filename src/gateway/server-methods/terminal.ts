@@ -188,7 +188,9 @@ export async function openTerminalSession(
             expectedSessionId: read.entry?.sessionId,
           },
         );
-        if (error) throw new Error(error);
+        if (error) {
+          throw new Error(error);
+        }
       };
       read.snapshot.assertCurrent();
       return openTerminalSessionWithSource(opts, request, { entry: read.entry, assertCurrent });

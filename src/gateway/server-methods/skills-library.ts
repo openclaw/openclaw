@@ -183,10 +183,10 @@ export async function activateLibrarySelection(
 }
 
 async function selectedSession(options: SkillLibraryRequestOwner, sessionKey: string) {
-  const cfg = options.context.getRuntimeConfig();
+  const sourceCfg = options.context.getRuntimeConfig();
   const binding = captureIncognitoSessionBinding({ sessionKey });
   const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, sessionKey, true);
-  const assertRouting = captureSessionMutationRouting(cfg);
+  const assertRouting = captureSessionMutationRouting(sourceCfg);
   const resolve = (): SessionSharingTarget => {
     const cfg = options.context.getRuntimeConfig();
     assertRouting(cfg);

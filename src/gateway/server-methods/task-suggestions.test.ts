@@ -170,7 +170,7 @@ describe("task suggestion gateway methods", () => {
         }
         if (roleName === "restricted") {
           const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
-          for (const mode of ["worktree", "local", "cloud"] as const) {
+          for (const mode of ["worktree", "local", "cloud", "session"] as const) {
             const accepted = await request("taskSuggestions.accept", { taskId, mode });
             expect(accepted.response?.[2], mode).toMatchObject({
               code: "FORBIDDEN",
@@ -179,9 +179,9 @@ describe("task suggestion gateway methods", () => {
           }
           expect(createSession).not.toHaveBeenCalled();
           expect(mocks.handleChatSend).not.toHaveBeenCalled();
-          const accepted = await request("taskSuggestions.accept", { taskId, mode: "session" });
-          expect(accepted.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
-          expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+          expect((await request("taskSuggestions.list")).response?.[1]).toMatchObject({
+            suggestions: [{ id: taskId }],
+          });
           return;
         }
         const rejected = await request("taskSuggestions.accept", { taskId, mode: "session" });

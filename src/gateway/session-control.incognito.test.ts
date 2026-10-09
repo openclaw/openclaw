@@ -10,26 +10,34 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import * as chatSend from "./server-methods/chat-send-handler.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
+import { sessionDeleteHandlers } from "./server-methods/sessions-delete.js";
 import { sessionGoalHandlers } from "./server-methods/sessions-goal.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { skillsLibraryHandlers } from "./server-methods/skills-library.js";
+import { taskSuggestionsHandlers } from "./server-methods/task-suggestions.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlers,
   RespondFn,
+  SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
+import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
@@ -325,4 +333,120 @@ it("attaches actor skill pins for the next turn and refuses a detached revision"
       expect.objectContaining({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }),
     );
   });
+});
+
+it("restores a refused actor task suggestion and retains accepted chat authority after its ACK", async () => {
+  const sessionKey = "agent:main:dashboard:incognito-task-rollback";
+  const entry = {
+    sessionId: "task-rollback",
+    updatedAt: 1,
+    lifecycleRevision: "first",
+    incognito: true as const,
+  };
+  await actor.sessions.create(authority, { sessionKey, entry });
+  const originalActors = captureOpenClawAgentDatabaseExecution
+    .listIncognito(env)
+    .map((owner) => owner.identity.incarnation);
+  let refuse = true;
+  let acceptedAuthority: SessionMutationAuthorization | undefined;
+  const delivery = vi.spyOn(chatSend, "handleChatSend").mockImplementation(async (options) => {
+    const resolved = options.sessionMutationAuthorization
+      ? { authorization: options.sessionMutationAuthorization, error: null }
+      : resolveSessionMutationAuthorization({
+          client: options.client,
+          context: options.context,
+          method: "chat.send",
+          requestParams: options.params,
+        });
+    assert(!resolved.error);
+    const chatAuthority = withSessionMutationCommitGuard(
+      resolved.authorization,
+      options.sessionMutationCommitGuard,
+      undefined,
+    );
+    assert(chatAuthority);
+    const prepared = await prepareSessionSourceAuthority(chatAuthority.assertCurrent);
+    try {
+      prepared.assertCurrent();
+      if (refuse) {
+        options.respond(false, undefined, {
+          code: "UNAVAILABLE",
+          message: "delivery refused before admission",
+        });
+      } else {
+        acceptedAuthority = chatAuthority;
+        options.respond(true, { runId: "accepted-task", status: "started" });
+      }
+    } finally {
+      await prepared.release?.();
+    }
+  });
+  const deletion = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
+  const host = observeHostDataSql();
+  try {
+    await withIncognitoSessionActor(actor, async () => {
+      const created = await invoke(taskSuggestionsHandlers, "taskSuggestions.create", {
+        title: "Follow up",
+        prompt: "Continue the synthetic task",
+        tldr: "Synthetic task",
+        cwd: process.cwd(),
+        sessionKey,
+        agentId: "main",
+      });
+      expect(created.mock.calls).toEqual([
+        [true, expect.objectContaining({ taskId: expect.any(String) }), undefined],
+      ]);
+      const taskId = (created.mock.calls[0]![1] as { taskId: string }).taskId;
+      const rejected = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
+        taskId,
+        mode: "session",
+      });
+      expect(rejected.mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          expect.objectContaining({ message: "delivery refused before admission" }),
+        ],
+      ]);
+      const restored = await invoke(taskSuggestionsHandlers, "taskSuggestions.list", {
+        sessionKey,
+      });
+      expect(restored.mock.calls).toEqual([
+        [true, { suggestions: [expect.objectContaining({ id: taskId })] }, undefined],
+      ]);
+      expect((await actor.sessions.read(authority, { sessionKey })).entry?.sessionId).toBe(
+        entry.sessionId,
+      );
+      expect(deletion).not.toHaveBeenCalled();
+      refuse = false;
+      const accepted = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
+        taskId,
+        mode: "session",
+      });
+      expect(accepted.mock.calls).toEqual([[true, { taskId, key: sessionKey }, undefined]]);
+      assert(acceptedAuthority);
+      // Detached chat work prepares this same authority after the task RPC has acknowledged.
+      const forwarded = await prepareSessionSourceAuthority(acceptedAuthority.assertCurrent);
+      try {
+        forwarded.assertCurrent();
+      } finally {
+        await forwarded.release?.();
+      }
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath: actor.path },
+        { ...entry, lifecycleRevision: "replacement" },
+      );
+      expect(() => acceptedAuthority!.assertCurrent()).toThrow();
+      expect(
+        captureOpenClawAgentDatabaseExecution
+          .listIncognito(env)
+          .map((owner) => owner.identity.incarnation),
+      ).toEqual(originalActors);
+    });
+    expect(host.queries).toEqual([]);
+  } finally {
+    host.restore();
+    deletion.mockRestore();
+    delivery.mockRestore();
+  }
 });

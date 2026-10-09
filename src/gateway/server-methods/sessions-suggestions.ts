@@ -227,8 +227,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         agentId: query.agentId,
       });
       const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, query.key, true);
-      while (!binding && projection.needsMembershipPreparation()) {
-        await projection.prepareMembership();
+      if (!binding) {
+        while (projection.needsMembershipPreparation()) {
+          await projection.prepareMembership();
+        }
       }
       let selected: ReturnType<typeof readCollaborationTarget> = undefined;
       const readCurrent = (read: Pick<SessionRowReadView, "describe"> = projection) => {
@@ -546,8 +548,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       agentId: query.agentId,
     });
     const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, query.key, true);
-    while (!binding && projection.needsMembershipPreparation()) {
-      await projection.prepareMembership();
+    if (!binding) {
+      while (projection.needsMembershipPreparation()) {
+        await projection.prepareMembership();
+      }
     }
     const readTarget = (read?: Pick<SessionRowReadView, "describe">) =>
       readCollaborationTarget(projection, query, read, actorFacts);

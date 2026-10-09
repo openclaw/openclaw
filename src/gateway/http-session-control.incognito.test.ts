@@ -50,7 +50,9 @@ vi.mock("./http-utils.js", async (original) => {
     operatorScopes: ["operator.admin"],
     hasCurrentClientAuthority: () => runtime.current,
     assertCurrent() {
-      if (!runtime.current) throw new Error("Request revoked");
+      if (!runtime.current) {
+        throw new Error("Request revoked");
+      }
     },
   });
   return {
@@ -124,13 +126,21 @@ const server = createServer((req, res) => {
       cfg: runtime.cfg,
       auth: { mode: "token" as const, token: "synthetic", allowTailscale: false },
     };
-    if (await handleSessionHistoryHttpRequest(req, res, options)) return;
-    if (await handleSessionKillHttpRequest(req, res, options)) return;
-    if (await handleChannelAvatarHttpRequest(req, res, options)) return;
+    if (await handleSessionHistoryHttpRequest(req, res, options)) {
+      return;
+    }
+    if (await handleSessionKillHttpRequest(req, res, options)) {
+      return;
+    }
+    if (await handleChannelAvatarHttpRequest(req, res, options)) {
+      return;
+    }
     res.writeHead(404).end();
   };
   lastHandled = (bound ? withIncognitoSessionBinding({ actor }, handle) : handle()).catch(() => {
-    if (!res.headersSent) res.writeHead(403);
+    if (!res.headersSent) {
+      res.writeHead(403);
+    }
     res.end();
   });
 });
@@ -146,7 +156,9 @@ beforeAll(async () => {
   assert(opened);
   actor = opened;
   portClaim = await acquireTestPortBlock({ offsets: [0] });
-  await new Promise<void>((resolve) => server.listen(portClaim.port, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(portClaim.port, "127.0.0.1", resolve);
+  });
   const address = server.address();
   assert(address && typeof address !== "string");
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -166,7 +178,9 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   await lastHandled;
   await portClaim?.release();
   await actor?.close();

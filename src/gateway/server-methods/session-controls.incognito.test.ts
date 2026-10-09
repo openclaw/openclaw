@@ -37,9 +37,9 @@ import { createTerminalLaunchPolicy } from "../terminal/launch.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { systemHandlers } from "./system.js";
 import { openTerminalSession } from "./terminal.js";
-import { toolsEffectiveInventoryMocks } from "./tools-effective.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+const { toolsEffectiveInventoryMocks } = await import("./tools-effective.test-support.js");
 const { testing, toolsEffectiveHandlers } = await import("./tools-effective.js");
 
 const { cfg, heartbeat, prepareRegistry, ingress } = vi.hoisted(() => ({
@@ -146,7 +146,9 @@ it.each([false, true])(
             entered.promise,
             pending.then(() => {
               const response = vi.mocked(options.respond).mock.calls[0];
-              if (response?.[2]) throw new Error(response[2].message);
+              if (response?.[2]) {
+                throw new Error(response[2].message);
+              }
             }),
             "Tool inventory handler settled before catalogue preparation",
           );
@@ -536,7 +538,9 @@ it.each(["actor", "native"] as const)(
           },
         ),
       );
-      if (host) expect(host.queries).toEqual([]);
+      if (host) {
+        expect(host.queries).toEqual([]);
+      }
     } finally {
       await runtime?.close();
       admission.close();

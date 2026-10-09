@@ -284,18 +284,18 @@ async function prepareCheckDetailsSession(
   context: GatewayRequestContext,
   client: GatewayClient | null,
 ): Promise<ControlUiSessionPrTarget | null> {
-  const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
-  if (!requested.ok) {
+  const sourceCfg = context.getRuntimeConfig();
+  const sourceRequest = resolveRequestedGlobalAgentId(sourceCfg, sessionKey);
+  if (!sourceRequest.ok) {
     return null;
   }
-  const binding = captureIncognitoSessionSource({ sessionKey, agentId: requested.agentId });
+  const binding = captureIncognitoSessionSource({ sessionKey, agentId: sourceRequest.agentId });
   if (binding && "kind" in binding) {
     binding.assertCurrent();
     return null;
   }
   const claim = binding?.actor.sessions.captureCurrent(sessionKey);
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(sourceCfg);
   const preparedEntry =
     binding &&
     (await binding.actor.sessions.read(
