@@ -375,6 +375,10 @@ function openAgentDatabaseBackend(
     databaseOptions: options,
     assertFileIdentity,
     openWriter,
+    readPreparedDatabase() {
+      assertFileIdentity();
+      return expectDefined(database, "Maintenance read requires its admitted native owner");
+    },
     admit,
   });
   const loadMaintenanceOperations = async () => maintenance.operations;
@@ -422,6 +426,7 @@ function openAgentDatabaseBackend(
     "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
+    "session.maintenance.read": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
     "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
@@ -543,6 +548,7 @@ function openAgentDatabaseBackend(
       }
       if (
         command.type === "session.maintenance.prepare" ||
+        command.type === "session.maintenance.read" ||
         command.type === "session.maintenance.metadata"
       ) {
         return Promise.all([preparing, maintenance.prepare()]).then(() => {});

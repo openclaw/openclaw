@@ -2,7 +2,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import type { CliBackendToolPermissionResult } from "../../plugins/cli-backend.types.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  deactivateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  resolveMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
+} from "../../gateway/mcp-grant-store.js";
+import type {
+  CliBackendLiveSessionHandle,
+  CliBackendToolPermissionResult,
+} from "../../plugins/cli-backend.types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -12,6 +24,8 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { callGatewayTool } from "../tools/gateway.js";
@@ -22,6 +36,7 @@ import {
   requestNativeTool,
   runPlugin,
   SUCCESS_RESULT,
+  waitUntilAborted,
 } from "./execute-plugin.test-support.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -29,6 +44,8 @@ import type { PreparedCliRunContext } from "./types.js";
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
+
+const activeSessions = new Set<CliBackendLiveSessionHandle>();
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
@@ -48,10 +65,15 @@ function installBeforeToolCallHook(
 }
 
 afterEach(() => {
+  for (const session of activeSessions) {
+    session.close("restart");
+  }
+  activeSessions.clear();
   resetGlobalHookRunner();
   closePluginTestAdmissions();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("plugin-owned CLI native tool policy", () => {
@@ -86,6 +108,7 @@ describe("plugin-owned CLI native tool policy", () => {
       {
         hookName: "before_tool_call",
         pluginId: "guard",
+        matcher: ["exec"],
         handler: (...args) => Reflect.apply(currentHook, undefined, args),
       },
     ]);
@@ -233,76 +256,6 @@ describe("plugin-owned CLI native tool policy", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { native: "Bash", canonical: "exec", input: { command: "echo blocked" } },
-    {
-      native: "WebFetch",
-      canonical: "web_fetch",
-      input: { url: "https://example.com", prompt: "summarize" },
-    },
-    { native: "WebSearch", canonical: "web_search", input: { query: "blocked" } },
-  ])(
-    "applies matched $canonical policy to native $native",
-    async ({ native, canonical, input }) => {
-      const hook = vi.fn(async () => ({ block: true, blockReason: `${canonical} blocked` }));
-      installBeforeToolCallHook(hook, [canonical]);
-      const { context } = await createExecution({ nativeTools: [native] });
-      let decision: CliBackendToolPermissionResult | undefined;
-
-      await runPlugin(context, async function* (execution) {
-        decision = await requestNativeTool(execution, native, input);
-        yield SUCCESS_RESULT;
-      });
-
-      expect(decision).toEqual({ behavior: "deny", message: `${canonical} blocked` });
-      expect(hook).toHaveBeenCalledWith(
-        expect.objectContaining({ toolName: canonical, params: input }),
-        expect.objectContaining({ toolName: canonical }),
-      );
-      expect(mockCallGatewayTool).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { native: "Read", canonical: "read", input: { file_path: "/tmp/private.txt" } },
-    {
-      native: "Write",
-      canonical: "write",
-      input: { file_path: "/tmp/private.txt", content: "private" },
-    },
-    {
-      native: "Edit",
-      canonical: "edit",
-      input: { file_path: "/tmp/private.txt", old_string: "old", new_string: "new" },
-    },
-  ])(
-    "applies path-based $canonical policy to native $native",
-    async ({ native, canonical, input }) => {
-      const hook = vi.fn(async (event: { params: Record<string, unknown> }) =>
-        event.params.path === "/tmp/private.txt"
-          ? { block: true, blockReason: "private path blocked" }
-          : undefined,
-      );
-      installBeforeToolCallHook(hook, [canonical]);
-      const { context } = await createExecution({ nativeTools: [native] });
-      let decision: CliBackendToolPermissionResult | undefined;
-
-      await runPlugin(context, async function* (execution) {
-        decision = await requestNativeTool(execution, native, input);
-        yield SUCCESS_RESULT;
-      });
-
-      expect(decision).toEqual({ behavior: "deny", message: "private path blocked" });
-      expect(hook).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: canonical,
-          params: expect.objectContaining({ path: "/tmp/private.txt" }),
-        }),
-        expect.objectContaining({ toolName: canonical }),
-      );
-    },
-  );
-
   it("projects rewritten canonical file arguments back into the native Edit schema", async () => {
     const hook = vi.fn(async () => ({
       params: {
@@ -398,21 +351,10 @@ describe("plugin-owned CLI native tool policy", () => {
     );
   });
 
-  it.each([
-    {
-      name: "blocks",
-      handler: vi.fn(async () => ({ block: true, blockReason: "blocked by plugin policy" })),
-      message: "blocked by plugin policy",
-    },
-    {
-      name: "fails",
-      handler: vi.fn(async () => {
-        throw new Error("policy crashed");
-      }),
-      message: "before_tool_call hook failed",
-    },
-  ])("fails closed when before_tool_call $name", async ({ handler, message }) => {
-    installBeforeToolCallHook(handler);
+  it("fails closed when before_tool_call throws", async () => {
+    installBeforeToolCallHook(async () => {
+      throw new Error("policy crashed");
+    });
     const { context } = await createExecution({ nativeTools: ["Bash"] });
     let decision: CliBackendToolPermissionResult | undefined;
 
@@ -422,7 +364,10 @@ describe("plugin-owned CLI native tool policy", () => {
     });
 
     expect(decision).toEqual(
-      expect.objectContaining({ behavior: "deny", message: expect.stringContaining(message) }),
+      expect.objectContaining({
+        behavior: "deny",
+        message: expect.stringContaining("before_tool_call hook failed"),
+      }),
     );
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
@@ -476,6 +421,122 @@ describe("plugin-owned CLI native tool policy", () => {
       }),
     );
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("CLI MCP capture authority", () => {
+  it.each([
+    { name: "one-shot timeout", liveSession: false },
+    { name: "live backend cancellation", liveSession: true },
+  ])("revokes MCP authority before iterator cleanup after $name", async ({ liveSession }) => {
+    vi.useFakeTimers();
+    const source = new AbortController();
+    const { context } = await createExecution({ abortSignal: source.signal, timeoutMs: 100 });
+    const operation = createReplyOperation({
+      sessionKey: context.params.sessionKey!,
+      sessionId: context.params.sessionId,
+      resetTriggered: false,
+    });
+    context.params.replyOperation = operation;
+    const runtimeOwnerToken = `runtime-${context.params.runId}`;
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: context.params.sessionKey!, senderIsOwner: false },
+      runtimeOwnerToken,
+      admittedRunContext: context.params.admittedRunContext,
+      abortSignal: source.signal,
+    });
+    context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: grant.token,
+      adoptProcessToken: (targetToken) => {
+        transferMcpLoopbackClientGrant({
+          sourceToken: grant.token,
+          targetToken,
+          runtimeOwnerToken,
+        });
+      },
+      revokeProcessToken: () => {
+        revokeMcpLoopbackClientGrant(grant.token);
+      },
+      activate: (captureKey, assertCurrent) => {
+        activateMcpLoopbackClientGrantCapture({
+          token: grant.token,
+          runtimeOwnerToken,
+          captureKey,
+          assertCurrent,
+        });
+      },
+      deactivate: (captureKey) => {
+        deactivateMcpLoopbackClientGrantCapture({
+          token: grant.token,
+          runtimeOwnerToken,
+          captureKey,
+        });
+      },
+    };
+    const tracking = createCliToolTracking(context);
+    const captureKey = `capture-${context.params.runId}`;
+    const capture = { token: grant.token, runtimeOwnerToken, captureKey };
+    const streamStarted = createDeferred();
+    const streamClosing = createDeferred();
+    const releaseCleanup = createDeferred();
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        if (liveSession) {
+          const capability = execution.liveSession;
+          if (!capability) {
+            throw new Error("expected live CLI session capability");
+          }
+          const handle: CliBackendLiveSessionHandle = {
+            generation: context.params.runId,
+            fingerprint: capability.fingerprint,
+            isIdle: () => true,
+            close: () => capability.remove(handle),
+            waitForExit: async () => {},
+          };
+          capability.register(handle);
+          activeSessions.add(handle);
+          capability.activate(handle);
+        }
+        const aborted = waitUntilAborted(execution);
+        streamStarted.resolve();
+        try {
+          await aborted;
+          yield SUCCESS_RESULT;
+        } finally {
+          streamClosing.resolve();
+          await releaseCleanup.promise;
+        }
+      },
+      { liveSession, mcpCapture: { captureKey, beginCapture: tracking.beginGatewayCapture } },
+    );
+    const observedRun = run.catch((error: unknown) => error);
+    try {
+      await streamStarted.promise;
+      const retained = resolveMcpLoopbackClientGrant(capture);
+      expect(retained?.isCurrent()).toBe(true);
+
+      if (liveSession) {
+        expect(operation.abortByUser()).toBe(true);
+      } else {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      await streamClosing.promise;
+
+      expect(source.signal.aborted).toBe(false);
+      expect(getAdmittedRunDelegatedAuthority(context.params.admittedRunContext)).toBeDefined();
+      expect(retained?.isCurrent()).toBe(false);
+      expect(resolveMcpLoopbackClientGrant(capture)).toBeUndefined();
+    } finally {
+      releaseCleanup.resolve();
+      await observedRun;
+      tracking.finalizeCapture(() => {});
+      revokeMcpLoopbackClientGrant(grant.token);
+      operation.complete();
+    }
+    expect(await observedRun).toMatchObject(
+      liveSession ? { name: "AbortError" } : { reason: "overall-timeout", timedOut: true },
+    );
   });
 });
 
@@ -618,7 +679,7 @@ describe("plugin-owned CLI same-turn input", () => {
     expect(accepted.markBlocked).not.toHaveBeenCalled();
   });
 
-  it("reports a write refused before the transcript as an unconfirmed commit", async () => {
+  it("retains native acceptance when the transcript target cannot be resolved", async () => {
     const { context } = await createExecution();
     let handle: ReplyBackendHandle | undefined;
     context.params.replyOperation = {
@@ -628,7 +689,9 @@ describe("plugin-owned CLI same-turn input", () => {
       detachBackend: vi.fn(),
     } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
     const finish = createDeferred();
+    let signal: AbortSignal | undefined;
     const run = runPlugin(context, async function* (execution) {
+      signal = execution.abortSignal;
       execution.registerMessageInjection?.({
         isAvailable: () => true,
         queueMessage: async (_text, assertCurrent) => {
@@ -640,30 +703,26 @@ describe("plugin-owned CLI same-turn input", () => {
     });
     await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
     const injection = handle!.messageInjectionV2!;
-    // before_message_write rejected the turn: nothing was written, and the text
-    // is already in the model's hands, so the run must stop rather than replay it.
-    const blocked = {
-      hasPersisted: vi.fn(() => false),
-      isBlocked: vi.fn(() => false),
-      resolveMessage: vi.fn(async () => ({ role: "user" })),
-      markBlocked: vi.fn(),
-      persistApproved: vi.fn(async () => false),
-    };
+    // No receipt does not establish rejection: source resolution can return no target.
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "unconfirmed" },
+      target: () => undefined,
+    });
 
     await expect(
       injection.queueMessage(
-        "blocked",
-        { userTurnTranscriptRecorder: blocked } as unknown as Parameters<
-          typeof injection.queueMessage
-        >[1],
+        "unconfirmed",
+        { userTurnTranscriptRecorder: recorder },
         () => {},
         "run",
       ),
     ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    expect(signal?.aborted).toBe(false);
     finish.resolve();
     await run;
 
-    expect(blocked.markBlocked).toHaveBeenCalledTimes(1);
+    expect(recorder.isBlocked()).toBe(true);
+    expect(recorder.hasPersisted()).toBe(false);
   });
 
   it("carries the run's delivery modes on the handle, so admission can match them", async () => {

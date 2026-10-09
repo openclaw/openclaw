@@ -619,6 +619,12 @@ export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite):
   }
 }
 
+/** Select first ordinary admission without querying or authorizing a connection. */
+export function isSqliteSchemaAdmissionCold(database: DatabaseSync): boolean {
+  const owner = owners.get(database);
+  return Boolean(owner && !owner.admitted && !owner.authorizerActive);
+}
+
 /** Admission retains schema facts; its header validator must stay synchronous and read-free. */
 export function admitSqliteSchema(
   database: DatabaseSync,

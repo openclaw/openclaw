@@ -22,11 +22,12 @@ export async function queueSteeredCliUserTurn(
     if (recorder && !recorder.hasPersisted() && !recorder.isBlocked()) {
       const persisted = await recorder.persistApproved({ cwd });
       if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
-        // The input reached native. A refused transcript write must never replay it.
+        // Native owns the input, but an absent receipt does not prove write rejection.
+        // Suppress outer fallback persistence without canceling independent active work.
         recorder.markBlocked();
         result = {
           transcriptCommit: "unconfirmed",
-          errorMessage: "steered CLI user turn was rejected before the transcript write",
+          errorMessage: "steered CLI user turn transcript commitment could not be confirmed",
         };
       }
     }
@@ -35,7 +36,7 @@ export async function queueSteeredCliUserTurn(
   }
   try {
     // This receipt is terminal even when persistence failed; the registry retains
-    // accepted-input disposition and aborts rather than replaying an unconfirmed turn.
+    // accepted-input disposition without replaying or canceling an unconfirmed turn.
     options?.onQueueSettled?.();
   } catch (error) {
     failure ??= toErrorObject(error, "CLI steering completion observer failed.");

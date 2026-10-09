@@ -236,14 +236,10 @@ export async function handoffUpdateFromGateway(params: {
     installRoot: started.installRoot,
   };
   const target = resolveInstallationTarget(env);
-  const statusCommand = formatInstallationTargetCommand(["openclaw", "update", "status"], target, {
-    env,
-  });
-  const healthCommand = formatInstallationTargetCommand(
-    ["openclaw", "gateway", "status", "--deep"],
-    target,
-    { env },
-  );
+  const formatCommand = (args: string[]) =>
+    formatInstallationTargetCommand(["openclaw", ...args], target, { env });
+  const statusCommand = formatCommand(["update", "status"]);
+  const healthCommand = formatCommand(["gateway", "status", "--deep"]);
   const guidance = `Update is not finished. It will continue in the background so it can restart the Gateway.\nLog: ${started.logPath}\nCheck progress: ${statusCommand}`;
   const result: UpdateRunResult = {
     runId: params.opts.run?.runId,

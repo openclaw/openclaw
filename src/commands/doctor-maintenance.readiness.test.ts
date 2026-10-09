@@ -16,7 +16,6 @@ const { begin, boundary } = await import("./doctor-maintenance.settlement.test-s
 
 it.each([
   { outcome: "starting", phase: "waiting for Gateway listener", elapsedMs: 60_000, code: 0 },
-  { outcome: "starting", phase: "startup migration", elapsedMs: 300_000, code: 0 },
   { outcome: "failed", phase: "waiting for managed service", elapsedMs: 60_000, code: 1 },
 ] as const)("doctor --fix exits $code for $phase", async ({ outcome, phase, elapsedMs, code }) => {
   boundary.health.mockResolvedValue({

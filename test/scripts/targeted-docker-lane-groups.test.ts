@@ -145,10 +145,15 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       [
         ...synthetic.map((scenario) => `openclaw@2026.9.1:${scenario}`),
         "openclaw@2026.9.4:custom-plugin-siblings",
+        "openclaw@2026.9.8:package-publication-recovery",
+        "openclaw@2026.9.9:package-publication-recovery",
+        "openclaw@2026.9.8:package-verification-recovery",
+        "openclaw@2026.9.9:package-verification-recovery",
+        "openclaw@2026.9.7:package-stranded-first-hop",
         ...["2026.9.2", "2026.9.1"].map((baseline) => `openclaw@${baseline}:legacy-operator-state`),
       ].toSorted(),
     );
-    expect(groups).toHaveLength(15);
+    expect(groups).toHaveLength(20);
     expect(
       groups.every(
         (group) => (group.published_upgrade_survivor_scenarios ?? "").split(" ").length === 1,
@@ -190,26 +195,28 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     },
   );
 
-  it("retains the Cartesian product for explicit baseline lists", () => {
-    const baselines = "2026.9.2 2026.9.1";
-    const scenarios = "base legacy-operator-state";
-    const groups = planTargetedDockerLaneGroups({
-      lanes: "published-upgrade-survivor",
-      upgradeSurvivorBaseline: "2026.9.1",
-      upgradeSurvivorBaselines: baselines,
-      upgradeSurvivorScenarios: scenarios,
-    });
-    expect(
-      groups.flatMap(
-        (group) =>
-          expandedPlan(
-            group.docker_lanes,
-            group.published_upgrade_survivor_baselines ?? baselines,
-            group.published_upgrade_survivor_scenarios ?? scenarios,
-          ).scheduledLanes,
-      ),
-    ).toEqual(expandedPlan("published-upgrade-survivor", baselines, scenarios).scheduledLanes);
-  });
+  it.each(["2026.9.2 2026.9.1", "openclaw@latest 2026.9.1 2026.9.2"])(
+    "retains the Cartesian product and unresolved tag order for %s",
+    (baselines) => {
+      const scenarios = "base legacy-operator-state";
+      const groups = planTargetedDockerLaneGroups({
+        lanes: "published-upgrade-survivor",
+        upgradeSurvivorBaseline: "2026.9.1",
+        upgradeSurvivorBaselines: baselines,
+        upgradeSurvivorScenarios: scenarios,
+      });
+      expect(
+        groups.flatMap(
+          (group) =>
+            expandedPlan(
+              group.docker_lanes,
+              group.published_upgrade_survivor_baselines ?? baselines,
+              group.published_upgrade_survivor_scenarios ?? scenarios,
+            ).scheduledLanes,
+        ),
+      ).toEqual(expandedPlan("published-upgrade-survivor", baselines, scenarios).scheduledLanes);
+    },
+  );
 
   it("runs each recorded first-hop source and the fresh candidate edge as separate jobs", () => {
     const firstHopLanes = listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName);
@@ -335,6 +342,7 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         upgradeSurvivorScenarios: "base plugin-deps-cleanup",
       }),
     ).toEqual([
+      { docker_lanes: "plugin-update", label: "plugin-update" },
       { docker_lanes: "doctor-switch", label: "doctor-switch" },
       {
         docker_lanes: "published-upgrade-survivor",
@@ -361,8 +369,50 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         published_upgrade_survivor_scenarios: "plugin-deps-cleanup",
         timeout_minutes: 90,
       },
-      { docker_lanes: "plugin-update", label: "plugin-update" },
     ]);
+  });
+
+  it("admits long update jobs before an expanded scenario matrix without changing coverage", () => {
+    const lanes =
+      "doctor-switch published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update";
+    const baselines = "2026.6.34 2026.8.35 2026.9.7 2026.9.8 2026.9.10";
+    const scenarios = "reported-issues";
+    const groups = planTargetedDockerLaneGroups({
+      lanes,
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenarios,
+    });
+    expect(groups.length).toBeGreaterThan(32);
+    expect(groups.slice(0, 3).map((group) => group.docker_lanes)).toEqual([
+      "update-restart-auth",
+      "plugin-update",
+      "root-managed-vps-upgrade",
+    ]);
+    expect([
+      ...new Set(
+        groups
+          .filter((group) => group.docker_lanes === "published-upgrade-survivor")
+          .map((group) => group.published_upgrade_survivor_baselines),
+      ),
+    ]).toEqual([
+      "openclaw@2026.9.10",
+      "openclaw@2026.9.8",
+      "openclaw@2026.9.7",
+      "openclaw@2026.8.35",
+      "openclaw@2026.6.34",
+    ]);
+    const actual = groups.flatMap((group) =>
+      expandedPlan(
+        group.docker_lanes,
+        group.published_upgrade_survivor_baselines ?? baselines,
+        group.published_upgrade_survivor_scenarios ?? scenarios,
+      ).scheduledLanes.map((lane) => lane.name),
+    );
+    const expected = expandedPlan(lanes, baselines, scenarios).scheduledLanes.map(
+      (lane) => lane.name,
+    );
+    expect(actual.toSorted()).toEqual(expected.toSorted());
+    expect(new Set(actual).size).toBe(actual.length);
   });
 
   it("isolates the weekly mobile and watch scenarios by baseline", () => {
@@ -384,13 +434,6 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     expect(groups).toEqual([
       {
         docker_lanes: "update-migration",
-        label: "update-migration-2026.7.1-scenarios-1",
-        published_upgrade_survivor_baselines: "openclaw@2026.7.1",
-        published_upgrade_survivor_scenarios: "mobile-pairing-reconnect",
-        timeout_minutes: 90,
-      },
-      {
-        docker_lanes: "update-migration",
         label: "update-migration-2026.8.1-scenarios-1",
         published_upgrade_survivor_baselines: "openclaw@2026.8.1",
         published_upgrade_survivor_scenarios: "mobile-pairing-reconnect",
@@ -403,11 +446,18 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         published_upgrade_survivor_scenarios: "watchos-direct-node",
         timeout_minutes: 90,
       },
+      {
+        docker_lanes: "update-migration",
+        label: "update-migration-2026.7.1-scenarios-1",
+        published_upgrade_survivor_baselines: "openclaw@2026.7.1",
+        published_upgrade_survivor_scenarios: "mobile-pairing-reconnect",
+        timeout_minutes: 90,
+      },
     ]);
     expect(plans.flatMap((plan) => plan.scheduledLanes.map((lane) => lane.name))).toEqual([
-      "update-migration-2026.7.1-mobile-pairing-reconnect",
       "update-migration-2026.8.1-mobile-pairing-reconnect",
       "update-migration-2026.8.1-watchos-direct-node",
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
     ]);
     expect(plans.flatMap((plan) => plan.omittedUnsupportedLaneNames)).toEqual([]);
   });
@@ -429,6 +479,27 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       scenarios: "base feishu-channel tilde-log-path legacy-operator-state custom-plugin-siblings",
     },
     { label: "the default baseline", baselines: "", scenarios: "far-reaching" },
+    {
+      label: "one ordinary scenario with recovery",
+      baselines: "2026.9.8 2026.9.9",
+      scenarios: "base package-publication-recovery",
+    },
+    {
+      label: "already selected recovery drivers",
+      baselines: "2026.9.8 2026.9.9",
+      scenarios: "reported-issues",
+    },
+    {
+      label: "recovery-only rows",
+      baselines: "2026.10.1",
+      scenarios:
+        "package-publication-recovery package-verification-recovery package-stranded-first-hop",
+    },
+    {
+      label: "one recovery scenario",
+      baselines: "2026.9.8 2026.9.9",
+      scenarios: "package-publication-recovery",
+    },
   ])("preserves each expanded lane exactly once for $label", ({ baselines, scenarios }) => {
     const lanes = "doctor-switch published-upgrade-survivor update-migration plugin-update";
     const groups = planTargetedDockerLaneGroups({
@@ -447,7 +518,9 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     }));
     const actual = expanded.flatMap(({ plan }) => plan.scheduledLanes);
     const expected = expandedPlan(lanes, baselines, scenarios).scheduledLanes;
-    expect(actual).toEqual(expected);
+    expect(actual.toSorted((left, right) => left.name.localeCompare(right.name))).toEqual(
+      expected.toSorted((left, right) => left.name.localeCompare(right.name)),
+    );
     expect(new Set(actual.map((lane) => lane.name)).size).toBe(actual.length);
     expect(new Set(groups.map((group) => group.label)).size).toBe(groups.length);
     for (const { group, plan } of expanded) {
@@ -490,9 +563,15 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         ),
       );
       const expected = expandedPlan(lanes, baselines, scenarios, targetRoot);
-      expect(expanded.flatMap((plan) => plan.scheduledLanes)).toEqual(expected.scheduledLanes);
-      expect(expanded.flatMap((plan) => plan.omittedUnsupportedLaneNames)).toEqual(
-        expected.omittedUnsupportedLaneNames,
+      expect(
+        expanded
+          .flatMap((plan) => plan.scheduledLanes)
+          .toSorted((left, right) => left.name.localeCompare(right.name)),
+      ).toEqual(
+        expected.scheduledLanes.toSorted((left, right) => left.name.localeCompare(right.name)),
+      );
+      expect(expanded.flatMap((plan) => plan.omittedUnsupportedLaneNames).toSorted()).toEqual(
+        expected.omittedUnsupportedLaneNames.toSorted(),
       );
       for (const plan of expanded) {
         expect(

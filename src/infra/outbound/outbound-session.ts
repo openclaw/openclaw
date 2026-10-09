@@ -124,12 +124,7 @@ function resolveFallbackSession(
   if (!trimmed) {
     return null;
   }
-  const peerKind = inferPeerKind({
-    channel: params.channel,
-    plugin: params.plugin,
-    target: params.target,
-    resolvedTarget: params.resolvedTarget,
-  });
+  const peerKind = inferPeerKind(params);
   const peerId = stripOutboundTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;

@@ -39,6 +39,7 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createLazyPromise,
   createLazyPromiseLoader,
@@ -640,6 +641,10 @@ export function startGatewayEventSubscriptions(params: {
       ?.then((handler) => handler.dispose())
       .catch(() => undefined);
     await sessionLifecyclePersistence.drain();
+    // Terminal persistence can publish further committed transcript updates.
+    while (agentEventDispatches.size > 0) {
+      await Promise.allSettled(agentEventDispatches);
+    }
     await auditRecorder.stop();
   };
 
@@ -649,22 +654,31 @@ export function startGatewayEventSubscriptions(params: {
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    // Share the agent queue so a later cumulative update cannot outrun retirement.
+    // Retire synchronously before later cumulative updates, but retain the wire
+    // projection until this committed row has crossed its async publication path.
     const agentHandler = agentEventHandlerLoader.peek();
-    void dispatchEventHandler<InternalSessionTranscriptUpdate>({
-      loadHandler: agentHandler
-        ? () =>
-            agentHandler
-              .then(
-                (handler) => handler.retireTranscript(evt),
-                () => undefined,
-              )
-              .then(getTranscriptUpdateHandler)
-        : getTranscriptUpdateHandler,
-      event: evt,
-      log: params.log,
-      failureMessage: "Transcript update dispatch failed",
-      context: { sessionKey: evt.sessionKey },
+    const publication = createDeferredCore();
+    const dispatch = runOutsideAsyncWorkScope(() =>
+      dispatchEventHandler<InternalSessionTranscriptUpdate>({
+        loadHandler: agentHandler
+          ? () =>
+              agentHandler
+                .then(
+                  (handler) => handler.retireTranscript(evt, publication.promise),
+                  () => undefined,
+                )
+                .then(getTranscriptUpdateHandler)
+          : getTranscriptUpdateHandler,
+        event: evt,
+        log: params.log,
+        failureMessage: "Transcript update dispatch failed",
+        context: { sessionKey: evt.sessionKey },
+      }),
+    );
+    agentEventDispatches.add(dispatch);
+    void dispatch.then(() => {
+      publication.resolve();
+      agentEventDispatches.delete(dispatch);
     });
   });
 

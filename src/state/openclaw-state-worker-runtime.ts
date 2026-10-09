@@ -72,6 +72,7 @@ export function executeSharedStateCommand(
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
   write: WorkerWriteOperationContext["write"],
+  writeAdmitted: WorkerWriteOperationContext["writeAdmitted"],
   updateRunWriter: () => ExistingOpenClawStateWriter,
 ): ReturnType<OpenClawStateWorkerBackend["execute"]> {
   const stateOptions = () => ({
@@ -79,7 +80,7 @@ export function executeSharedStateCommand(
     env: getSqliteWorkerStateContext().environment,
   });
   if (stateWorkerRegistry.has(command)) {
-    return stateWorkerRegistry.execute(command, { open, write, stateOptions });
+    return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
   }
   if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
     return recordUpdateRunMutationInWorker(

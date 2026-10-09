@@ -55,9 +55,17 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     typeof environment.OPENCLAW_STATE_DIR === "string" &&
     (environment.OPENCLAW_SUPERVISOR_MODE === undefined ||
       environment.OPENCLAW_SUPERVISOR_MODE === "external") &&
-    ((input.command.type === "deliveryQueue.outbound" &&
-      (input.command.id === undefined || typeof input.command.id === "string") &&
-      (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+    ((input.command.type === "meetingTranscripts.export" &&
+      ((input.command.format === "library" &&
+        typeof input.command.selector === "string" &&
+        typeof input.command.includeNotes === "boolean") ||
+        (input.command.format === "artifact" &&
+          isRecord(input.command.session) &&
+          typeof input.command.session.sessionId === "string" &&
+          typeof input.command.session.startedAt === "string"))) ||
+      (input.command.type === "deliveryQueue.outbound" &&
+        (input.command.id === undefined || typeof input.command.id === "string") &&
+        (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
       (input.command.type === "pairing.allowFrom" &&
         isRecord(input.command.input) &&
         typeof input.command.input.channel === "string" &&
@@ -93,6 +101,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.agentId === "string" &&
         typeof input.command.input.afterSequence === "number" &&
         typeof input.command.input.limit === "number") ||
+      (input.command.type === "sessionUpstream.read" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.sessionKey === "string" &&
+        typeof input.command.input.agentId === "string") ||
       (input.command.type === "diagnostic.latest" &&
         isRecord(input.command.input) &&
         typeof input.command.input.scope === "string" &&
@@ -289,6 +301,16 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "userProfiles.catalog" ||
       (input.command.type === "userModelAccounts.links" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userModelAccounts.summary" &&
+        typeof input.command.profileId === "string" &&
+        typeof input.command.authProfileId === "string") ||
+      (input.command.type === "userModelAccounts.selection" &&
+        (input.command.profileId === undefined || typeof input.command.profileId === "string") &&
+        typeof input.command.authProfileId === "string") ||
+      (input.command.type === "userModelAccounts.catalog" &&
+        isRecord(input.command.selection) &&
+        (typeof input.command.selection.profileId === "string" ||
+          typeof input.command.selection.requesterProfileId === "string")) ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         isStringArray(input.command.profileIds)) ||
@@ -325,6 +347,12 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.login === "string")) ||
       (input.command.type === "userProfiles.githubAttribution.resolve" &&
         isStringArray(input.command.profileIds)) ||
+      (input.command.type === "userProfiles.catalogIdentity" &&
+        isRecord(input.command.input) &&
+        ((input.command.input.kind === "source" && isStringArray(input.command.input.profileIds)) ||
+          (input.command.input.kind === "link" &&
+            isStringArray(input.command.input.accountIds) &&
+            isStringArray(input.command.input.owners)))) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
         (Check(UserChannelIdentitySchema, input.command.identity) ||
           (isRecord(input.command.identity) &&

@@ -22,19 +22,15 @@ export function createTerminalOpenDeadline(): TerminalOpenDeadline {
   };
 }
 
-function expireTerminalOpenDeadline(deadline: TerminalOpenDeadline): Error {
-  if (!deadline.controller.signal.aborted) {
-    deadline.controller.abort(new TerminalOpenDeadlineError());
-  }
-  return toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
-}
-
 export async function waitForTerminalOpenDeadline<T>(
   run: () => Promise<T>,
   deadline: TerminalOpenDeadline,
 ): Promise<T> {
   const expire = () => {
-    throw expireTerminalOpenDeadline(deadline);
+    if (!deadline.controller.signal.aborted) {
+      deadline.controller.abort(new TerminalOpenDeadlineError());
+    }
+    throw toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
   };
   const assertCurrent = () => {
     if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {

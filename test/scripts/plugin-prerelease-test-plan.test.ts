@@ -415,7 +415,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
-    expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
+    expect(fixtureServer).toContain(
+      "const versionPath = `${packagePath}/versions/${fixture.version}`;",
+    );
+    expect(fixtureServer).toContain("[`${versionPath}/artifact`, artifactResolverDetail]");
   });
 
   it("forwards validated frozen-target omissions to the selected shard adapters", () => {

@@ -24,16 +24,16 @@ function normalizeAllowFrom(raw: unknown): string[] {
   return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
 
-function readDmAllowFrom(params: {
-  channelName: string;
-  account: ChannelRecord;
-  parent?: ChannelRecord;
-}): string[] {
+function readDmAllowFrom(
+  channelName: string,
+  account: ChannelRecord,
+  parent?: ChannelRecord,
+): string[] {
   return normalizeAllowFrom(
     resolveChannelDmAllowFrom({
-      account: params.account,
-      parent: params.parent,
-      mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
+      account,
+      parent,
+      mode: getDoctorChannelCapabilities(channelName).dmAllowFromMode,
     }),
   );
 }
@@ -105,10 +105,7 @@ function migrateRecord(params: {
   if (params.parent && params.parentHadGroupAllowFrom) {
     return;
   }
-  const ownAllowFrom = readDmAllowFrom({
-    channelName: params.channelName,
-    account: params.account,
-  });
+  const ownAllowFrom = readDmAllowFrom(params.channelName, params.account);
   if (
     params.parent &&
     ownAllowFrom.length === 0 &&
@@ -116,7 +113,7 @@ function migrateRecord(params: {
   ) {
     return;
   }
-  const allowFrom = readDmAllowFrom(params);
+  const allowFrom = readDmAllowFrom(params.channelName, params.account, params.parent);
   if (allowFrom.length === 0) {
     return;
   }

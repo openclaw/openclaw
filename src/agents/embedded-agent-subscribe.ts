@@ -322,21 +322,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     streamRendering.resetAssistantMessageState(0);
   };
 
-  // Re-filter the full raw buffer. Reusing live scanner state would hide the
-  // visible prefix when timeout interrupts an open <think> or <final> block.
-  const finalizeFlushedAssistantText = (text: string) =>
-    stripDowngradedToolCallText(
-      streamRendering.stripBlockTags(
-        text,
-        {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        { final: true },
-      ),
-    ).trimEnd();
-
   // Settlement calls this only for the final, failure-free run-budget terminal.
   // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
   // context; replace live chunks instead of appending cumulative text twice.
@@ -349,7 +334,18 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       state.hasFlushedPartialText = false;
       return;
     }
-    const visibleText = finalizeFlushedAssistantText(text);
+    // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
+    const visibleText = stripDowngradedToolCallText(
+      streamRendering.stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
     if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
       replyDelivery.replaceCurrentAssistantText(visibleText);
     } else if (visibleText) {

@@ -9,6 +9,7 @@ import {
   sqliteTranscriptPayloadColumns,
   transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { readDatabase } from "./observations.mjs";
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -64,8 +65,7 @@ function readSchemas(stateDir) {
         };
       }
       // Never import a runtime store: the observer must not perform a migration.
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
+      return readDatabase(databasePath, (database) => {
         const userVersion = database.prepare("PRAGMA user_version").get().user_version;
         return {
           kind: entry.kind,
@@ -73,9 +73,7 @@ function readSchemas(stateDir) {
           userVersion,
           contentVersion: readContentVersion(database, entry.kind, userVersion),
         };
-      } finally {
-        database.close();
-      }
+      });
     });
 }
 

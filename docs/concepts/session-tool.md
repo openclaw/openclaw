@@ -253,6 +253,9 @@ An accepted result keeps target admission separate from reply delivery.
 `delivery.status` describes only the later reply delivery as `pending` or `skipped`.
 An inline reply has `delivery.status: "skipped"` and starts no additional requester turn.
 Neither field is a target-completion receipt.
+New turns sent to a busy chat session wait for its active reply and delivery to
+finish. They keep their order behind other agent commands; cancellation or the
+receiver's execution deadline can withdraw a waiting turn before it runs.
 Default zero-wait sends to your own running child acknowledge queue admission,
 like `mode: "steer"`; they do not confirm transcript persistence or model consumption
 and are not restart-durable. They produce no separate completion turn. Use

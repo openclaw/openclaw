@@ -39,10 +39,7 @@ import {
   renderRateLimitReplyCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
-import {
-  AgentHarnessPreflightError,
-  isAgentHarnessPreflightError,
-} from "../../agents/harness/errors.js";
+import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
@@ -178,16 +175,6 @@ function buildCodexAppServerFailureText(normalizedMessage: string): string | nul
     return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
   }
   return null;
-}
-
-export function createPreflightCompactionError(reason: string, isCodexRuntime: boolean): Error {
-  const message = `${PREFLIGHT_COMPACTION_FAILURE_PREFIX} ${reason}`;
-  return isCodexRuntime
-    ? new AgentHarnessPreflightError(message, {
-        userMessage:
-          "⚠️ Your message was not sent to Codex: the session's saved history exceeds its configured size limit and compaction failed. Use /new, then resend your message, or ask the operator to review the compaction settings.",
-      })
-    : new Error(message);
 }
 
 export function buildPreflightCompactionFailureText(

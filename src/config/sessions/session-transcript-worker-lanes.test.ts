@@ -1,18 +1,23 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type {
   WorkerTaskOptions,
   WorkerTaskPoolOptions,
 } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   historyLane,
   maintenanceLane,
   projectionLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import {
@@ -26,6 +31,9 @@ import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 const observed = vi.hoisted(() => ({
+  preparedDatabase: true,
+  serializePools: false,
+  queued: vi.fn<(busy: boolean) => void>(),
   explicitSqliteCloseReleasesNativeResources: true,
   setTimeout: vi.spyOn(globalThis, "setTimeout"),
   clearTimeout: vi.spyOn(globalThis, "clearTimeout"),
@@ -36,6 +44,33 @@ const observed = vi.hoisted(() => ({
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
   replaceWorkers: [] as Array<() => () => Promise<void>>,
+}));
+
+// Transport controls normally represent an admitted store; the cold-admission
+// regression below exercises the real writer queue before such facts exist.
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
+  captureExistingOpenClawAgentDatabaseExecution: (options: { path: string }) => {
+    if (!observed.preparedDatabase) {
+      return undefined;
+    }
+    const claim = { identity: "transport", incarnation: "transport", assertCurrent() {} };
+    return {
+      agentId: "main",
+      path: options.path,
+      fileIdentity: undefined,
+      assertCurrent() {},
+      captureGenerationClaim: () => claim,
+      capturePreparedGenerationClaim: () => claim,
+      async prepare() {
+        throw new Error("Readonly transport must not prepare a writer");
+      },
+      async runExisting() {
+        throw new Error("Readonly transport must not open a writer");
+      },
+      async release() {},
+    };
+  },
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
@@ -64,6 +99,10 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
     const retiring = new Set<NonNullable<typeof worker>>();
     let activeTasks = 0;
+    const serialSlots = Array.from({ length: poolOptions.maxWorkers ?? 1 }, () =>
+      Promise.resolve(),
+    );
+    let nextSlot = 0;
     observed.replaceWorkers.push(() => {
       const previous = worker;
       worker = poolOptions.prepareWorker?.();
@@ -71,14 +110,27 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     });
     return {
       async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        activeTasks++;
-        try {
-          const preparedInput = prepare();
-          worker ??= poolOptions.prepareWorker?.();
-          return await observed.run(preparedInput, options);
-        } finally {
-          activeTasks--;
+        const execute = async () => {
+          activeTasks++;
+          try {
+            const preparedInput = prepare();
+            worker ??= poolOptions.prepareWorker?.();
+            return await observed.run(preparedInput, options);
+          } finally {
+            activeTasks--;
+          }
+        };
+        if (!observed.serializePools) {
+          return execute();
         }
+        observed.queued(activeTasks >= serialSlots.length);
+        const index = nextSlot++ % serialSlots.length;
+        const result = serialSlots[index]!.then(execute);
+        serialSlots[index] = result.then(
+          () => {},
+          () => {},
+        );
+        return result;
       },
       getSnapshot: () => ({ activeTasks }),
       async rotate() {
@@ -138,6 +190,9 @@ function input() {
 }
 
 beforeEach(() => {
+  observed.preparedDatabase = true;
+  observed.serializePools = false;
+  observed.queued.mockReset();
   observed.explicitSqliteCloseReleasesNativeResources = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   observed.setTimeout.mockImplementation(globalThis.setTimeout);
@@ -152,13 +207,195 @@ afterEach(async () => {
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
   await Promise.all(
-    [historyLane, projectionLane, maintenanceLane].map((lane) => rotateDatabaseWorkers(lane)),
+    [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane].map((lane) =>
+      rotateDatabaseWorkers(lane),
+    ),
   );
 });
 afterAll(() => {
   vi.useRealTimers();
   observed.setTimeout.mockRestore();
   observed.clearTimeout.mockRestore();
+});
+
+it.each([false, true])(
+  "orders cold read admission without holding consumer writes (prepared=%s)",
+  async (prepared) => {
+    observed.preparedDatabase = prepared;
+    const request = input();
+    const entered = createDeferredCore();
+    const ready = createDeferredCore();
+    const writer = runOpenClawAgentWriteAdmission(request.database, async () => {
+      entered.resolve();
+      await ready.promise;
+    });
+    await entered.promise;
+    observed.run.mockResolvedValue({ ok: true, value: false });
+    const read = withSessionHistoryWorkerDatabase(request.database, async (owner) => {
+      const present = await owner.readEntryPresence(request.scope);
+      return runOpenClawAgentWriteAdmission(request.database, () => present);
+    });
+    try {
+      expect(observed.run).toHaveBeenCalledTimes(prepared ? 1 : 0);
+    } finally {
+      ready.resolve();
+      await writer;
+      await expect(read).resolves.toBe(false);
+    }
+  },
+);
+
+it.each(["deadline", "revocation"])(
+  "cancels cold read admission on %s before the writer settles",
+  async (reason) => {
+    observed.preparedDatabase = false;
+    const request = input();
+    const entered = createDeferredCore();
+    const ready = createDeferredCore();
+    const writer = runOpenClawAgentWriteAdmission(request.database, async () => {
+      entered.resolve();
+      await ready.promise;
+    });
+    await entered.promise;
+    observed.run.mockResolvedValue({ ok: true, value: false });
+    const read = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
+    );
+    let settled = false;
+    void read.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const rejected = expect(read).rejects.toThrow(reason === "deadline" ? "timed out" : "revoked");
+    void rejected.catch(() => {});
+    try {
+      if (reason === "deadline") {
+        await vi.advanceTimersByTimeAsync(60_000);
+      } else {
+        observed.resources.at(-1)!.revoke();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(settled).toBe(true);
+      await rejected;
+      expect(observed.run).not.toHaveBeenCalled();
+    } finally {
+      ready.resolve();
+      await Promise.allSettled([writer, read, rejected]);
+    }
+  },
+);
+
+it("keeps cold reads progressing while history searches await the same writer", async () => {
+  observed.serializePools = true;
+  const request = input();
+  const releaseWriter = createDeferredCore();
+  const writerEntered = createDeferredCore();
+  const searchesEntered = createDeferredCore();
+  const allowStatus = createDeferredCore();
+  const releaseOnFailure = createDeferredCore<boolean>();
+  const coldQueued = createDeferredCore<boolean>();
+  const statuses: Promise<boolean>[] = [];
+  let entered = 0;
+  observed.run.mockImplementation(async (work, options) => {
+    assert(isRecord(work));
+    if (work.kind !== "transcript-search") {
+      return { ok: true, value: false };
+    }
+    if (++entered === SESSION_TRANSCRIPT_FOREGROUND_WORKERS) {
+      searchesEntered.resolve();
+    }
+    await allowStatus.promise;
+    assert(options.onRequest);
+    await options.onRequest("transcript-index-status", {
+      signal: new AbortController().signal,
+      yieldSignal: new AbortController().signal,
+    });
+    return { ok: true, value: { kind: "transcript-search", result: { hits: [] } } };
+  });
+  const writer = runOpenClawAgentWriteAdmission(request.database, async () => {
+    writerEntered.resolve();
+    await releaseWriter.promise;
+  });
+  await writerEntered.promise;
+  const searches = Array.from({ length: SESSION_TRANSCRIPT_FOREGROUND_WORKERS }, () =>
+    withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.searchTranscripts({ agentId: "main", query: "needle" }, () => {
+        const status = runOpenClawAgentWriteAdmission(request.database, () => false);
+        statuses.push(status);
+        return Promise.race([status, releaseOnFailure.promise]);
+      }),
+    ),
+  );
+  let cold: Promise<boolean> | undefined;
+  try {
+    await awaitGateBeforeSettlement(
+      searchesEntered.promise,
+      Promise.all(searches),
+      "Searches finished before occupying the history workers",
+    );
+    observed.preparedDatabase = false;
+    observed.queued.mockImplementation((busy) => coldQueued.resolve(busy));
+    cold = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
+    );
+    releaseWriter.resolve();
+    await writer;
+    // A cold reader holding the writer must not queue behind searches needing that writer.
+    expect(await coldQueued.promise).toBe(false);
+    allowStatus.resolve();
+    expect(await cold).toBe(false);
+    expect(await Promise.all(searches)).toEqual(searches.map(() => ({ hits: [] })));
+    expect(await Promise.all(statuses)).toEqual(searches.map(() => false));
+  } finally {
+    releaseWriter.resolve();
+    allowStatus.resolve();
+    releaseOnFailure.resolve(false);
+    await Promise.allSettled([writer, ...searches, ...(cold ? [cold] : [])]);
+    await Promise.allSettled(statuses);
+  }
+});
+
+it("hands admitted read deadlines to the worker pool", async () => {
+  observed.preparedDatabase = false;
+  const request = input();
+  const statusStarted = createDeferredCore();
+  const statusReady = createDeferredCore<boolean>();
+  let dispatchSignal: AbortSignal | undefined;
+  observed.run.mockImplementation(async (_input, options) => {
+    dispatchSignal = options.signal;
+    assert(dispatchSignal);
+    assert(options.onRequest);
+    const response = await options.onRequest("transcript-index-status", {
+      signal: dispatchSignal,
+      yieldSignal: new AbortController().signal,
+    });
+    expect(response).toMatchObject({ input: false, timeoutMs: 60_000 });
+    return { ok: true, value: { kind: "transcript-search", result: { hits: [] } } };
+  });
+  const searching = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.searchTranscripts({ agentId: "main", query: "needle" }, () => {
+      statusStarted.resolve();
+      return statusReady.promise;
+    }),
+  );
+  try {
+    await awaitGateBeforeSettlement(
+      statusStarted.promise,
+      searching,
+      "Search finished before requesting its host status",
+    );
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(dispatchSignal?.aborted).toBe(false);
+    statusReady.resolve(false);
+    await expect(searching).resolves.toEqual({ hits: [] });
+  } finally {
+    statusReady.resolve(false);
+    await Promise.allSettled([searching]);
+  }
 });
 
 it("retains branch reads across ten-minute gaps in the maintenance owner", async () => {

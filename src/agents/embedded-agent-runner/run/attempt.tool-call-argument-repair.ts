@@ -191,10 +191,7 @@ function readObjectMemberKeyAfterComma(raw: string, commaIndex: number): string 
 
 function normalizeToolCallRepairToolName(value: string): string | undefined {
   const trimmed = value.trim();
-  if (!/^[a-z0-9_-]{1,128}$/i.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return /^[a-z0-9_-]{1,128}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined;
 }
 
 function extractToolNameFromLeadingPrefix(prefix: string): string | undefined {

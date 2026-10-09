@@ -173,6 +173,62 @@ it("retains an idle agent executor for thirty minutes and renews the window afte
   }
 });
 
+it("retains a warm executor through a fallback wait between publication generations", async () => {
+  const { db, worker } = await setup();
+  const firstThread = await worker.execute(
+    { type: "append", input: { value: "before preparation" } },
+    () => undefined,
+  );
+  const lifetime = await openOpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>(
+    options,
+    db,
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+      input: undefined,
+      retainExecutionUntilClose: true,
+    },
+  );
+  workers.add(lifetime);
+  await worker.close();
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  let next: OpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations> | undefined;
+  const publication = (async () => {
+    entered.resolve();
+    await resume.promise;
+    next = await openOpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>(options, db, {
+      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+      input: undefined,
+    });
+    workers.add(next);
+    return next.run(
+      (scope) => scope.execute({ type: "append", input: { value: "after preparation" } }),
+      () => undefined,
+    );
+  })();
+  try {
+    await entered.promise;
+    markGatewayRestartDraining();
+    resume.resolve();
+    expect(await publication).toBe(firstThread);
+    expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
+      { value: "before preparation" },
+      { value: "after preparation" },
+    ]);
+    await next?.close();
+    expect(db.isOpen).toBe(true);
+    beginGatewayShutdownCleanup();
+    await lifetime.close();
+    expect(db.isOpen).toBe(false);
+    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([publication]);
+    await Promise.allSettled([next?.close(), lifetime.close(), worker.close()]);
+    resetGatewayWorkAdmission();
+  }
+});
+
 it.each([undefined, true] as const)(
   "releases settled publication leases at shutdown cleanup unless an accepted sequence retains them (%s)",
   async (retainExecutionUntilClose) => {

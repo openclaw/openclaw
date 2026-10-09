@@ -515,22 +515,50 @@ Retirement records removal of the disposable directory before recording the
 helper's final unlink intent. The helper is then removed. The bounded last
 receipt remains in the control directory and is readable through
 `openclaw update status --json` as `packageActivation`, even after helper removal.
-A completed receipt is replaced only when the next update is admitted through
-the same original executor store; it is not authority to mutate an installation.
+A completed receipt is replaced only by a newly admitted update under current
+ownership; it is not authority to mutate an installation. Historical filesystem
+or executor-store identities do not have to match today's identities. Reboots,
+remounts, or removal of already-retained evidence do not reopen a closed operation.
+Reading a completed receipt does not rewrite it.
 
-On Linux, a filesystem remount can change device numbers without moving files.
-Update admission reconciles this change for completed receipts when the recorded
-inodes, installation path, and ownership still match. It refreshes verified
-identities while preserving the original journal format and completion intent,
-so older CLI versions can still read the completed receipt. The warning
-`filesystem device id changed; receipt identities refreshed` reports the repair
-without adding a new persisted intent. Active recovery operations and replaced
-files retain their existing identity checks.
+Explicit repair preserves settled evidence, including the entire control journal,
+inside the operation's retained recovery directory. The completed journal leaves
+the active admission path, so an older updater does not need to understand a newer
+settlement reason. Ordinary successful retirement still reuses the bounded last
+receipt described above.
+Explicit repair verifies an installed candidate under current executor ownership,
+even when the old lease store disappeared or was replaced. It does not execute
+the old helper, so a changed or missing helper and changed retained directories
+are preserved as evidence rather than required as proof of the live package.
+An unfinished rollback cannot be settled merely because its lease or installation
+was replaced.
 
-Missing, legacy or identity-mismatched recovery artifacts block the next mutable
-update. They are not silently migrated or deleted. Preserve them and use their
-original recovery owner; do not recreate the journal or remove them to bypass
-the refusal.
+After the transaction verifies its selected installation, cleanup failures are
+warnings. Changed old package trees, old helpers, and unexpected backup contents
+are preserved, not restored or deleted. The updater durably closes their recovery
+operation and attempts to archive the evidence. If completed evidence cannot be
+archived, a later update retains it and uses the ordinary package-swap path without
+standalone publication recovery. Its warning names that limitation.
+
+These rules do not mark an unverified publication as a successful update. Missing,
+legacy, corrupt, or identity-mismatched **unfinished** recovery artifacts still
+require their recovery owner. Live ownership conflicts, changed selected packages
+or launchers, and pending restoration remain refusals. Preserve those artifacts;
+do not recreate the journal or remove them to bypass recovery.
+
+These admission and cleanup fixes must be present in the updater executing them.
+A newer candidate cannot run before an already-blocked older updater downloads it.
+The candidate's dependency inventory can, however, avoid modifying old recovery
+artifacts during an update that has already passed admission.
+
+For an external-helper operation stuck at `publication-complete`, run
+`openclaw update repair` from an independent terminal. Repair verifies the
+installed candidate's dist content inventory, manifest, launchers,
+and current update ownership before settling the operation. It archives the
+remaining helper and retained package evidence, including a changed previous
+tree, without restoring or deleting that tree. Failed verification leaves
+recovery armed and blocks the next update. Older updater versions without this
+settlement path still require their original recovery owner.
 
 SQLite recovery and rollback custody verify file identity, size, and content.
 Timestamp-only changes are accepted after verifying identical bytes; replaced

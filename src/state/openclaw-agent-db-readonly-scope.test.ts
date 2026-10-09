@@ -13,6 +13,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/k
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -69,7 +70,11 @@ it.each([false, true])(
                 for (let read = 0; read < 2; read++) {
                   expect(
                     withOpenClawAgentDatabaseReadOnly(
-                      (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
+                      (database) =>
+                        runSqliteReadOperationSync(
+                          database.db,
+                          () => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
+                        ),
                       options,
                       { snapshot },
                     ),

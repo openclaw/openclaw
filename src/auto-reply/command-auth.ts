@@ -407,25 +407,14 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );
 
-  const commandsAllowFromList = resolveCommandsAllowFromList({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
-    providerId,
-  });
-
+  const providerContext = { plugin, cfg, accountId: ctx.AccountId, providerId };
+  const commandsAllowFromList = resolveCommandsAllowFromList(providerContext);
   const resolvedAllowFrom = resolveProviderAllowFrom({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
-    providerId,
+    ...providerContext,
     forceFallbackResolutionError: providerResolutionError,
   });
   const ownerState = resolveOwnerAuthorizationState({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
-    providerId,
+    ...providerContext,
     to,
     allowFromList: resolvedAllowFrom.allowFromList,
     hadResolutionError: resolvedAllowFrom.hadResolutionError,
@@ -433,21 +422,19 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
   });
 
   const senderCandidates = resolveSenderCandidates({
-    plugin,
-    cfg,
-    accountId: ctx.AccountId,
+    ...providerContext,
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
     commandSenderId: getCommandSenderAuthority(ctx)?.(),
     from,
     chatType: ctx.ChatType,
   });
-  const matchedSender = ownerState.explicitOwners.length
-    ? senderCandidates.find((candidate) => ownerState.explicitOwners.includes(candidate))
-    : undefined;
-  const matchedCommandOwner = ownerState.commandOwnerCandidates.length
-    ? senderCandidates.find((candidate) => ownerState.commandOwnerCandidates.includes(candidate))
-    : undefined;
+  const matchedSender = senderCandidates.find((candidate) =>
+    ownerState.explicitOwners.includes(candidate),
+  );
+  const matchedCommandOwner = senderCandidates.find((candidate) =>
+    ownerState.commandOwnerCandidates.includes(candidate),
+  );
   const senderId = matchedSender ?? matchedCommandOwner ?? senderCandidates[0];
 
   const enforceOwner = Boolean(plugin?.commands?.enforceOwnerForCommands);
