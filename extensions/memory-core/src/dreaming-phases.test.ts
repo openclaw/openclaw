@@ -472,7 +472,6 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-<<<<<<< HEAD
   it.each(["## Ops"])("does not ingest nested REM output before boundary %s", async (boundary) => {
     const workspaceDir = await createWorkspace();
     await withClock(async () => {
@@ -492,7 +491,7 @@ describe("memory-core dreaming phases", () => {
         "### User follow-up",
         "- Rotate access keys.",
       ]);
-      const subagent = createCompletion();
+      const subagent = createDreamingCompletion();
       const { sweep } = createHarness(INLINE_CONFIG, workspaceDir, subagent);
       await sweepLight(sweep, 1);
       const store = await shortTermTesting.readRecallStore(
@@ -505,43 +504,6 @@ describe("memory-core dreaming phases", () => {
       ]);
     });
   });
-=======
-  it.each(["<!-- openclaw:dreaming:rem:end -->", "## Ops"])(
-    "does not ingest nested REM output before boundary %s",
-    async (boundary) => {
-      const workspaceDir = await createWorkspace();
-      await withClock(async () => {
-        await writeDailyNote(workspaceDir, [
-          `# ${DAY}`,
-          "- Move backups to S3 Glacier.",
-          "",
-          "## REM Sleep",
-          "<!-- openclaw:dreaming:rem:start -->",
-          "### Reflections",
-          "- Theme: `across` kept surfacing across 26 memories.",
-          "#### Unexpected nested heading",
-          "- Old generated dream text must not become a daily memory.",
-          "### Possible Lasting Truths",
-          "- Old generated lasting truth must not become a daily memory.",
-          boundary,
-          "### User follow-up",
-          "- Rotate access keys.",
-        ]);
-        const subagent = createDreamingCompletion();
-        const { sweep } = createHarness(INLINE_CONFIG, workspaceDir, subagent);
-        await sweepLight(sweep, 1);
-        const store = await shortTermTesting.readRecallStore(
-          workspaceDir,
-          "2026-04-05T10:01:00.000Z",
-        );
-        expect(Object.values(store.entries).map((entry) => entry.snippet)).toEqual([
-          "Move backups to S3 Glacier.",
-          "User follow-up: Rotate access keys.",
-        ]);
-      });
-    },
-  );
->>>>>>> 754eebb6572c (fix(memory): let slow models finish dream diary entries)
 
   it("prefers a fresh light snippet outside the top diary-covered candidates", async () => {
     const workspaceDir = await createWorkspace();

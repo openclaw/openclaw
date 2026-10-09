@@ -27,38 +27,6 @@ afterEach(() => {
 });
 
 describe("runDreamNarrative", () => {
-<<<<<<< HEAD
-=======
-  it("writes the completion using the workspace owner's configured model", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-completion-");
-    const subagent = createDreamingCompletion();
-    const outcome = await runDreamNarrative({
-      agentId: "researcher",
-      timeoutMs: 180_000,
-      subagent,
-      workspaceDir,
-      data: { phase: "light", snippets: ["API endpoints need authentication"] },
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-      model: "anthropic/claude-sonnet-4-6",
-      logger: createLogger(),
-    });
-
-    expect(subagent.complete).toHaveBeenCalledOnce();
-    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({
-      agentId: "researcher",
-      model: "anthropic/claude-sonnet-4-6",
-      timeoutMs: 180_000,
-      message: expect.stringContaining("API endpoints need authentication"),
-      extraSystemPrompt: expect.stringContaining("Output ONLY the diary entry"),
-    });
-    expect(outcome).toEqual({ status: "completed" });
-    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
-      "The repository whispered of forgotten endpoints.",
-    );
-  });
-
->>>>>>> 754eebb6572c (fix(memory): let slow models finish dream diary entries)
   it.each([
     new Error("Completion failed", { cause: new Error("unknown model: ollama/missing-model") }),
   ])("retries an unavailable configured model with the default (%s)", async (error) => {
@@ -118,14 +86,7 @@ describe("runDreamNarrative", () => {
 
   it("writes only a generic trace after empty completion", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-fallback-");
-<<<<<<< HEAD
-    const subagent = createCompletion("   \n  ");
-=======
     const subagent = createDreamingCompletion("   \n  ");
-    if (failure) {
-      subagent.complete.mockRejectedValue(failure);
-    }
->>>>>>> 754eebb6572c (fix(memory): let slow models finish dream diary entries)
     const outcome = await runDreamNarrative({
       agentId: "main",
       timeoutMs: 180_000,
