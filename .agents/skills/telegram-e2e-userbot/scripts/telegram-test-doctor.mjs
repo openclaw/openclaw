@@ -50,9 +50,7 @@ export async function checkTelegramTestCredential({
 }) {
   const scope = currentTelegramRun();
   const lease = scope.health;
-  if (dm && (requireForum || createForum))
-    throw new Error("Forum-topic proof requires a forum group target.");
-  if (createForum && chat) throw new Error("A run-owned forum replaces the selected chat.");
+  if (dm && requireForum) throw new Error("Forum-topic proof requires a forum group target.");
   lease.assertHealthy();
   const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
   const requiredChat = dm || chat || createForum ? "" : credential.groupId;
