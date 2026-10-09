@@ -60,19 +60,13 @@ export function resolveCustomModelImageInputInference(
     /\b(?:qwen[\w.-]*-?vl|qwen-vl)\b/.test(normalized) ||
     /\b(?:vision|llava|pixtral|internvl|mllama|minicpm-v|glm-4v)\b/.test(normalized) ||
     /(?:^|[-_/])vl(?:[-_/]|$)/.test(normalized);
-  if (matchesKnownVision) {
-    return { supportsImageInput: true, confidence: "known" };
-  }
-
-  const matchesKnownText =
+  const knownModel =
+    matchesKnownVision ||
     /\b(?:llama\d*|deepseek|mistral|mixtral|kimi|moonshot|codestral|devstral|phi|qwq|codellama)\b/.test(
       normalized,
-    ) || /\bqwen(?!.*(?:vl|vision))/.test(normalized);
-  if (matchesKnownText) {
-    return { supportsImageInput: false, confidence: "known" };
-  }
-
-  return { supportsImageInput: false, confidence: "unknown" };
+    ) ||
+    /\bqwen(?!.*(?:vl|vision))/.test(normalized);
+  return { supportsImageInput: matchesKnownVision, confidence: knownModel ? "known" : "unknown" };
 }
 
 function isAzureUrl(baseUrl: string, openAiOnly = false): boolean {
@@ -276,38 +270,29 @@ export function buildOpenAiVerificationProbeRequest(params: {
       ? { "api-key": params.apiKey }
       : { Authorization: `Bearer ${params.apiKey}` }
     : {};
-  if (isAzureUrl(params.baseUrl, true) || params.responsesApi === true) {
-    const endpoint = new URL(
-      "responses",
-      (isBaseUrlAzureUrl ? transformAzureConfigUrl(params.baseUrl) : params.baseUrl).replace(
-        /\/?$/,
-        "/",
-      ),
-    ).href;
-    return {
-      endpoint,
-      headers,
-      body: {
-        model: params.modelId,
-        input: "Hi",
-        max_output_tokens: 16,
-        stream: false,
-      },
-    };
-  }
-  const endpoint = resolveVerificationEndpoint({
-    baseUrl: params.baseUrl,
-    modelId: params.modelId,
-    endpointPath: "chat/completions",
-  });
+  const responsesApi = isAzureUrl(params.baseUrl, true) || params.responsesApi === true;
+  const endpoint = responsesApi
+    ? new URL(
+        "responses",
+        (isBaseUrlAzureUrl ? transformAzureConfigUrl(params.baseUrl) : params.baseUrl).replace(
+          /\/?$/,
+          "/",
+        ),
+      ).href
+    : resolveVerificationEndpoint({
+        baseUrl: params.baseUrl,
+        modelId: params.modelId,
+        endpointPath: "chat/completions",
+      });
   return {
     endpoint,
     headers,
     body: {
       model: params.modelId,
-      messages: [{ role: "user", content: "Hi" }],
       // Recent OpenAI-family endpoints reject probes below 16 tokens.
-      max_tokens: 16,
+      ...(responsesApi
+        ? { input: "Hi", max_output_tokens: 16 }
+        : { messages: [{ role: "user", content: "Hi" }], max_tokens: 16 }),
       stream: false,
     },
   };

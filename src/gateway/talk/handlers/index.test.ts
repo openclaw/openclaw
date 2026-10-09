@@ -2709,18 +2709,27 @@ describe("talk.client.toolCall handler", () => {
             },
         respond,
       });
+      const physicalSource = mockCallArg(mocks.assertClientVoiceSessionOpen, 0, 1);
+      expect(physicalSource).toMatchObject({
+        options: { agentId: "main" },
+        assertCurrent: expect.any(Function),
+      });
       if (existing) {
-        expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
-          agentId: "main",
-          sessionKey: "main",
-          voiceSessionId: "voice-test",
-        });
+        expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith(
+          {
+            agentId: "main",
+            sessionKey: "main",
+            voiceSessionId: "voice-test",
+          },
+          physicalSource,
+        );
         expectRespondOk(respond, { runId: "run-voice-1" });
       } else {
         expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith({
           agentId: "main",
           sessionKey: "main",
           origin: "client",
+          physicalSource,
           assertCurrent: expect.any(Function),
           requester: expect.any(Function),
           source: {
@@ -2729,7 +2738,11 @@ describe("talk.client.toolCall handler", () => {
           },
         });
         expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
-          expect.objectContaining({ voiceSessionId: "voice-test", runId: "run-voice-1" }),
+          expect.objectContaining({
+            voiceSessionId: "voice-test",
+            runId: "run-voice-1",
+            physicalSource,
+          }),
         );
         expect(mocks.chatSend.mock.calls[0]?.[0].client.connect).toMatchObject({
           scopes: ["operator.admin"],

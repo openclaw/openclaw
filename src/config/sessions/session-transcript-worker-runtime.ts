@@ -5,6 +5,8 @@ import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerInput,
   type UsageCostWorkerResult,
+  type SessionCostUsageWorkerOptions,
+  type SessionCostUsageWorkerScope,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -13,6 +15,7 @@ import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-t
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -54,6 +57,7 @@ import {
 import type {
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
+  SessionTranscriptWorkerRequest,
   SessionRowPresenceWorkerInput,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -137,21 +141,6 @@ export async function prewarmSessionHistoryWorker(
     log.debug(`Session history worker prewarm failed: ${String(error)}`);
   }
 }
-
-type SessionCostUsageWorkerOptions = Pick<
-  WorkerTaskOptions<UsageCostWorkerInput>,
-  "signal" | "onRequest" | "inputBytes" | "timeoutMs" | "transferList" | "onInputConsumed"
-> & { beforeDispatch?: () => void };
-
-export type SessionCostUsageWorkerScope = {
-  assertCurrent: () => void;
-  run: (
-    input: UsageCostWorkerInput,
-    options: SessionCostUsageWorkerOptions,
-  ) => Promise<UsageCostWorkerResult>;
-  /** Register before acquisition can wait; a failed cleanup stays owned for close retry. */
-  retainCleanup: (close: () => Promise<void>) => () => void;
-};
 
 /** Capture the exact metadata owner before initial-writer admission can wait. */
 export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Readonly<{
@@ -244,6 +233,12 @@ export function retainSessionHistoryWorkerDatabase(
       onRequest,
       timeoutMs = 60_000,
     ) => {
+      assertCurrent();
+      const validation = captureOpenClawAgentDatabaseReadValidation(database);
+      const assertRequestCurrent = () => {
+        assertCurrent();
+        validation?.assertCurrent();
+      };
       let sequence = 0;
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
@@ -254,32 +249,36 @@ export function retainSessionHistoryWorkerDatabase(
           timeoutMs,
           signal,
           aborters: owned.aborters,
-          assertCurrent,
+          assertCurrent: assertRequestCurrent,
         },
         async (admit, requestLane) => {
           try {
             const reply = await admit((requestSignal, remaining) =>
               requestLane.pool.run(
                 () => {
-                  assertCurrent();
+                  assertRequestCurrent();
                   const input = prepare();
-                  assertCurrent();
+                  assertRequestCurrent();
                   sequence = ++requestLane.nativeSequence;
                   owned.nativeSequences.set(requestLane, sequence);
-                  return { ...input, database };
+                  return {
+                    ...input,
+                    database,
+                    validation: validation?.validation,
+                  } satisfies SessionTranscriptWorkerRequest;
                 },
                 {
-                  inputBytes,
+                  inputBytes: inputBytes + (validation?.inputBytes ?? 0),
                   timeoutMs: remaining,
                   signal: requestSignal,
                   onRequest: onRequest
                     ? (value, context) => {
                         const effect = (async () => {
                           context.signal.throwIfAborted();
-                          assertCurrent();
+                          assertRequestCurrent();
                           const response = await onRequest(value, context.signal);
                           context.signal.throwIfAborted();
-                          assertCurrent();
+                          assertRequestCurrent();
                           return response ?? { input: null, timeoutMs };
                         })();
                         hostEffects.add(effect);
@@ -328,11 +327,12 @@ export function retainSessionHistoryWorkerDatabase(
               // Retain the identity that actually supplied the row, not a later stat of its locator.
               entryReadSource = source;
             }
+            assertRequestCurrent();
             const value = receive(received);
             if (reply.ok && reply.closedHistoryDatabase) {
               await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
             }
-            assertCurrent();
+            assertRequestCurrent();
             return value;
           } catch (error) {
             if (sequence > 0) {

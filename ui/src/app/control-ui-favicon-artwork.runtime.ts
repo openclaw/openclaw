@@ -1,3 +1,4 @@
+import { agentTabIconShape } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { registerAvatarGatewayReset } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
@@ -40,6 +41,7 @@ export function connectControlUiFaviconArtwork(context: {
     }
     const scope = gatewayPresentationScope(context.gateway);
     const mode = context.theme.settings.tabIcon ?? "default";
+    const shape = agentTabIconShape(mode);
     const lobsterId = mode.startsWith("lobster:") ? mode.slice("lobster:".length) : null;
     if (!lobsterId) {
       stopLobsterdex?.();
@@ -47,26 +49,26 @@ export function connectControlUiFaviconArtwork(context: {
     }
     const agentId = context.agentSelection.state.selectedId;
     const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
-    if (mode === "agent" && agentId && context.gateway.snapshot.phase === "connected") {
+    if (shape !== null && agentId && context.gateway.snapshot.phase === "connected") {
       void context.agentIdentity.ensure([agentId]);
     }
     const source =
-      mode === "agent" && agent
+      shape !== null && agent
         ? resolveAgentAvatarUrl(agent, context.agentIdentity.get(agentId))
         : null;
     const nextKey = JSON.stringify([
       scope.key,
       mode,
-      mode === "agent" ? agentId : null,
+      shape !== null ? agentId : null,
       source,
-      mode === "agent" ? avatarRevision : lobsterId ? lobsterRevision : null,
+      shape !== null ? avatarRevision : lobsterId ? lobsterRevision : null,
     ]);
     if (sourceKey === nextKey) {
       return;
     }
     sourceKey = nextKey;
     retireImage();
-    if (!lobsterId && (mode !== "agent" || !source)) {
+    if (!lobsterId && (shape === null || !source)) {
       applyControlUiFaviconImage(null);
       return;
     }
@@ -103,7 +105,7 @@ export function connectControlUiFaviconArtwork(context: {
         });
       return;
     }
-    if (!source) {
+    if (!source || shape === null) {
       return;
     }
     const resolved = source.startsWith("/") ? resolveAvatarImageUrl(source) : source;
@@ -125,7 +127,7 @@ export function connectControlUiFaviconArtwork(context: {
         if (!image.naturalWidth || !image.naturalHeight) {
           throw new Error("Agent avatar has no dimensions");
         }
-        applyControlUiFaviconImage(image);
+        applyControlUiFaviconImage(image, shape);
       })
       .catch(() => {
         if (current()) {

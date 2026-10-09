@@ -898,7 +898,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     rotateAgentEventLifecycleGeneration();
     await initSubagentRegistry();
     await activateGatewayRuntime();
-    await Promise.resolve();
+    await fixture.settle();
     await testing.sweepOnceForTests();
 
     expect(dispatchAgent).not.toHaveBeenCalled();
@@ -928,7 +928,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     rotateAgentEventLifecycleGeneration();
     await initSubagentRegistry();
     await activateGatewayRuntime();
-    await Promise.resolve();
+    await fixture.settle();
     await testing.sweepOnceForTests();
 
     const restoredAgain = subagentRuns.get(runId);

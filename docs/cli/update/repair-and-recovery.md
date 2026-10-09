@@ -566,7 +566,12 @@ availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
 successfully when required checks pass. Doctor maintenance admission refusals
 also finish with a warning when no data is at risk. Repair restores any service
-it stopped, leaves migrations pending, and names the next repair action. Errors
+it stopped and leaves migrations pending. When Doctor could not run, the saved
+run is `skipped` with reason `doctor-maintenance-pending`, and the report leads
+with the next action: stop the Gateway through its service owner, then rerun
+`openclaw update repair` with the same profile and state overrides. A standalone
+repair's generic failure is recorded as `repair-failed`; specific failure codes
+and failures belonging to an existing update keep their original reasons. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
 cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
 

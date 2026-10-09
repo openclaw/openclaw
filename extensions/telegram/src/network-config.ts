@@ -46,20 +46,15 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
 }): TelegramDnsResultOrderDecision {
-  const envValue = normalizeOptionalLowercaseString(process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
-  if (envValue === "ipv4first" || envValue === "verbatim") {
-    return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
+  for (const [source, read] of [
+    [`env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`, () => process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]],
+    ["config", () => params?.network?.dnsResultOrder],
+    ["process-default", () => dns.getDefaultResultOrder()],
+  ] as const) {
+    const value = normalizeOptionalLowercaseString(read());
+    if (value === "ipv4first" || value === "verbatim") {
+      return { value, source };
+    }
   }
-
-  const configValue = normalizeOptionalLowercaseString(params?.network?.dnsResultOrder);
-  if (configValue === "ipv4first" || configValue === "verbatim") {
-    return { value: configValue, source: "config" };
-  }
-
-  const processDefaultValue = normalizeOptionalLowercaseString(dns.getDefaultResultOrder());
-  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
-    return { value: processDefaultValue, source: "process-default" };
-  }
-
   return { value: "ipv4first", source: "default-node22" };
 }

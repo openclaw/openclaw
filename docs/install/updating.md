@@ -135,6 +135,10 @@ the handoff, the candidate retains exact file and parent-directory identities;
 later replacement still stops the update. Lease read failures report their
 underlying cause instead of a parent-binding mismatch.
 
+Post-install Doctor also accepts older updaters, including `2026.8.2`, that do not
+provide an update run ID. Its commands retain invocation-specific custody without
+requiring an environment-variable workaround.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic

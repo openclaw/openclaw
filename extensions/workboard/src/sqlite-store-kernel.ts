@@ -62,6 +62,13 @@ export type WorkboardSqliteKernel = {
   close(this: void): void;
 };
 
+function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
+  return Array.from(rows, (row) => ({
+    key: requiredString(row, "id"),
+    value: read(row),
+  }));
+}
+
 class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -519,12 +526,9 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
   }
 
   entries(): Array<{ key: string; value: PersistedWorkboardBoard }> {
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(this.db, this.rowsQuery.orderBy("id", "asc")),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readBoard(row),
-      }),
+      readBoard,
     );
   }
 }
@@ -611,12 +615,9 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
     if (options.cardId) {
       query = query.where("card_id", "=", options.cardId);
     }
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(this.db, query.orderBy("created_at", "asc").orderBy("id", "asc")),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readSubscription(row),
-      }),
+      readSubscription,
     );
   }
 }
@@ -676,15 +677,12 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 
   entries(): Array<{ key: string; value: PersistedWorkboardAttachment }> {
     // Decode each BLOB before advancing so the list never retains a second full raw payload copy.
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(
         this.db,
         this.rowsQuery.orderBy("a.created_at", "asc").orderBy("a.id", "asc"),
       ),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readPersistedAttachment(row),
-      }),
+      readPersistedAttachment,
     );
   }
 }

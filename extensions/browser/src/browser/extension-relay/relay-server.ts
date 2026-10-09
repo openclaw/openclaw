@@ -40,7 +40,6 @@ import { attachRelayOwner } from "./owner-server.js";
 import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
-import { parseExtensionMessage } from "./relay-protocol.js";
 import {
   firstHeader,
   isAllowedExtensionOrigin,
@@ -173,26 +172,11 @@ function bindSocket(
 
 /** Wire an already-v2-authenticated extension socket to the bridge. */
 export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSocket): void {
-  const handlers = bridge.attachExtensionSocket(ws);
-  let helloSeen = false;
-  const helloTimer = setTimeout(() => {
+  const handlers = bridge.attachExtensionSocket(ws, () => {
     ws.close(4008, "extension hello timeout");
     ws.terminate();
-  }, BROWSER_RELAY_CHALLENGE_TTL_MS);
-  helloTimer.unref?.();
-  bindSocket(ws, {
-    onMessage: (raw) => {
-      if (!helloSeen && parseExtensionMessage(raw)?.type === "hello") {
-        helloSeen = true;
-        clearTimeout(helloTimer);
-      }
-      handlers.onMessage(raw);
-    },
-    onClose: () => {
-      clearTimeout(helloTimer);
-      handlers.onClose();
-    },
   });
+  bindSocket(ws, handlers);
 }
 
 export async function startExtensionRelayServer(params: {

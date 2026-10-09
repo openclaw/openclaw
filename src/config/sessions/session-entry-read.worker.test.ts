@@ -9,6 +9,7 @@ import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -978,7 +979,9 @@ it("refuses an ordered result when its database closes during reader cleanup", a
       ([read]) => {
         read!.assertCurrent();
         queueMicrotask(() => {
-          closing = closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+          closing = runInDetachedAsyncContext(() =>
+            closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId),
+          );
         });
         return read!.result.entries[0]?.entry;
       },

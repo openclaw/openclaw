@@ -9,12 +9,13 @@ import { buildSessionCreationStamp } from "../config/sessions/session-entry-prov
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";
 import {
+  acceptSessionSourceValidation,
   assertPreparedSessionSourceCurrent,
   prepareSessionSourceAuthority,
   composeSessionSourceAssertion,
   type PreparedSessionSourceAuthority,
   type SessionSourceAssertion,
-  type SessionSourcePredicateFacts,
+  type SessionSourceValidation,
   type SessionSourceWriteGrant,
   type SessionSourceTransactionGrant,
 } from "../config/sessions/session-source-authority.js";
@@ -103,20 +104,23 @@ export function captureClientVoiceSessionWriter(params: {
           binding.authorize(request);
           const facts = isRecord(request.facts) ? request.facts.publication : undefined;
           if (isRecord(facts) && facts.kind === "voice-session-authority") {
-            if (!authority?.transaction) {
+            if (!authority) {
               throw new Error("Voice session authority omitted its prepared assertion");
             }
-            // SAFETY: voice.session.mutate publishes its typed transaction authority through this admission.
-            authority.transaction.assertCurrent(facts.facts as SessionPendingInputAuthorityFacts);
-          }
-          if (
-            isRecord(facts) &&
-            facts.kind === "voice-session-source" &&
-            typeof facts.index === "number"
-          ) {
-            // SAFETY: voice.session.mutate forwards the typed facts from readRefusedSessionSource.
-            authority?.checks[facts.index]?.refuse(facts.facts as SessionSourcePredicateFacts);
-            throw new Error("Voice session source refusal omitted its prepared assertion");
+            // SAFETY: voice.session.mutate supplies validation from this transaction.
+            if (facts.sourceValidation) {
+              acceptSessionSourceValidation(
+                authority,
+                facts.sourceValidation as SessionSourceValidation,
+              );
+            }
+            if (facts.facts) {
+              if (!authority.transaction) {
+                throw new Error("Voice session transaction omitted its prepared assertion");
+              }
+              authority.transaction.assertCurrent(facts.facts as SessionPendingInputAuthorityFacts);
+            }
+            authority.assertCurrent();
           }
           if (!grant()) {
             throw new Error("Voice session write authority expired");
@@ -539,7 +543,7 @@ export async function mutateAuthorizedClientVoiceSession<T>(
             { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseRuntimeFromExecution },
             { runOpenClawAgentWriteWithYieldingAdmission },
             { hasSqliteSessionOwnerColumns },
-            { readRefusedSessionSource },
+            { readSessionSourceValidation },
             { readSessionPendingInputAuthorityFactsInTransaction },
             kernel,
           ] = await Promise.all([
@@ -562,12 +566,14 @@ export async function mutateAuthorizedClientVoiceSession<T>(
           const assertNativeCurrent = (transaction?: OpenClawAgentDatabase) => {
             // An SDK guard need not check a source alias, even when it shares the writer's file.
             assertPreparationCurrent();
+            if (transaction) {
+              acceptSessionSourceValidation(
+                sources,
+                readSessionSourceValidation(transaction, predicates),
+              );
+            }
             sources.assertCurrent();
             if (transaction) {
-              const refused = readRefusedSessionSource(transaction, predicates);
-              if (refused) {
-                sources.checks[refused.index]!.refuse(refused.facts);
-              }
               if (authority?.transaction) {
                 authority.transaction.assertCurrent(
                   readSessionPendingInputAuthorityFactsInTransaction(

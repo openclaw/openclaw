@@ -23,7 +23,6 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { modelsAliasesAddCommand } from "./aliases.js";
 import { changeFallbacksCommand } from "./fallbacks-shared.js";
-import { modelsSetImageCommand } from "./set-image.js";
 import { modelsSetCommand } from "./set.js";
 
 describe("model command provider preparation", () => {
@@ -297,7 +296,7 @@ describe("model command provider preparation", () => {
           if (command === "set") {
             await modelsSetCommand(input, runtime);
           } else if (command === "set-image") {
-            await modelsSetImageCommand(input, runtime);
+            await modelsSetCommand(input, runtime, "imageModel");
           } else {
             await changeFallbacksCommand(
               { label: "Fallbacks", key, action: "add" },

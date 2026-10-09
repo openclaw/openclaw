@@ -226,6 +226,25 @@ instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
 
+### Instance-bound background context
+
+Managed instances also expose the additive
+`api.lifecycle.runInBackgroundContext<T>(run: () => T): T` capability. It runs
+immediately and returns the callback's value or promise. It detaches the calling
+turn, request, and unrelated async-local context while preserving the instance's
+host resource bindings. Each call selects that exact instance's current adopted
+registry, so a retained plugin sees replacement providers after a reload.
+
+Use it when installing timers, watchers, and listeners, and again when delivering
+each background callback. Keep the runner with the resource that owns it; an old
+manager must not look up a replacement plugin instance. Return asynchronous work
+from the callback so the instance can drain it. Its completion remains independent
+of disposal cleanup, so resource cleanup can safely await it. New calls reject after admission
+closes; already admitted host cleanup retains its teardown authority. The runner
+does not schedule work or cancel native resources: release those in the existing
+cleanup owner. Like the other instance lifecycle fields, it can be absent on an
+API host without a managed instance.
+
 Inspection release reports settled disposal failures without marking the managed
 resources as still retained. Prepared-model shutdown records those failures and
 can finish after cleanup settles. Unfinished disposal and failed host cleanup
@@ -290,13 +309,11 @@ SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
 [Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
 
-For a bounded, accepted persistence sequence,
-`openOpenClawAgentSqliteWorkerStore` from `openclaw/plugin-sdk/sqlite-runtime`
-accepts `retainExecutionUntilClose: true` in its worker options. The caller must
-close that store when the sequence settles, including on failure. This retains
-the existing executor between commands without holding a writer turn across
-preparation. Each command keeps its own live authority checks. Omit the option
-for cached stores whose lifetime can outlast accepted work.
+First-party bounded persistence sequences retain their original agent executor
+before asynchronous preparation and release it after publication cleanup. The
+private `sqlite-runtime` facade exposes that existing owner and its recorded
+native identity; each worker command keeps its own FIFO turn and live authority
+checks. Native maintenance and private shadow stores keep their existing owners.
 
 First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
 same subpath to admit cold agent storage in its existing executor before
@@ -312,6 +329,11 @@ of opaque SDK callbacks. Cold restoration can recheck those prepared components
 and their stored predicates while retaining the full synchronous assertion for
 native commit. Custom SDK assertion wrappers are not executed in restoration
 worker grants; existing writer adapter selection remains unchanged.
+
+`cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
+joins the selected database owner's pending startup preparation before capturing
+its physical identity. Prepared agents do not wait. Failed preparation still
+surfaces through normal database admission checks; Gateway shutdown cancels the wait.
 
 ### Memory runtime replacement
 

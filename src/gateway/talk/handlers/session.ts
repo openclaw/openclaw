@@ -231,11 +231,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           replacement?.assertCurrent(target);
           const { agentId } = target;
-          const assertCommitAllowed = () => {
-            sessionMutationCommitGuard?.();
-            sessionMutationAuthorization?.assertCurrent();
-            replacement?.assertCurrent(target);
-          };
+          const assertCommitAllowed = composeSessionSourceAssertion(
+            [sessionMutationCommitGuard, sessionMutationAuthorization?.assertCurrent],
+            (assertSources) => {
+              assertSources();
+              replacement?.assertCurrent(target);
+            },
+          );
           assertCommitAllowed();
           assertSecretOwnerAvailable("capability", "talk:realtime");
           const resolution = resolveConfiguredRealtimeVoiceProvider({

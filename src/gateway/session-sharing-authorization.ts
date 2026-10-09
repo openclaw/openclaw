@@ -48,7 +48,8 @@ export type AuthorizedSessionMutationTarget = SessionMutationTarget & {
   sessionId: string | null;
   lifecycleRevision?: string;
   created?: true;
-  absentTarget?: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
+  absentTarget?: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath"> &
+    Pick<SessionSharingTarget, "readSource">;
   projection?: import("./session-row-projection.js").SessionRowProjection;
 };
 

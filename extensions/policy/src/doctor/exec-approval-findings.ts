@@ -9,13 +9,11 @@ import type { PolicyEvidence, PolicyExecApprovalEvidence } from "../policy-state
 import { execApprovalsPolicyShapeFinding } from "./access-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import {
-  effectiveExecApprovalAgentAutoAllowSkillsEntry,
-  effectiveExecApprovalAgentSecurityEntry,
+  execApprovalAgentEntries,
   execApprovalAllowlistMissingTarget,
   execApprovalAllowlistRequirementKey,
   formatExecApprovalAllowlistEntry,
   readExecApprovalAllowlistRequirements,
-  syntheticExecApprovalAgentEntry,
 } from "./exec-approval-rules.js";
 import { parseExecApprovalsFile } from "./policy-runtime.js";
 import { agentScopedPolicyTargets } from "./policy-scope.js";
@@ -202,14 +200,12 @@ function execApprovalsRuleFindings(
 
   const allowedAgents = new Set(readStringList(execApprovalsPolicy, ["agents", "allowSecurity"]));
   if (allowedAgents.size > 0) {
-    const agentEntries =
-      params.targetAgentId === undefined
-        ? globalExecApprovalAgentSecurityEntries(params.entries, params.defaults)
-        : [
-            effectiveExecApprovalAgentSecurityEntry(params.entries, params.targetAgentId) ??
-              params.defaults ??
-              syntheticExecApprovalAgentEntry(params.targetAgentId),
-          ];
+    const agentEntries = execApprovalAgentEntries(
+      params.entries,
+      params.defaults,
+      "security",
+      params.targetAgentId,
+    );
     for (const entry of agentEntries) {
       const security = entry.security ?? params.defaultSecurity;
       if (allowedAgents.has(security.toLowerCase())) {
@@ -232,14 +228,12 @@ function execApprovalsRuleFindings(
     "allowAutoAllowSkills",
   ]);
   if (allowAutoAllowSkills === false) {
-    const autoAllowEntries =
-      params.targetAgentId === undefined
-        ? globalExecApprovalAgentAutoAllowSkillsEntries(params.entries, params.defaults)
-        : [
-            effectiveExecApprovalAgentAutoAllowSkillsEntry(params.entries, params.targetAgentId) ??
-              params.defaults ??
-              syntheticExecApprovalAgentEntry(params.targetAgentId),
-          ];
+    const autoAllowEntries = execApprovalAgentEntries(
+      params.entries,
+      params.defaults,
+      "autoAllowSkills",
+      params.targetAgentId,
+    );
     for (const entry of autoAllowEntries) {
       if (entry.autoAllowSkills !== true) {
         continue;
@@ -308,33 +302,6 @@ function execApprovalsRuleFindings(
     }
   }
   return findings;
-}
-
-function globalExecApprovalAgentSecurityEntries(
-  entries: readonly PolicyExecApprovalEvidence[],
-  defaults: PolicyExecApprovalEvidence | undefined,
-): readonly PolicyExecApprovalEvidence[] {
-  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
-  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
-  const securityEntries = agentEntries.filter(
-    (entry) =>
-      entry.agentId === "*" || entry.security !== undefined || entry.securityConfigured === true,
-  );
-  return wildcard === undefined
-    ? [...securityEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
-    : securityEntries;
-}
-
-function globalExecApprovalAgentAutoAllowSkillsEntries(
-  entries: readonly PolicyExecApprovalEvidence[],
-  defaults: PolicyExecApprovalEvidence | undefined,
-): readonly PolicyExecApprovalEvidence[] {
-  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
-  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
-  const explicitEntries = agentEntries.filter((entry) => entry.autoAllowSkills !== undefined);
-  return wildcard?.autoAllowSkills === undefined
-    ? [...explicitEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
-    : explicitEntries;
 }
 
 function execApprovalAllowlistEntries(

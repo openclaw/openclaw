@@ -41,8 +41,9 @@ import type {
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
-  prepareSessionSourceAuthority,
+  acceptSessionSourceValidation,
   type PreparedSessionSourceAuthority,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -98,6 +99,10 @@ export async function patchSessionEntryInWorker(params: {
       }
     },
     onTransactionFacts: (value) => {
+      if (source && isRecord(value) && value.kind === "session-entry-patch-validated") {
+        // SAFETY: The paired kernel supplies the source indices from this transaction.
+        acceptSessionSourceValidation(source, value.sourceValidation as SessionSourceValidation);
+      }
       if (
         ensureIdentitySource &&
         isRecord(value) &&
@@ -178,12 +183,8 @@ export async function patchSessionEntryInWorker(params: {
           );
         }
       }
+      // This write may change its source; callers authorize subsequent effects separately.
       await releaseSource();
-      // Closed ensure callers check fresh authority before their next effect; the receipt is a fact.
-      if (committed.entry !== null && params.guard?.source && !ensureIdentitySource) {
-        source = await prepareSessionSourceAuthority(params.guard.source);
-        source.assertCurrent();
-      }
       return { entry: committed.entry, wrote: Boolean(committed.publication) };
     },
   });

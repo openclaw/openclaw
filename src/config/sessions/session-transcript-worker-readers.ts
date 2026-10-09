@@ -470,11 +470,12 @@ export function createSessionHistoryWorkerReaders(
       "a Goal operation receipt",
       (value) => value.result,
     ),
-    readEntryResult: reader("session-entry-read", "an entry", (value) =>
-      value.readError
+    readEntryResult: reader("session-entry-read", "an entry", (value) => ({
+      ...(value.readError
         ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-        : ok(value.entry),
-    ),
+        : ok(value.entry)),
+      source: value.source,
+    })),
     readEntryCurrent: reader(
       "session-entry-current",
       "entry currency facts",

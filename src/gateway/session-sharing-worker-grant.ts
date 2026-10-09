@@ -1,5 +1,5 @@
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,
@@ -152,11 +152,11 @@ export async function prepareSessionSharingWorkerGrant(params: {
       ) {
         throw changed(expected.sessionKey);
       }
-      const source = provided?.source ?? expected.resolved?.readSource;
+      const source = provided?.source ?? route?.readSource;
       if (!route || !source) {
         throw changed(expected.sessionKey);
       }
-      const originalSource = expected.resolved?.readSource;
+      const originalSource = route.readSource;
       if (
         originalSource &&
         (source.agentId !== originalSource.agentId ||

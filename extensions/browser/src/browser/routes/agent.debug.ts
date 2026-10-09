@@ -1,71 +1,19 @@
 import crypto from "node:crypto";
-import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_TRACE_DIR } from "../paths.js";
-import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
-import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
+import { createPlaywrightRouteRegistrar } from "./agent.playwright.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
-import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
-
-type DebugCollector = (
-  pw: PwAiModule,
-  target: { cdpUrl: string; targetId: string; signal: AbortSignal },
-) => Promise<object | null>;
+import type { BrowserRouteRegistrar } from "./types.js";
+import { toBoolean, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserAgentDebugRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
-  const register = (
-    method: "get" | "post",
-    path: string,
-    feature: string,
-    prepare: (input: Record<string, unknown>, res: BrowserResponse) => DebugCollector,
-    existingSessionUnsupported?: string,
-  ) => {
-    app[method](path, async (req, res) => {
-      const input = method === "get" ? req.query : readBody(req);
-      const targetId = normalizeOptionalString(input.targetId);
-      let collect: DebugCollector;
-      try {
-        collect = prepare(input, res);
-      } catch (error) {
-        return jsonError(res, 400, formatErrorMessage(error));
-      }
-      const profileCtx = resolveProfileContext(req, res, ctx);
-      if (!profileCtx) {
-        return;
-      }
-      if (
-        existingSessionUnsupported &&
-        getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
-      ) {
-        return jsonError(res, 501, existingSessionUnsupported);
-      }
-      await withPlaywrightRouteContext({
-        req,
-        res,
-        ctx,
-        profileCtx,
-        targetId,
-        feature,
-        enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw, resolveTabUrl, signal }) => {
-          const result = await collect(pw, { cdpUrl, targetId: tab.targetId, signal });
-          if (result === null) {
-            return;
-          }
-          const url = await resolveTabUrl(tab.url);
-          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
-        },
-      });
-    });
-  };
+  const register = createPlaywrightRouteRegistrar(app, ctx, "inspection");
 
   register("get", "/console", "console messages", (input) => {
     const level = normalizeOptionalString(typeof input.level === "string" ? input.level : "");
@@ -106,7 +54,8 @@ export function registerBrowserAgentDebugRoutes(
     (input) => {
       const selector = normalizeOptionalString(input.selector);
       const maxChars = readRoutePositiveInteger(input.maxChars, "maxChars");
-      return (pw, target) => pw.getPageTextViaPlaywright({ ...target, selector, maxChars });
+      return (pw, target, signal) =>
+        pw.getPageTextViaPlaywright({ ...target, signal, selector, maxChars });
     },
     EXISTING_SESSION_LIMITS.text,
   );
@@ -129,7 +78,7 @@ export function registerBrowserAgentDebugRoutes(
     };
   });
 
-  register("post", "/trace/stop", "trace stop", (input, res) => {
+  register("post", "/trace/stop", "trace stop", (input, _params, res) => {
     const requestedPath = toStringOrEmpty(input.path);
     return async (pw, { cdpUrl, targetId }) => {
       const tracePath = await resolveWritableOutputPathOrRespond({

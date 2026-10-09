@@ -253,27 +253,22 @@ function repairLegacyRow(database: OpenClawAgentDatabase, legacyConversationId: 
       db.insertInto("session_conversations").values([...mergedBindings.values()]),
     );
   }
-  executeSqliteQuerySync(
-    database.db,
+  for (const query of [
     db
       .updateTable("session_windows")
       .set({ primary_conversation_id: canonical.conversationId })
       .where("primary_conversation_id", "=", legacy.conversation_id),
-  );
-  executeSqliteQuerySync(
-    database.db,
     db
       .updateTable("conversation_deliveries")
       .set({ conversation_id: canonical.conversationId })
       .where("conversation_id", "=", legacy.conversation_id),
-  );
-  executeSqliteQuerySync(
-    database.db,
     db
       .updateTable("conversations")
       .set({ parent_conversation_id: canonical.conversationId })
       .where("parent_conversation_id", "=", legacy.conversation_id),
-  );
+  ]) {
+    executeSqliteQuerySync(database.db, query);
+  }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("conversations").where("conversation_id", "=", legacy.conversation_id),

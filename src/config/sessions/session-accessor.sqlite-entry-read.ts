@@ -221,6 +221,7 @@ export function prepareSqliteSessionEntryRowDecoder(
   rows: readonly ReadableSessionEntryRow[],
   projection: SessionEntryProjection | "delivery" = "full",
   projectParticipants = true,
+  onParticipantProjectionError?: (sessionKey: string) => void,
 ): (row: ReadableSessionEntryRow) => SessionEntry | null {
   const project =
     projection === "delivery" || !projectParticipants
@@ -231,7 +232,18 @@ export function prepareSqliteSessionEntryRowDecoder(
         );
   return (row) => {
     const parsed = parseReadableSessionEntryData(database, row, projection);
-    return parsed ? project(row.session_key, parsed) : null;
+    if (!parsed) {
+      return null;
+    }
+    try {
+      return project(row.session_key, parsed);
+    } catch (error) {
+      if (!onParticipantProjectionError) {
+        throw error;
+      }
+      onParticipantProjectionError(row.session_key);
+      return parsed;
+    }
   };
 }
 
@@ -498,6 +510,8 @@ export function prepareExactSessionEntryRowReads(
   options?: {
     includeBoardPresence?: boolean;
     includeMembership?: boolean;
+    /** Commit receipts retain canonical metadata but withhold failed display projections. */
+    onParticipantProjectionError?: (sessionKey: string) => void;
     projectParticipants?: false;
   },
 ): (sessionKey: string) => ResolvedSessionEntryRow | undefined {
@@ -512,6 +526,7 @@ export function prepareExactSessionEntryRowReads(
       if (
         options?.includeBoardPresence ||
         options?.includeMembership ||
+        options?.onParticipantProjectionError ||
         options?.projectParticipants === false
       ) {
         return (sessionKey) =>
@@ -521,11 +536,13 @@ export function prepareExactSessionEntryRowReads(
               row &&
               (options.projectParticipants === false
                 ? parseReadableSessionEntryData(database, row, projection)
-                : parseReadableSqliteSessionEntryRow(
+                : prepareSqliteSessionEntryRowDecoder(
                     database,
-                    row,
+                    [row],
                     projection === "delivery" ? "list" : projection,
-                  ));
+                    true,
+                    options.onParticipantProjectionError,
+                  )(row));
             return row && entry ? { entry, row } : undefined;
           });
       }
@@ -543,6 +560,7 @@ export function prepareExactSessionEntryRowReads(
       rows,
       projection,
       options?.projectParticipants !== false,
+      options?.onParticipantProjectionError,
     );
     return (sessionKey) =>
       runSqliteReadOperationSync(database.db, () => {

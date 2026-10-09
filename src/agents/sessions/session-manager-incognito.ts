@@ -25,6 +25,7 @@ import {
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { readSessionTranscriptContextMessagesInWorker } from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import type { SessionHistoryWorkerLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -43,15 +44,19 @@ import {
 /** SessionManager planning uses the same actor as its subsequent metadata command. */
 export function prepareSessionManagerHydration(
   source: SessionTranscriptRuntimeTarget,
-  limits?: { maxBytes: number; maxEvents: number },
-  signal?: AbortSignal,
-  manager?: object,
-  retarget = false,
+  options: {
+    limits?: { maxBytes: number; maxEvents: number };
+    signal?: AbortSignal;
+    manager?: object;
+    retarget?: boolean;
+    lane?: SessionHistoryWorkerLane;
+  } = {},
 ) {
+  const { limits, signal, manager, retarget = false, lane } = options;
   const target = captureSessionTranscriptTargetBinding(source);
   const incognitoBinding = captureSessionManagerIncognitoBinding(target, manager, retarget);
   if (!incognitoBinding) {
-    return { ...prepareSessionTranscriptHydration(target, limits, signal), incognitoBinding };
+    return { ...prepareSessionTranscriptHydration(target, limits, signal, lane), incognitoBinding };
   }
   const assertAdmission = captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding);
   const actor = incognitoBinding.actor;

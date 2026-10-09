@@ -1,4 +1,3 @@
-import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
@@ -6,7 +5,7 @@ import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
 
 export async function loadAgentVoiceSessionOperations() {
-  const { readRefusedSessionSource } =
+  const { readSessionSourceValidation } =
     await import("../config/sessions/session-source-predicate.worker.js");
   const kernel = await import("../talk/client-voice-session-write.kernel.js");
   const store = await import("../talk/client-voice-session-store.js");
@@ -19,26 +18,24 @@ export async function loadAgentVoiceSessionOperations() {
   return {
     "voice.session.read": (input: { voiceSessionId: string }, { open }) => {
       const database = open();
-      return runSqliteReadOperationSync(database.db, () => {
-        const record = store.readVoiceSessionRecordInTransaction(database, input.voiceSessionId);
-        let entry;
-        if (
-          record &&
-          record.effects.length > 0 &&
-          !record.digestDeliveredAt &&
-          !isIncognitoSessionKey(record.sessionKey)
-        ) {
-          canonical.assertCanonicalSqliteSessionKeysCurrent(database);
-          const key = keys.resolveSqliteSessionKey(record.sessionKey, database.agentId);
-          entry = entries.prepareExactSessionEntryRowReads(
-            database,
-            [key],
-            "delivery",
-            "canonical",
-          )(key)?.entry;
-        }
-        return { record, entry };
-      });
+      const record = store.readVoiceSessionRecordInTransaction(database, input.voiceSessionId);
+      let entry;
+      if (
+        record &&
+        record.effects.length > 0 &&
+        !record.digestDeliveredAt &&
+        !isIncognitoSessionKey(record.sessionKey)
+      ) {
+        canonical.assertCanonicalSqliteSessionKeysCurrent(database);
+        const key = keys.resolveSqliteSessionKey(record.sessionKey, database.agentId);
+        entry = entries.prepareExactSessionEntryRowReads(
+          database,
+          [key],
+          "delivery",
+          "canonical",
+        )(key)?.entry;
+      }
+      return { record, entry };
     },
     "voice.session.mutate": (
       input: Parameters<typeof kernel.mutateVoiceSessionInDatabase>[1] & {
@@ -58,12 +55,15 @@ export async function loadAgentVoiceSessionOperations() {
               input.transactionSource.agentId,
             )
           : undefined;
-        if (sourceFacts) {
-          admit("transaction", { kind: "voice-session-authority", facts: sourceFacts });
+        const sourceValidation = readSessionSourceValidation(database, input.sources);
+        if (sourceFacts || input.sources?.length) {
+          admit("transaction", {
+            kind: "voice-session-authority",
+            facts: sourceFacts,
+            sourceValidation,
+          });
         }
-        const refused = readRefusedSessionSource(database, input.sources);
-        if (refused) {
-          admit("transaction", { kind: "voice-session-source", ...refused });
+        if (sourceValidation.refusedSource) {
           throw new Error("Voice session source refusal was not rejected");
         }
         const entry =

@@ -276,102 +276,89 @@ export async function buildChannelsTable(
 
     const label = plugin.meta.label ?? plugin.id;
 
-    const state = (() => {
-      // Precedence matches operator actionability: disabled, local file breakage, plugin issues, auth, link.
+    const status = ((): Pick<ChannelRow, "state" | "detail"> => {
+      // Resolve shared precedence once; link details can still accompany unavailable credentials.
       if (!anyEnabled) {
-        return "off";
-      }
-      if (
-        missingPaths.length > 0 ||
-        issues.length > 0 ||
-        unavailableConfiguredAccounts.length > 0 ||
-        configurationUnknown ||
-        link.statusState === "unstable"
-      ) {
-        return "warn";
-      }
-      if (link.linked === false) {
-        return "setup";
-      }
-      if (tokenSummary.state) {
-        return tokenSummary.state;
-      }
-      return link.linked === true || configuredAccounts.length > 0 ? "ok" : "setup";
-    })();
-
-    const detail = (() => {
-      if (!anyEnabled) {
-        if (!defaultEntry) {
-          return "disabled";
-        }
-        return defaultEntry.kind === "resolved"
-          ? (plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled")
-          : (defaultEntry.snapshot.stateReason ?? "disabled");
+        const detail = !defaultEntry
+          ? "disabled"
+          : defaultEntry.kind === "resolved"
+            ? (plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled")
+            : (defaultEntry.snapshot.stateReason ?? "disabled");
+        return { state: "off", detail };
       }
       if (missingPaths.length > 0) {
-        return `missing file (${missingPaths[0]})`;
+        return { state: "warn", detail: `missing file (${missingPaths[0]})` };
       }
       if (issues.length > 0) {
-        return issues[0]?.message ?? "misconfigured";
+        return { state: "warn", detail: issues[0]?.message ?? "misconfigured" };
       }
       if (configurationUnknown) {
-        return "configuration status unavailable";
+        return { state: "warn", detail: "configuration status unavailable" };
       }
-      if (link.statusState || link.linked !== null) {
-        if (link.statusState && link.statusState !== "linked") {
-          return formatChannelStatusState(link.statusState);
+      const state =
+        unavailableConfiguredAccounts.length > 0 || link.statusState === "unstable"
+          ? "warn"
+          : link.linked === false
+            ? "setup"
+            : (tokenSummary.state ??
+              (link.linked === true || configuredAccounts.length > 0 ? "ok" : "setup"));
+      const detail = (() => {
+        if (link.statusState || link.linked !== null) {
+          if (link.statusState && link.statusState !== "linked") {
+            return formatChannelStatusState(link.statusState);
+          }
+          const linked = link.statusState === "linked" || link.linked === true;
+          const base = link.statusState
+            ? formatChannelStatusState(link.statusState)
+            : linked
+              ? "linked"
+              : "not linked";
+          const extra: string[] = [];
+          if (linked && link.selfE164) {
+            extra.push(formatPhoneNumberForCli(link.selfE164));
+          }
+          if (linked && link.authAgeMs != null && link.authAgeMs >= 0) {
+            extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
+          }
+          if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
+            extra.push(`accounts ${accounts.length || 1}`);
+          }
+          return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
         }
-        const linked = link.statusState === "linked" || link.linked === true;
-        const base = link.statusState
-          ? formatChannelStatusState(link.statusState)
-          : linked
-            ? "linked"
-            : "not linked";
-        const extra: string[] = [];
-        if (linked && link.selfE164) {
-          extra.push(formatPhoneNumberForCli(link.selfE164));
-        }
-        if (linked && link.authAgeMs != null && link.authAgeMs >= 0) {
-          extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
-        }
-        if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
-          extra.push(`accounts ${accounts.length || 1}`);
-        }
-        return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
-      }
 
-      if (unavailableConfiguredAccounts.length > 0) {
-        if (tokenSummary.detail?.includes("unavailable")) {
+        if (unavailableConfiguredAccounts.length > 0) {
+          if (tokenSummary.detail?.includes("unavailable")) {
+            return tokenSummary.detail;
+          }
+          return `configured credentials unavailable in this command path · accounts ${unavailableConfiguredAccounts.length}`;
+        }
+
+        if (tokenSummary.detail) {
           return tokenSummary.detail;
         }
-        return `configured credentials unavailable in this command path · accounts ${unavailableConfiguredAccounts.length}`;
-      }
 
-      if (tokenSummary.detail) {
-        return tokenSummary.detail;
-      }
-
-      if (configuredAccounts.length > 0) {
-        const head = "configured";
-        if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) {
-          return head;
+        if (configuredAccounts.length > 0) {
+          const head = "configured";
+          if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) {
+            return head;
+          }
+          return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
         }
-        return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
-      }
 
-      const reason =
-        defaultEntry?.kind === "resolved" && plugin.config.unconfiguredReason
-          ? plugin.config.unconfiguredReason(defaultEntry.account, cfg)
-          : defaultEntry?.snapshot.stateReason;
-      return reason ?? "not configured";
+        const reason =
+          defaultEntry?.kind === "resolved" && plugin.config.unconfiguredReason
+            ? plugin.config.unconfiguredReason(defaultEntry.account, cfg)
+            : defaultEntry?.snapshot.stateReason;
+        return reason ?? "not configured";
+      })();
+      return { state, detail };
     })();
 
     rows.push({
       id: plugin.id,
       label,
       enabled: anyEnabled,
-      state,
-      detail,
+      ...status,
     });
 
     if (configuredAccounts.length > 0) {

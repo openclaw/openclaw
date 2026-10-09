@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -34,7 +34,6 @@ context.getCommittedRuntimeConfig = () => cfg;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-sharing-source-") };
-  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   const opened = await captureOpenClawAgentDatabaseExecution({
     kind: "ephemeral",
     agentId: "main",
@@ -52,6 +51,7 @@ beforeAll(async () => {
   assert(foreign);
   foreignActor = foreign;
 });
+beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR));
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   await Promise.all([actor?.close(), foreignActor?.close()]);

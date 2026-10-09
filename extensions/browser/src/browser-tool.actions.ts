@@ -33,6 +33,7 @@ import {
   browserDownload,
   browserWaitForDownload,
 } from "./browser/client-actions.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
 import { browserTabs, type BrowserTabsResult } from "./browser/client.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -168,15 +169,14 @@ function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): bo
 }
 
 export async function executeTabsAction(params: {
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
   timeoutMs?: number;
-  proxyRequest: BrowserProxyRequest | null;
   targetId?: string;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, timeoutMs, proxyRequest } = params;
-  const result = await browserTabs(proxyRequest ?? baseUrl, {
+  const { target, profile, timeoutMs } = params;
+  const result = await browserTabs(target, {
     profile,
     timeoutMs,
     signal: params.signal,
@@ -227,13 +227,12 @@ function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | nul
 
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
-  const result = await browserConsoleMessages(proxyRequest ?? baseUrl, {
+  const { input, target, profile } = params;
+  const result = await browserConsoleMessages(target, {
     level: normalizeOptionalString(input.level),
     targetId: normalizeOptionalString(input.targetId),
     profile,
@@ -257,7 +256,7 @@ export async function executeDebugLogAction(
   kind: "requests" | "errors",
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const { input, target, profile, signal } = params;
   const limit =
     readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
     50;
@@ -268,13 +267,13 @@ export async function executeDebugLogAction(
     signal,
   };
   if (kind === "requests") {
-    const result = await browserRequests(proxyRequest ?? baseUrl, {
+    const result = await browserRequests(target, {
       ...options,
       filter: normalizeOptionalString(input.filter),
     });
     return formatBrowserDebugLogResult(kind, result, result.requests, limit);
   }
-  const result = await browserErrors(proxyRequest ?? baseUrl, options);
+  const result = await browserErrors(target, options);
   return formatBrowserDebugLogResult("errors", result, result.errors, limit);
 }
 
@@ -282,7 +281,7 @@ export async function executeDebugLogAction(
 export async function executeTextAction(
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const { input, target, profile, signal } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const selector = normalizeOptionalString(input.selector);
   const maxChars = Math.min(
@@ -291,7 +290,7 @@ export async function executeTextAction(
     }) ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   );
-  const result = await browserPageText(proxyRequest ?? baseUrl, {
+  const result = await browserPageText(target, {
     targetId,
     selector,
     maxChars,
@@ -320,7 +319,7 @@ export async function executeTextAction(
 export async function executeEmulateAction(
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const { input, target, profile, signal } = params;
   const settings = [
     ["device", "device", "name"],
     ["colorScheme", "media", "colorScheme"],
@@ -342,7 +341,7 @@ export async function executeEmulateAction(
   const applied: string[] = [];
   for (const { field, setting, key, value } of requested) {
     const body = { targetId, [key]: value };
-    const result = await browserEmulateSetting(proxyRequest ?? baseUrl, {
+    const result = await browserEmulateSetting(target, {
       setting,
       body,
       profile,
@@ -360,18 +359,18 @@ export async function executeDownloadAction(
     onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
   },
 ): Promise<AgentToolResult<unknown>> {
-  const { action, input, baseUrl, profile, proxyRequest } = params;
+  const { action, input, target, profile } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
   const options = { targetId, timeoutMs, profile, signal: params.signal };
   const result =
     action === "download"
-      ? await browserDownload(proxyRequest ?? baseUrl, {
+      ? await browserDownload(target, {
           ...options,
           ref: readStringParam(input, "ref", { required: true }),
           path: readStringParam(input, "path", { required: true }),
         })
-      : await browserWaitForDownload(proxyRequest ?? baseUrl, {
+      : await browserWaitForDownload(target, {
           ...options,
           path: readStringParam(input, "path"),
         });
@@ -417,9 +416,8 @@ export async function executeActAction(params: {
     return await appendNavigatedPageState({
       result: formatted,
       targetId: resolvedTargetId,
-      baseUrl,
+      target: proxyRequest ?? baseUrl,
       profile,
-      proxyRequest,
       signal: params.signal,
     });
   };

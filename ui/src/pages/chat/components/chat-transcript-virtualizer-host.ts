@@ -738,7 +738,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       ...virtualizer.options,
       count: nextKeys.length,
       getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
-      followOnAppend: false,
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, rowIndexesByKey, this.focusedRowKey),
       scrollMargin: resolveTranscriptScrollMargin(this.scrollElement, this.headerHeight),

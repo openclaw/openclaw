@@ -40,7 +40,10 @@ import type {
   SessionEntryReadSourcePreparation,
   SessionEntryCohortReader,
 } from "./session-entry-read-runtime.types.js";
-import type { SessionEntryListWorkerInput } from "./session-entry-read.types.js";
+import type {
+  SessionEntryListWorkerInput,
+  SessionEntryReadWorkerResult,
+} from "./session-entry-read.types.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionEntry,
@@ -60,6 +63,7 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import {
   maintenanceLane,
   projectionLane,
+  targetDiscoveryLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -71,6 +75,7 @@ export type SessionEntryReadWorkerOwner = {
   incognito?: IncognitoSessionBinding;
   assertCurrent: () => void;
   scope?: SessionEntryReadOnlyWorkerScope;
+  source?: SessionEntryReadWorkerResult["source"];
   selectedStore?: Readonly<Pick<SessionStoreReadCandidate, "path" | "physicalPath">>;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   refreshBeforeDispatch?: (assertRetainedTarget: () => void) => Promise<void>;
@@ -86,6 +91,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     owner: SessionEntryReadWorkerOwner,
   ) => Promise<T>,
   prepareSource?: SessionEntryReadSourcePreparation,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
@@ -141,13 +147,18 @@ export async function withSessionEntryReadOnlyInWorker<T>(
       };
       const read = await reader.readEntryResult({ scope: readScope, continuation });
       owner.assertCurrent();
-      const value = await consumeRead(read, { ...owner, kind: "file", scope: readScope });
+      const value = await consumeRead(read, {
+        ...owner,
+        kind: "file",
+        scope: readScope,
+        source: read.source,
+      });
       owner.assertCurrent();
       return value;
     },
     {
       backing: true,
-      lane: projectionLane,
+      lane: lane ?? projectionLane,
       dataOnly: true,
       logical: { assertCurrent: assertCallerCurrent, onReadError },
       prepareSource,
@@ -160,16 +171,23 @@ export function readSessionEntryReadOnlyInWorker(
   input: SessionEntryReadScope,
   assertCallerCurrent: () => void = () => {},
   reader?: SessionEntryCohortReader,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<SessionEntry | undefined> {
   if (reader) {
     return readAdmittedSessionEntry(reader, input, assertCallerCurrent);
   }
-  return withSessionEntryReadOnlyInWorker(input, assertCallerCurrent, async (read) => {
-    if (!read.ok) {
-      throw read.error;
-    }
-    return read.value;
-  });
+  return withSessionEntryReadOnlyInWorker(
+    input,
+    assertCallerCurrent,
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return read.value;
+    },
+    undefined,
+    lane,
+  );
 }
 
 /** Envelope timestamps are descriptive reads; missing stores remain absent. */
@@ -294,7 +312,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
-          lane: projectionLane,
+          lane: targetDiscoveryLane,
           prepareSource: options.prepareSource?.bind(
             options,
             originalInputs[capturedInputs.indexOf(input)]!,
@@ -598,7 +616,6 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
-        { lane: readLane },
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

@@ -1,6 +1,7 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveSqliteAgentId } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
+  acceptSessionSourceValidation,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
@@ -150,15 +151,13 @@ export async function prepareClientVoiceSessionSourceChecks(
   const [
     { retainOpenClawAgentDatabaseReadOnly },
     { readOpenClawAgentDatabaseIdentity },
-    { readRefusedSessionSource },
+    { readSessionSourceValidation },
     { hasSqliteSessionOwnerColumns },
-    { runSqliteReadOperationSync },
   ] = await Promise.all([
     import("../state/openclaw-agent-db-readonly.js"),
     import("../state/openclaw-agent-db-identity.js"),
     import("../config/sessions/session-source-predicate.worker.js"),
     import("../config/sessions/session-accessor.sqlite-owner-projection.js"),
-    import("../infra/sqlite-schema-facts.js"),
   ]);
   const resources: Pick<PreparedSessionSourceAuthority, "release">[] = [];
   const release = () => releaseSessionSourceAuthorities(resources);
@@ -201,14 +200,10 @@ export async function prepareClientVoiceSessionSourceChecks(
       assertions.push(() => {
         assertPathsCurrent();
         retained.claim.assertCurrent();
-        const refused = runSqliteReadOperationSync(
-          retained.database.db,
-          () => readRefusedSessionSource(retained.database, predicates),
-          "fresh",
+        acceptSessionSourceValidation(
+          { checks: group, assertCurrent: assertAuthoritiesCurrent },
+          readSessionSourceValidation(retained.database, predicates),
         );
-        if (refused) {
-          group[refused.index]!.refuse(refused.facts);
-        }
       });
     }
     return {

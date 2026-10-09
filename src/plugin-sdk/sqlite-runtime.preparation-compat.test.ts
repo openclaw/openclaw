@@ -5,8 +5,20 @@ type PublicationSource = Parameters<SqliteRuntime["openOpenClawAgentSqliteWorker
 type Execution = Extract<PublicationSource, { execution: unknown }>["execution"];
 type Source = Parameters<Execution["prepare"]>[0];
 type ReleasedPrepare = (source: Source, signal?: AbortSignal) => Promise<void>;
+// v2026.9.9 accepted this shape before host-only preparation and adoption capabilities.
+type ReleasedExecution = {
+  readonly agentId: string;
+  readonly path: string;
+  readonly fileIdentity: Execution["fileIdentity"];
+  assertCurrent(): void;
+  captureGenerationClaim: Execution["captureGenerationClaim"];
+  prepare: ReleasedPrepare;
+  runExisting: Execution["runExisting"];
+  release(): Promise<void>;
+};
 
 it("retains released agent execution preparation calls and implementations", () => {
+  expectTypeOf<{ execution: ReleasedExecution }>().toExtend<PublicationSource>();
   expectTypeOf<ReleasedPrepare>().toExtend<Execution["prepare"]>();
   expectTypeOf<Execution["prepare"]>().toExtend<ReleasedPrepare>();
   expectTypeOf<[Source]>().toExtend<Parameters<Execution["prepare"]>>();

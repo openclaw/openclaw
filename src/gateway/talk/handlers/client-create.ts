@@ -144,10 +144,13 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     );
     replacement?.assertCurrent(target);
     const { agentId, sessionKey } = target;
-    const assertTargetCurrent = () => {
-      sessionMutationAuthorization?.assertCurrent();
-      replacement?.assertCurrent(target);
-    };
+    const assertTargetCurrent = composeSessionSourceAssertion(
+      [sessionMutationAuthorization?.assertCurrent],
+      (assertSources) => {
+        assertSources();
+        replacement?.assertCurrent(target);
+      },
+    );
     const sessionTarget = { agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
     assertSecretOwnerAvailable("capability", "talk:realtime");
     const resolution = resolveConfiguredRealtimeVoiceProvider({
@@ -437,11 +440,13 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         ...(tools.length > 0 ? { tools } : {}),
         ...launchOptions,
       };
-      const assertCommitAllowed = () => {
-        sessionMutationCommitGuard?.();
-        assertTargetCurrent();
-        gatewayControlOwner?.assertOpen();
-      };
+      const assertCommitAllowed = composeSessionSourceAssertion(
+        [sessionMutationCommitGuard, assertTargetCurrent],
+        (assertSources) => {
+          assertSources();
+          gatewayControlOwner?.assertOpen();
+        },
+      );
       let session: Awaited<ReturnType<typeof resolution.provider.createBrowserSession>> | undefined;
       let delivered = false;
       let mutationGrant: SessionSourceWriteGrant | undefined;

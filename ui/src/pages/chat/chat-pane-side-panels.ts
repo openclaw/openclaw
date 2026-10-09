@@ -83,13 +83,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
-      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
-      this.setSessionObserverVisibility(false);
-      return;
-    }
-    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
-    this.setSessionObserverVisibility(true);
+    const closing = intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion");
+    const changeSlot = closing ? closeSlot : openSlot;
+    this.commitSidebarLayout(changeSlot(state.sidebarLayout, "companion"));
+    this.setSessionObserverVisibility(!closing);
   }
 
   requestSubagentsPanel(intent: "open" | "toggle"): void {

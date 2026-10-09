@@ -77,8 +77,6 @@ function collectExecPolicyConflictWarnings(
   approvals: ExecApprovalsFile,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const defaultRequestedSecuritySource = "OpenClaw default (full)";
-  const defaultRequestedAskSource = "OpenClaw default (off)";
 
   const maybeWarn = (params: {
     scopeLabel: string;
@@ -104,15 +102,6 @@ function collectExecPolicyConflictWarnings(
       scopeLabel: params.scopeLabel,
       agentId: params.agentId,
     });
-    const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
-    const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
-    const securityConflict =
-      securityConfigured && snapshot.security.requested !== snapshot.security.effective;
-    const askConflict = askConfigured && snapshot.ask.requested !== snapshot.ask.effective;
-    if (!securityConflict && !askConflict) {
-      return;
-    }
-
     const configParts: string[] = [];
     const hostParts: string[] = [];
     const canonicalModeSource =
@@ -123,16 +112,21 @@ function collectExecPolicyConflictWarnings(
     if (canonicalModeSource) {
       configParts.push(`${canonicalModeSource}="${snapshot.mode.requested}"`);
     }
-    for (const [field, conflict] of [
-      [snapshot.security, securityConflict],
-      [snapshot.ask, askConflict],
+    for (const [key, defaultSource] of [
+      ["security", "OpenClaw default (full)"],
+      ["ask", "OpenClaw default (off)"],
     ] as const) {
-      if (conflict) {
-        if (!canonicalModeSource) {
-          configParts.push(`${field.requestedSource}="${field.requested}"`);
-        }
-        hostParts.push(`${field.hostSource}="${field.host}"`);
+      const policy = snapshot[key];
+      if (policy.requestedSource === defaultSource || policy.requested === policy.effective) {
+        continue;
       }
+      if (!canonicalModeSource) {
+        configParts.push(`${policy.requestedSource}="${policy.requested}"`);
+      }
+      hostParts.push(`${policy.hostSource}="${policy.host}"`);
+    }
+    if (hostParts.length === 0) {
+      return;
     }
 
     findings.push({

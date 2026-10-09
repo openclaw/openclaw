@@ -27,6 +27,9 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   if (observed.key !== params.lease.sharedStateIdentity) {
     throw new Error("Retired agent cleanup cannot adopt a replacement shared database");
   }
+  params.assertOwned();
+  // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
+  invalidateOpenClawAgentDatabaseValidation(params.lease.path);
   const context = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,

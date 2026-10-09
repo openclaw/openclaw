@@ -79,7 +79,7 @@ import { SqliteTranscriptMutationConflictError } from "./session-mutation-confli
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -320,7 +320,7 @@ function commitLockedTranscript(
         context.admit("transaction", {
           kind: "session-transcript-lock-source",
           fresh,
-          refusedSource: readRefusedSessionSource(database, sources),
+          sourceValidation: readSessionSourceValidation(database, sources),
         });
       assertSources(false, input.sources);
       const entry = assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);

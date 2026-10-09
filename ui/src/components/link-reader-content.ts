@@ -2,6 +2,7 @@ import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import createDOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
+import { full as markdownItEmoji } from "markdown-it-emoji";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { i18n, t } from "../i18n/index.ts";
@@ -25,6 +26,8 @@ const documentOptions = normalizeMarkdownRenderOptions({
   assistantTranscriptRoleHeaders: false,
 });
 const markdown = createMarkdownParser();
+// Reader documents support named emoji without changing chat or emoticon text.
+markdown.use(markdownItEmoji, { shortcuts: {} });
 // Remote attachments commonly use a standalone HTML img. Only that passive
 // element is admitted; all other authored HTML keeps the shared parser's rules.
 for (const kind of ["html_inline", "html_block"] as const) {

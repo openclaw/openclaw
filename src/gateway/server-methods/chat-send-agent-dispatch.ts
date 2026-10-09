@@ -704,7 +704,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       emitSessionsChanged(
         context,
         { sessionKey, agentId, reason: "agent.input.settled" },
-        { accessChanged: false },
+        { accessChanged: false, rowScope: "runtime" },
       );
       if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media

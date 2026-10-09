@@ -11,6 +11,11 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -104,7 +109,7 @@ type SessionTitleParams = {
   storePath: string;
   currentUserMessage?: string;
   userMessage: string;
-  commitGuard?: () => void;
+  commitGuard?: SessionSourceAssertion;
   withSource?: WorktreeSourceStage;
   retryFailedJoin?: boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -394,13 +399,11 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     if (!displayName) {
       return false;
     }
-    const persist = async (assertSourceCurrent?: () => void) => {
-      const assertCommitAllowed = assertSourceCurrent
-        ? () => {
-            params.commitGuard?.();
-            assertSourceCurrent();
-          }
-        : params.commitGuard;
+    const persist = async (assertSourceCurrent?: SessionSourceAssertion) => {
+      const assertCommitAllowed = composeSessionSourceAssertion([
+        params.commitGuard,
+        assertSourceCurrent,
+      ]);
       if (assertSourceCurrent) {
         assertCommitAllowed?.();
       }
@@ -416,7 +419,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
         },
         {
           requireWriteSuccess: true,
-          ...(assertCommitAllowed ? { assertCommitAllowed } : {}),
+          ...sessionEntryCommitGuardOptions(assertCommitAllowed),
         },
       );
       return persisted;

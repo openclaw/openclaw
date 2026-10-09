@@ -571,10 +571,24 @@ export async function withBrowserSessionTabSelection<T>(
     async (store) =>
       await select({
         lookup: () => store.lookup(key),
-        update: (update, onCommitted) =>
-          updateBrowserSessionTabInOperation(store, key, update, { ...captured, onCommitted }),
-        deleteIf: (predicate) =>
-          deleteBrowserSessionTabInOperation(store, key, predicate, captured),
+        update: async (update, onCommitted) =>
+          (
+            await mutateBrowserSessionTabInOperation(
+              store,
+              key,
+              { operation: "update", update },
+              { ...captured, onCommitted },
+            )
+          ).next,
+        deleteIf: async (predicate) =>
+          (
+            await mutateBrowserSessionTabInOperation(
+              store,
+              key,
+              { operation: "delete", predicate },
+              captured,
+            )
+          ).deleted,
       }),
   );
 }
@@ -633,15 +647,21 @@ async function withBrowserSessionTabNativeIdentities<T>(
   return await run(0);
 }
 
-async function updateBrowserSessionTabInOperation(
+async function mutateBrowserSessionTabInOperation(
   store: ReturnType<typeof getBrowserSessionTabStore>,
   key: string,
-  update: BrowserSessionTabUpdate,
+  mutation:
+    | { operation: "update"; update: BrowserSessionTabUpdate }
+    | { operation: "delete"; predicate: (current: unknown) => boolean },
   authority: BrowserSessionTabWriteOptions,
-): Promise<BrowserSessionTabRecord | undefined> {
+): Promise<{ next: BrowserSessionTabRecord | undefined; deleted: boolean }> {
   let observed = await store.observe(key);
   while (true) {
-    const next = update(observed.value);
+    const next = mutation.operation === "update" ? mutation.update(observed.value) : undefined;
+    const deleted =
+      mutation.operation === "delete" &&
+      observed.value !== undefined &&
+      mutation.predicate(observed.value);
     const previous = parseBrowserSessionTabRecord(observed.value);
     const outcome = await withBrowserSessionTabNativeIdentities(
       [previous, next],
@@ -650,26 +670,36 @@ async function updateBrowserSessionTabInOperation(
         const result = await store.compareAndApply(
           key,
           observed.comparison,
-          next
-            ? { operation: "update", action: "set", value: next }
-            : { operation: "update", action: "keep" },
+          mutation.operation === "delete"
+            ? { operation: "delete", action: deleted ? "delete" : "keep" }
+            : next
+              ? { operation: "update", action: "set", value: next }
+              : { operation: "update", action: "keep" },
         );
         if (
           result.status === "conflict" ||
-          !next ||
+          (!next && !deleted) ||
           getOptionalBrowserStateRuntime() !== authority.runtime
         ) {
           return result;
         }
-        authority.onCommitted?.(next);
+        if (next) {
+          authority.onCommitted?.(next);
+        } else {
+          clearDurableTabAliases(key);
+          activeDurableStorageKeys().delete(key);
+        }
         if (
-          previous?.interactionTargetKind === "native" &&
-          (next.interactionTargetKind !== "native" ||
-            browserSessionTabNativeIdentity(previous) !== browserSessionTabNativeIdentity(next))
+          deleted ||
+          (previous?.interactionTargetKind === "native" &&
+            (next?.interactionTargetKind !== "native" ||
+              browserSessionTabNativeIdentity(previous) !== browserSessionTabNativeIdentity(next)))
         ) {
           await retireColdNativeActivityIfUnowned(
             store,
-            browserSessionTabNativeIdentity(previous),
+            previous?.interactionTargetKind === "native"
+              ? browserSessionTabNativeIdentity(previous)
+              : undefined,
             authority,
           );
         }
@@ -680,47 +710,6 @@ async function updateBrowserSessionTabInOperation(
       observed = outcome.current;
       continue;
     }
-    return next;
-  }
-}
-
-async function deleteBrowserSessionTabInOperation(
-  store: ReturnType<typeof getBrowserSessionTabStore>,
-  key: string,
-  predicate: (current: unknown) => boolean,
-  authority: BrowserSessionTabAuthority,
-): Promise<boolean> {
-  let observed = await store.observe(key);
-  while (true) {
-    const shouldDelete = observed.value !== undefined && predicate(observed.value);
-    const removed = parseBrowserSessionTabRecord(observed.value);
-    const outcome = await withBrowserSessionTabNativeIdentities([removed], authority, async () => {
-      const result = await store.compareAndApply(key, observed.comparison, {
-        operation: "delete",
-        action: shouldDelete ? "delete" : "keep",
-      });
-      if (
-        result.status === "conflict" ||
-        !shouldDelete ||
-        getOptionalBrowserStateRuntime() !== authority.runtime
-      ) {
-        return result;
-      }
-      clearDurableTabAliases(key);
-      activeDurableStorageKeys().delete(key);
-      await retireColdNativeActivityIfUnowned(
-        store,
-        removed?.interactionTargetKind === "native"
-          ? browserSessionTabNativeIdentity(removed)
-          : undefined,
-        authority,
-      );
-      return result;
-    });
-    if (outcome.status === "conflict") {
-      observed = outcome.current;
-      continue;
-    }
-    return shouldDelete;
+    return { next, deleted };
   }
 }

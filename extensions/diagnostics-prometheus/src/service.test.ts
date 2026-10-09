@@ -56,6 +56,23 @@ describe("diagnostics-prometheus service", () => {
     metrics.stop();
   });
 
+  it("counts HTTP cancellations by source without accepting public events", () => {
+    const metrics = createMetricsHarness();
+    for (const source of ["client", "client", "shutdown"] as const) {
+      metrics.record(
+        { type: "gateway.http.cancelled", source },
+        { trusted: false, internal: true },
+      );
+    }
+    metrics.record({ type: "gateway.http.cancelled", source: "client" }, untrusted);
+
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_gateway_http_cancelled_total counter");
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="client"} 2\n');
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="shutdown"} 1\n');
+    metrics.stop();
+  });
+
   it("exports bounded byte histograms, including late frames and negative heap changes", () => {
     const metrics = createMetricsHarness();
     const base = { type: "gateway.rpc" as const, method: "sessions.history" };

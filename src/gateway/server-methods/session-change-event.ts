@@ -400,6 +400,8 @@ export function emitSessionsChanged(
   payload: SessionChangedPayload,
   options: {
     accessChanged?: boolean;
+    /** The producer changed liveness only; durable owners publish their own row facts. */
+    rowScope?: "runtime";
     preparedPublication?: boolean;
     sessionRows?: SessionRowReadView;
     catalogOnly?: boolean;
@@ -414,6 +416,9 @@ export function emitSessionsChanged(
         ? {
             sessionKey: payload.sessionKey,
             ...(payload.agentId ? { agentId: payload.agentId } : {}),
+            ...(options.rowScope
+              ? { scope: options.rowScope, facts: { kind: "unchanged" as const } }
+              : {}),
           }
         : { all: true, scope: "sessions" },
     );

@@ -232,20 +232,15 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
-function isSlackSocketHeartbeatTimeoutWarning(args: readonly unknown[]) {
+function isSlackSocketNoiseWarning(args: readonly unknown[]) {
+  const message = args[0];
   return (
-    typeof args[0] === "string" &&
-    (args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX) ||
-      args[0].startsWith(SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX))
+    typeof message === "string" &&
+    (message.startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX) ||
+      message.startsWith(SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX) ||
+      SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(message) ||
+      SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE.test(message))
   );
-}
-
-function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
-  return typeof args[0] === "string" && SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(args[0]);
-}
-
-function isSlackSocketForeignDiagnosticsWarning(args: readonly unknown[]) {
-  return typeof args[0] === "string" && SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE.test(args[0]);
 }
 
 function formatSlackSdkLogArgs(args: readonly unknown[]) {
@@ -270,11 +265,7 @@ function createSlackSocketModeLogger(): SlackSocketModeLogger {
     debug: () => {},
     info: () => {},
     warn: (...args: unknown[]) => {
-      if (
-        isSlackSocketHeartbeatTimeoutWarning(args) ||
-        isSlackSocketSelfInflictedLoggerWarning(args) ||
-        isSlackSocketForeignDiagnosticsWarning(args)
-      ) {
+      if (isSlackSocketNoiseWarning(args)) {
         return;
       }
       remember(args);

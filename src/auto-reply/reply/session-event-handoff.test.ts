@@ -214,6 +214,69 @@ describe("session event target custody", () => {
     );
   });
 
+  it.each(["before", "after"] as const)(
+    "binds cold event capture to storage created %s the worker read",
+    async (creation) => {
+      await withTargetFixture(
+        async ({ env }) => {
+          const create = () => {
+            const database = openOpenClawAgentDatabase({ agentId: "main", env });
+            writeSessionEntry(database, sessionKey, {
+              sessionId: "created-during-capture",
+              lifecycleRevision: "created-during-capture",
+              updatedAt: 1,
+            });
+          };
+          const originalRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
+          const reader = vi
+            .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+            .mockImplementation((input, assertCurrent, consume, prepare) =>
+              originalRead(
+                input,
+                assertCurrent,
+                async (read, owner) => {
+                  if (creation === "after") {
+                    create();
+                  }
+                  return consume(read, owner);
+                },
+                (database, identity) => {
+                  prepare?.(database, identity);
+                  expect(identity.key).toMatch(/^path:/);
+                  if (creation === "before") {
+                    create();
+                  }
+                },
+              ),
+            );
+          try {
+            const capture = captureSessionEventTargetForHost("main", sessionKey, { env });
+            if (creation === "after") {
+              await expect(capture).rejects.toThrow("storage changed after capture");
+              return;
+            }
+            const target = await capture;
+            expect(target).toMatchObject({
+              sessionId: "created-during-capture",
+              lifecycleRevision: "created-during-capture",
+            });
+            reader.mockRestore();
+            const prepared = await prepareSessionEventTargetForHost(target);
+            try {
+              prepared.assertCurrent();
+            } finally {
+              prepared.release();
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+          } finally {
+            reader.mockRestore();
+          }
+        },
+        { empty: true, native: true },
+      );
+    },
+  );
+
   it.for([false, true])(
     "joins cold native preparation before settling cancellation (retained occurrence: %s)",
     async (preserve, { signal }) => {

@@ -10,6 +10,7 @@ import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { publishIncognitoSessionEntry } from "./session-incognito-binding.js";
 import type { IncognitoEntryPatchResult } from "./session-incognito-entry-patch-contract.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
@@ -111,11 +112,12 @@ export function patchIncognitoSessionEntry(params: {
             }
           },
           undefined,
-          (refusedSource) => {
+          (refusedSource, validation) => {
             if (refusedSource) {
               source.checks[refusedSource.index]?.refuse(refusedSource.facts);
               throw new Error("Session source refusal omitted its prepared assertion");
             }
+            acceptSessionSourceValidation(source, validation);
             params.assertCommitAllowed?.();
             source.assertCurrent();
           },

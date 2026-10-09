@@ -1,4 +1,4 @@
-import type { SessionSourcePredicateFacts } from "./session-source-authority.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 import type { SqliteExpectedSessionTranscriptTurnResult } from "./session-turn.types.js";
 
@@ -8,6 +8,6 @@ export type SessionColdMutationResult = {
   restored: boolean;
   sessionKey?: string;
   turnRebound?: SqliteExpectedSessionTranscriptTurnResult;
-  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
+  refusedSource?: NonNullable<SessionSourceValidation["refusedSource"]>;
   writerRefusal?: TranscriptAppendRefusal;
 };

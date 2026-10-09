@@ -1377,6 +1377,9 @@ src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
+src/plugins/plugin-instance-background.ts
+src/plugins/legacy-sdk-resource-host.ts
+src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
@@ -1673,6 +1676,7 @@ src/state/openclaw-agent-execution-config.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-incognito.ts
 src/state/openclaw-agent-execution-native.ts
+src/state/openclaw-agent-execution-owner.ts
 src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
@@ -1694,6 +1698,7 @@ src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-admission.ts
+src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
 src/state/openclaw-database-preflight-cleanup.ts
 src/state/openclaw-database-preflight-state-path.ts
@@ -1888,6 +1893,7 @@ src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts
 src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
 src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
+src/config/sessions/session-transcript-append-postimage.ts
 src/config/sessions/session-transcript-fts.ts
 src/config/sessions/session-transcript-index.ts
 src/config/sessions/session-transcript-projection-append.ts

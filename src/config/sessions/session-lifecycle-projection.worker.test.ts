@@ -92,6 +92,9 @@ function fixture() {
   const initial = {
     sessionId: "lifecycle-original",
     updatedAt: Date.now(),
+    createdAt: 123,
+    createdVia: "operator" as const,
+    createdActor: { type: "human" as const, source: "profile" as const, id: "creator" },
     skillsSnapshot: { prompt: "original saved prompt", skills: [] },
     sessionDiffBaseline: {
       version: 1 as const,
@@ -228,6 +231,11 @@ it("moves lifecycle counts and snapshot writes off the host while preserving mai
       sql.restore();
     }
     expect(f.read()?.skillsSnapshot).toEqual(f.upserts[0].entry.skillsSnapshot);
+    expect(f.read()).toMatchObject({
+      createdAt: f.initial.createdAt,
+      createdVia: f.initial.createdVia,
+      createdActor: f.initial.createdActor,
+    });
     expect(f.read()?.sessionDiffBaseline).toBeUndefined();
     expect(f.read(f.siblingKey)).toMatchObject({ archiveReason: "active-session-cap" });
     expect(f.read(f.createdKey)).toMatchObject({ sessionId: "new-session" });
