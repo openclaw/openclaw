@@ -392,6 +392,7 @@ export async function runEmbeddedAttemptPromptPhase(
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
+      pendingInputTokens: compactionRequestBudget?.pendingTokens,
       reserveTokens,
       sessionMessageCount: activeSession.messages.length,
       state,

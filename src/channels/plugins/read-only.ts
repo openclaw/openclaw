@@ -80,17 +80,6 @@ function addChannelPlugins(
   }
 }
 
-function rebindChannelScopedString(
-  value: string,
-  sourceChannelId: string,
-  targetChannelId: string,
-): string {
-  const sourcePrefix = `channels.${sourceChannelId}`;
-  return value === sourcePrefix || value.startsWith(`${sourcePrefix}.`)
-    ? `channels.${targetChannelId}${value.slice(sourcePrefix.length)}`
-    : value;
-}
-
 function normalizeManifestText(value: string | undefined, fallback: string): string {
   return sanitizeForLog(value?.trim() || fallback).trim();
 }
@@ -407,25 +396,20 @@ function rebindChannelPluginSecrets(
   if (!secrets) {
     return undefined;
   }
+  const sourcePrefix = `channels.${sourceChannelId}`;
+  const rebind = (value: string) =>
+    value === sourcePrefix || value.startsWith(`${sourcePrefix}.`)
+      ? `channels.${targetChannelId}${value.slice(sourcePrefix.length)}`
+      : value;
   return {
     ...secrets,
     secretTargetRegistryEntries: secrets.secretTargetRegistryEntries?.map((entry) => ({
       ...entry,
-      id: rebindChannelScopedString(entry.id, sourceChannelId, targetChannelId),
-      pathPattern: rebindChannelScopedString(entry.pathPattern, sourceChannelId, targetChannelId),
-      ...(entry.refPathPattern
-        ? {
-            refPathPattern: rebindChannelScopedString(
-              entry.refPathPattern,
-              sourceChannelId,
-              targetChannelId,
-            ),
-          }
-        : {}),
+      id: rebind(entry.id),
+      pathPattern: rebind(entry.pathPattern),
+      ...(entry.refPathPattern ? { refPathPattern: rebind(entry.refPathPattern) } : {}),
     })),
-    unsupportedSecretRefSurfacePatterns: secrets.unsupportedSecretRefSurfacePatterns?.map(
-      (pattern) => rebindChannelScopedString(pattern, sourceChannelId, targetChannelId),
-    ),
+    unsupportedSecretRefSurfacePatterns: secrets.unsupportedSecretRefSurfacePatterns?.map(rebind),
     collectRuntimeConfigAssignments: secrets.collectRuntimeConfigAssignments
       ? (params) =>
           secrets.collectRuntimeConfigAssignments?.({

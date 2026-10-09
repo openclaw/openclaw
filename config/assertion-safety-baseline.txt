@@ -1618,7 +1618,7 @@ src/channels/plugins/bundled-setup-policy.ts	2
 src/channels/plugins/bundled.ts	4
 src/channels/plugins/chat-target-prefixes.ts	2
 src/channels/plugins/config-helpers.ts	7
-src/channels/plugins/config-schema.ts	11
+src/channels/plugins/config-schema.ts	10
 src/channels/plugins/config-write-policy-shared.ts	1
 src/channels/plugins/contracts/outbound-payload-testkit.ts	4
 src/channels/plugins/contracts/trace/delivery-trace.ts	1

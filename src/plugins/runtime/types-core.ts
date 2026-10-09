@@ -411,6 +411,16 @@ export type PluginRuntimeCore = {
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      createSessionEntryListReader: (params: {
+        agentId: string;
+        storePath: string;
+        env?: NodeJS.ProcessEnv;
+      }) => Promise<
+        () => Promise<{
+          entries: RuntimeSessionStoreEntrySummary[];
+          assertCurrent: () => void;
+        }>
+      >;
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;

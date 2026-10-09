@@ -47,12 +47,15 @@ export type SessionEntryListWorkerInput = {
   scope: SessionEntryListScope & { cleanupSession?: string };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
+  ifRevision?: string;
 };
 
 export type SessionEntryListWorkerResult = {
   kind: "session-entry-list";
   entries: SessionEntrySummary[];
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  revision?: string;
+  unchanged?: true;
 };
 
 export type SessionExactEntriesWorkerInput = {

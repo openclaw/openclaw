@@ -27,7 +27,10 @@ import { withSessionTranscriptReadSource } from "../../config/sessions/session-t
 import { readSessionTranscriptContextMessagesInWorker } from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import type { SessionHistoryWorkerLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
-import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -154,9 +157,7 @@ function prepareSessionManagerIncognitoContext(
   };
 }
 
-function captureNativeContextOwner(
-  target: ReturnType<typeof captureSessionTranscriptTargetBinding>,
-) {
+function captureNativeContextOwner(target: CapturedSessionTranscriptTargetBinding) {
   const pathname = resolveIncognitoOpenClawAgentSqlitePath(target);
   const readOwner = () => getOpenIncognitoAgentDatabase(target.agentId, pathname);
   const owner = readOwner();

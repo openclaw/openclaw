@@ -41,7 +41,10 @@ import type {
   InternalSessionTranscriptWriteLockContext,
   InternalSessionTranscriptWriteLockParams,
 } from "./session-transcript-lock-runtime.js";
-import type { SessionTranscriptTargetParams } from "./session-transcript-runtime.js";
+import type {
+  SessionTranscriptTargetParams,
+  SessionTranscriptWriteContext,
+} from "./session-transcript-runtime.js";
 
 export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
 export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
@@ -190,31 +193,69 @@ export type CodexSessionTranscriptMirrorWriteLockContext =
     }>;
   };
 
-/** Runs the bundled Codex mirror under the transcript writer lock. */
+/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed at the next Plugin SDK major. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
+  return withMirrorWrite(params, run, "lock");
+}
+
+export type CodexSessionTranscriptMirrorWriteContext = SessionTranscriptWriteContext & {
+  readMessageFacts: CodexSessionTranscriptMirrorWriteLockContext["readMessageFacts"];
+  appendMessageWithMessageSequence: <TMessage>(
+    options: Omit<
+      LockedTranscriptMessageAppendOptions<TMessage>,
+      | "config"
+      | "prepareMessageAfterIdempotencyCheck"
+      | "prepareMessageAfterIdempotencyCheckAsync"
+      | "beforeFreshMessageCommit"
+    >,
+  ) => Promise<{
+    lifecycleRevision?: string;
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+};
+
+/** Runs ordered optimistic mirror writes and returns each committed message's sequence. */
+export async function withCodexSessionTranscriptMirrorWrite<T>(
+  params: InternalSessionTranscriptWriteLockParams,
+  run: (context: CodexSessionTranscriptMirrorWriteContext) => Promise<T> | T,
+): Promise<T> {
+  return withMirrorWrite(params, run, "sequence");
+}
+
+async function withMirrorWrite<T>(
+  params: InternalSessionTranscriptWriteLockParams,
+  run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
+  mode: "lock" | "sequence",
+): Promise<T> {
   const { withProjectedSessionTranscriptWriteLock } =
     await import("./session-transcript-lock-runtime.js");
-  return await withProjectedSessionTranscriptWriteLock(params, run, (context, locked) => ({
-    ...context,
-    appendMessageWithMessageSequence: (options) =>
-      locked.appendMessageWithMessageSequence({
-        ...options,
-        ...(params.config !== undefined ? { config: params.config } : {}),
-      }),
-    readMessageFacts: async (factParams) => {
-      const facts = await locked.readMessageFacts(factParams);
-      const messagesByIdempotencyKey = new Map<string, AgentMessage>();
-      for (const [idempotencyKey, message] of facts.messagesByIdempotencyKey) {
-        if (isAgentMessageRecord(message)) {
-          messagesByIdempotencyKey.set(idempotencyKey, message);
+  return await withProjectedSessionTranscriptWriteLock(
+    params,
+    run,
+    (context, locked) => ({
+      ...context,
+      appendMessageWithMessageSequence: (options) =>
+        locked.appendMessageWithMessageSequence({
+          ...options,
+          ...(params.config !== undefined ? { config: params.config } : {}),
+        }),
+      readMessageFacts: async (factParams) => {
+        const facts = await locked.readMessageFacts(factParams);
+        const messagesByIdempotencyKey = new Map<string, AgentMessage>();
+        for (const [idempotencyKey, message] of facts.messagesByIdempotencyKey) {
+          if (isAgentMessageRecord(message)) {
+            messagesByIdempotencyKey.set(idempotencyKey, message);
+          }
         }
-      }
-      return { ...facts, messagesByIdempotencyKey };
-    },
-  }));
+        return { ...facts, messagesByIdempotencyKey };
+      },
+    }),
+    mode,
+  );
 }
 
 function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {

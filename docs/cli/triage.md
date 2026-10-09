@@ -15,7 +15,9 @@ Collect sanitized diagnostics and open a coding agent on this machine to diagnos
 openclaw triage
 ```
 
-In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Codex (`codex`), Claude Code (`claude`), Pi (`pi`), OpenCode (`opencode`), Muse Code (`muse`), Grok Build (`grok`), Cursor (`cursor-agent`), Kimi Code (`kimi`), then Qwen Code (`qwen`). When both Codex and Claude Code are available, Codex takes priority unless you select an agent with `--agent`. An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication and native execution policy.
+In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Codex (`codex`), Claude Code (`claude`), Pi (`pi`), OpenCode (`opencode`), Muse Code (`muse`), Grok Build (`grok`), Cursor (`cursor-agent`), Kimi Code (`kimi`), Qwen Code (`qwen`), then Google Antigravity CLI (`agy`). When both Codex and Claude Code are available, Codex takes priority unless you select an agent with `--agent`. An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication and native execution policy.
+
+Google Antigravity CLI uses `agy --prompt-interactive` to start with the repair prompt and keep the session open. Install and sign in to the [official CLI](https://antigravity.google/docs/cli/install/) first. Triage uses Antigravity's existing authentication and permission settings; it does not import Google credentials or bypass tool approvals.
 
 Cursor selection uses `--agent cursor` and requires the `cursor-agent` alias installed by Cursor's CLI installer. Triage does not use the `cursor` editor command or the generic `agent` alias, which Grok also installs.
 
@@ -26,6 +28,7 @@ Claude Code starts with `--safe-mode` when supported, which disables custom hook
 Choose a particular agent with `--agent`, or collect diagnostics without starting one with `--json` or `--non-interactive`:
 
 ```bash
+openclaw triage --agent agy
 openclaw triage --agent codex
 openclaw triage --agent cursor
 openclaw triage --agent grok
@@ -106,9 +109,10 @@ On Windows, recognized npm `.cmd` and `.bat` shims launch their Node.js or nativ
 
 ## Manual handoff
 
-Non-interactive sessions save diagnostics without starting an agent. Human output prints one next step for the explicitly selected or first detected coding agent. If no coding agent is detected, it explains how to install one and rerun triage. Windows wrappers that require a shell remain available as manual commands. JSON output retains all external handoff commands and the explicit embedded route. Saved external prompts are read from stdin or, for Grok and Muse, with `--prompt-file`. Kimi Code receives a short instruction to read the saved prompt because it has no prompt-file or stdin input option. On macOS and Linux, the commands look like this:
+Non-interactive sessions save diagnostics without starting an agent. Human output prints one next step for the explicitly selected or first detected coding agent. If no coding agent is detected, it explains how to install one and rerun triage. Windows wrappers that require a shell remain available as manual commands. JSON output retains all external handoff commands and the explicit embedded route. Saved external prompts are read from stdin or, for Grok and Muse, with `--prompt-file`. Kimi Code and Antigravity CLI receive a short instruction to read the saved prompt rather than piping it to stdin. On macOS and Linux, the commands look like this:
 
 ```bash
+env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' agy --prompt-interactive 'Read the debugging prompt at <prompt-path> and follow its repair and verification instructions.'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' claude -p < '<prompt-path>'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' codex exec --skip-git-repo-check - < '<prompt-path>'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' cursor-agent --print < '<prompt-path>'
@@ -121,7 +125,7 @@ env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCL
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' openclaw triage --run
 ```
 
-A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native non-interactive tool policy, including Kimi Code's automatic permissions. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
+A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native tool policy, including Kimi Code's automatic permissions. Antigravity's saved command starts an interactive session. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
 
 Printed Windows commands target PowerShell, including Windows PowerShell 5.1. They read saved prompts as UTF-8, preserve literal paths, and restore your installation selectors after the command completes. WSL uses POSIX shell commands.
 
@@ -188,14 +192,14 @@ Embedded repair exits with 0 when its validation proves resolution, 2 when a tim
 
 ## Options
 
-| Option                   | Effect                                                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.                                           |
-| `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route.                              |
-| `--agent <name>`         | Select `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
-| `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                 |
-| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                    |
-| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                    |
+| Option                   | Effect                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.                                                  |
+| `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route.                                     |
+| `--agent <name>`         | Select `agy`, `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
+| `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                        |
+| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                           |
+| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                           |
 
 `--run` cannot be combined with `--json`, `--non-interactive`, or `--agent`.
 

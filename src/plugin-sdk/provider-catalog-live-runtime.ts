@@ -54,6 +54,7 @@ export type {
 } from "./provider-catalog-live-acquisition.internal.js";
 export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
+  buildOpenAICompatibleLiveModels,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,

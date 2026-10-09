@@ -19,7 +19,6 @@ extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
 extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
-extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
@@ -210,7 +209,6 @@ src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
 src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
-src/agents/agent-scope.test.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
@@ -288,7 +286,6 @@ src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
-src/auto-reply/reply/agent-runner-payloads.test.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts

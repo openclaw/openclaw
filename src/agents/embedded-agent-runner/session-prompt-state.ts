@@ -32,7 +32,6 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
-  persistedSystemPrompt?: string;
   prunedImageMessages?: Set<string>;
   removedRuntimeContextKeys?: Set<string>;
   runtimeContextCarrierPositions?: number[];
@@ -85,15 +84,17 @@ function promptSections(text: string): Map<string, string> {
 
 function promptDelta(previous: string, current: string): string[] {
   const before = promptSections(previous);
-  const after = promptSections(current);
-  return [
-    ...[...after].flatMap(([heading, section]) =>
-      before.get(heading) === section ? [] : [section],
-    ),
-    ...[...before.keys()].flatMap((heading) =>
-      after.has(heading) ? [] : [`${heading}\n(removed)`],
-    ),
-  ];
+  const sections: string[] = [];
+  for (const [heading, section] of promptSections(current)) {
+    if (before.get(heading) !== section) {
+      sections.push(section);
+    }
+    before.delete(heading);
+  }
+  for (const heading of before.keys()) {
+    sections.push(`${heading}\n(removed)`);
+  }
+  return sections;
 }
 
 /** Restore the admitted series; refreshed instructions append after its conversation prefix. */
@@ -103,10 +104,9 @@ export function prepareSessionSystemPrompt(params: {
   systemPrompt: string;
   entries: SessionEntry[];
 }) {
-  const { permissionNotice, systemPrompt: prompt } = extractAttemptPermissionNotice(
+  const { permissionNotice, systemPrompt: renderedPrefix } = extractAttemptPermissionNotice(
     params.systemPrompt,
   );
-  const renderedPrefix = prompt;
   const historyId =
     params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
     null;
@@ -120,7 +120,6 @@ export function prepareSessionSystemPrompt(params: {
   if (orphanedUpdate) {
     // A canceled append may precede its checkpoint; retire that override before any new request.
     params.state.systemPrompt = undefined;
-    params.state.persistedSystemPrompt = undefined;
   }
   let series = params.state.pendingSystemPrompt ?? params.state.systemPrompt;
   if (
@@ -149,12 +148,12 @@ export function prepareSessionSystemPrompt(params: {
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         restart: false,
       };
-      params.state.persistedSystemPrompt = JSON.stringify(series);
+      params.state.systemPrompt = series;
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
   const sections =
-    !restart && series
+    !restart && series && series.renderedPrefix !== renderedPrefix
       ? promptDelta(
           stripSystemPromptCacheBoundary(series.renderedPrefix),
           stripSystemPromptCacheBoundary(renderedPrefix),
@@ -207,7 +206,6 @@ export async function retireSessionSystemPrompt(
 ): Promise<void> {
   state.systemPrompt = undefined;
   state.pendingSystemPrompt = undefined;
-  state.persistedSystemPrompt = undefined;
   state.systemPromptRouteKey = routeKey;
   await appendEntry("openclaw.system-prompt", { restart: true, routeKey });
 }
@@ -220,18 +218,24 @@ export async function persistSessionSystemPrompt(
   if (!snapshot) {
     return;
   }
-  const fingerprint = JSON.stringify({ ...snapshot, restart: false });
-  if (snapshot.restart || state.persistedSystemPrompt !== fingerprint) {
+  const previous = state.systemPrompt;
+  if (
+    snapshot.restart ||
+    !previous ||
+    snapshot.prefix !== previous.prefix ||
+    snapshot.renderedPrefix !== previous.renderedPrefix ||
+    snapshot.routeKey !== previous.routeKey ||
+    snapshot.historyId !== previous.historyId ||
+    snapshot.permissionNotice !== previous.permissionNotice
+  ) {
     try {
       await appendEntry("openclaw.system-prompt", snapshot);
     } catch (error) {
       // Rejection can follow a durable commit; keep pending work, but distrust the cached checkpoint.
       state.systemPrompt = undefined;
-      state.persistedSystemPrompt = undefined;
       throw error;
     }
   }
-  state.persistedSystemPrompt = fingerprint;
   state.systemPrompt = { ...snapshot, restart: false };
   state.pendingSystemPrompt = undefined;
 }
