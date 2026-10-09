@@ -70,4 +70,17 @@ struct RemindersServiceTests {
         let payload = RemindersService.payload(from: reminder, formatter: formatter)
         #expect(payload.dueISO == formatter.string(from: expectedDate))
     }
+
+    @Test func `payload includes reminder notes when present`() {
+        let store = EKEventStore()
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = "Reminder with notes"
+        reminder.calendar = EKCalendar(for: .reminder, eventStore: store)
+        let formatter = ISO8601DateFormatter()
+
+        #expect(RemindersService.payload(from: reminder, formatter: formatter).notes == nil)
+
+        reminder.notes = "Bring the signed form"
+        #expect(RemindersService.payload(from: reminder, formatter: formatter).notes == "Bring the signed form")
+    }
 }
