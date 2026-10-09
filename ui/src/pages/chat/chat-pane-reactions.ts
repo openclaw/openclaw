@@ -123,7 +123,15 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     this.requestUpdate();
   }
 
-  protected readonly handleMessageReaction = async (
+  protected readonly handleMessageReaction = (
+    messageId: string,
+    emoji: string,
+    remove: boolean,
+  ): void => {
+    void this.setMessageReaction(messageId, emoji, remove);
+  };
+
+  protected readonly setMessageReaction = async (
     messageId: string,
     emoji: string,
     remove: boolean,

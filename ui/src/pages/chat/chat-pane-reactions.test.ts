@@ -19,7 +19,7 @@ const peerReaction: MessageReactionSummary[] = [
 type ReactionsPane = {
   syncSessionReactions(): void;
   handleSessionReactionEvent(event: SessionReactionEvent): void;
-  handleMessageReaction(messageId: string, emoji: string, remove: boolean): Promise<void>;
+  setMessageReaction(messageId: string, emoji: string, remove: boolean): Promise<void>;
   messageReactions: Map<string, MessageReactionSummary[]>;
 };
 
@@ -83,7 +83,7 @@ describe("pane reaction ownership", () => {
         await list.promise;
         await Promise.resolve();
         await Promise.resolve();
-        write = pane.handleMessageReaction("message-1", "🎉", false);
+        write = pane.setMessageReaction("message-1", "🎉", false);
       }
       pane.handleSessionReactionEvent(event());
       list.resolve({ sessionId: "session-1", reactions: {} });
@@ -107,7 +107,7 @@ describe("pane reaction ownership", () => {
     const { pane, session, event } = fixture(list.promise, set.promise);
     pane.syncSessionReactions();
     pane.handleSessionReactionEvent(event());
-    const write = pane.handleMessageReaction("message-1", "🎉", false);
+    const write = pane.setMessageReaction("message-1", "🎉", false);
     session("session-2");
     pane.syncSessionReactions();
     pane.handleSessionReactionEvent(event());
