@@ -59,6 +59,7 @@ import {
   withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
+import { useIncognitoActorProbe } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
@@ -70,6 +71,8 @@ import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
+const probe = useIncognitoActorProbe();
+
 it("settles an accepted incognito outbox write after the close prelude and before actor retirement", async ({
   signal,
 }) => {
@@ -79,7 +82,7 @@ it("settles an accepted incognito outbox write after the close prelude and befor
   const accepted = createDeferredCore();
   const joining = createDeferredCore();
   let actor: IncognitoAgentDatabaseExecution | undefined;
-  let holding: Promise<void> | undefined;
+  let holding: Promise<unknown> | undefined;
   let writing: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let persisted: unknown;
@@ -119,7 +122,7 @@ it("settles an accepted incognito outbox write after the close prelude and befor
       path: actor.path,
       incognito: { actor, authority, ...target },
     });
-    holding = actor.run(authority, async () => {
+    holding = probe.read(actor, authority, async () => {
       entered.resolve();
       await release.promise;
     });

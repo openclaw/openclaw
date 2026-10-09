@@ -462,6 +462,19 @@ export async function prepareSqliteTranscriptReadScope(
   if (isIncognitoSessionKey(readScope.sessionKey)) {
     return resolveSqliteTranscriptReadScope(readScope);
   }
+  const { getOwnedSessionTranscriptReader } = await import("./transcript-write-context.js");
+  const reader = getOwnedSessionTranscriptReader(readScope);
+  if (reader) {
+    return {
+      agentId: reader.logicalAgentId,
+      databaseAgentId: reader.database.agentId,
+      path: reader.database.path,
+      ownerStorePath: readScope.storePath,
+      env: reader.database.env,
+      sessionKey: reader.sessionKey,
+      sessionId: readScope.sessionId,
+    };
+  }
   const target = await prepareSqliteScopeTarget(readScope, signal);
   return {
     ...resolveSqliteReadScope(readScope, undefined, target),

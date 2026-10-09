@@ -40,6 +40,7 @@ import {
 } from "./agent-dir-registry.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
@@ -53,16 +54,18 @@ import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
-  PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
-  type PreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerRequest,
-  type PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.js";
+} from "./prepared-model-catalog-fingerprints.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
+import type {
+  PreparedModelCatalogWorkerInput,
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerRequest,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
@@ -219,6 +222,9 @@ async function runCatalogRequest(
   let prepared: WorkerGeneration | undefined;
   let acquiredGeneration: WorkerGeneration | undefined;
   try {
+    if (value.sharedAuthStoreOwnership) {
+      noteCommittedSharedAuthStoreOwnership(value.sharedAuthStoreOwnership, value.input.env);
+    }
     if (directoryOwner) {
       registeredDirectoryOwner = registerResolvedAgentDir(directoryOwner);
       if (

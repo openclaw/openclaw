@@ -30,6 +30,7 @@ import {
   fromRow,
   query,
   readWorkerPlacementsForReconcileInDatabase,
+  readWorkerPlacementsInDatabase,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
@@ -388,11 +389,9 @@ export function createWorkerSessionPlacementStore(
     },
 
     list(): WorkerSessionPlacementRecord[] {
-      const db = read();
-      return executeSqliteQuerySync(
-        db,
-        query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
-      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+      return readWorkerPlacementsInDatabase(read()).map((record) =>
+        withWorkspaceResultConflict(record)!,
+      );
     },
 
     async readChangeSnapshot(profileIds?: readonly string[]) {

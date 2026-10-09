@@ -36,6 +36,7 @@ import {
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
 export type SessionTranscriptWorkerReadSource = {
   scope: SessionTranscriptReadScope & {
@@ -78,6 +79,54 @@ export async function withSessionTranscriptReadSource<T>(
   }
   const storePath =
     captured.storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: captured.env });
+  const selected = getOwnedSessionTranscriptReader(captured);
+  if (selected) {
+    const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
+    const assertSource = () => {
+      signal?.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      selected.assertCurrent();
+    };
+    assertSource();
+    const identity = readDatabasePathIdentitySync(selected.database.path);
+    if (!identity.key.startsWith("file:")) {
+      throw new Error("Admitted transcript database is no longer available");
+    }
+    return withSessionHistoryWorkerDatabase(
+      { ...selected.database, requestedPaths: selected.storePaths },
+      async (owner) => {
+        const assertCurrent = () => {
+          assertSource();
+          owner.assertCurrent();
+        };
+        assertCurrent();
+        try {
+          return await readInWorker({
+            scope: {
+              ...captured,
+              agentId: selected.logicalAgentId,
+              storePath: selected.database.path,
+            },
+            resolved: {
+              agentId: selected.logicalAgentId,
+              databaseAgentId: selected.database.agentId,
+              path: selected.database.path,
+              ownerStorePath: storePath,
+              env: selected.database.env,
+              sessionKey: selected.sessionKey,
+              sessionId: captured.sessionId,
+            },
+            owner,
+            expectedIdentity: identity,
+            assertCurrent,
+          });
+        } finally {
+          assertCurrent();
+        }
+      },
+    );
+  }
   const candidates = captureSessionStoreReadCandidates(storePath);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });

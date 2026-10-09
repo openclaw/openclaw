@@ -255,11 +255,6 @@ export async function resolveAgentRunSessionTarget(
   const prepared = prepareTarget ? await prepareTarget(scope) : undefined;
   const target = prepared?.target ?? (await resolveSessionTranscriptRuntimeTarget(scope));
   prepared?.assertCurrent();
-  const { restoreSessionColdTranscript } =
-    await import("../config/sessions/session-cold-storage.js");
-  prepared?.assertCurrent();
-  await restoreSessionColdTranscript(target, prepared?.assertCurrent);
-  prepared?.assertCurrent();
   return target;
 }
 

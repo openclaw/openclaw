@@ -18,6 +18,7 @@ import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
+import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -281,6 +282,11 @@ export async function executeCliProcess(params: {
         onInterrupted: (reason) => {
           streamingParser?.finish();
           const partialOutput = streamingParser?.getOutput();
+          if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
+            throw createCliFailoverError(partialOutput.errorText, "format", failoverContext, {
+              code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
+            });
+          }
           if (
             !partialOutput?.text.trim() ||
             partialOutput.errorText ||

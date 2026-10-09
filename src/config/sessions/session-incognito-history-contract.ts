@@ -55,10 +55,8 @@ import type {
   SessionTranscriptAccountingOptions,
   SessionTranscriptAccountingSnapshot,
 } from "./session-transcript-accounting.types.js";
-import type {
-  SessionTranscriptAnchorFacts,
-  SessionTranscriptAnchorSelection,
-} from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type {
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
