@@ -238,7 +238,7 @@ function duplicateScopedFieldFinding(
   return undefined;
 }
 
-function scopedPolicyFields(
+export function scopedPolicyFields(
   scopeName: string,
   overlay: Record<string, unknown>,
   selector: PolicyScopeSelectorKind,

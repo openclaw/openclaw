@@ -457,28 +457,25 @@ export class SidebarSessionNarrationController {
     // A newly subscribed sidebar can join mid-run. Within one run the server's
     // cumulative snapshot grows monotonically, so length arithmetic decides
     // append vs rejoin without storing the raw stream.
-    if (record.replace === true) {
-      // Handle before any truthiness gate: an EMPTY replacement retracts the
-      // narration line (streamLength 0 takes publishText's clearing path).
-      const replacement = messageText ?? deltaText;
+    const replacement = record.replace === true;
+    if (replacement || messageText !== null) {
+      const snapshot = messageText ?? deltaText;
+      const appends =
+        !replacement &&
+        deltaText !== "" &&
+        consumed > 0 &&
+        snapshot.length - deltaText.length === consumed;
+      // An empty replacement still reaches publishText's clearing path.
       this.publishText(key, {
-        streamLength: replacement.length,
-        fragment: replacement,
-        reset: true,
+        streamLength: snapshot.length,
+        fragment: appends ? deltaText : snapshot,
+        reset: !appends,
         immediate,
       });
       return;
     }
     if (deltaText) {
-      if (messageText !== null) {
-        const appends = consumed > 0 && messageText.length - deltaText.length === consumed;
-        this.publishText(key, {
-          streamLength: messageText.length,
-          fragment: appends ? deltaText : messageText,
-          reset: !appends,
-          immediate,
-        });
-      } else if (consumed > 0) {
+      if (consumed > 0) {
         this.publishText(key, {
           streamLength: consumed + deltaText.length,
           fragment: deltaText,
@@ -486,19 +483,11 @@ export class SidebarSessionNarrationController {
           immediate,
         });
       }
-      // consumed === 0 with a bare delta: a mid-run join may sit INSIDE an
-      // internal-context block whose opening delimiter we never saw. Stay
-      // silent until a cumulative snapshot or replacement aligns the stream.
+      // A bare delta cannot align a mid-run join inside an internal-context block.
+      // Stay silent until a cumulative snapshot or replacement aligns the stream.
       return;
     }
-    if (messageText !== null) {
-      this.publishText(key, {
-        streamLength: messageText.length,
-        fragment: messageText,
-        reset: true,
-        immediate,
-      });
-    } else if (immediate) {
+    if (immediate) {
       const pending = this.throttles.get(key)?.pending;
       if (pending != null) {
         this.publishImmediate(key, pending);
@@ -690,19 +679,15 @@ export class SidebarSessionNarrationController {
 
   private publishActivity(key: string, text: string): void {
     const line = deriveSidebarNarrationLine(text);
-    if (line) {
-      if (this.lines.get(key) !== line) {
-        this.lines.set(key, line);
-        this.onLinesChanged(new Map(this.lines));
-      }
+    // A full visible buffer that normalizes to nothing retracts the prior line.
+    const changed = line ? this.lines.get(key) !== line : this.lines.delete(key);
+    if (!changed) {
       return;
     }
-    // The activity text is the full visible buffer: normalizing it to nothing
-    // means only suppressed content remains (e.g. a replacement that reduced
-    // to a historical control reply or a heartbeat), so retract any previously shown line.
-    if (this.lines.delete(key)) {
-      this.onLinesChanged(new Map(this.lines));
+    if (line) {
+      this.lines.set(key, line);
     }
+    this.onLinesChanged(new Map(this.lines));
   }
 
   private clearLine(key: string): void {

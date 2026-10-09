@@ -11,6 +11,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   parseSkillFrontmatter,
   resolveSkillInvocationPolicy,
@@ -55,13 +56,30 @@ function bindPreparedSelection(prepared: {
 const selectedEntryCache = new Map<string, SkillEntry[]>();
 
 /** Async preparation retains pin values even when a caller later edits its snapshot. */
-export function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
+function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
   return selections.map(({ skillId, revision, name, ownerProfileId }) => ({
     skillId,
     revision,
     name,
     ownerProfileId,
   }));
+}
+
+export function captureSkillLibraryPreparation(
+  selections: readonly SkillLibrarySelection[],
+  assertCallerCurrent?: () => void,
+) {
+  const librarySelections = captureSkillLibrarySelection(selections);
+  const libraryContext = librarySelections.length ? captureOpenClawStateWorkerContext() : undefined;
+  return {
+    librarySelections,
+    libraryContext,
+    assertCurrent: () => {
+      assertCallerCurrent?.();
+      libraryContext?.maintenanceScope?.assertAdmission();
+      libraryContext?.admission.assertCurrent();
+    },
+  };
 }
 
 /** The session owner has already authorized this exact immutable pin. */

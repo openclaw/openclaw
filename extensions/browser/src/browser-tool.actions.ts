@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/param-readers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asNullableObjectRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -82,10 +83,10 @@ function withLocalActTimeout(
 }
 
 function formatAgentTab(tab: unknown): Record<string, unknown> {
-  if (!tab || typeof tab !== "object") {
+  const source = asNullableObjectRecord(tab);
+  if (!source) {
     return { value: tab };
   }
-  const source = tab as Record<string, unknown>;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
   const webExtensionTabId =
@@ -181,26 +182,19 @@ export async function executeTabsAction(params: {
     timeoutMs,
     signal: params.signal,
   });
-  const tabs = result.running
-    ? result.tabs.filter(
-        (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
-      )
-    : [];
+  const tabs = result.tabs.filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
   return formatTabsToolResult({ running: result.running, tabs });
 }
 
 /** Validate the /act wire payload's abort summary once for note and page-state decisions. */
 function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
-  if (!result || typeof result !== "object") {
+  const aborted = asNullableObjectRecord(asNullableObjectRecord(result)?.aborted);
+  if (!aborted) {
     return null;
   }
-  const aborted = (result as { aborted?: unknown }).aborted;
-  if (!aborted || typeof aborted !== "object") {
-    return null;
-  }
-  const { reason, afterAction, url, skipped } = aborted as Partial<
-    Record<keyof BrowserBatchAbort, unknown>
-  >;
+  const { reason, afterAction, url, skipped } = aborted;
   if (
     (reason !== "navigation" && reason !== "closed") ||
     typeof afterAction !== "number" ||
@@ -338,8 +332,7 @@ export async function executeEmulateAction(
     throw new Error("colorScheme must be dark|light|no-preference|none.");
   }
   let targetId = normalizeOptionalString(input.targetId);
-  const applied: string[] = [];
-  for (const { field, setting, key, value } of requested) {
+  for (const { setting, key, value } of requested) {
     const body = { targetId, [key]: value };
     const result = await browserEmulateSetting(target, {
       setting,
@@ -348,9 +341,8 @@ export async function executeEmulateAction(
       signal,
     });
     targetId = result.targetId ?? targetId;
-    applied.push(field);
   }
-  return jsonResult({ ok: true, targetId, applied });
+  return jsonResult({ ok: true, targetId, applied: requested.map(({ field }) => field) });
 }
 
 export async function executeDownloadAction(

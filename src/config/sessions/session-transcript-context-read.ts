@@ -20,6 +20,7 @@ import {
   readSessionTranscriptAnchorsAsync,
   readSessionTranscriptAnchorsFromSource,
 } from "./session-transcript-anchor-read.js";
+import { retainSessionTranscriptContextGeneration } from "./session-transcript-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -126,7 +127,13 @@ export function readSessionTranscriptModelContextAsync<T>(
     assertCurrent: () => void,
     binding?: IncognitoSessionHistoryBinding,
     contextAdmission = capturedAdmission,
+    databaseIdentity?: string,
   ): Promise<T> => {
+    const generation = retainSessionTranscriptContextGeneration(
+      scope,
+      context.version,
+      databaseIdentity,
+    );
     const contextValidation = structuredClone({
       version: context.version,
       admission: contextAdmission,
@@ -140,6 +147,7 @@ export function readSessionTranscriptModelContextAsync<T>(
         signal,
         (facts) => {
           assertCurrent();
+          generation.assertCurrent();
           if (
             !facts.contextValidated &&
             (contextValidation.version || contextAdmission || capturedThrough)
@@ -175,6 +183,7 @@ export function readSessionTranscriptModelContextAsync<T>(
       joined = true;
       return (await validate(() => value)).value;
     } finally {
+      generation.release();
       // Initial acceptance can fail after starting a consumer; its owner still joins that work.
       if (consumerSettlement && !joined) {
         await consumerSettlement.catch(() => undefined);
@@ -288,7 +297,14 @@ export function readSessionTranscriptModelContextAsync<T>(
         expectedIdentity,
       );
       assertCurrent();
-      return accept(captured, context, assertCurrent);
+      return accept(
+        captured,
+        context,
+        assertCurrent,
+        undefined,
+        capturedAdmission,
+        expectedIdentity?.key.startsWith("file:") ? expectedIdentity.key.slice(5) : undefined,
+      );
     },
     signal,
   );

@@ -44,18 +44,15 @@ const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
 const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
 
 function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
-  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
-  if (!peerId) {
+  if (!normalizeOptionalString(parts[markerIndex + 1])) {
     return false;
   }
   const tail = parts.slice(markerIndex + 2);
-  if (tail.length === 0) {
-    return true;
-  }
   return (
-    tail.length === 2 &&
-    THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
-    Boolean(normalizeOptionalString(tail[1]))
+    tail.length === 0 ||
+    (tail.length === 2 &&
+      THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
+      Boolean(normalizeOptionalString(tail[1])))
   );
 }
 

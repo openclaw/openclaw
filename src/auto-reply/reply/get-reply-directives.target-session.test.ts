@@ -205,11 +205,6 @@ vi.mock("./directive-handling.parse.js", async () => {
   };
 });
 
-vi.mock("./get-reply-directive-aliases.js", () => ({
-  reserveSkillCommandNames: vi.fn(),
-  resolveConfiguredDirectiveAliases: vi.fn(() => []),
-}));
-
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: (...args: unknown[]) =>
     mocks.applyInlineDirectiveOverrides(...args),

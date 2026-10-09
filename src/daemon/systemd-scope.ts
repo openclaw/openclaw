@@ -484,45 +484,36 @@ async function findMarkerOwnedSystemSystemdUnit(
   return found;
 }
 
-async function findUserSystemdGatewayScope(
+async function findSystemdGatewayScope(
   env: GatewayServiceEnv,
+  scope: "user" | "system",
+  options?: SystemdDiscoveryOptions,
+  discoverCustom = true,
 ): Promise<SystemdServiceReadTarget | null> {
   const candidates = resolveInstalledSystemdServiceNameCandidates(env);
-  for (const name of candidates) {
-    try {
-      const userPath = resolveSystemdUnitPathForName(env, name);
-      await fs.access(userPath);
-      return { scope: "user", unitName: `${name}.service`, unitPath: userPath };
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-async function findSystemSystemdGatewayScope(
-  env: GatewayServiceEnv,
-  options: SystemdDiscoveryOptions | undefined,
-  discoverCustom: boolean,
-): Promise<SystemdServiceReadTarget | null> {
-  const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
-  for (const name of candidates) {
+  const names = scope === "system" ? systemdInstalledNameProbes(candidates) : candidates;
+  const directories = scope === "system" ? DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS : [undefined];
+  for (const name of names) {
     const unitName = `${name}.service`;
-    for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
-      const unitPath = path.posix.join(dir, unitName);
+    for (const dir of directories) {
+      let unitPath: string;
       try {
+        unitPath =
+          dir === undefined
+            ? resolveSystemdUnitPathForName(env, name)
+            : path.posix.join(dir, unitName);
         await fs.access(unitPath);
       } catch {
         continue;
       }
       return {
-        scope: "system",
-        unitName: resolveSystemdTemplateInstanceName(unitName, env),
+        scope,
+        unitName: scope === "system" ? resolveSystemdTemplateInstanceName(unitName, env) : unitName,
         unitPath,
       };
     }
   }
-  if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
+  if (scope === "user" || env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return null;
   }
   // System-scope installs may use a non-canonical unit name for the default
@@ -538,9 +529,9 @@ export async function findSystemdGatewayInstallation(
 ): Promise<SystemdGatewayInstallation> {
   const deadline =
     options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
-  const user = await findUserSystemdGatewayScope(env);
+  const user = await findSystemdGatewayScope(env, "user");
   // With a user unit present, only this profile's known system aliases compete.
-  const system = await findSystemSystemdGatewayScope(env, options, !user);
+  const system = await findSystemdGatewayScope(env, "system", options, !user);
   if (user) {
     if (system && (await systemdUnitsShareInstallation(env, user, system, options, deadline))) {
       return { kind: "dueling", user, system };
@@ -558,11 +549,11 @@ export async function findInstalledSystemdGatewayScope(
   env: GatewayServiceEnv,
   options?: SystemdDiscoveryOptions,
 ): Promise<SystemdServiceReadTarget | null> {
-  const user = await findUserSystemdGatewayScope(env);
+  const user = await findSystemdGatewayScope(env, "user");
   if (user) {
     return user;
   }
-  return await findSystemSystemdGatewayScope(env, options, true);
+  return await findSystemdGatewayScope(env, "system", options, true);
 }
 
 /** Doctor may remove a duplicate only when the system unit runs now and survives reboot. */

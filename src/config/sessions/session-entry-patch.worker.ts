@@ -29,6 +29,7 @@ import type {
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 
 /** Connection-bound domains share the executor's transaction and publication grants. */
 export function createSessionWorkerOperationContext(
@@ -197,7 +198,9 @@ export function transferSessionEntryWorkerCandidate<Receipt>(
 ): SessionEntryPatchReceipt | Receipt {
   // Deliver the exact candidate before COMMIT; the small native receipt certifies it afterward.
   const transfer = createSqliteWorkerTransferOwner();
-  const handle = transfer.start([{ kind: "patch", value: result }].values(), {
+  const transcriptPublication = readStagedSessionTranscriptAuthority(database);
+  const candidate = transcriptPublication ? { ...result, transcriptPublication } : result;
+  const handle = transfer.start([{ kind: "patch", value: candidate }].values(), {
     kinds: ["patch"],
   });
   try {

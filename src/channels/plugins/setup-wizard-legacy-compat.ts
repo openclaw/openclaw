@@ -53,21 +53,19 @@ export function createLegacyCompatChannelDmPolicy(params: {
   channel: string;
   promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
 }): ChannelSetupDmPolicy {
+  const configKeys = (accountId?: string) => {
+    const accountPath =
+      accountId && accountId !== DEFAULT_ACCOUNT_ID ? `.accounts.${accountId}` : "";
+    return {
+      policyKey: `channels.${params.channel}${accountPath}.dmPolicy`,
+      allowFromKey: `channels.${params.channel}${accountPath}.allowFrom`,
+    };
+  };
   return {
     label: params.label,
     channel: params.channel,
-    policyKey: `channels.${params.channel}.dmPolicy`,
-    allowFromKey: `channels.${params.channel}.allowFrom`,
-    resolveConfigKeys: (_cfg, accountId) =>
-      accountId && accountId !== DEFAULT_ACCOUNT_ID
-        ? {
-            policyKey: `channels.${params.channel}.accounts.${accountId}.dmPolicy`,
-            allowFromKey: `channels.${params.channel}.accounts.${accountId}.allowFrom`,
-          }
-        : {
-            policyKey: `channels.${params.channel}.dmPolicy`,
-            allowFromKey: `channels.${params.channel}.allowFrom`,
-          },
+    ...configKeys(),
+    resolveConfigKeys: (_cfg, accountId) => configKeys(accountId),
     getCurrent: (cfg, accountId) => {
       const channelConfig = resolveLegacyChannelConfig(cfg, params.channel);
       const accountConfig =

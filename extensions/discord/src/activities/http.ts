@@ -51,12 +51,6 @@ type DiscordActivityHttpDeps = {
   bodyTimeoutMs?: number;
 };
 
-function setCommonHeaders(res: ServerResponse): void {
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-}
-
 function respond(
   res: ServerResponse,
   statusCode: number,
@@ -65,7 +59,9 @@ function respond(
   headers?: Record<string, string>,
 ): true {
   res.statusCode = statusCode;
-  setCommonHeaders(res);
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Type", contentType);
   for (const [key, value] of Object.entries(headers ?? {})) {
     res.setHeader(key, value);
@@ -119,15 +115,8 @@ function bearerToken(req: IncomingMessage): string | undefined {
   return match?.[1];
 }
 
-function widgetIdFromCustomId(customId: string): string | undefined {
-  if (WIDGET_ID_PATTERN.test(customId)) {
-    return customId;
-  }
-  return parseDiscordActivityCustomId(customId)?.widgetId;
-}
-
 export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps): {
-  handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
+  handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 } {
   const fetchGuard = deps.fetchGuard ?? fetchWithSsrFGuard;
   const limiter = new TokenRateLimiter(deps.now ?? Date.now);
@@ -286,7 +275,9 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       widget: NonNullable<Awaited<ReturnType<typeof deps.runtime.store.lookupWidget>>>;
     } | null = null;
     // Prefer an explicit ID, then the click-time launch record, then the newest posted widget.
-    const requestedWidgetId = widgetIdFromCustomId(customId);
+    const requestedWidgetId = WIDGET_ID_PATTERN.test(customId)
+      ? customId
+      : parseDiscordActivityCustomId(customId)?.widgetId;
     if (requestedWidgetId) {
       const widget = await deps.runtime.store.lookupWidget(requestedWidgetId);
       // A parseable ID is an explicit widget selection. Missing or foreign widgets fail closed
@@ -367,7 +358,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
   }
 
   return {
-    async handleHttpRequest(req, res) {
+    handleHttpRequest: async (req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (
         url.pathname !== DISCORD_ACTIVITY_ROUTE_PREFIX &&

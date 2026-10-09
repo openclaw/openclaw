@@ -5,6 +5,12 @@ import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
 
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+};
+
 export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
   catalogOnly: boolean;
