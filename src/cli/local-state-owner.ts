@@ -11,8 +11,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
+import { resolveCliStateOwnerGatewayTimeoutMs } from "./state-owner-timeout.js";
 
 type LocalMutationScope = {
   env: NodeJS.ProcessEnv;
@@ -150,6 +152,18 @@ export async function runWithLocalStateOwner<T>(params: {
     let dispatched = false;
     try {
       assertTargetCurrent();
+      // A routed call is only as responsive as the Gateway's event loop. Report the wait
+      // before it starts so a starved Gateway is diagnosable instead of a silent hang.
+      const timeoutMs = resolveCliStateOwnerGatewayTimeoutMs();
+      process.stderr.write(
+        `${formatConsoleDiagnosticLine({
+          level: "warn",
+          message:
+            `Waiting up to ${Math.round(timeoutMs / 1000)}s for the Gateway state owner ` +
+            `(pid ${owner.pid}) to complete ${params.method} for ${params.target}. ` +
+            `If it is mid-startup this will time out; raise OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS for a longer wait.`,
+        })}\n`,
+      );
       // The transport owns reduced connection config; full runtime loading can write state.
       return await callGateway<T>({
         method: params.method,
@@ -162,7 +176,7 @@ export async function runWithLocalStateOwner<T>(params: {
           GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
           ...(params.requiredCapabilities ?? []),
         ],
-        timeoutMs: 600_000,
+        timeoutMs,
         signal: controller.signal,
         scopes: ["operator.admin"],
         clientName: GATEWAY_CLIENT_NAMES.CLI,

@@ -749,6 +749,11 @@ describe("same-root local mutation routing", () => {
         if (scenario === "lost-reply") {
           expect(result.stderr).toContain("outcome may be partial");
         }
+        if (scenario !== "offline") {
+          // The routed handshake reports its bounded wait before dispatching, so a
+          // starved Gateway is diagnosable instead of a silent multi-minute hang.
+          expect(result.stderr).toContain("Waiting up to");
+        }
         // Read the canonical owner's persisted publication after success or a lost
         // reply. Unknown outcomes must never trigger a caller-thread SQL replay.
         let payload =
