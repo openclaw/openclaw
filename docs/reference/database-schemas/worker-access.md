@@ -3024,6 +3024,12 @@ permission generation, cancellation, and one-time replay consumption remain live
 checks after waits. The core run settles outside reader custody. This changes no
 schema, stored bytes, retention, durability, or update behavior.
 
+Orphan preparation under a selected transcript owner skips hydration when the
+persisted current input already matches the model tail or is excluded from model
+context. That decision performs no repair and grants no replay authority; final
+core-entry replay still reads fresh transcript facts. Missing recorder state,
+unmatched input, and standalone SDK callers retain fresh orphan inspection.
+
 CLI harness history preparation reads the session owner, current input, and
 transcript watermark through the existing anchor reader. Its metadata patch
 rechecks the exact input identity and watermark in the existing writer's
