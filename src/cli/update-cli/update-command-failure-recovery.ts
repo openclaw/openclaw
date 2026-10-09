@@ -4,6 +4,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { getUpdateRun, recordUpdateRunDiagnostics } from "../../infra/update-run-ledger.js";
+import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -116,7 +117,11 @@ export async function verifyUpdateFailureRecovery(params: {
         });
         return;
       }
-      if (params.opts.restart === false && !params.serviceStopped) {
+      if (
+        params.opts.restart === false &&
+        !params.serviceStopped &&
+        result.steps.some(isUpdatePostInstallVerificationDeferred)
+      ) {
         result.steps.push({
           name: "gateway recovery verification",
           command: "gateway verification",
@@ -172,7 +177,7 @@ export async function verifyUpdateFailureRecovery(params: {
         expectedVersion: version,
         expectedBuildId: buildId ?? undefined,
         timeoutMs: params.timeoutMs,
-        waitForStartup: params.waitForStartup,
+        waitForStartup: params.opts.restart === false ? false : params.waitForStartup,
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent?.();

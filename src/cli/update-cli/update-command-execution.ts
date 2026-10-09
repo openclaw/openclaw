@@ -6,6 +6,7 @@ import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-stat
 import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
@@ -676,8 +677,8 @@ export async function executeMutableUpdate(
   result = recordMutableUpdateInterruption(opts, result);
   if (
     result.status === "ok" &&
-    !params.shouldRestart &&
-    result.steps.some((step) => step.name === "post-install-verify" && step.advisory)
+    opts.restart === false &&
+    result.steps.some(isUpdatePostInstallVerificationDeferred)
   ) {
     result = { ...result, status: "skipped", reason: "gateway-readiness-unverified" };
   }

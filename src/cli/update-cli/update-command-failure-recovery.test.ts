@@ -176,12 +176,14 @@ describe("post-update failure recovery observation", () => {
   });
 
   it.each([
-    { activated: false, json: true },
-    { activated: true, json: false },
-    { activated: true, json: true },
+    { activated: false, json: true, deferred: false },
+    { activated: true, json: false, deferred: false },
+    { activated: true, json: true, deferred: false },
+    { activated: true, json: false, deferred: true },
+    { activated: true, json: true, deferred: true },
   ])(
-    "defers operator recovery and observes owned recovery (activated=$activated, json=$json)",
-    async ({ activated, json }) => {
+    "defers only recorded state contention (activated=$activated, json=$json, deferred=$deferred)",
+    async ({ activated, json, deferred }) => {
       const env = { ...process.env };
       const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       const readRuntime = vi.fn(async () => ({ status: "unknown" }));
@@ -230,6 +232,21 @@ describe("post-update failure recovery observation", () => {
               reason: "doctor-failed",
               recovery: { serviceRestartSafe: true, version: "2026.9.5" },
               steps: [
+                ...(deferred
+                  ? [
+                      {
+                        name: "post-install-verify",
+                        command: "verify installed package",
+                        cwd: root,
+                        durationMs: 0,
+                        exitCode: null,
+                        advisory: {
+                          kind: "recoverable-maintenance" as const,
+                          message: "State verification deferred to the operator restart.",
+                        },
+                      },
+                    ]
+                  : []),
                 {
                   name: "candidate-doctor-lint",
                   command: "doctor",
@@ -251,8 +268,8 @@ describe("post-update failure recovery observation", () => {
       if (!(failure instanceof ReportedUpdateCommandFailure)) {
         throw failure;
       }
-      expect(readRuntime).toHaveBeenCalledTimes(activated ? 0 : 1);
-      expect(inspect).toHaveBeenCalledTimes(activated ? 0 : 1);
+      expect(readRuntime).toHaveBeenCalledTimes(deferred ? 0 : 1);
+      expect(inspect).toHaveBeenCalledTimes(deferred ? 0 : 1);
       expect(sleep).not.toHaveBeenCalled();
       expect(waitForStartup).not.toHaveBeenCalled();
       expect(elapsedMs).toBe(0);
@@ -272,7 +289,7 @@ describe("post-update failure recovery observation", () => {
         );
       }
       expect(recorded?.verification.serviceRunning).toBeUndefined();
-      expect(recorded?.verification.readyz).toBe(activated ? undefined : false);
+      expect(recorded?.verification.readyz).toBe(deferred ? undefined : false);
       expect(recorded?.steps).toContainEqual(
         expect.objectContaining({ step: "candidate-doctor-lint", exitCode: 2 }),
       );
@@ -280,10 +297,10 @@ describe("post-update failure recovery observation", () => {
         (step) => step.step === "gateway recovery verification",
       );
       expect(recoveryStep).toMatchObject({
-        status: activated ? "completed" : "failed",
-        exitCode: activated ? null : 1,
+        status: deferred ? "completed" : "failed",
+        exitCode: deferred ? null : 1,
       });
-      if (activated) {
+      if (deferred) {
         expect(recoveryStep?.detail).toContain("deferred");
         expect(recoveryStep?.detail).toContain("service owner");
         expect(recoveryStep?.detail).toContain(

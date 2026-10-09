@@ -25,16 +25,20 @@ const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, succe
 
 describe("mutable update execution", () => {
   registerServiceCollectionTests();
-  it.each(["package", "git"] as const)(
-    "records deferred %s verification as a non-failure",
-    async (kind) => {
+  it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      (["deferred", "advisory", "failure"] as const).map((outcome) => ({ kind, outcome })),
+    ),
+  )(
+    "scopes $kind verification deferral to state contention ($outcome)",
+    async ({ kind, outcome }) => {
       const options = executionParams(kind);
       options.opts.restart = options.shouldRestart = false;
       const deferred = {
         name: "post-install-verify",
         command: "verify installed package",
         cwd: options.root,
-        exitCode: null,
+        exitCode: outcome === "advisory" ? 0 : null,
         durationMs: 0,
         advisory: {
           kind: "recoverable-maintenance" as const,
@@ -42,13 +46,24 @@ describe("mutable update execution", () => {
         },
       };
       const install = kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate;
-      install.mockResolvedValueOnce({ ...successfulUpdate, steps: [deferred] });
+      const result = {
+        ...successfulUpdate,
+        ...(outcome === "failure" ? { status: "error", reason: "post-update-failed" } : {}),
+        steps: [deferred],
+      };
+      install.mockResolvedValueOnce(result);
       const execution = await executeMutableUpdate(await bindExecutionGuards(options));
       expect(execution?.result).toMatchObject({
-        status: "skipped",
-        reason: "gateway-readiness-unverified",
+        status: outcome === "deferred" ? "skipped" : outcome === "failure" ? "error" : "ok",
         steps: [deferred],
       });
+      expect(execution?.result.reason).toBe(
+        outcome === "deferred"
+          ? "gateway-readiness-unverified"
+          : outcome === "failure"
+            ? "post-update-failed"
+            : undefined,
+      );
     },
   );
   it.each(
