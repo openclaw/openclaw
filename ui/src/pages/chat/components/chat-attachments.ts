@@ -14,10 +14,10 @@ import {
   generateAttachmentId,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles, chatAttachmentBatchBytes } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
@@ -64,10 +64,6 @@ function isEditableDropTarget(event: DragEvent): boolean {
     return !editable.disabled && !editable.readOnly;
   }
   return editable instanceof HTMLElement && editable.isContentEditable;
-}
-
-function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
-  return props.getAttachments?.() ?? props.attachments ?? [];
 }
 
 /** Decoded bytes already committed to the next send: ready attachments plus in-flight reads. */
@@ -289,19 +285,6 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
   };
 }
 
-function removeBrowserAnnotationAttachment(
-  attachment: ChatAttachment,
-  props: ChatAttachmentControlsProps,
-): void {
-  if (props.onRemoveAttachment) {
-    props.onRemoveAttachment(attachment);
-    return;
-  }
-  const next = currentAttachments(props).filter((candidate) => candidate.id !== attachment.id);
-  releaseChatAttachmentPayload(attachment.id);
-  props.onAttachmentsChange?.(next);
-}
-
 function renderAttachmentImage(
   attachment: ChatAttachment,
   alt: string,
@@ -377,7 +360,10 @@ function renderBrowserAnnotationAttachment(
           type="button"
           aria-label=${removeLabel}
           ?disabled=${props.disabled}
-          @click=${() => removeBrowserAnnotationAttachment(attachment, props)}
+          @click=${() =>
+            props.onRemoveAttachment
+              ? props.onRemoveAttachment(attachment)
+              : removeDraftAttachment(attachment, props)}
         >
           ${icons.x}
         </button>
@@ -487,9 +473,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         ?disabled=${props.disabled}
                         @click=${() => {
                           props.attachmentReads?.remove(entry);
-                          const next = currentAttachments(props).filter((a) => a.id !== att.id);
-                          releaseChatAttachmentPayload(att.id);
-                          props.onAttachmentsChange?.(next);
+                          removeDraftAttachment(att, props);
                         }}
                       >
                         ${icons.x}

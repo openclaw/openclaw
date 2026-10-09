@@ -16,12 +16,13 @@ import type { CanonicalSessionReaderContinuation } from "./session-canonical-key
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
   SessionSourcePredicateFacts,
 } from "./session-source-authority.js";
-import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -46,12 +47,15 @@ export type SessionEntryListWorkerInput = {
   scope: SessionEntryListScope & { cleanupSession?: string };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
+  ifRevision?: string;
 };
 
 export type SessionEntryListWorkerResult = {
   kind: "session-entry-list";
   entries: SessionEntrySummary[];
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  revision?: string;
+  unchanged?: true;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -108,6 +112,7 @@ export type SessionEntryCohortRequest = Pick<
   sessionKeys: readonly string[];
   includeAuthProfileSource?: boolean;
   runtimeTarget?: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId" | "sessionKey">;
+  includeColdMetadata?: boolean;
   expected?: {
     /** Native incarnation returned by this cohort, independent of the host execution claim. */
     incarnation: string;
@@ -117,10 +122,10 @@ export type SessionEntryCohortRequest = Pick<
       lifecycleRevision: string | undefined;
     }[];
   };
-  transcript?: {
+  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
     sessionKey: string;
-    entryIds: readonly string[];
-    includeHeader?: boolean;
+    /** Captured logical owner; the executor still selects the physical database. */
+    agentId?: string;
   };
 };
 
@@ -153,11 +158,12 @@ export type SessionExactEntriesWorkerResult = {
     members: Array<{ sessionKey: string; identityIds: string[] }>;
     placeholders: Array<{ sessionKey: string; sessionId: string }>;
   };
-  transcript?: Pick<SessionTranscriptAnchorFacts, "anchors" | "header">;
+  transcript?: SessionTranscriptAnchorFacts;
 };
 
 export type SessionEntryCohortResult = SessionExactEntriesWorkerResult & {
   runtimeTarget?: SessionTranscriptRuntimeTarget;
+  coldArchives?: Array<Omit<SessionColdArchive, "archive_blob">>;
   source: NonNullable<SessionExactEntriesWorkerResult["source"]>;
   databaseIdentity: NonNullable<SessionExactEntriesWorkerResult["databaseIdentity"]>;
   authProfileSource?: boolean;

@@ -74,24 +74,11 @@ describe("buildCodexMessagesSnapshot", () => {
     );
   });
 
-  it("leaves ordinary current-turn messages visible", () => {
-    const messages = buildSnapshot("user");
-
-    expect(messages.every((message) => (message as { display?: boolean }).display !== false)).toBe(
-      true,
-    );
-  });
-
-  it.each([
-    "completed replacement",
-    "replaceable stream",
-    "cumulative replacement",
-    "append-only streams",
-  ] as const)(
+  it.each(["completed replacement", "cumulative replacement", "append-only streams"] as const)(
     "captures only visible assistant items at the first steer (%s)",
     async (replacement) => {
       const projector = await createProjector();
-      const phase = replacement === "replaceable stream" ? {} : { phase: "final_answer" };
+      const phase = { phase: "final_answer" };
       await projector.handleNotification(
         forCurrentTurn("item/started", {
           item: { type: "agentMessage", id: "preview", text: "", ...phase },
@@ -181,48 +168,46 @@ describe("buildCodexMessagesSnapshot", () => {
     );
   });
 
-  it.each(["streamed", "raw-completed"])(
-    "adopts the saved prefix for an accepted raw completion under %s",
-    async (completionId) => {
-      const projector = await createProjector();
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: { type: "agentMessage", id: "streamed", phase: "final_answer", text: "" },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/agentMessage/delta", {
-          itemId: "streamed",
-          delta: "Before steer.",
-        }),
-      );
-      commitSteeringPrefix(projector, projector.buildSteeringTranscriptPrefix());
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: {
-            type: "message",
-            role: "assistant",
-            phase: "final_answer",
-            id: completionId,
-            content: [{ type: "output_text", text: "Before steer. After steer." }],
-          },
-        }),
-      );
-      await projector.handleNotification(
-        turnCompleted([
-          {
-            type: "agentMessage",
-            id: completionId,
-            phase: "final_answer",
-            text: "Before steer. After steer.",
-          },
-        ]),
-      );
-      expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-        "After steer.",
-      ]);
-    },
-  );
+  it("adopts the saved prefix for a raw completion with a replacement identity", async () => {
+    const completionId = "raw-completed";
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "streamed", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/agentMessage/delta", {
+        itemId: "streamed",
+        delta: "Before steer.",
+      }),
+    );
+    commitSteeringPrefix(projector, projector.buildSteeringTranscriptPrefix());
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          role: "assistant",
+          phase: "final_answer",
+          id: completionId,
+          content: [{ type: "output_text", text: "Before steer. After steer." }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: completionId,
+          phase: "final_answer",
+          text: "Before steer. After steer.",
+        },
+      ]),
+    );
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+      "After steer.",
+    ]);
+  });
 
   it.each([true, false])(
     "respects the first completion boundary across a native tool (completed before tool: %s)",

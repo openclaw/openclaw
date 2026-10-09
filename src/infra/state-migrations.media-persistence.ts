@@ -29,6 +29,7 @@ import {
 import {
   assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
+  getOpenClawAgentMigrationSchema,
 } from "../state/openclaw-agent-db-schema-helpers.js";
 import {
   ensureOpenClawAgentDatabaseSchemaSteps,
@@ -40,9 +41,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../state/openclaw-agent-db.js";
-import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { withLegacyAgentStorageSchema } from "../state/openclaw-agent-storage-schema.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -83,6 +81,7 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
+import { repairDoctorSessionWindowOrphans } from "./state-migrations.session-window-repair.js";
 import {
   MEDIA_ARCHIVE_VERIFICATION_KEY,
   migrateCanonicalTranscriptArchives,
@@ -161,7 +160,7 @@ async function migrateAgentDatabase(params: {
         userVersion = readSqliteUserVersion(database);
       }
     };
-    let indexChanges: string[] = [];
+    let integrityChanges: string[] = [];
     try {
       await prepareSchema();
     } catch (error) {
@@ -170,25 +169,33 @@ async function migrateAgentDatabase(params: {
       }
       // Admission already checks the whole file. Only a proven integrity failure
       // needs Doctor's preserving repair scan under an immediate transaction.
-      indexChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
+      const assertCurrent = () => {
+        assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+        assertOpenClawAgentDatabaseOwner(database, params);
+      };
+      integrityChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
         label: `agent ${params.agentId}`,
-        assertCurrent: () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          assertOpenClawAgentDatabaseOwner(database, params);
-        },
+        assertCurrent,
       });
-      params.changes.push(...indexChanges);
+      if (integrityChanges.length === 0) {
+        integrityChanges = repairDoctorSessionWindowOrphans(
+          database,
+          params.pathname,
+          assertCurrent,
+        );
+      }
+      params.changes.push(...integrityChanges);
       await prepareSchema();
     }
     if (
-      indexChanges.length > 0 ||
+      integrityChanges.length > 0 ||
       agentDatabaseLifecycle.terminal.peek(params.pathname) ||
       readOpenClawDatabaseQuarantineFailure("agent", params.pathname, { env: params.env })
     ) {
       runSqliteImmediateTransactionSync(
         database,
         () => {
-          if (indexChanges.length === 0) {
+          if (integrityChanges.length === 0) {
             assertSqliteIntegrity(database, params.pathname);
           }
           assertAgentDatabaseMaintenanceAuthority();
@@ -220,12 +227,7 @@ async function migrateAgentDatabase(params: {
     };
     assertMediaSchemaMigration();
     const schemaMode = userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current";
-    const schemaSql =
-      schemaMode === "legacy"
-        ? withLegacySessionParticipantsSchema(
-            withLegacyAgentStorageSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-          )
-        : OPENCLAW_AGENT_SCHEMA_SQL;
+    const schemaSql = getOpenClawAgentMigrationSchema(userVersion);
     // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {

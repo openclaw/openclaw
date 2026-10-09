@@ -27,6 +27,22 @@ export function readChannelConfigSection(
   return section && typeof section === "object" ? (section as ChannelSectionBase) : undefined;
 }
 
+function resolveSetupAccountKey(
+  accounts: ChannelSectionBase["accounts"],
+  accountId: string,
+  params: { channelKey: string; accountKeyPolicy?: ChannelAccountKeyPolicy },
+): string {
+  return (
+    resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.channelKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    ) ?? accountId
+  );
+}
+
 export function applyAccountNameToChannelSection(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -42,14 +58,7 @@ export function applyAccountNameToChannelSection(params: {
   const accountId = normalizeAccountId(params.accountId);
   const base = readChannelConfigSection(params.cfg, params.channelKey);
   const accounts = base?.accounts ?? {};
-  const accountKey =
-    resolveChannelAccountKey(
-      accounts,
-      accountId,
-      params.channelKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? accountId;
+  const accountKey = resolveSetupAccountKey(accounts, accountId, params);
   const useAccounts =
     params.alwaysUseAccounts ||
     accountId !== DEFAULT_ACCOUNT_ID ||
@@ -85,14 +94,7 @@ export function migrateBaseNameToDefaultAccount(params: {
   const accounts: Record<string, Record<string, unknown>> = {
     ...base?.accounts,
   };
-  const defaultAccountKey =
-    resolveChannelAccountKey(
-      accounts,
-      DEFAULT_ACCOUNT_ID,
-      params.channelKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? DEFAULT_ACCOUNT_ID;
+  const defaultAccountKey = resolveSetupAccountKey(accounts, DEFAULT_ACCOUNT_ID, params);
   const defaultAccount = accounts[defaultAccountKey] ?? {};
   if (!defaultAccount.name) {
     accounts[defaultAccountKey] = { ...defaultAccount, name: baseName };
@@ -270,14 +272,7 @@ export function patchScopedAccountConfig(params: {
   }
 
   const accounts = base?.accounts ?? {};
-  const accountKey =
-    resolveChannelAccountKey(
-      accounts,
-      accountId,
-      params.channelKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? accountId;
+  const accountKey = resolveSetupAccountKey(accounts, accountId, params);
   const existingAccount = clearFields(accounts[accountKey] ?? {});
   // Preserve an explicit disabled account while enabling newly created accounts by default.
   return writeChannelSection(params.cfg, params.channelKey, {

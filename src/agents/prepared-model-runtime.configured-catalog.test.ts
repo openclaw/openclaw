@@ -13,9 +13,11 @@ import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { mergeProviderModels } from "./models-config.merge.js";
-import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
-import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
+import {
+  materializePreparedModelCatalog,
+  prepareModelCatalogPublication,
+} from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
@@ -425,56 +427,97 @@ describe("synthetic configured context publication", () => {
     expect(status.text).toContain("/872k");
   });
   it.each([
-    { name: "declared default", selected: undefined, expected: 64_000 },
-    { name: "selected small window", selected: "small", expected: 64_000 },
-    { name: "selected wide window", selected: "wide", expected: 872_000 },
-  ])("preserves $name when accepted capacity supersedes an estimate", ({ selected, expected }) => {
-    const options = [
-      { id: "small", label: "Small", contextWindow: 64_000 },
-      { id: "wide", label: "Wide", contextWindow: 1_000_000 },
-    ];
-    const publication = prepareModelCatalogPublication(
-      {
-        entries: [discovered],
-        routeVariants: [discovered],
-        providerOutcomes: [{ provider: "fixture", status: "ready" }],
-      },
-      new Map(),
-      undefined,
-      auth("account-a"),
-      (provider) => provider,
-      new Map(),
-    );
-    const catalog = materializePreparedModelCatalog(
-      publication.catalog,
-      [],
-      [
+    {
+      name: "declared default",
+      selected: undefined,
+      expected: 64_000,
+      promptCap: undefined,
+      choices: true,
+    },
+    {
+      name: "selected small window",
+      selected: "small",
+      expected: 64_000,
+      promptCap: undefined,
+      choices: true,
+    },
+    {
+      name: "selected wide window",
+      selected: "wide",
+      expected: 872_000,
+      promptCap: undefined,
+      choices: true,
+    },
+    {
+      name: "prompt cap with choices",
+      selected: "wide",
+      expected: 64_000,
+      promptCap: 64_000,
+      choices: true,
+    },
+    {
+      name: "prompt cap without choices",
+      selected: undefined,
+      expected: 64_000,
+      promptCap: 64_000,
+      choices: false,
+    },
+    {
+      name: "larger prompt cap",
+      selected: "wide",
+      expected: 872_000,
+      promptCap: 1_000_000,
+      choices: true,
+    },
+  ])(
+    "preserves $name when accepted capacity supersedes an estimate",
+    ({ selected, expected, promptCap, choices }) => {
+      const options = [
+        { id: "small", label: "Small", contextWindow: 64_000 },
+        { id: "wide", label: "Wide", contextWindow: 1_000_000 },
+      ];
+      const publication = prepareModelCatalogPublication(
         {
-          ...fallback,
-          baseUrl: discovered.baseUrl,
-          contextWindows: options,
-          contextWindowDefault: "small",
+          entries: [discovered],
+          routeVariants: [discovered],
+          providerOutcomes: [{ provider: "fixture", status: "ready" }],
         },
-      ],
-      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
-    );
-    const capacity = createSessionContextCapacityResolver({
-      isCurrent: () => true,
-      modelCatalog: catalog,
-    });
-    expect(capacity("fixture", "new-model", { contextWindow: selected })).toMatchObject({
-      state: "ready",
-      contextTokens: expected,
-      synthetic: false,
-    });
-    const declared = [
-      ...catalog.entries,
-      ...catalog.routeVariants,
-      ...(catalog.staticEntries ?? []),
-    ].find((entry) => entry.contextWindows?.length);
-    expect(declared?.contextWindows).toEqual(options);
-    expect(declared?.contextWindowDefault).toBe("small");
-  });
+        new Map(),
+        undefined,
+        auth("account-a"),
+        (provider) => provider,
+        new Map(),
+      );
+      const catalog = materializePreparedModelCatalog(
+        publication.catalog,
+        [],
+        [
+          {
+            ...fallback,
+            baseUrl: discovered.baseUrl,
+            ...(promptCap !== undefined ? { contextTokens: promptCap } : {}),
+            ...(choices ? { contextWindows: options, contextWindowDefault: "small" } : {}),
+          },
+        ],
+        new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+      );
+      const capacity = createSessionContextCapacityResolver({
+        isCurrent: () => true,
+        modelCatalog: catalog,
+      });
+      expect(capacity("fixture", "new-model", { contextWindow: selected })).toMatchObject({
+        state: "ready",
+        contextTokens: expected,
+        synthetic: false,
+      });
+      const retained = catalog.staticEntries?.[0];
+      if (promptCap !== undefined) {
+        expect(retained?.contextTokens).toBe(Math.min(promptCap, discovered.contextTokens));
+      }
+      expect(retained?.contextWindows).toEqual(choices ? options : undefined);
+      expect(retained?.contextWindowDefault).toBe(choices ? "small" : undefined);
+    },
+  );
   it.each([
     ["matching physical route", discovered, false],
     ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],

@@ -8,6 +8,7 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerRequest,
 } from "../../infra/sqlite-worker-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { prepareUserModelAccountAuthority } from "../../state/user-model-account-operations.js";
 import {
@@ -31,26 +32,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("refreshes a personal credential with no caller-thread data SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("personal-refresh@example.test");
-    const credential: OAuthCredential = {
-      type: "oauth",
-      provider: "synthetic",
-      access: "synthetic-old-access",
-      refresh: "synthetic-old-refresh",
-      expires: 1,
-      accountId: "synthetic-account",
-    };
-    const { authProfileId: profileId } = connectUserModelAccount({
-      ownerProfileId: owner.id,
-      credential,
-      assertCurrent() {},
-    });
-    const refreshed = {
-      ...credential,
-      access: "synthetic-new-access",
-      refresh: "synthetic-new-refresh",
-      expires: Date.now() + 600_000,
-    };
+    const { profileId, credential, replacement: refreshed } = fixture();
     const manager = createOAuthManager({
       buildApiKey: async (_provider, value) => value.access,
       canRefreshCredential: async () => true,
@@ -120,23 +102,12 @@ it("does not disclose a personal API key when its worker read is canceled", asyn
     });
     const controller = new AbortController();
     const reason = new Error("Synthetic credential read cancellation");
-    const original = workerStore.runOpenClawStateWorkerOperation;
-    vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: (command, executeOptions) => {
-                if (command.type === "authProfiles.personal") {
-                  controller.abort(reason);
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(workerStore, (command, executeOptions, scope) => {
+      if (command.type === "authProfiles.personal") {
+        controller.abort(reason);
+      }
+      return scope.execute(command, executeOptions);
+    });
     await expect(
       resolveApiKeyForProfile({
         profileId,
@@ -335,29 +306,15 @@ it.each(["conflict", "unknown"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { profileId, credential, replacement, replace } = fixture();
       let attempts = 0;
-      const original = workerStore.runOpenClawStateWorkerOperation;
-      vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
-        (context, operation, options) =>
-          original(
-            context,
-            (scope) =>
-              operation({
-                execute: (command, executeOptions) => {
-                  if (command.type === "authProfiles.personalReplace") {
-                    attempts++;
-                    if (outcome === "unknown") {
-                      throw new SqliteWorkerError(
-                        "Synthetic transport uncertainty",
-                        "outcome-unknown",
-                      );
-                    }
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-      );
+      probe.command(workerStore, (command, executeOptions, scope) => {
+        if (command.type === "authProfiles.personalReplace") {
+          attempts++;
+          if (outcome === "unknown") {
+            throw new SqliteWorkerError("Synthetic transport uncertainty", "outcome-unknown");
+          }
+        }
+        return scope.execute(command, executeOptions);
+      });
       const updater = vi.fn((store) => {
         if (outcome === "conflict") {
           replace();

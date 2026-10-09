@@ -252,14 +252,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.embeddingBootstrapFailure = undefined;
     this.providerUnavailableReason = undefined;
     if (this.provider) {
-      this.providerLifecycle = this.fallbackFrom
-        ? {
-            mode: "fallback-active",
-            providerId: this.provider.id,
-            fallbackFrom: this.fallbackFrom,
-            reason: this.fallbackReason ?? "fallback activated",
-          }
-        : { mode: "active", providerId: this.provider.id };
+      this.providerLifecycle = resolveMemoryProviderLifecycle({
+        provider: this.provider,
+        requestedProvider: this.settings.provider,
+        fallbackFrom: this.fallbackFrom,
+        fallbackReason: this.fallbackReason,
+      });
     }
     this.embeddingProbeCache.delete(this.cacheKey);
   }
@@ -578,13 +576,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     providerKeyKnown?: boolean;
     indexState?: MemoryRetrievalIndexState;
   }) {
+    // Provider retirement preserves configured identity for both search and status.
     const provider =
       this.settings.provider === "none"
         ? null
-        : this.providerInitialized
+        : this.providerInitialized && this.providerLifecycle.mode !== "degraded"
           ? this.provider
-            ? { id: this.provider.id, model: this.provider.model }
-            : null
           : undefined;
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),

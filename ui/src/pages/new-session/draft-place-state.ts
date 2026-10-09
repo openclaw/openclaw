@@ -114,7 +114,13 @@ export class DraftPlaceState {
           this.callbacks.onClearError(t("newSession.browserLoadFailed"));
           this.repositoryState.load();
         },
-        onMissing: () => this.restoreWorkspaceFolder(),
+        onMissing: () => {
+          this.callbacks.onClearError(t("newSession.browserLoadFailed"));
+          this.folderValue = this.workspacePath();
+          this.repositoryState.rejectPreferredWorktree();
+          this.persistPreference({ folder: this.folderValue, worktree: false });
+          this.repositoryState.load();
+        },
         onFailed: () => this.callbacks.onError(t("newSession.browserLoadFailed")),
       },
     );
@@ -708,13 +714,5 @@ export class DraftPlaceState {
 
   private persistPreference(patch: Parameters<DraftGatewayState["persistPreference"]>[2]) {
     void this.gateway.persistPreference(this.agentIdValue, this.workspacePath(), patch);
-  }
-
-  private restoreWorkspaceFolder() {
-    this.callbacks.onClearError(t("newSession.browserLoadFailed"));
-    this.folderValue = this.workspacePath();
-    this.repositoryState.rejectPreferredWorktree();
-    this.persistPreference({ folder: this.folderValue, worktree: false });
-    this.repositoryState.load();
   }
 }

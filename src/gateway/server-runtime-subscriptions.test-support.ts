@@ -19,9 +19,11 @@ import {
   type AgentEventPayload,
   emitAgentAuditEvent,
   emitAgentEvent,
+  emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
+  onAgentRuntimeEvent,
 } from "../infra/agent-events.js";
-import { claimAgentRunContext } from "../infra/agent-run-registry.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -371,6 +373,68 @@ export function registerAuditSubscriptionTests(params: {
     warn.mockClear();
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
+  });
+}
+
+export function registerSubscriptionRegistrationTests(
+  start: typeof startGatewayEventSubscriptions,
+) {
+  const { createParams } = createSubscriptionTestFixture();
+  it("does not mark a reentrant replacement terminal from the previous claim", () => {
+    const params = createParams();
+    const runId = "replaced-terminal-claim";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const identity = {
+      sessionKey: "agent:main:replaced",
+      sessionId: "replaced-session",
+      lifecycleGeneration,
+    };
+    let registration = registerSubscriptionChatRun(params, { runId, ...identity });
+    const ownership = { exclusive: true, ownsContext: true, trackOwner: true };
+    const originalClaim = claimAgentRunContext(runId, identity, ownership);
+    if (!originalClaim) {
+      throw new Error("Missing original claim");
+    }
+    let replacementClaim: string | undefined;
+    const removeListener = onAgentRuntimeEvent((event) => {
+      if (event.runId !== runId) {
+        return;
+      }
+      releaseAgentRunContext(runId, originalClaim);
+      registration.cleanup();
+      registration = registerSubscriptionChatRun(params, { runId, ...identity });
+      replacementClaim = claimAgentRunContext(runId, identity, ownership);
+    });
+    start(params);
+    try {
+      emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, originalClaim);
+      expect(replacementClaim).toBeTruthy();
+      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(true));
+    } finally {
+      removeListener();
+      registration.cleanup();
+      releaseAgentRunContext(runId, replacementClaim ?? originalClaim);
+    }
+  });
+
+  it("does not attach a missing-key terminal to a registration created during deferred preparation", async () => {
+    const params = createParams();
+    const runId = "late-terminal-registration";
+    const unsubs = start(params);
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    const registration = registerSubscriptionChatRun(params, {
+      runId,
+      sessionKey: "agent:main:main",
+      sessionId: "late-terminal-session",
+    });
+    try {
+      await unsubs.agentUnsub();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(true));
+      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
+    } finally {
+      registration.cleanup();
+    }
   });
 }
 

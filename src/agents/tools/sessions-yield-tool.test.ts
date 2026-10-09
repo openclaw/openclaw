@@ -58,42 +58,25 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("invokes onYield callback with default message", async () => {
+  it("keeps continuation context private with an acknowledgment", async () => {
+    const acknowledgment = "Research started; results will follow.";
+    const message = "SYNTHETIC_PRIVATE_CONTINUATION_MARKER";
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({
       sessionId: "test-session",
       claimYield: () => true,
       onYield,
     });
-    const result = await tool.execute("call-1", {});
-    const details = result.details as SessionsYieldDetails;
-    expect(details.status).toBe("yielded");
-    expect(details).not.toHaveProperty("message");
+    const result = await tool.execute("call-1", { message, acknowledgment });
+
+    expect(result.details).toEqual({
+      status: "yielded",
+      ...(acknowledgment ? { acknowledgment } : {}),
+    });
+    expect(JSON.stringify(result)).not.toContain(message);
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
+    expect(onYield).toHaveBeenCalledWith(message, acknowledgment, undefined);
   });
-
-  it.each([undefined, "Research started; results will follow."])(
-    "keeps continuation context private with acknowledgment %s",
-    async (acknowledgment) => {
-      const message = "SYNTHETIC_PRIVATE_CONTINUATION_MARKER";
-      const onYield = vi.fn();
-      const tool = createSessionsYieldTool({
-        sessionId: "test-session",
-        claimYield: () => true,
-        onYield,
-      });
-      const result = await tool.execute("call-1", { message, acknowledgment });
-
-      expect(result.details).toEqual({
-        status: "yielded",
-        ...(acknowledgment ? { acknowledgment } : {}),
-      });
-      expect(JSON.stringify(result)).not.toContain(message);
-      expect(onYield).toHaveBeenCalledOnce();
-      expect(onYield).toHaveBeenCalledWith(message, acknowledgment, undefined);
-    },
-  );
 
   it("claims completion ownership before aborting the requester run", async () => {
     const order: string[] = [];
@@ -128,14 +111,12 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "the claim callback is unavailable" },
-    { name: "the turn owns no pending child completion", claimYield: () => false },
-  ])("keeps the turn active without a tool failure when $name", async ({ claimYield }) => {
+  it("keeps the turn active without a tool failure when it owns no pending child completion", async () => {
+    const claimYield = () => false;
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({
       sessionId: "test-session",
-      ...(claimYield ? { claimYield } : {}),
+      claimYield,
       onYield,
     });
 

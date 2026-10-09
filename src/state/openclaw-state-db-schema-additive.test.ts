@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -29,6 +31,7 @@ vi.mock("./openclaw-state-schema.js", async (importOriginal) => {
 });
 
 import {
+  assertAgentDeletionJournalAvailable,
   ensureAgentDatabaseLeaseSchema,
   ensureSecretStoreSchema,
 } from "./openclaw-state-db-schema-additive.js";
@@ -200,4 +203,43 @@ it("adds the caption retry index to populated same-version state without changin
   ensureMeetingTranscriptsSchema({ ...options, database: reopened });
   expect(readIndex(reopened.db)).toEqual({ unique: 0, partial: 1 });
   expect(readState(reopened.db)).toEqual(before);
+});
+
+it("reuses admitted journal columns while observing foreign DDL and rollback", () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-journal-columns-") },
+  });
+  const check = () =>
+    runSqliteReadOperationSync(database.db, () => assertAgentDeletionJournalAvailable(database.db));
+  check();
+  const observation = observeHostDataSql();
+  try {
+    check();
+    check();
+    expect(
+      observation.queries.filter((sql) =>
+        /pragma\s+table_info\(agent_deletion_journal\)/i.test(sql),
+      ),
+    ).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+  const foreign = new DatabaseSync(database.path);
+  try {
+    foreign.exec("ALTER TABLE agent_deletion_journal RENAME COLUMN agent_id TO retired_agent_id");
+    expect(check).toThrow("Agent deletion journal missing");
+    foreign.exec("ALTER TABLE agent_deletion_journal RENAME COLUMN retired_agent_id TO agent_id");
+    expect(check).not.toThrow();
+    database.db.exec(
+      "BEGIN; ALTER TABLE agent_deletion_journal RENAME COLUMN agent_id TO retired_agent_id",
+    );
+    expect(check).toThrow("Agent deletion journal missing");
+    database.db.exec("ROLLBACK");
+    expect(check).not.toThrow();
+  } finally {
+    if (database.db.isTransaction) {
+      database.db.exec("ROLLBACK");
+    }
+    foreign.close();
+  }
 });

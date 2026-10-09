@@ -69,7 +69,11 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  isSubagentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
 import {
   isModelSelectionLocked,
@@ -223,17 +227,18 @@ async function ensureSessionRuntimeCleanup(params: {
       : undefined,
     assertCurrent: params.assertCurrent,
   });
+  const queueKeys = [
+    ...params.target.storeKeys,
+    params.target.canonicalKey,
+    params.sessionId,
+  ].filter((key) => key !== undefined);
   const closeTrackedBrowserTabs = async () => {
     assertCurrent();
-    const closeKeys = new Set<string>([
-      params.key,
-      params.target.canonicalKey,
-      ...params.target.storeKeys,
-      params.sessionId ?? "",
-    ]);
     await cleanupBrowserSessionsForLifecycleEnd({
       cfg: params.cfg,
-      sessionKeys: [...closeKeys],
+      sessionKeys: [...queueKeys, params.key].map((requestKey) =>
+        toAgentStoreSessionKey({ agentId: params.target.agentId, requestKey }),
+      ),
       onWarn: (message) => logVerbose(message),
     });
     assertCurrent();
@@ -256,11 +261,6 @@ async function ensureSessionRuntimeCleanup(params: {
   // Parent admissions are already drained. Reject stale or incomplete child cleanup
   // before discarding queues or interrupting a newly accepted reply operation.
   assertCurrent();
-  const queueKeys = [
-    ...params.target.storeKeys,
-    params.target.canonicalKey,
-    params.sessionId,
-  ].filter((key) => key !== undefined);
   // Process scopes may use the requested alias, canonical key, or session id.
   // Clear only completed records so reset/delete cannot erase another scope's
   // output or hide a background process whose owner has not confirmed exit.
@@ -584,24 +584,26 @@ export async function performGatewaySessionReset(params: {
     errorShape(ErrorCodes.INVALID_REQUEST, `Session ${params.key} changed before reset. Retry.`, {
       details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
     });
-  if (!expectedSessionMatches(initialResetEntry)) {
-    return { ok: false, error: sessionChangedError() };
-  }
-  if (!initialResetEntry) {
-    const creationError = authorizeResetCreation();
-    if (creationError) {
-      return { ok: false, error: creationError };
-    }
-  }
-  const initialOwnershipError = resolvePluginSessionOwnershipError({
-    action: "reset",
-    entry: initialResetEntry,
-    key: resetTarget.target.canonicalKey,
-    pluginOwnerId: params.authorizedPluginId,
-  });
-  if (initialOwnershipError) {
-    return { ok: false, error: initialOwnershipError };
-  }
+  const resolveResetCreationError = (entry: SessionEntry | undefined) =>
+    !expectedSessionMatches(entry)
+      ? sessionChangedError()
+      : !entry
+        ? authorizeResetCreation()
+        : undefined;
+  const resolveResetOwnershipError = (
+    entry: SessionEntry | undefined,
+    key = resetTarget.target.canonicalKey,
+  ) =>
+    resolvePluginSessionOwnershipError({
+      action: "reset",
+      entry,
+      key,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+  const resolveResetHarnessError = (entry: SessionEntry | undefined) => {
+    const message = resolveMissingAgentHarnessSessionError(resetTarget.target.canonicalKey, entry);
+    return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
+  };
   const resolveFastModeSelectionError = (entry: SessionEntry | undefined) => {
     const selection = params.fastModeSelection;
     return entry &&
@@ -612,23 +614,14 @@ export async function performGatewaySessionReset(params: {
       : undefined;
   };
   const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
-    resolveFastModeSelectionError(entry) ??
-    resolvePluginSessionOwnershipError({
-      action: "reset",
-      entry,
-      key: canonicalKey,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-  const initialFastModeSelectionError = resolveFastModeSelectionError(initialResetEntry);
-  if (initialFastModeSelectionError) {
-    return { ok: false, error: initialFastModeSelectionError };
-  }
-  const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
-    resetTarget.target.canonicalKey,
-    initialResetEntry,
-  );
-  if (missingHarnessSessionError) {
-    return invalidSessionRequest(missingHarnessSessionError);
+    resolveFastModeSelectionError(entry) ?? resolveResetOwnershipError(entry, canonicalKey);
+  const initialEntryError =
+    resolveResetCreationError(initialResetEntry) ??
+    resolveResetOwnershipError(initialResetEntry) ??
+    resolveFastModeSelectionError(initialResetEntry) ??
+    resolveResetHarnessError(initialResetEntry);
+  if (initialEntryError) {
+    return { ok: false, error: initialEntryError };
   }
   // Reject before interrupting admitted work or firing reset hooks. The model lock is
   // session-id scoped, so rotating first would silently detach native harness ownership.
@@ -707,37 +700,13 @@ export async function performGatewaySessionReset(params: {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
       const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadResetSession();
-      if (!expectedSessionMatches(currentEntry)) {
-        resetPreparationError = sessionChangedError();
-        return;
-      }
-      if (!currentEntry) {
-        resetPreparationError = authorizeResetCreation();
-        if (resetPreparationError) {
-          return;
-        }
-      }
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
-      resetPreparationError = resolveResetEntryAccessError(
-        currentEntry,
-        resetTarget.target.canonicalKey,
-      );
-      if (resetPreparationError) {
-        return;
-      }
-      const currentMissingHarnessSessionError = resolveMissingAgentHarnessSessionError(
-        resetTarget.target.canonicalKey,
-        currentEntry,
-      );
-      if (currentMissingHarnessSessionError) {
-        resetPreparationError = errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          currentMissingHarnessSessionError,
-        );
-        return;
-      }
-      resetPreparationError = resolveResetEntryStateError(currentEntry, currentCanonicalKey);
+      resetPreparationError =
+        resolveResetCreationError(currentEntry) ??
+        resolveResetEntryAccessError(currentEntry, resetTarget.target.canonicalKey) ??
+        resolveResetHarnessError(currentEntry) ??
+        resolveResetEntryStateError(currentEntry, currentCanonicalKey);
       if (resetPreparationError) {
         return;
       }
@@ -781,11 +750,9 @@ export async function performGatewaySessionReset(params: {
       }
       // Admitted directives can finish persisting while reset drains them.
       // Recheck their final selection before retiring placement or running cleanup.
-      const currentAccessError = resolveResetEntryAccessError(entry, canonicalKey);
-      if (currentAccessError) {
-        return { ok: false, error: currentAccessError };
-      }
-      const entryStateError = resolveResetEntryStateError(entry, canonicalKey);
+      const entryStateError =
+        resolveResetEntryAccessError(entry, canonicalKey) ??
+        resolveResetEntryStateError(entry, canonicalKey);
       if (entryStateError) {
         return { ok: false, error: entryStateError };
       }

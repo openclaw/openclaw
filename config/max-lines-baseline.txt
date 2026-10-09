@@ -19,7 +19,6 @@ extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
 extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
-extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
@@ -50,7 +49,6 @@ extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts
-extensions/diagnostics-prometheus/src/service.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
@@ -101,7 +99,6 @@ extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
-extensions/memory-core/src/dreaming.test.ts
 extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/rem-evidence.ts
@@ -211,7 +208,6 @@ src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
 src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
-src/agents/agent-scope.test.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
@@ -262,7 +258,6 @@ src/agents/model-selection-shared.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
-src/agents/provider-attribution.test.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
@@ -279,7 +274,6 @@ src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
-src/agents/tools/music-generate-tool.test.ts
 src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
@@ -289,7 +283,6 @@ src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
-src/auto-reply/reply/agent-runner-payloads.test.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
@@ -309,7 +302,6 @@ src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
-src/auto-reply/reply/inbound-meta.test.ts
 src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
@@ -346,7 +338,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/backup-verify.test.ts
 src/commands/channels.add.test.ts
-src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
@@ -360,8 +351,6 @@ src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
-src/commands/doctor/shared/preview-warnings.test.ts
-src/commands/doctor/shared/stale-auth-order.test.ts
 src/commands/gateway-status.test.ts
 src/commands/migrate.test.ts
 src/commands/model-picker.test.ts
@@ -538,7 +527,6 @@ src/plugins/update.test.ts
 src/secrets/apply.test.ts
 src/secrets/apply.ts
 src/secrets/configure.ts
-src/secrets/resolve.ts
 src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/secrets/runtime-web-tools.test.ts
@@ -574,7 +562,6 @@ ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/view.ts
-ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts

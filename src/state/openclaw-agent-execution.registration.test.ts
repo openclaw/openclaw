@@ -205,25 +205,29 @@ function retireFailedReply(
     reject,
     detach() {},
   };
-  receiveSqliteWorkerReply({ current: job, worker: { postMessage: edge.forbidden } }, reply, {
-    fail(error, currentError, openOutcome) {
-      if (!(error instanceof Error)) {
-        throw error;
-      }
-      settleFailedSqliteWorkerJobs({
-        current: job,
-        queued: [],
-        queuedError: new SqliteWorkerError("retired", "unavailable"),
-        error,
-        currentError,
-        openOutcome,
-        retire: () => retired.promise,
-        finish: settleSqliteWorkerJob,
-      });
+  receiveSqliteWorkerReply(
+    { actors: new Set(), current: job, worker: { postMessage: edge.forbidden } },
+    reply,
+    {
+      fail(error, currentError, openOutcome) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        settleFailedSqliteWorkerJobs({
+          current: job,
+          queued: [],
+          queuedError: new SqliteWorkerError("retired", "unavailable"),
+          error,
+          currentError,
+          openOutcome,
+          retire: () => retired.promise,
+          finish: settleSqliteWorkerJob,
+        });
+      },
+      finish: edge.forbidden,
+      dispatch: edge.forbidden,
     },
-    finish: edge.forbidden,
-    dispatch: edge.forbidden,
-  });
+  );
   return { retired, completion, reject, settleNative };
 }
 

@@ -3,8 +3,10 @@ import { dualRoutes } from "../agents/model-auth-availability.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
 import * as openaiRoutes from "../agents/openai-model-routes.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
-import { prepareModelCatalogPublication } from "../agents/prepared-model-runtime.catalog-publication.js";
-import { materializePreparedModelCatalog } from "../agents/prepared-model-runtime.full-catalog.js";
+import {
+  materializePreparedModelCatalog,
+  prepareModelCatalogPublication,
+} from "../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

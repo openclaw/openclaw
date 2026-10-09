@@ -142,27 +142,30 @@ export function extractEnvAssignmentKeysFromDispatchWrappers(
 function unwrapDashOptionInvocation(
   argv: string[],
   params: {
-    onFlag?: (flag: string, lowerToken: string) => WrapperScanDirective;
+    onFlag?: (flag: string, token: string) => WrapperScanDirective;
     flagOptions?: ReadonlySet<string>;
     optionsWithValue?: ReadonlySet<string>;
+    caseSensitive?: boolean;
+    allowDoubleDash?: boolean;
     adjustCommandIndex?: (commandIndex: number, argv: string[]) => number | null;
   },
 ): string[] | null {
   return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
+    separators: params.allowDoubleDash === false ? undefined : new Set(["--"]),
     onToken: (token, lower) => {
       if (!token.startsWith("-") || token === "-") {
         return "stop";
       }
-      const { name: flag } = parseInlineOptionToken(lower);
+      const comparableToken = params.caseSensitive ? token : lower;
+      const { name: flag } = parseInlineOptionToken(comparableToken);
       if (params.onFlag) {
-        return params.onFlag(flag, lower);
+        return params.onFlag(flag, comparableToken);
       }
       if (params.flagOptions?.has(flag)) {
         return "continue";
       }
       if (params.optionsWithValue?.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
+        return comparableToken.includes("=") ? "continue" : "consume-next";
       }
       return "invalid";
     },
@@ -188,14 +191,9 @@ function unwrapNiceInvocation(argv: string[]): string[] | null {
 }
 
 function unwrapNohupInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      return lower === "--help" || lower === "--version" ? "continue" : "invalid";
-    },
+  return unwrapDashOptionInvocation(argv, {
+    onFlag: (_flag, token) =>
+      token === "--help" || token === "--version" ? "continue" : "invalid",
   });
 }
 
@@ -204,30 +202,22 @@ function isFlockShortFlagCluster(token: string): boolean {
 }
 
 function unwrapFlockInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      const parsedToken = parseInlineOptionToken(token);
-      const lowerFlag = parseInlineOptionToken(lower).name;
-      if (FLOCK_LONG_FLAG_OPTIONS.has(lowerFlag)) {
+  return unwrapDashOptionInvocation(argv, {
+    caseSensitive: true,
+    onFlag: (flag, token) => {
+      const lowerFlag = flag.toLowerCase();
+      if (
+        FLOCK_LONG_FLAG_OPTIONS.has(lowerFlag) ||
+        isFlockShortFlagCluster(token) ||
+        FLOCK_SHORT_FLAG_OPTIONS.has(flag)
+      ) {
         return "continue";
       }
-      if (FLOCK_LONG_OPTIONS_WITH_VALUE.has(lowerFlag)) {
-        return parsedToken.hasInlineValue ? "continue" : "consume-next";
-      }
-      if (isFlockShortFlagCluster(token)) {
-        return "continue";
-      }
-      if (FLOCK_SHORT_FLAG_OPTIONS.has(parsedToken.name)) {
-        return "continue";
-      }
-      if (FLOCK_SHORT_OPTIONS_WITH_VALUE.has(parsedToken.name)) {
-        return parsedToken.hasInlineValue || token !== parsedToken.name
-          ? "continue"
-          : "consume-next";
+      if (
+        FLOCK_LONG_OPTIONS_WITH_VALUE.has(lowerFlag) ||
+        FLOCK_SHORT_OPTIONS_WITH_VALUE.has(flag)
+      ) {
+        return token.includes("=") ? "continue" : "consume-next";
       }
       return "invalid";
     },
@@ -279,21 +269,10 @@ function unwrapScriptInvocation(
   if (platform !== "darwin" && platform !== "freebsd") {
     return null;
   }
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!lower.startsWith("-") || lower === "-") {
-        return "stop";
-      }
-      const { name: flag } = parseInlineOptionToken(token);
-      if (BSD_SCRIPT_OPTIONS_WITH_VALUE.has(flag)) {
-        return token.includes("=") ? "continue" : "consume-next";
-      }
-      if (BSD_SCRIPT_FLAG_OPTIONS.has(flag)) {
-        return "continue";
-      }
-      return "invalid";
-    },
+  return unwrapDashOptionInvocation(argv, {
+    caseSensitive: true,
+    optionsWithValue: BSD_SCRIPT_OPTIONS_WITH_VALUE,
+    flagOptions: BSD_SCRIPT_FLAG_OPTIONS,
     adjustCommandIndex: (commandIndex, currentArgv) => {
       let sawTranscript = false;
       for (let idx = commandIndex; idx < currentArgv.length; idx += 1) {
@@ -355,16 +334,9 @@ function supportsDarwinDispatchWrapper(platform: NodeJS.Platform = process.platf
 }
 
 function unwrapXcrunInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      if (XCRUN_FLAG_OPTIONS.has(lower)) {
-        return "continue";
-      }
-      return "invalid";
-    },
+  return unwrapDashOptionInvocation(argv, {
+    allowDoubleDash: false,
+    onFlag: (_flag, token) => (XCRUN_FLAG_OPTIONS.has(token) ? "continue" : "invalid"),
   });
 }
 

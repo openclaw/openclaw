@@ -1151,6 +1151,17 @@ const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map([
       ]),
     },
   ],
+  [
+    "12.2.0",
+    {
+      allowMissingBundleMarker: false,
+      exceptions: new Map([
+        ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+      ]),
+    },
+  ],
 ]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {

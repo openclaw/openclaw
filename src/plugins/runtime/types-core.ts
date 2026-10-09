@@ -77,6 +77,12 @@ type RuntimeSessionStoreReadParams = {
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
   readOnly?: boolean;
+  /** Restrict results to exact persisted keys while retaining canonical listing validation. */
+  sessionKeys?: readonly string[];
+  /** Set false to skip derived participant identities and counts when reading metadata. */
+  includeParticipants?: boolean;
+  /** Capture the admitted store's physical identity; access policy remains caller-owned. */
+  captureSource?: (assertCurrent: () => void) => void;
 };
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -398,9 +404,23 @@ export type PluginRuntimeCore = {
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
+      getSessionEntryAsync?: (
+        params: RuntimeSessionStoreReadParams,
+      ) => Promise<RuntimeSessionEntry | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      createSessionEntryListReader: (params: {
+        agentId: string;
+        storePath: string;
+        env?: NodeJS.ProcessEnv;
+      }) => Promise<
+        () => Promise<{
+          entries: RuntimeSessionStoreEntrySummary[];
+          assertCurrent: () => void;
+        }>
+      >;
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;

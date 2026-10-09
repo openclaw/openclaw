@@ -35,12 +35,13 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   adapter?: ChannelApprovalNativeAdapter | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
+  const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
+    targets: [],
+    originTarget: null,
+    notifyOriginWhenDmOnly: false,
+  };
   if (!adapter) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const capabilities = adapter.describeDeliveryCapabilities({
@@ -50,11 +51,7 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     request: params.request,
   });
   if (!capabilities.enabled) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const originTarget =

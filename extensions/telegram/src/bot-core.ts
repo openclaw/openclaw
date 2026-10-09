@@ -45,7 +45,6 @@ import {
   TelegramSpooledReplayProcessingError,
 } from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
-import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { apiThrottler, Bot, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
@@ -127,11 +126,6 @@ export async function createTelegramBotCore(
 
   const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
-  const logSkippedUpdate = (key: string) => {
-    if (shouldLogVerbose()) {
-      logVerbose(`telegram dedupe: skipped ${key}`);
-    }
-  };
   const updateTracker = createTelegramUpdateTracker({
     initialUpdateId,
     persistenceFloorUpdateId:
@@ -145,10 +139,13 @@ export async function createTelegramBotCore(
     onPersistError: (err) => {
       runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
     },
-    onSkip: logSkippedUpdate,
+    onSkip: (key) => {
+      if (shouldLogVerbose()) {
+        logVerbose(`telegram dedupe: skipped ${key}`);
+      }
+    },
   });
-  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) =>
-    updateTracker.shouldSkipHandlerDispatch(ctx);
+  const shouldSkipUpdate = updateTracker.shouldSkipHandlerDispatch;
 
   bot.use(async (ctx, next) => {
     const begin = updateTracker.beginUpdate(ctx);

@@ -234,6 +234,7 @@ export function capturePluginPackageMetadata(
   copy: (source: string, target: string) => void,
   isRetainedReference?: (source: string, real: string) => boolean,
   resolveSource?: (source: string) => { path: string; boundary: string } | undefined,
+  recordFileProbe?: (source: string) => void,
 ) {
   const manifest = path.join(destination, "package.json");
   copy(path.join(root, "package.json"), manifest);
@@ -263,7 +264,11 @@ export function capturePluginPackageMetadata(
       const filename = fileURLToPath(url);
       const prepared = resolveSource?.(filename);
       const input = prepared?.path ?? filename;
-      if (isPathInside(root, filename) && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
+      const insideRoot = isPathInside(root, filename);
+      if (insideRoot) {
+        recordFileProbe?.(filename);
+      }
+      if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
         const real = fs.realpathSync(input);
         if (
           !isPathInside(prepared?.boundary ?? root, real) &&
@@ -561,12 +566,14 @@ export function createPluginPackageMetadataCapture(params: {
       boundary,
       copy,
       hasSource,
+      recordMissingMetadata,
     }: {
       root: string;
       destination: string;
       boundary: string;
       copy: (source: string, target: string) => void;
       hasSource: (source: string) => boolean;
+      recordMissingMetadata?: (source: string) => void;
     }) {
       type PackageScope = {
         source: string;
@@ -601,11 +608,11 @@ export function createPluginPackageMetadataCapture(params: {
             }
             return parsed;
           };
-        } else if (
-          scopeDirectory !== boundary &&
-          isPathInside(boundary, path.dirname(scopeDirectory))
-        ) {
-          scope = captureScopeMetadata(path.dirname(scopeDirectory));
+        } else {
+          recordMissingMetadata?.(source);
+          if (scopeDirectory !== boundary && isPathInside(boundary, path.dirname(scopeDirectory))) {
+            scope = captureScopeMetadata(path.dirname(scopeDirectory));
+          }
         }
         capturedScopes.set(scopeDirectory, scope);
         return scope;
@@ -634,7 +641,7 @@ export function withPluginSourceCaptureDirectory<T>(
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
-export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
+export function createPluginSourceCapture() {
   const override = sourceCaptureDirectory.getStore();
   const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
@@ -698,10 +705,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       throw captureFailures.get(filename);
     }
   };
-  const captureAdmitted = <T>(run: () => T) => {
-    const capture = () => acquire(run);
-    return execute ? execute(capture) : capture();
-  };
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
@@ -719,7 +722,7 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     inputs,
     pendingInputs,
     additions,
-    capture: captureAdmitted,
+    capture: acquire,
     assertModuleAvailable,
     directory,
     outputRoot: override?.managedRoot ?? instance?.managedRoot,

@@ -11,10 +11,8 @@ import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/sessio
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWorkerWrite,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {

@@ -411,10 +411,8 @@ export class ApprovalPage extends OpenClawLightDomElement {
   }
 
   private clearPollTimer() {
-    if (this.pollTimer !== undefined) {
-      globalThis.clearTimeout(this.pollTimer);
-      this.pollTimer = undefined;
-    }
+    globalThis.clearTimeout(this.pollTimer);
+    this.pollTimer = undefined;
   }
 
   private schedulePoll() {

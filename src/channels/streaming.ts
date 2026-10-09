@@ -315,22 +315,13 @@ export function copyProgressDraftLineMetadata(
   );
 }
 
-function itemKindToToolName(kind: string | undefined): string | undefined {
-  switch (normalizeOptionalLowercaseString(kind)) {
-    case "command":
-      return "exec";
-    case "patch":
-      return "apply_patch";
-    case "search":
-      return "web_search";
-    case "api":
-      return "api";
-    case "tool":
-      return "tool_call";
-    default:
-      return undefined;
-  }
-}
+const PROGRESS_ITEM_TOOL_NAMES = new Map([
+  ["command", "exec"],
+  ["patch", "apply_patch"],
+  ["search", "web_search"],
+  ["api", "api"],
+  ["tool", "tool_call"],
+]);
 
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
@@ -470,7 +461,9 @@ export function buildChannelProgressDraftLine(
       );
     }
     case "item": {
-      const name = input.name ?? itemKindToToolName(input.itemKind);
+      const name =
+        input.name ??
+        PROGRESS_ITEM_TOOL_NAMES.get(normalizeOptionalLowercaseString(input.itemKind) ?? "");
       if (isAgentPlanProgressToolName(name)) {
         const status = normalizeOptionalLowercaseString(input.status);
         return status === "failed" || status === "error" || status === "blocked"
@@ -1028,21 +1021,12 @@ export function formatPlanChecklistLines(
   },
 ): string[] {
   const selected = selectPlanChecklistSteps(steps, options);
-  const marker = (status: AgentPlanStepStatus) =>
-    options.plain
-      ? status === "completed"
-        ? "Completed:"
-        : status === "in_progress"
-          ? "In progress:"
-          : "Pending:"
-      : status === "completed"
-        ? "✅"
-        : status === "in_progress"
-          ? "▸"
-          : "▢";
+  const markers = options.plain
+    ? { completed: "Completed:", in_progress: "In progress:", pending: "Pending:" }
+    : { completed: "✅", in_progress: "▸", pending: "▢" };
   return [
     ...(selected.summary ? [`${options.plain ? "" : "✅ "}${selected.summary}`] : []),
-    ...selected.steps.map((entry) => `${marker(entry.status)} ${entry.step}`),
+    ...selected.steps.map((entry) => `${markers[entry.status]} ${entry.step}`),
   ].map((line) => compactChannelProgressDraftLine(line, options.maxLineChars));
 }
 

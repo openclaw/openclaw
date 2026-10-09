@@ -5,12 +5,12 @@ import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   collectProjectedReferencedSessionIds,
   collectSessionStateIdsForEntry,
-  planSessionStateDeleteIfUnreferenced,
   readSessionGenerationIdsForKeys,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
@@ -35,10 +35,8 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
-import {
-  resolveSessionMaintenancePreserveKeys,
-  type SessionMaintenancePreservationSnapshot,
-} from "./store-maintenance-preserve-snapshot.js";
+import { resolveSessionMaintenancePreserveKeys } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 

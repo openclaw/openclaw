@@ -218,11 +218,7 @@ export function sessionProgressCardsForGateway(
           }),
         ),
     );
-  const notify = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const notify = () => listeners.forEach((listener) => listener());
   const retireRefresh = (entry: ProgressCardEntry) => {
     clearTimeout(entry.refresh?.timer);
     delete entry.refresh;
@@ -266,11 +262,8 @@ export function sessionProgressCardsForGateway(
     gateway.snapshot.phase === "connected" && gateway.snapshot.client !== null;
 
   const queueRefresh = (entry: ProgressCardEntry, revision: number | null) => {
-    if (entry.pendingRefreshRevision === null || revision === null) {
-      entry.pendingRefreshRevision = null;
-      return;
-    }
-    if (entry.pendingRefreshRevision === undefined || revision > entry.pendingRefreshRevision) {
+    const pending = entry.pendingRefreshRevision;
+    if (pending !== null && (revision === null || pending === undefined || revision > pending)) {
       entry.pendingRefreshRevision = revision;
     }
   };
@@ -368,9 +361,7 @@ export function sessionProgressCardsForGateway(
   };
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
     if (connection.transition(snapshot)) {
-      for (const entry of entries.values()) {
-        retireRefresh(entry);
-      }
+      entries.forEach(retireRefresh);
       notify();
     }
     const clientChanged = snapshot.client !== knownClient;
@@ -492,9 +483,7 @@ export function sessionProgressCardsForGateway(
     stopGatewaySnapshots = null;
     stopGatewayEvents = null;
     // Without event/client subscriptions these snapshots cannot remain fresh.
-    for (const entry of entries.values()) {
-      retireRefresh(entry);
-    }
+    entries.forEach(retireRefresh);
     entries.clear();
   };
   const watch: SessionProgressCardStore["watch"] = (owner, targets, options) => {

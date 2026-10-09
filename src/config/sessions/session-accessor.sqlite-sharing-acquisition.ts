@@ -65,10 +65,16 @@ export function publishRetainedSessionEntryPredicate(
   if (predicate.state === "changed") {
     return;
   }
-  if (!known) {
+  let matches: boolean | undefined;
+  try {
+    matches = known ? predicate.matches(entry) : undefined;
+  } catch {
+    // A failed comparison fences this claim without stranding the committed batch.
+  }
+  if (matches === undefined) {
     predicate.revision += 1;
     predicate.state = "unknown";
-  } else if (!predicate.matches(entry)) {
+  } else if (!matches) {
     predicate.revision += 1;
     predicate.state = "changed";
   } else {
@@ -85,7 +91,7 @@ export function revokePreparedSessionEntryPredicate(read: PreparedSessionSharing
 
 /** Partial publications change only their named fields, independently of row-cache warmth. */
 export function projectSessionEntryPredicateChange(
-  predicate: PreparedSessionEntryPredicate,
+  predicate: Pick<PreparedSessionEntryPredicate, "entry">,
   change: SessionRowFacts,
 ): SessionEntry | undefined {
   const entry = predicate.entry;
@@ -206,7 +212,7 @@ export function recordAcquiringSessionMember(
 /** Apply a committed field postimage only to its original session generation. */
 export function updateSessionSharingField(
   facts: CommittedSessionSharingFacts,
-  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
 ): CommittedSessionSharingFacts {
   if (facts.entry?.sessionId !== change.sessionId) {
     return facts;
@@ -215,6 +221,9 @@ export function updateSessionSharingField(
     return (facts.entry.lifecycleRevision ?? null) === change.lifecycleRevision
       ? { ...facts, entry: { ...facts.entry, owner: change.owner } }
       : facts;
+  }
+  if (change.kind === "category") {
+    return { ...facts, entry: { ...facts.entry, category: change.category ?? undefined } };
   }
   const membership = new Set(facts.membership);
   if (change.present) {

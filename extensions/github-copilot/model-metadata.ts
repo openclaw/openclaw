@@ -97,6 +97,7 @@ export function resolveCopilotThinkingLevelMap(
   modelId: string,
   compat?: CopilotReasoningCompat | null,
   api?: string | null,
+  params?: Record<string, unknown>,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
   const normalizedModelId = normalizeOptionalLowercaseString(modelId) ?? "";
   const runtimeApi = api ?? resolveCopilotTransportApi(normalizedModelId);
@@ -113,7 +114,7 @@ export function resolveCopilotThinkingLevelMap(
   const supported = new Set(efforts.map(normalizeOptionalLowercaseString));
   const supportsEffort =
     runtimeApi !== "anthropic-messages" ||
-    supportsClaudeAdaptiveThinking({ id: normalizedModelId });
+    supportsClaudeAdaptiveThinking({ id: normalizedModelId, params });
   return {
     // Keep the public minimal setting usable when this route starts its native ladder at low.
     ...(runtimeApi === "openai-responses" && !supported.has("minimal") && supported.has("low")

@@ -184,10 +184,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const extensionFactories = buildEmbeddedExtensionFactories({
       cfg: params.config,
       sessionManager,
-      provider,
-      modelId,
       model: effectiveModel,
-      contextTokenBudget,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey ?? sandboxSessionKey,
@@ -454,6 +451,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               context: { systemPrompt: systemPromptText, messages: session.messages },
               sessionManager,
               extraParams: effectiveExtraParams,
+              requestBudget: accountingRecorder?.requestBudget,
               customInstructions: params.customInstructions,
               config: params.config,
               onUsage: recordUsage,

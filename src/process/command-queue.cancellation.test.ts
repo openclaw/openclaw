@@ -86,11 +86,66 @@ function measureCancellationWork(count: number) {
   return cancellationOperations;
 }
 
-describe("queued command cancellation", () => {
+describe("queued command scheduling and cancellation", () => {
   beforeEach(resetCommandQueueStateForTest);
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     resetCommandQueueStateForTest();
+  });
+
+  it("admits aging work in FIFO order while foreground arrivals continue", async () => {
+    vi.useFakeTimers();
+    const lane = "main";
+    setCommandLaneConcurrency(lane, 0);
+    const starts: Array<[string, number]> = [];
+    const pending: Promise<unknown>[] = [];
+    for (const priority of ["background", "normal"] as const) {
+      for (let index = 0; index < 2; index += 1) {
+        pending.push(
+          enqueueCommandInLane(
+            lane,
+            async () => {
+              starts.push([`${priority}-${index}`, performance.now()]);
+            },
+            { priority },
+          ),
+        );
+      }
+    }
+    const foregroundDone = createDeferred();
+    const foreground = (index: number) => {
+      pending.push(
+        enqueueCommandInLane(
+          lane,
+          async () => {
+            starts.push(["foreground", performance.now()]);
+            vi.advanceTimersByTime(1_000);
+            // Wall-clock corrections must not extend priority's head start.
+            vi.setSystemTime(Date.now() - 2_000);
+            if (index < 39) {
+              foreground(index + 1);
+            } else {
+              foregroundDone.resolve();
+            }
+          },
+          { priority: "foreground" },
+        ),
+      );
+    };
+    foreground(0);
+    setCommandLaneConcurrency(lane, 1);
+    await foregroundDone.promise;
+    await Promise.all(pending);
+
+    expect(starts[0]).toEqual(["foreground", 0]);
+    expect(starts.filter(([kind]) => kind !== "foreground")).toEqual([
+      ["normal-0", 15_000],
+      ["normal-1", 15_000],
+      ["background-0", 30_000],
+      ["background-1", 30_000],
+    ]);
+    expect(starts.at(-1)).toEqual(["foreground", 39_000]);
   });
 
   it("preserves priority and FIFO after cancelling heads, middle entries and tails", async () => {

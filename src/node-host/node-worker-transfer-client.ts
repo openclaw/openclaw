@@ -67,7 +67,7 @@ import {
 import { initializeNodeWorkerGitWorkspace } from "./node-worker-workspace-git.js";
 import {
   recoverWorkspaceReplacement,
-  replaceWorkspace,
+  replaceNodeWorkerDirectory,
 } from "./node-worker-workspace-replacement.js";
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
 
@@ -429,8 +429,8 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     const blobApplyMs = performance.now() - blobApplyStartedAt;
     // Reuse only hashes validated on this staging filesystem. Capture still checks
     // the complete tree and current handle identities before the atomic replacement.
+    params.setStage("verify");
     if (checkpointBase && checkpointBaseRef && !overlay) {
-      params.setStage("verify");
       await applyNodeRepositoryCheckpoint({
         workspaceDir: params.workspaceDir,
         stagingRoot: staging,
@@ -442,7 +442,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       });
       params.hashMemo?.clear();
     } else {
-      params.setStage("verify");
       const observed = overlay
         ? await overlay.apply(staging)
         : await captureManifest({
@@ -491,7 +490,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       }
     } else if (!overlay && !checkpointBase) {
       params.setStage("replace");
-      await replaceWorkspace(params.workspaceDir, staging);
+      await replaceNodeWorkerDirectory(params.workspaceDir, staging, "workspace");
     }
     if (params.hashMemo && !overlay && !checkpointBase) {
       replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);

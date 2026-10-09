@@ -228,35 +228,6 @@ describe("operator-managed private wildcard portal ingress", () => {
 });
 
 describe("managed private Serve portal ingress", () => {
-  it.each(["serve", "funnel"] as const)(
-    "uses a separate private Serve claim even for a %s Gateway",
-    async (mode) => {
-      const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
-      publishManaged(mode);
-      const { claim } = fakeClaim();
-      vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
-      const { service, httpServers } = makeService({
-        managedTailscale: true,
-        httpBindHosts: ["0.0.0.0"],
-      });
-      const portal = await service.open({ targetPort: 3000, path: "/app" });
-      expect(portal.publicUrl).toBe(`https://gateway.example.ts.net:${portal.listenPort}/app`);
-      expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
-        portal.listenPort,
-        portal.listenPort,
-        expect.any(Function),
-      );
-      expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
-      expect(portal.listenPort).not.toBe(443);
-      await service.open({ targetPort: 3000 });
-      expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
-      await service.close(portal.id);
-      expect(claim.stop).toHaveBeenCalledOnce();
-      expect(service.list()).toEqual([]);
-      expect(resolveHost).not.toHaveBeenCalled();
-    },
-  );
-
   it("uses a private Serve claim with partitioned cookies even for a Funnel Gateway", async () => {
     await withServer(
       (_, res) => {

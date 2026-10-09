@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import {
@@ -135,7 +136,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
       ["credential.helper", "!gh auth git-credential"],
     ],
   });
-  if (process.platform === "win32") {
+  if (os.platform() === "win32") {
     const permissions = await inspectPathPermissions(profileDir);
     if (
       !permissions.ok ||

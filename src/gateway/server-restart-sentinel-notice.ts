@@ -370,6 +370,12 @@ async function deliverGatewayLifecycleNoticeAttempt(
   onDelivered?: () => void,
   context = captureDeliveryQueueStateContext(),
 ) {
+  const warn = (message: string) =>
+    log.warn(message, {
+      channel: params.channel,
+      to: params.to,
+      sessionKey: params.sessionKey,
+    });
   const messageSentEvents: MessageSentEvent[] = [];
   const flushTerminalObservers = async (
     results: readonly OutboundDeliveryResult[],
@@ -406,13 +412,8 @@ async function deliverGatewayLifecycleNoticeAttempt(
         return false;
       }
     } catch (err) {
-      log.warn(
+      warn(
         `${params.summary}: outbound delivery attempt reservation failed; queued for recovery: ${formatErrorMessage(err)}`,
-        {
-          channel: params.channel,
-          to: params.to,
-          sessionKey: params.sessionKey,
-        },
       );
       return false;
     }
@@ -470,11 +471,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
         await owner
           .fail(results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery, error)
           .catch(() => undefined);
-        log.warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`, {
-          channel: params.channel,
-          to: params.to,
-          sessionKey: params.sessionKey,
-        });
+        warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`);
         return false;
       }
     } catch (err) {
@@ -500,32 +497,19 @@ async function deliverGatewayLifecycleNoticeAttempt(
             }
           }
         } catch (persistError) {
-          log.warn(
+          warn(
             `${params.summary}: permanent rejection persistence failed; queued for recovery: ${formatErrorMessage(persistError)}`,
-            {
-              channel: params.channel,
-              to: params.to,
-              sessionKey: params.sessionKey,
-            },
           );
           return false;
         }
-        log.warn(`${params.summary}: outbound delivery permanently rejected: ${error}`, {
-          channel: params.channel,
-          to: params.to,
-          sessionKey: params.sessionKey,
-        });
+        warn(`${params.summary}: outbound delivery permanently rejected: ${error}`);
         return true;
       }
       const recordFailure = isProvenDeliveryNotSentError(err)
         ? failDeliveryBeforePlatformSend
         : failDelivery;
       await owner.fail(recordFailure, error).catch(() => undefined);
-      log.warn(`${params.summary}: outbound delivery failed; queued for recovery: ${String(err)}`, {
-        channel: params.channel,
-        to: params.to,
-        sessionKey: params.sessionKey,
-      });
+      warn(`${params.summary}: outbound delivery failed; queued for recovery: ${String(err)}`);
       return false;
     }
   });

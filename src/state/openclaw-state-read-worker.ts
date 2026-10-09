@@ -26,6 +26,7 @@ import {
 } from "../infra/worker-task-capacity.js";
 import { createOwnedWorkerTaskPool, WorkerTaskError } from "../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { assertOpenClawAgentWriterReleased } from "./openclaw-agent-write-admission-state.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -161,6 +162,19 @@ function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
       },
       { retainedTransport: true, nativeSource: state.nativeSource },
     );
+    if (process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development") {
+      const pool = state.pool;
+      const closeResources = pool.closeResources;
+      const rotate = pool.rotate;
+      pool.closeResources = (key) => {
+        assertOpenClawAgentWriterReleased("close shared-state reader resources");
+        return closeResources(key);
+      };
+      pool.rotate = () => {
+        assertOpenClawAgentWriterReleased("rotate shared-state readers");
+        return rotate();
+      };
+    }
   }
   return state.pool;
 }
@@ -213,7 +227,8 @@ export function captureOpenClawStateReadSource() {
     createTransport: (
       command: OpenClawStateReadCommand,
       onChunk?: OpenClawStateReadOptions["onChunk"],
-    ) => createReadTransport(command, state, () => admitted.size > 0, onChunk),
+      onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
+    ) => createReadTransport(command, state, () => admitted.size > 0, onChunk, onChunkAsync),
     own(service: () => void, close: () => Promise<void>): () => void {
       if (state.sealed || state.closing) {
         throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
@@ -262,13 +277,18 @@ function createReadTransport(
   state: ReadRuntime,
   ownsAdmission: () => boolean,
   onChunk?: OpenClawStateReadOptions["onChunk"],
+  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
 ) {
+  if (onChunk && onChunkAsync) {
+    throw new Error("Shared-state reads require one stream consumer");
+  }
   // Capture nested input before the read owner can yield during snapshot preparation.
   const capturedCommand = captureCommand(command);
   type ReadTask = ReturnType<ReadPool["startTask"]>;
   const tasks = new Map<ReadTask, { retire: boolean; error?: Error }>();
   let closed = false;
   let closing: RetainedOperation<void> | undefined;
+  let pendingChunks = 0;
 
   const startCloseTask = (task: ReadTask): RetainedOperation<void> => {
     const inContext = AsyncLocalStorage.snapshot();
@@ -393,15 +413,33 @@ function createReadTransport(
           signal: authority.signal,
           inputBytes: requestBytes(request),
           diagnosticOperation: readCommand.type,
-          ...(onChunk
+          ...(onChunkAsync
             ? {
-                onRequestSync(value: unknown) {
+                async onRequest(value: unknown, { signal: taskSignal }: { signal: AbortSignal }) {
                   authority.assertCurrent();
-                  onChunk(value);
-                  return { input: null, timeoutMs: 300_000 };
+                  const signal = AbortSignal.any([authority.signal, taskSignal]);
+                  signal.throwIfAborted();
+                  pendingChunks += 1;
+                  try {
+                    await onChunkAsync(value, signal);
+                    signal.throwIfAborted();
+                    authority.assertCurrent();
+                    return { input: null, timeoutMs: 300_000 };
+                  } finally {
+                    pendingChunks -= 1;
+                    closing?.service();
+                  }
                 },
               }
-            : {}),
+            : onChunk
+              ? {
+                  onRequestSync(value: unknown) {
+                    authority.assertCurrent();
+                    onChunk(value);
+                    return { input: null, timeoutMs: 300_000 };
+                  },
+                }
+              : {}),
         },
       );
       tasks.set(task, cleanup);
@@ -462,7 +500,8 @@ function createReadTransport(
         return;
       }
       const errors: unknown[] = [];
-      let pending = false;
+      // Pool cancellation stops the worker, but an accepted host consumer still owns its data.
+      let pending = pendingChunks > 0;
       for (const release of releases) {
         release.service();
         const outcome = release.read();

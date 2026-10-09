@@ -4,7 +4,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readExpiredCronRunEntriesInWorker } from "./session-entry-read-maintenance.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 it("checks the captured registry after cron data cleanup", async () => {
   await withOpenClawTestState({ label: "readonly-entry-cleanup" }, async ({ env, path }) => {
@@ -12,7 +12,7 @@ it("checks the captured registry after cron data cleanup", async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
     const sessionKey = "agent:main:cron:job:run:cleanup";
     writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
-    const pool = maintenanceLane.pool;
+    const pool = targetDiscoveryLane.pool;
     const rotate = pool.rotate.bind(pool);
     const closeResources = pool.closeResources.bind(pool);
     let cleanupCalled = false;

@@ -202,10 +202,7 @@ export function retireDeliveredQueuedUserTurn(
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before

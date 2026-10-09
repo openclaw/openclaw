@@ -146,6 +146,27 @@ export function createSessionRowPublication(owner: {
                 : undefined,
           }
         : undefined;
+    if (
+      !prepared &&
+      !change.factsInvalidated &&
+      facts?.kind === "category" &&
+      row.sharingEntry?.sessionId === facts.sessionId
+    ) {
+      const { category: _previousCategory, ...sharingEntry } = row.sharingEntry;
+      const next = freezeJsonSnapshot({
+        ...sharingEntry,
+        ...(facts.category !== null ? { category: facts.category } : {}),
+      });
+      const retained =
+        previousFacts?.entry === row.sharingEntry ? { ...previousFacts, entry: next } : undefined;
+      records.invalidateDatabaseFacts(row, retained);
+      if (row.sharingEntry === row.storedEntry) {
+        acquirePublishedEntry(row, next, retained);
+      } else {
+        owner.defer({ ...row, sharingEntry: next });
+      }
+      return;
+    }
     records.invalidateDatabaseFacts(row);
     if (
       !prepared &&

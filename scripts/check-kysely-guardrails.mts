@@ -52,6 +52,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
     // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-canonical-validation-migration.ts",
     "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
@@ -134,6 +135,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.meeting-transcripts-files.ts",
     "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
+    // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
+    "src/infra/state-migrations.session-window-repair.ts",
     "src/infra/state-migrations.transcript-directives-archives.ts",
     "src/infra/state-migrations.transcript-directives.ts",
     // Doctor integrity PRAGMAs and lossless native 64-bit orphan-row preservation.
