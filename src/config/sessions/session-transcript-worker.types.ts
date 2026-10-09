@@ -702,9 +702,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     >;
     readEntryResult: SessionHistoryReader<
       SessionEntryReadWorkerInput,
-      Result<SessionEntryReadWorkerResult["entry"], unknown> & {
-        source?: SessionEntryReadWorkerResult["source"];
-      }
+      Result<SessionEntryReadWorkerResult["entry"], unknown> &
+        Pick<SessionEntryReadWorkerResult, "source">
     >;
     readEntryCurrent: SessionHistoryReader<
       SessionEntryCurrentWorkerInput,
