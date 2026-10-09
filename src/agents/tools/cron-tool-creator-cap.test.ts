@@ -341,8 +341,24 @@ describe("cron tool creator cap", () => {
       trigger: { script: "return { fire: false }" },
       payload: { kind: "systemEvent", text: "wake", toolsAllow: ["write"] },
     };
-    capCronJobToolsAllowOnCreate(unrelated, creator);
-    expect(unrelated.payload.toolsAllow).toEqual([]);
+    // A complete capture proves `write` is outside this creator's surface. Saving
+    // the empty cap would report the add as accepted and run the job with no tools.
+    expect(() => capCronJobToolsAllowOnCreate(unrelated, creator)).toThrow(
+      "Cron add requested tools outside this turn's captured tool surface (write)",
+    );
+    expect(unrelated.payload.toolsAllow).toEqual(["write"]);
+  });
+
+  it("keeps the matching tools of a partially unmatched finite request", () => {
+    const creator: CronCreatorToolAllowlistEntry[] = [];
+    replaceWithEffectiveCronCreatorToolAllowlist(creator, [testTool("read")]);
+
+    const partial = {
+      trigger: { script: "return { fire: false }" },
+      payload: { kind: "systemEvent", text: "wake", toolsAllow: ["read", "future__tool"] },
+    };
+    capCronJobToolsAllowOnCreate(partial, creator);
+    expect(partial.payload.toolsAllow).toEqual(["read"]);
   });
 
   it("treats an alias-name finite request as already covered by creator authority", () => {

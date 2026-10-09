@@ -267,6 +267,15 @@ export function cronCreateRequiresCreatorAuthority(
   );
 }
 
+const REQUESTED_TOOLS_ALLOW_PREVIEW_LIMIT = 5;
+
+function formatRequestedToolsAllow(requestedToolsAllow: readonly string[]): string {
+  const preview = requestedToolsAllow.slice(0, REQUESTED_TOOLS_ALLOW_PREVIEW_LIMIT).join(", ");
+  return requestedToolsAllow.length > REQUESTED_TOOLS_ALLOW_PREVIEW_LIMIT
+    ? `${preview}, … (${requestedToolsAllow.length} total)`
+    : preview;
+}
+
 function capCronJobToolsAllow(params: {
   payload: Record<string, unknown>;
   trigger?: unknown;
@@ -274,6 +283,12 @@ function capCronJobToolsAllow(params: {
   defaultToolsAllow?: unknown;
   /** Codex app authority is captured against the concrete list, so its jobs keep that list. */
   creatorHoldsRuntimeAuthority?: boolean;
+  /**
+   * An add is the caller's own request: a finite list that matches nothing would
+   * persist an empty cap, so the job silently runs without any of the tools it
+   * named. Updates keep their existing narrowing so unrelated edits stay possible.
+   */
+  refuseUnmatchedFiniteRequest?: boolean;
 }): void {
   const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
   if (
@@ -324,11 +339,20 @@ function capCronJobToolsAllow(params: {
   const matches = createToolPolicyMatcher(requestedPolicy);
   // A creator tool matches under its canonical name or the runtime alias the
   // creating surface presented; the persisted cap always holds canonical names.
-  params.payload.toolsAllow = creatorToolsAllow
+  const cappedToolsAllow = creatorToolsAllow
     .filter(
       (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
     )
     .map((tool) => tool.name);
+  if (cappedToolsAllow.length === 0 && params.refuseUnmatchedFiniteRequest) {
+    // A complete capture proves the requested names are outside the creator's
+    // surface. Persisting `[]` would report the add as accepted and then run the
+    // job without those tools, so refuse instead and name them.
+    throw new Error(
+      `Cron add requested tools outside this turn's captured tool surface (${formatRequestedToolsAllow(requestedToolsAllow)}). ${CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE}`,
+    );
+  }
+  params.payload.toolsAllow = cappedToolsAllow;
   delete params.payload.toolsAllowIsDefault;
 }
 
@@ -345,6 +369,7 @@ export function capCronJobToolsAllowOnCreate(
     trigger: value.trigger,
     creatorToolAllowlist,
     creatorHoldsRuntimeAuthority,
+    refuseUnmatchedFiniteRequest: true,
   });
 }
 
