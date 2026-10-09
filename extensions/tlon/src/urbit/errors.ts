@@ -1,4 +1,4 @@
-import { redactUrbitErrorText } from "./redact.js";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 
 type UrbitErrorCode = "invalid_url" | "http_error" | "auth_failed" | "missing_cookie";
 
@@ -27,7 +27,7 @@ export class UrbitHttpError extends UrbitError {
   constructor(params: { operation: string; status: number; bodyText?: string; cause?: unknown }) {
     // A ship or proxy can reflect the session cookie sent with the request in the
     // error body; mask it before the text enters messages, logs, or diagnostics.
-    const bodyText = params.bodyText ? redactUrbitErrorText(params.bodyText) : undefined;
+    const bodyText = params.bodyText ? redactToolPayloadText(params.bodyText) : undefined;
     const suffix = bodyText ? ` - ${bodyText}` : "";
     super("http_error", `${params.operation} failed: ${params.status}${suffix}`, {
       cause: params.cause,

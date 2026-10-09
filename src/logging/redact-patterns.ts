@@ -416,6 +416,7 @@ const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   GATEWAY_SECURITY_COLON_HEADER_REDACT_PATTERN,
   GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN,
   STANDALONE_BEARER_REDACT_PATTERN,
+  String.raw`\b(urbauth-[a-z0-9~-]+=[^\s"'(),;]+)`,
   String.raw`\b(?:https?|wss?|ftp):\/\/[^\/\s:@]*:([^\/\s@]+)@`,
   String.raw`\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^:\s/@]*:([^@\s]+)@`,
   String.raw`(^|[\s,;])(?:${FORM_BODY_FIRST_PAIR_KEYS})=([^&\s]+)(?=&[A-Za-z_][A-Za-z0-9_.-]*=)`,
