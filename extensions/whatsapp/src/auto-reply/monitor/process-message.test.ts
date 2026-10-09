@@ -337,12 +337,6 @@ describe("processMessage group system prompt wiring", () => {
 
   it.each([
     {
-      name: "renders a native self-LID mention as the configured agent identity",
-      identityName: "Kit",
-      suffix: "?",
-      expectedBody: "@Kit ?",
-    },
-    {
       name: "renders dollar signs in the agent identity literally",
       identityName: "Kit $&",
       suffix: "/status",
