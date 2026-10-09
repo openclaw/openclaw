@@ -12,11 +12,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
 
 const PLUGIN_ID = "replayproof";
 

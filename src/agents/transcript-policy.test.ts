@@ -4,7 +4,6 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
@@ -184,42 +183,6 @@ describe("resolveTranscriptPolicy", () => {
       ...overrides,
     };
   }
-
-  it("resolves fresh replay policies after plugin runtime discovery invalidation", async () => {
-    const config = {} as OpenClawConfig;
-    const { resolveProviderRuntimePlugin } = await import("../plugins/provider-hook-runtime.js");
-    const { invalidatePluginRuntimeDiscoveryAfterConfigMutation } =
-      await import("../plugins/registry-refresh.js");
-    const mockedResolve = vi.mocked(resolveProviderRuntimePlugin);
-    // Same provider id and config after an in-process plugin package swap: the first
-    // resolution must not pin the previous package's policy for the second one.
-    const stubPlugin = (sanitizeToolCallIds: boolean): ProviderPlugin => ({
-      id: "demo",
-      label: "Demo",
-      auth: [],
-      buildReplayPolicy: () => ({ sanitizeToolCallIds }),
-    });
-    mockedResolve
-      .mockImplementationOnce(() => stubPlugin(false))
-      .mockImplementationOnce(() => stubPlugin(true));
-
-    const stalePolicy = resolveTranscriptPolicy({
-      provider: "demo",
-      config,
-      modelApi: "openai-completions",
-    });
-
-    await invalidatePluginRuntimeDiscoveryAfterConfigMutation({});
-
-    const refreshedPolicy = resolveTranscriptPolicy({
-      provider: "demo",
-      config,
-      modelApi: "openai-completions",
-    });
-
-    expect(stalePolicy.sanitizeToolCallIds).toBe(false);
-    expect(refreshedPolicy.sanitizeToolCallIds).toBe(true);
-  });
 
   it("does not reuse cached replay policies across custom env objects", () => {
     const config = {} as OpenClawConfig;
