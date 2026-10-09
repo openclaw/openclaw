@@ -164,8 +164,10 @@ changes can then update the index without a search or agent turn. Retiring an
 instance closes its managers, including file watchers, timers, and session
 listeners. Plugin reload also stops and restarts the retained Memory Core
 service around publication, so its managers use the current embedding providers,
-including providers loaded on demand, without waiting for a search or turn. Memory Core running only as another memory plugin's consolidation
-sidecar does not start these indexes automatically.
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+before reporting the previous runtime restored. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
 
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses

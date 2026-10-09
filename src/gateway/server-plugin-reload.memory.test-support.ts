@@ -247,6 +247,10 @@ export async function verifyGatewayMemoryWatcherRestart(
   ) => ReturnType<typeof createPluginReloadRecoveryFixture>,
   providerState: "pending" | "initialized" | "separate-registry" | "rollback",
   signal: AbortSignal,
+  recovery?: {
+    owner: "retained" | "replaced";
+    failure: "before-drain" | "checkpoint" | "restart";
+  },
 ) {
   const state = await createOpenClawTestState({ label: "gateway-memory-watcher-reload" });
   const config: OpenClawConfig = {
@@ -298,6 +302,7 @@ export async function verifyGatewayMemoryWatcherRestart(
   const releaseStartup = createDeferredCore();
   let reloading: Promise<unknown> | undefined;
   let independent: ReturnType<typeof createPluginRegistry> | undefined;
+  const recoveryFailure = new Error("memory reload checkpoint failed");
   const registerProvider = (api: OpenClawPluginApi, current: number) =>
     api.registerEmbeddingProvider({
       id: "gateway-memory-probe",
@@ -317,6 +322,11 @@ export async function verifyGatewayMemoryWatcherRestart(
     const fixture = await createRecoveryFixture({
       config,
       abortOnCandidateStart: providerState === "rollback",
+      checkpoint: async () => {
+        if (recovery && recovery.failure !== "before-drain" && subscriptions[0]?.signal.aborted) {
+          throw recoveryFailure;
+        }
+      },
       beforePublish: async () => {
         expect(
           subscriptions[0]!.signal.aborted,
@@ -351,6 +361,9 @@ export async function verifyGatewayMemoryWatcherRestart(
             if (managers.length > 1) {
               restarted.resolve();
               await releaseStartup.promise;
+              if (recovery?.failure === "restart") {
+                throw new Error("memory indexing restart failed");
+              }
             }
           },
           stop: () => runtime.closeAllMemorySearchManagers?.(),
@@ -358,6 +371,17 @@ export async function verifyGatewayMemoryWatcherRestart(
       },
     });
     memory = fixture.previousRegistry.memoryCapabilities[0]?.capability.runtime;
+    if (recovery?.failure === "before-drain") {
+      fixture.lifetime.publish({
+        stop: async () => {},
+        preparePluginReload: () => ({
+          drain: async () => {
+            throw recoveryFailure;
+          },
+          resume() {},
+        }),
+      });
+    }
     expect(subscriptions).toHaveLength(1);
     const first = managers[0]!;
     if (providerState === "separate-registry") {
@@ -403,39 +427,62 @@ export async function verifyGatewayMemoryWatcherRestart(
       }
       return work;
     });
-    reloading = fixture.reload().catch((error: unknown) => error);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        restarted.promise,
-        reloading,
-        "Provider reload completed without restarting retained memory indexing",
-      ),
-      signal,
-    );
-    expect(subscriptions[0]!.signal.aborted).toBe(true);
+    reloading = fixture
+      .reload(config, [recovery?.owner === "replaced" ? "sibling" : "first"])
+      .catch((error: unknown) => error);
+    if (recovery?.failure === "before-drain") {
+      releaseStartup.resolve();
+    } else {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          restarted.promise,
+          reloading,
+          "Plugin reload completed without restarting drained memory indexing",
+        ),
+        signal,
+      );
+      expect(subscriptions[0]!.signal.aborted).toBe(true);
+      let settled = false;
+      void reloading.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled, "Reload must join memory service startup").toBe(false);
+      expect(fixture.owner.getReloadStatus()).toMatchObject({
+        phase: providerState === "rollback" ? "recovering" : "reloading",
+      });
+      releaseStartup.resolve();
+    }
     expect(fixture.registryOwner.registry.memoryCapabilities[0]?.capability.runtime).toBe(
       fixture.previousRegistry.memoryCapabilities[0]?.capability.runtime,
     );
-    let settled = false;
-    void reloading.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await Promise.resolve();
-    expect(settled, "Reload must join retained service startup").toBe(false);
-    releaseStartup.resolve();
     const result = await reloading;
-    if (providerState === "rollback") {
+    if (providerState === "rollback" || recovery) {
       expect(result).toMatchObject({ details: { committed: false } });
     } else {
       expect(result).toMatchObject({ runtime: { pluginIds: ["first"] } });
     }
-    expect(subscriptions).toHaveLength(2);
-    if (providerState === "initialized") {
+    if (recovery?.failure === "restart") {
+      expect(result).toMatchObject({
+        cause: {
+          errors: [
+            recoveryFailure,
+            expect.objectContaining({ message: "plugin services failed to start" }),
+          ],
+        },
+      });
+      expect(fixture.owner.getReloadStatus()).toMatchObject({ phase: "failed" });
+      expect(subscriptions.every((subscription) => subscription.signal.aborted)).toBe(true);
+      return;
+    }
+    expect(fixture.owner.getReloadStatus()).toBeUndefined();
+    if (recovery) {
+      expect(result).toMatchObject({ cause: recoveryFailure });
+      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+    }
+    expect(subscriptions).toHaveLength(recovery?.failure === "before-drain" ? 1 : 2);
+    if (providerState === "initialized" && !recovery) {
       await fixture.reload();
       expect(subscriptions).toHaveLength(3);
     }

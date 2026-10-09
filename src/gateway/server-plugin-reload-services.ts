@@ -44,17 +44,16 @@ export function createPluginReloadServices(
       if (!memory) {
         return;
       }
-      if (rollback) {
-        memory.rollback();
-      } else {
+      const restartPluginIds = rollback ? memory.rollback() : memory.retainedPluginIds;
+      if (!rollback) {
         memory.commit(runtime.pluginRuntime.registry);
       }
-      if (memory.retainedPluginIds.size === 0) {
+      if (restartPluginIds.size === 0) {
         return;
       }
       // Early rollback may have drained managers before reaching service stop.
       if (rollback) {
-        await stopServices(generation.currentServices(), true, memory.retainedPluginIds);
+        await stopServices(generation.currentServices(), true, restartPluginIds);
       }
       // A retained instance must reacquire managers only after registry adoption
       // and memory admission resume; startup is part of this reload's completion.

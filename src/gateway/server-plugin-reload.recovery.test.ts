@@ -316,6 +316,19 @@ it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
     verifyGatewayMemoryWatcherRestart(createRecoveryFixture, providerState, signal),
 );
 
+it.for([
+  { owner: "retained", failure: "before-drain" },
+  { owner: "replaced", failure: "before-drain" },
+  { owner: "retained", failure: "checkpoint" },
+  { owner: "replaced", failure: "checkpoint" },
+  { owner: "retained", failure: "restart" },
+  { owner: "replaced", failure: "restart" },
+] as const)(
+  "recovers $owner memory indexing after early $failure failure",
+  (recovery, { signal }) =>
+    verifyGatewayMemoryWatcherRestart(createRecoveryFixture, "initialized", signal, recovery),
+);
+
 it.each(["retry", "shutdown"] as const)(
   "reports failed candidate startup and retires its dispatch before %s",
   (action) => verifyManagedCandidateRetirement(createRecoveryFixture, action),
