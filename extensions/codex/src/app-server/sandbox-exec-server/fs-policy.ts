@@ -228,14 +228,32 @@ function normalizeSandboxGlobPattern(pattern: string): string {
   return pattern.replace(/\/{2,}/gu, "/");
 }
 
+type SandboxGlobLiteral = { kind: "literal"; points: string[]; fallback: number[] };
+
 type SandboxGlobToken =
-  | { kind: "literal"; text: string }
+  | SandboxGlobLiteral
   | { kind: "star" }
   | { kind: "globstar" }
   | { kind: "globstarSlash" }
   | { kind: "single"; matches: (char: string) => boolean };
 
 type SandboxGlobCursorRange = { start: number; end: number };
+
+function compileSandboxGlobLiteral(text: string): SandboxGlobLiteral {
+  const points = Array.from(text);
+  const fallback = Array.from({ length: points.length }, () => 0);
+  let matched = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    while (matched > 0 && points[index] !== points[matched]) {
+      matched = fallback[matched - 1] ?? 0;
+    }
+    if (points[index] === points[matched]) {
+      matched += 1;
+    }
+    fallback[index] = matched;
+  }
+  return { kind: "literal", points, fallback };
+}
 
 function tokenizeSandboxGlobPattern(pattern: string): SandboxGlobToken[] {
   // Lex with the same rules as the previous regex compiler: `**/` is an
@@ -245,7 +263,7 @@ function tokenizeSandboxGlobPattern(pattern: string): SandboxGlobToken[] {
   let literal = "";
   const flushLiteral = () => {
     if (literal) {
-      tokens.push({ kind: "literal", text: literal });
+      tokens.push(compileSandboxGlobLiteral(literal));
       literal = "";
     }
   };
@@ -285,8 +303,7 @@ function tokenizeSandboxGlobPattern(pattern: string): SandboxGlobToken[] {
 
 // Cursor positions index Unicode code points, matching the `u`-flag regex the
 // tokenizer replaces: an astral char is one cursor step, never a surrogate
-// half. `unitStarts` maps each code-point index to its UTF-16 offset, and
-// `pointAtUnit` reverses the map for literal end positions.
+// half. Literal tokens use the same code-point indexing.
 // `slashFollowRanges` precomputes positions just past each separator so `**/`
 // tokens merge them in without rescanning the target per cursor range.
 // `lineTerminators` lists LF/CR/U+2028/U+2029 points: the old regex compiled
@@ -294,8 +311,6 @@ function tokenizeSandboxGlobPattern(pattern: string): SandboxGlobToken[] {
 // globstar reach stops before each of them.
 type SandboxGlobTarget = {
   points: string[];
-  unitStarts: number[];
-  pointAtUnit: Map<number, number>;
   slashFollowRanges: SandboxGlobCursorRange[];
   lineTerminators: number[];
 };
@@ -324,23 +339,16 @@ function createSandboxGlobTarget(url: string): SandboxGlobTarget {
   // Array.from iterates Unicode code points, matching the `u`-flag regex the
   // tokenizer replaces; Intl.Segmenter graphemes would diverge from it.
   const points = Array.from(url);
-  const unitStarts: number[] = [];
-  const pointAtUnit = new Map<number, number>();
   const slashFollows: number[] = [];
   const lineTerminators: number[] = [];
-  let unit = 0;
   for (let index = 0; index < points.length; index += 1) {
     const point = points[index] ?? "";
-    unitStarts.push(unit);
-    pointAtUnit.set(unit, index);
-    unit += point.length;
     if (point === "/") {
       slashFollows.push(index + 1);
     } else if (isSandboxGlobLineTerminator(point)) {
       lineTerminators.push(index);
     }
   }
-  pointAtUnit.set(unit, points.length);
   const slashFollowRanges: SandboxGlobCursorRange[] = [];
   for (const follow of slashFollows) {
     const last = slashFollowRanges.at(-1);
@@ -350,7 +358,7 @@ function createSandboxGlobTarget(url: string): SandboxGlobTarget {
       slashFollowRanges.push({ start: follow, end: follow });
     }
   }
-  return { points, unitStarts, pointAtUnit, slashFollowRanges, lineTerminators };
+  return { points, slashFollowRanges, lineTerminators };
 }
 
 // Merges two sorted, disjoint range lists in linear time; globstar-slash
@@ -413,44 +421,49 @@ function mergeSandboxGlobRanges(ranges: SandboxGlobCursorRange[]): SandboxGlobCu
 }
 
 function literalSandboxGlobRanges(
-  url: string,
   target: SandboxGlobTarget,
-  literal: string,
+  literal: SandboxGlobLiteral,
   ranges: readonly SandboxGlobCursorRange[],
 ): SandboxGlobCursorRange[] {
   const next: SandboxGlobCursorRange[] = [];
-  const lastStart = target.points.length - 1;
-  for (const range of ranges) {
-    let runStart = -1;
-    let runEnd = -1;
-    const rangeEnd = Math.min(range.end, lastStart);
-    for (let pos = range.start; pos <= rangeEnd; pos += 1) {
-      const unitPos = target.unitStarts[pos] ?? 0;
-      if (!url.startsWith(literal, unitPos)) {
-        continue;
-      }
-      const at = target.pointAtUnit.get(unitPos + literal.length);
-      if (at === undefined) {
-        // The literal ends between code points and cannot align with the old
-        // `u`-flag regex, which only stops on code-point boundaries.
-        continue;
-      }
-      if (runStart < 0) {
-        runStart = at;
-        runEnd = at;
-      } else if (at <= runEnd + 1) {
-        runEnd = at;
-      } else {
-        next.push({ start: runStart, end: runEnd });
-        runStart = at;
-        runEnd = at;
-      }
+  const first = ranges[0];
+  const last = ranges.at(-1);
+  if (!first || !last) {
+    return next;
+  }
+  // KMP retains matched prefixes, including overlapping occurrences, instead
+  // of comparing a potentially long literal again at every reachable cursor.
+  const limit = Math.min(target.points.length, last.end + literal.points.length);
+  let matched = 0;
+  let rangeIndex = 0;
+  for (let pos = first.start; pos < limit; pos += 1) {
+    const point = target.points[pos];
+    while (matched > 0 && point !== literal.points[matched]) {
+      matched = literal.fallback[matched - 1] ?? 0;
     }
-    if (runStart >= 0) {
-      next.push({ start: runStart, end: runEnd });
+    if (point === literal.points[matched]) {
+      matched += 1;
+    }
+    if (matched !== literal.points.length) {
+      continue;
+    }
+    const start = pos + 1 - matched;
+    matched = literal.fallback[matched - 1] ?? 0;
+    while (rangeIndex < ranges.length && (ranges[rangeIndex]?.end ?? -1) < start) {
+      rangeIndex += 1;
+    }
+    const range = ranges[rangeIndex];
+    if (!range || start < range.start) {
+      continue;
+    }
+    const previous = next.at(-1);
+    if (previous && previous.end === pos) {
+      previous.end = pos + 1;
+    } else {
+      next.push({ start: pos + 1, end: pos + 1 });
     }
   }
-  return mergeSandboxGlobRanges(next);
+  return next;
 }
 
 // `*` stays inside one path segment. The first cursor in a segment already
@@ -586,7 +599,7 @@ function matchSandboxGlobTokens(url: string, tokens: readonly SandboxGlobToken[]
       break;
     }
     if (token.kind === "literal") {
-      ranges = literalSandboxGlobRanges(url, target, token.text, ranges);
+      ranges = literalSandboxGlobRanges(target, token, ranges);
     } else if (token.kind === "star") {
       ranges = starSandboxGlobRanges(target.points, ranges);
     } else if (token.kind === "globstar") {

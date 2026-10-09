@@ -147,11 +147,14 @@ describe("sandbox fs glob matching", () => {
     );
   });
 
-  it("requires exact literal matches without wildcards", () => {
+  it("matches literal runs only at reachable positions", () => {
     const matcher = createGlobReadMatcher("/work/file.txt");
     expect(matcher("/work/file.txt")).toBe(true);
     expect(matcher("/work/file.txtx")).toBe(false);
     expect(matcher("/work/sub/file.txt")).toBe(false);
+    expect(createGlobReadMatcher("/*ababac/end")("/ababababac/end")).toBe(true);
+    expect(createGlobReadMatcher("/**/aba/end")("/aaba/end")).toBe(false);
+    expect(createGlobReadMatcher("/**/aba/end")("/x/aba/end")).toBe(true);
   });
 
   it("keeps unicode code-point semantics from the u-flag regex", () => {
@@ -160,6 +163,9 @@ describe("sandbox fs glob matching", () => {
     expect(createGlobReadMatcher("/*😀")("/a😀b")).toBe(false);
     expect(createGlobReadMatcher("/[😀]")("/😀")).toBe(true);
     expect(createGlobReadMatcher("/[😀]")("/a")).toBe(false);
+    expect(createGlobReadMatcher("/*😀😀x")("/😀😀😀x")).toBe(true);
+    expect(createGlobReadMatcher("/*\ud83d")("/😀")).toBe(false);
+    expect(createGlobReadMatcher("/*\ud83d")("/\ud83d")).toBe(true);
   });
 
   it("stops globstars at line terminators like the old dot without dotAll", () => {
@@ -194,6 +200,14 @@ describe("sandbox fs glob matching", () => {
     const missStarted = Date.now();
     expect(matcher(`/${"b".repeat(10_000)}`)).toBe(false);
     expect(Date.now() - missStarted).toBeLessThan(250);
+  });
+
+  it("matches long overlapping literals without rescanning each prefix", () => {
+    const literal = "a".repeat(100_000);
+    const matcher = createGlobReadMatcher(`/*${literal}*`);
+    const started = Date.now();
+    expect(matcher(`/${literal}${literal}`)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(250);
   });
 
   it("matches repeated globstar-slash tokens without rescanning per cursor", () => {
