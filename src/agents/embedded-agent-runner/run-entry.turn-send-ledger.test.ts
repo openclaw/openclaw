@@ -49,7 +49,8 @@ const state = vi.hoisted(() => ({
   finalizedAttempts: [] as string[],
 }));
 
-vi.mock("../harness/context-engine-turn-attempt.js", () => ({
+vi.mock("../harness/context-engine-turn-attempt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../harness/context-engine-turn-attempt.js")>()),
   discardContextEngineTurnAttemptIntent: vi.fn(
     ({ facts }: { facts: ContextEngineTurnAttemptFacts }) => {
       state.discardedAttempts.push(facts.sessionIdUsed);
@@ -60,16 +61,19 @@ vi.mock("../harness/context-engine-turn-attempt.js", () => ({
   }),
 }));
 
-vi.mock("../model-fallback-runner.js", () => ({
+vi.mock("../model-fallback-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-fallback-runner.js")>()),
   runWithModelFallback: (params: FallbackRunnerParams) => state.runWithModelFallback(params),
 }));
 
-vi.mock("../harness/runtime-plugin.js", () => ({
+vi.mock("../harness/runtime-plugin.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../harness/runtime-plugin.js")>()),
   ensureSelectedAgentHarnessPlugin: (params: unknown) =>
     state.ensureSelectedAgentHarnessPlugin(params),
 }));
 
-vi.mock("../harness/selection.js", () => ({
+vi.mock("../harness/selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../harness/selection.js")>()),
   selectAgentHarness: (params: { provider: string }) => state.selectAgentHarness(params),
 }));
 

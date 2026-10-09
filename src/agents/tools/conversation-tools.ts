@@ -1,5 +1,5 @@
 /** Agent tools for addressing external conversations independently from local model sessions. */
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { Type } from "typebox";
 // Keep Gateway wire schemas as the single owner so Code Mode never advertises a divergent shape.
 import {
@@ -133,21 +133,28 @@ function readConversationRef(value: string): string {
   return conversationRef;
 }
 
-function buildConversationOperationId(params: {
-  options: ConversationToolOptions;
-  toolCallId: string;
-  toolName: "conversations_send" | "conversations_turn";
-  conversationRef: string;
-}): string {
+/** Reads the arguments shared by send and turn and derives their stable operation id. */
+function readConversationMessageInput(
+  options: ConversationToolOptions,
+  toolName: "conversations_send" | "conversations_turn",
+  toolCallId: string,
+  args: unknown,
+) {
+  const params = args as Record<string, unknown>;
+  const conversationRef = readConversationRef(
+    readToolStringParam(params, "conversationRef", { required: true }),
+  );
+  const message = readToolStringParam(params, "message", { required: true });
   const identity = [
-    resolveToolAgentId(params.options),
-    params.options.agentSessionId ?? "",
-    params.options.agentSessionKey ?? "",
-    params.toolName,
-    params.toolCallId,
-    params.conversationRef,
+    resolveToolAgentId(options),
+    options.agentSessionId ?? "",
+    options.agentSessionKey ?? "",
+    toolName,
+    toolCallId,
+    conversationRef,
   ].join("\u0000");
-  return `convop_${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
+  const operationId = `convop_${sha256Hex(identity).slice(0, 32)}`;
+  return { params, conversationRef, message, operationId };
 }
 
 /** Lists opaque, exact external addresses owned by the active agent. */
@@ -250,17 +257,12 @@ export function createConversationsSendTool(
     outputSchema: ConversationSendToolResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
-      const params = args as Record<string, unknown>;
-      const conversationRef = readConversationRef(
-        readToolStringParam(params, "conversationRef", { required: true }),
-      );
-      const message = readToolStringParam(params, "message", { required: true });
-      const operationId = buildConversationOperationId({
+      const { conversationRef, message, operationId } = readConversationMessageInput(
         options,
+        "conversations_send",
         toolCallId,
-        toolName: "conversations_send",
-        conversationRef,
-      });
+        args,
+      );
       // Per-turn send budget, shared with the message tool: count successful sends
       // per (turn, resolved route) so a reworded resend to the same conversation is
       // visible even though the loop detector hashes full params and can't see it.
@@ -385,20 +387,15 @@ export function createConversationsTurnTool(
     outputSchema: ConversationTurnResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
-      const params = args as Record<string, unknown>;
-      const conversationRef = readConversationRef(
-        readToolStringParam(params, "conversationRef", { required: true }),
-      );
-      const message = readToolStringParam(params, "message", { required: true });
+      const {
+        params,
+        conversationRef,
+        message,
+        operationId: turnId,
+      } = readConversationMessageInput(options, "conversations_turn", toolCallId, args);
       const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = timeoutSeconds * 1_000;
       const agentId = resolveToolAgentId(options);
-      const turnId = buildConversationOperationId({
-        options,
-        toolCallId,
-        toolName: "conversations_turn",
-        conversationRef,
-      });
       const result = await deps.callGateway<ConversationTurnResult>({
         method: "conversations.turn",
         params: {
