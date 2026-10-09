@@ -118,15 +118,31 @@ verify_crabbox_admin_merge_bypass() {
     "$proof_dir/main-ref.json") || return 1
   pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$workflow_sha...$main_sha" \
     >"$proof_dir/main-comparison.json" || return 1
-  # Keep this as the final remote authority read before the verifier returns.
+  # This remains the final mutable authority read; later comparisons bind immutable SHAs.
   pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/git/ref/heads/main" \
     >"$proof_dir/final-main-ref.json" || return 1
+  local final_main_sha
+  final_main_sha=$(jq -er '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+    "$proof_dir/final-main-ref.json") || return 1
+  local main_args=(
+    --main-ref "$proof_dir/main-ref.json"
+    --main-comparison "$proof_dir/main-comparison.json"
+    --final-main-ref "$proof_dir/final-main-ref.json"
+  )
+  if [ "$final_main_sha" != "$main_sha" ] && [ "${OPENCLAW_PR_STRICT_DRIFT:-}" != 1 ]; then
+    pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$main_sha...$final_main_sha" \
+      >"$proof_dir/main-advance-comparison.json" || return 1
+    pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$workflow_sha...$final_main_sha" \
+      >"$proof_dir/final-main-comparison.json" || return 1
+    main_args+=(
+      --main-advance-comparison "$proof_dir/main-advance-comparison.json"
+      --final-main-comparison "$proof_dir/final-main-comparison.json"
+    )
+  fi
   if ! node "$script_parent_dir/pr-lib/crabbox-merge-bypass.mjs" \
     --actor "$proof_dir/actor.json" \
     --membership "$proof_dir/membership.json" \
-    --main-ref "$proof_dir/main-ref.json" \
-    --main-comparison "$proof_dir/main-comparison.json" \
-    --final-main-ref "$proof_dir/final-main-ref.json" \
+    "${main_args[@]}" \
     --pull-request "$proof_dir/pull-request.json" \
     --publisher-run "$proof_dir/publisher-run.json" \
     --required-checks "$proof_dir/required-checks.json" \

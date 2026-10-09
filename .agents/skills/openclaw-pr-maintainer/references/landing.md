@@ -378,8 +378,9 @@ intent and landing-parent audit retain their original main anchor. Already-selec
 REST completes its final observation and main materialization before one final
 live authority verification. GraphQL retains its post-authority local-only reread,
 including late REST fallback; a newly unavailable main there is a pre-dispatch
-refusal. Neither path fetches after final authority verification. Crabbox admission
-and retained-outcome reconciliation keep their existing strict main binding.
+refusal. Neither path fetches after final authority verification. Crabbox admission also verifies forward main ancestry and the candidate tree;
+`OPENCLAW_PR_STRICT_DRIFT=1` restores strict main stability on every landing
+route. Retained-outcome reconciliation keeps its existing strict main binding.
 A fork run with an empty GitHub PR association must match the current PR's exact
 head, branch, and source repository identity as well as that check-run; an
 explicit association with another PR is rejected. The retained result names

@@ -19,6 +19,7 @@ const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
 const workflowSha = "d".repeat(40);
 const mainSha = "e".repeat(40);
+const advancedMainSha = "f".repeat(40);
 const planDigest = "c".repeat(64);
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
@@ -201,11 +202,11 @@ describe("Crabbox admin merge bypass verifier", () => {
       /not bound to the current protected-main publisher workflow/u,
     ],
     [
-      "protected main drift",
+      "protected main drift without ancestry evidence",
       (value: ReturnType<typeof input>) => {
         value.finalMainRef.object.sha = "f".repeat(40);
       },
-      /protected main moved/u,
+      /final protected main advance is malformed/u,
     ],
     [
       "publisher workflow not ancestral to main",
@@ -322,6 +323,10 @@ function runProtectedShell(
     override = false,
     revoke = false,
     longPreview = false,
+    advanceMain = false,
+    nonForwardMain = false,
+    nonAncestralPublisher = false,
+    strictDrift = false,
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "pr-crabbox-protected-"));
@@ -336,12 +341,29 @@ function runProtectedShell(
   writeFileSync(join(root, "calls.jsonl"), "");
   const evidence = {
     ...input(),
+    mainAdvanceComparison: {
+      ahead_by: 1,
+      base_commit: { sha: mainSha },
+      behind_by: nonForwardMain ? 1 : 0,
+      merge_base_commit: { sha: nonForwardMain ? baseSha : mainSha },
+      status: nonForwardMain ? "diverged" : "ahead",
+    },
+    finalMainComparison: {
+      ahead_by: 4,
+      base_commit: { sha: workflowSha },
+      behind_by: nonAncestralPublisher ? 1 : 0,
+      merge_base_commit: { sha: nonAncestralPublisher ? baseSha : workflowSha },
+      status: nonAncestralPublisher ? "diverged" : "ahead",
+    },
     // Exercise pipe backpressure during trailer parsing without changing authorization.
     mergePreview: "Reviewed fixture body".repeat(longPreview ? 16_384 : 1),
   };
   const reviewComments = validClawsweeperReviewCommentPages(131091, headSha);
   evidence.membership.role = role;
   evidence.membership.state = state;
+  if (advanceMain) {
+    evidence.finalMainRef.object.sha = advancedMainSha;
+  }
   writeFileSync(join(root, "input.json"), JSON.stringify(evidence));
   const gh = join(bin, "gh");
   const protectedGh = `#!${process.execPath}
@@ -427,8 +449,13 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     save(); out(value.membership);
   }
   else if (endpoint === "orgs/openclaw/memberships/relay-reader") out({role:"admin",state:"active",user:{login:"relay-reader"}});
-  else if (endpoint === prefix + "git/ref/heads/main") out(value.mainRef);
+  else if (endpoint === prefix + "git/ref/heads/main") {
+    value.mainReads = (value.mainReads || 0) + 1;
+    save(); out(value.mainReads === 1 ? value.mainRef : value.finalMainRef);
+  }
   else if (endpoint === prefix + "compare/${workflowSha}...${mainSha}") out(value.mainComparison);
+  else if (endpoint === prefix + "compare/${mainSha}...${advancedMainSha}") out(value.mainAdvanceComparison);
+  else if (endpoint === prefix + "compare/${workflowSha}...${advancedMainSha}") out(value.finalMainComparison);
   else if (endpoint === "repos/prepared/base/commits/${headSha}") out({parents:[{sha:"${mainSha}"}]});
   else fail("unexpected endpoint: " + endpoint);
 }
@@ -492,6 +519,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
           GH_TOKEN: "synthetic-token",
           OPENCLAW_GH_BIN: override ? selected : "",
+          OPENCLAW_PR_STRICT_DRIFT: strictDrift ? "1" : "",
           FAKE_DENIED: denied,
           FAKE_DISPATCH: command.includes("finalize_remote_crabbox_aws_gate") ? "1" : "",
           FAKE_REVOKE: revoke ? "1" : "",
@@ -537,6 +565,46 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.proof).toMatchObject({ actor: "maintainer", mainSha, workflowSha, ciRunId });
     expect(result.calls.at(-1)).toContain("repos/openclaw/openclaw/git/ref/heads/main");
     expect(result.calls.filter((args) => args.includes("--paginate"))).toHaveLength(2);
+  });
+
+  it("accepts a forward final main advance with both ancestry proofs and preserves the first anchor", () => {
+    const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`, {
+      advanceMain: true,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.proof).toMatchObject({ mainSha, finalMainSha: advancedMainSha, workflowSha });
+    expect(
+      result.calls.slice(-2).map((args) => args.find((arg) => arg.includes("/compare/"))),
+    ).toEqual([
+      `repos/openclaw/openclaw/compare/${mainSha}...${advancedMainSha}`,
+      `repos/openclaw/openclaw/compare/${workflowSha}...${advancedMainSha}`,
+    ]);
+  });
+
+  it.each([
+    {
+      label: "rewritten main",
+      options: { nonForwardMain: true },
+      error: "final protected main advance is not identical or forward",
+    },
+    {
+      label: "publisher workflow no longer ancestral to final main",
+      options: { nonAncestralPublisher: true },
+      error: "final protected main is not identical or forward",
+    },
+    {
+      label: "main advancement in strict mode",
+      options: { strictDrift: true },
+      error: "protected main moved during final Crabbox merge validation",
+    },
+  ])("rejects $label", ({ options, error }) => {
+    const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`, {
+      advanceMain: true,
+      ...options,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(result.proof).toBeUndefined();
   });
 
   it("checks the explicitly selected writer's live admin membership", () => {
