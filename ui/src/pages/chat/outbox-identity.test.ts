@@ -21,7 +21,7 @@ import {
   listStoredChatOutboxes,
   loadChatComposerSnapshot,
   persistChatComposerState,
-  updateStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 
@@ -139,11 +139,10 @@ describe("outbox submission handoff", () => {
           : { orderKey: 2 }),
       };
       expect(
-        updateStoredChatComposerQueueItem(
+        updateStoredChatComposerQueueItems(
           host,
           host.sessionKey,
-          stored,
-          replacement,
+          [{ expected: stored, next: replacement }],
           stored.agentId,
         ),
       ).toBe(true);
@@ -529,12 +528,22 @@ describe("captured outbox scope review regressions", () => {
       sendRunId: "captured-attempt",
     };
     expect(
-      updateStoredChatComposerQueueItem(changed, original.sessionKey, item, next, "other"),
+      updateStoredChatComposerQueueItems(
+        changed,
+        original.sessionKey,
+        [{ expected: item, next }],
+        "other",
+      ),
     ).toBe(false);
     removeStoredChatComposerQueueItem(changed, original.sessionKey, item.id, item, "other");
     expect(listStoredChatOutboxes(changed)).toEqual([original]);
     expect(
-      updateStoredChatComposerQueueItem(changed, original.sessionKey, item, next, original.agentId),
+      updateStoredChatComposerQueueItems(
+        changed,
+        original.sessionKey,
+        [{ expected: item, next }],
+        original.agentId,
+      ),
     ).toBe(true);
     expect(listStoredChatOutboxes(changed)[0]).toMatchObject({
       sessionKey: initial.sessionKey,

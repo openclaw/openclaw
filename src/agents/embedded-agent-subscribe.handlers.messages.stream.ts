@@ -48,13 +48,21 @@ export function isResponsesApiAssistantMessage(message: AgentMessage | undefined
   return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
-export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  return readAssistantMessageApi(message) === "anthropic-messages";
-}
-
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
   const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function isAssistantTextPhasePending(
+  message: AgentMessage | undefined,
+  eventType: string,
+): boolean {
+  const api = readAssistantMessageApi(message);
+  return (
+    api === "ollama" ||
+    isOpenAiCompletionsAssistantMessage(message) ||
+    (api === "anthropic-messages" && eventType !== "text_end")
+  );
 }
 
 export function extractStandaloneMessageToolText(

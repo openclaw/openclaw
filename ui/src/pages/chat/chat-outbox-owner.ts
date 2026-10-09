@@ -34,7 +34,6 @@ import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
-  updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
@@ -254,11 +253,10 @@ class ChatOutboxGatewayOwner {
                   sendState: "unconfirmed",
                 });
               if (
-                !updateStoredChatComposerQueueItem(
+                !updateStoredChatComposerQueueItems(
                   host,
                   outbox.sessionKey,
-                  parked ? current : item,
-                  { ...current, ...result.update },
+                  [{ expected: parked ? current : item, next: { ...current, ...result.update } }],
                   outbox.agentId,
                 )
               ) {
@@ -277,11 +275,10 @@ class ChatOutboxGatewayOwner {
                 : {}),
             });
           } else {
-            updateStoredChatComposerQueueItem(
+            updateStoredChatComposerQueueItems(
               host,
               outbox.sessionKey,
-              current,
-              failOutboxPayload(current, result.reason),
+              [{ expected: current, next: failOutboxPayload(current, result.reason) }],
               outbox.agentId,
             );
           }

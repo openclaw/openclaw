@@ -58,6 +58,7 @@ export async function runDoctorHealthFlow(
     writeAuthority?.assertCurrent,
     writeAuthority?.commandAuthority,
   );
+  let requestedExit: (() => void) | undefined;
   const run = () =>
     withDeferredDebugProxyCapture(async (resumeCapture) => {
       let preparedPreflight = databasePreflight;
@@ -89,6 +90,9 @@ export async function runDoctorHealthFlow(
       return withPluginLoadDiagnostics((diagnostics) => {
         const runDoctor = (capture?: DoctorConfigCapture) =>
           runDoctorHealthFlowWithResult(
+            (selectedRuntime, code) => {
+              requestedExit = () => selectedRuntime.exit(code);
+            },
             runtime,
             options,
             preparedPreflight,
@@ -103,10 +107,16 @@ export async function runDoctorHealthFlow(
           : runDoctor();
       });
     });
-  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
+  const { withPluginGenerationSourceCustody } =
+    await import("../plugins/plugin-generation-source-lookup.js");
+  await withPluginGenerationSourceCustody(() =>
+    custody ? withCommandProcessScope(run, undefined, custody) : run(),
+  );
+  requestedExit?.();
 }
 
 async function runDoctorHealthFlowWithResult(
+  requestExit: (runtime: RuntimeEnv, code: number) => void,
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
   databasePreflight: DoctorDatabasePreflight | undefined,
@@ -684,7 +694,7 @@ async function runDoctorHealthFlowWithResult(
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.
     if (exitCode !== undefined) {
-      effectiveRuntime.exit(exitCode);
+      requestExit(effectiveRuntime, exitCode);
     }
   }
 

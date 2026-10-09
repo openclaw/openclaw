@@ -11,7 +11,6 @@ import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
-  updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 
@@ -244,15 +243,15 @@ describe("queued message reorder", () => {
     const expectedQueued2 = storedById("queued-2");
     const expectedQueued3 = storedById("queued-3");
 
-    const concurrentWrite = updateStoredChatComposerQueueItem(
-      host as never,
-      SESSION_KEY,
-      expectedQueued2,
+    const concurrentWrite = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [
       {
-        ...expectedQueued2,
-        sendAttempts: (expectedQueued2.sendAttempts ?? 0) + 1,
+        expected: expectedQueued2,
+        next: {
+          ...expectedQueued2,
+          sendAttempts: (expectedQueued2.sendAttempts ?? 0) + 1,
+        },
       },
-    );
+    ]);
     expect(concurrentWrite).toBe(true);
 
     const applied = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [

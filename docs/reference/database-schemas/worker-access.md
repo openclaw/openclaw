@@ -16,6 +16,44 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+## Committed facts and completeness
+
+Synchronous compatibility writers and workers share the existing postcommit
+installation boundary. A managed outer transaction installs every owner's facts,
+then projections, then public notifications. Releasing a nested savepoint does
+not publish; nested and outer rollback discard their staged publications. A
+notification failure cannot undo a committed write or suppress later notifications.
+Failed fact installation retires the affected scope before notification. If its
+owner cannot fence that failure, the batch suppresses public notification and
+reports the failure without replaying the mutation.
+
+Private receipt envelopes identify the operation, physical source and connection
+incarnation, domain, and exact affected keys. Each key contains a postimage,
+explicit absence, unchanged facts, or unknown coverage. Missing coverage is never
+absence. Session replacement receipts carry the existing entry and membership
+postimages; their current publication owner still handles newer native writes,
+deletions, unknown successors, and delayed receipts. Transport sequencing does not
+replace that domain supersession logic or compare revisions across connections.
+
+Worker receipt capture precedes fallible observers. Its private transport uses
+operation identity and a monotonically increasing commit sequence, so identical
+successive commits remain distinct and duplicate or older deliveries cannot
+restore prior facts. Native settlement and result delivery remain separate:
+retained commit evidence survives a lost reply, while missing or conflicting
+evidence stays unknown. A confirmed identity mutation still notifies lifecycle
+observers when native settlement is unknown; retained read facts remain fenced.
+Unknown writes are never automatically repeated.
+
+This is a scoped completeness contract, not global writer certification. Session
+transcript/context coverage, conversation and plugin-state writers, approvals,
+placement and workspace writers, raw SQLite handles, and foreign-process refresh
+retain their existing guards until their own coverage is complete. Unmanaged raw
+transactions are not covered by managed savepoint publication. A receipt grants
+neither current permission nor cross-store exclusion through destination commit.
+This foundation adds no SQL, schema validation, persistent storage, SDK
+deprecation, or migration. Admission continues to own validation; receipt
+installation consumes the physical facts already captured by that owner.
+
 Meeting transcript downloads and JSONL artifacts stream through the existing
 shared-state read worker. One private read-only transaction owns the cursor,
 entry metadata, and optional summary until the consumer and cleanup settle.
@@ -86,6 +124,29 @@ Reset reuses its prepared entry snapshot across transcript-only cold restoration
 the committing worker still compares the complete current target before changing
 it. ACP transactions use the shared writer's retained handle and validate ownership
 after `BEGIN`, without a duplicate ownership read before the transaction.
+
+Update failure-report reservations, transitions, and artifact cleanup use the
+existing shared-state worker. A report retains its original physical database
+through upload and finalization; shutdown joins accepted reports before closing
+storage. Pending issue creation rereads its receipt in the worker transaction
+and rechecks current host authority immediately before the external request.
+
+Restart signals capture their physical store before yielding and consume the
+intent in one worker `DELETE ... RETURNING` transaction. Signal dispatch remains
+FIFO under the run loop's admission fence; close and successor handoff join
+accepted signal work. Supervisor handoff writes use the same writer, while boot
+handoff consumption and native service-control lock operations retain their
+existing synchronous contracts. Schemas, stored formats, retention, permissions,
+and published-driver update behavior are unchanged.
+
+Supervised restarts can preload the shared-state worker's code while accepted
+work drains. This optional preparation opens no database and grants no authority;
+normal work can reclaim its capacity. The broker binds it to the captured runtime
+source and the next successful close, then consumes it once through ordinary
+admission after native writers retire. Failed or stale preparations are retired,
+and unused preparation is joined before an in-process fallback or normal exit.
+The handoff still captures and checks the physical database and live request at
+use time, so warming does not move persistence ahead of shutdown settlement.
 
 Conversation directory registration and outbound binding predicates use the existing
 agent writer. Registration retains the selected physical store across directory

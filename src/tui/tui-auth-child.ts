@@ -66,12 +66,7 @@ export function createTuiAuthChildOwner() {
       const owned: ActiveAuthChild = { child: spawnChild() };
       active = owned;
       return await new Promise<TuiAuthChildResult>((resolve, reject) => {
-        let settled = false;
         const settle = (complete: () => void): void => {
-          if (settled) {
-            return;
-          }
-          settled = true;
           clearActive(owned);
           complete();
         };

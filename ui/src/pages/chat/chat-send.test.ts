@@ -86,7 +86,7 @@ import {
   listStoredChatOutboxes,
   loadChatComposerSnapshot,
   storedChatOutboxScopeKey,
-  updateStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
@@ -3692,15 +3692,12 @@ describe("handleSendChat", () => {
         const reference = expectDefined(stored.attachmentPayload, "reconnect payload reference");
         markQueuedChatSendsWaitingForReconnect(source);
         if (retry) {
+          const unconfirmed: typeof stored = { ...stored, sendState: "unconfirmed" };
           expect(
-            updateStoredChatComposerQueueItem(
+            updateStoredChatComposerQueueItems(
               source,
               source.sessionKey,
-              stored,
-              {
-                ...stored,
-                sendState: "unconfirmed",
-              },
+              [{ expected: stored, next: unconfirmed }],
               stored.agentId,
             ),
           ).toBe(true);

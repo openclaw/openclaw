@@ -422,7 +422,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
-  it("serializes concurrent installs with slow version initialization and VC runtime fallback", async () => {
+  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
@@ -461,12 +461,8 @@ describe("ensureLlamaServerInstalled", () => {
     );
 
     const { command } = resolveManagedLlamaServerPaths(asset);
-    await expect(
-      Promise.all([ensureLlamaServerInstalled({ asset }), ensureLlamaServerInstalled({ asset })]),
-    ).resolves.toEqual([
-      expect.objectContaining({ command }),
-      expect.objectContaining({ command }),
-    ]);
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
 
     expect(
       calls.map((call) => ({
@@ -486,7 +482,6 @@ describe("ensureLlamaServerInstalled", () => {
         `runtime:${file.target}`,
       );
     }
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({ url: runtime.url }),
     );

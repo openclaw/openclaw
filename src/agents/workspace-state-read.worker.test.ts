@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import {
   withArtifactPreservingStateReads,
@@ -130,18 +131,13 @@ it.each(["snapshot", "merge", "expire"] as const)(
     const before = await seed();
     const alias = state.path("grant-alias");
     fs.symlinkSync(state.workspaceDir, alias, process.platform === "win32" ? "junction" : "dir");
-    const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     for (const stage of ["transaction", "commit"] as const) {
       let retired = false;
       const refusal = new Error("workspace owner retired");
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          originalAdmission((request, grant) => {
-            retired ||= request.stage === stage;
-            admit(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+        retired ||= request.stage === stage;
+        admit(request, grant);
+      });
       const options = {
         assertCurrent: () => {
           if (retired) {
@@ -180,19 +176,14 @@ it.each(["transaction", "commit"] as const)(
     const before = await seed();
     const filePath = path.join(state.workspaceDir, "AGENTS.md");
     writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
-    const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let restored = false;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        originalAdmission((request, grant) => {
-          if (!restored && request.stage === stage) {
-            fs.writeFileSync(filePath, "Restored workspace instructions.");
-            restored = true;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (!restored && request.stage === stage) {
+        fs.writeFileSync(filePath, "Restored workspace instructions.");
+        restored = true;
+      }
+      admit(request, grant);
+    });
     await expect(
       clearExpiredWorkspaceStateForVanishedWorkspace(
         state.workspaceDir,
@@ -249,18 +240,13 @@ it("rolls back alias registration when its symlink is repointed before commit", 
   const replacement = state.path("new-target");
   fs.mkdirSync(replacement);
   fs.symlinkSync(state.workspaceDir, alias, process.platform === "win32" ? "junction" : "dir");
-  const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      originalAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          fs.unlinkSync(alias);
-          fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+    }
+    admit(request, grant);
+  });
   await expect(readWorkspaceStateSnapshot(alias)).rejects.toBeInstanceOf(
     WorkspaceAliasRepointedError,
   );
@@ -274,23 +260,18 @@ it("joins a granted workspace mutation before closing its database", async () =>
   await seed();
   let close: Promise<void> | undefined;
   let closed = false;
-  const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      originalAdmission((request, grant) => {
-        admit(request, () => {
-          const granted = grant();
-          if (request.stage === "commit") {
-            close = closeOpenClawStateDatabaseAsync().then(() => {
-              closed = true;
-            });
-            expect(closed).toBe(false);
-          }
-          return granted;
+  const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, () => {
+      const granted = grant();
+      if (request.stage === "commit") {
+        close = closeOpenClawStateDatabaseAsync().then(() => {
+          closed = true;
         });
-      }, attachment),
-    );
+        expect(closed).toBe(false);
+      }
+      return granted;
+    });
+  });
   await expect(
     mergeWorkspaceSetupState(
       state.workspaceDir,

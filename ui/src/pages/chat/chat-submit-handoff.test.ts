@@ -20,7 +20,7 @@ import {
 import { handleSendChat } from "./chat-send-submit.ts";
 import {
   listStoredChatOutboxes,
-  updateStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { beginQueuedMessageEdit, updateQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -284,11 +284,10 @@ describe("chat submission handoff", () => {
       expect(queued.mentions).toEqual(originalMentions);
       replacement = { ...queued, mentions: replacementMentions };
       expect(
-        updateStoredChatComposerQueueItem(
+        updateStoredChatComposerQueueItems(
           host,
           host.sessionKey,
-          queued,
-          replacement,
+          [{ expected: queued, next: replacement }],
           queued.agentId,
         ),
       ).toBe(true);

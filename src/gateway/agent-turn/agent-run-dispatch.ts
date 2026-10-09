@@ -272,6 +272,7 @@ export function dispatchAgentRunFromGateway(params: {
             await completeTerminalProducer(producerError);
           }
         },
+        isTerminalOutcomeObserved: () => registeredRunEntry?.terminalOutcomeObserved === true,
       },
       readAgentRunDispatchExecutionIdentity(params),
     );

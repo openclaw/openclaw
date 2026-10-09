@@ -8,7 +8,6 @@ import type {
 } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
   subtitleForRoute,
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
@@ -19,6 +18,7 @@ import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
+import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
 

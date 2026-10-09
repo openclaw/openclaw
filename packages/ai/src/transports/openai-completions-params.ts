@@ -1,4 +1,5 @@
 import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -91,11 +92,8 @@ function resolveOpenAICompletionsMaxTokens(
 }
 
 function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
-  return typeof model.maxTokens === "number" &&
-    Number.isFinite(model.maxTokens) &&
-    model.maxTokens > 0
-    ? Math.floor(model.maxTokens)
-    : undefined;
+  const maxTokens = asPositiveFiniteNumber(model.maxTokens);
+  return maxTokens === undefined ? undefined : Math.floor(maxTokens);
 }
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
@@ -177,20 +175,6 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
     adjustedChars += estimateJsonChars(block, 256);
   }
   return adjustedChars;
-}
-
-function resolveOpenAICompletionsEffectiveContextTokens(
-  model: OpenAIModeModel,
-): number | undefined {
-  const contextTokens = (model as { contextTokens?: number }).contextTokens;
-  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
-    return contextTokens;
-  }
-  return typeof model.contextWindow === "number" &&
-    Number.isFinite(model.contextWindow) &&
-    model.contextWindow > 0
-    ? model.contextWindow
-    : undefined;
 }
 
 function convertTools(
@@ -445,7 +429,9 @@ export function buildOpenAICompletionsRequest(
         ? { maxTokens: options?.maxTokens, clampToModelMaxTokens: true }
         : resolveOpenAICompletionsMaxTokens(model, options);
     const effectiveMaxTokens = maxTokenBudget.maxTokens;
-    const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
+    const effectiveContextTokens =
+      asPositiveFiniteNumber((model as { contextTokens?: number }).contextTokens) ??
+      asPositiveFiniteNumber(model.contextWindow);
     let clampedMaxTokens = effectiveMaxTokens;
     const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
     if (

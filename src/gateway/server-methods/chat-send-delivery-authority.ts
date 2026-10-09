@@ -3,6 +3,7 @@ import {
   isReplyPayloadSessionWriterDeliveryAuthorized,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { captureWebchatReplyMediaScope } from "./chat-reply-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -13,6 +14,7 @@ export type ChatSendReplyFinalizationParams = {
   abortSignal?: AbortSignal;
   accountId: string | undefined;
   context: GatewayRequestContext;
+  terminalEntry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined;
   emitFirstAssistantServerTiming: () => void;
   session: Pick<
     PreparedChatSendSession,
