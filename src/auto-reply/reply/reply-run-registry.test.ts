@@ -1290,41 +1290,54 @@ describe("reply run registry", () => {
     },
   );
 
-  it("reports callback acceptance before outcome and composes the caller callback", async () => {
-    const delivery = createDeferred();
-    const callerOnQueueAccepted = vi.fn();
-    let queueOptions: ReplyBackendQueueMessageOptions | undefined;
-    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "run-a",
-      cancel: vi.fn(),
-      messageInjection: {
-        isAvailable: () => true,
-        queueMessage: vi.fn((_text, options) => {
-          queueOptions = options;
-          return delivery.promise;
-        }),
-      },
-    });
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const attempt = await beginReplyMessageInjectionTarget(target, "accepted", {
-      onQueueAccepted: callerOnQueueAccepted,
-    });
-    let outcomeSettled = false;
-    void attempt.outcome.then(() => {
-      outcomeSettled = true;
-    });
+  it.each(["callback", "queue-fulfilled", "queue-rejected"] as const)(
+    "reports acceptance through %s and composes the caller callback",
+    async (source) => {
+      const delivery = createDeferred();
+      const callerOnQueueAccepted = vi.fn();
+      let queueOptions: ReplyBackendQueueMessageOptions | undefined;
+      const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "run-a",
+        cancel: vi.fn(),
+        messageInjection: {
+          isAvailable: () => true,
+          queueMessage: vi.fn((_text, options) => {
+            queueOptions = options;
+            return delivery.promise;
+          }),
+        },
+      });
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const attempt = await beginReplyMessageInjectionTarget(target, "input", {
+        onQueueAccepted: callerOnQueueAccepted,
+      });
+      let outcomeSettled = false;
+      void attempt.outcome.then(() => {
+        outcomeSettled = true;
+      });
 
-    queueOptions?.onQueueAccepted?.(true);
-
-    await expect(attempt.acceptance).resolves.toBe(true);
-    expect(callerOnQueueAccepted).toHaveBeenCalledWith(true);
-    expect(outcomeSettled).toBe(false);
-    delivery.resolve();
-    await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
-  });
+      if (source === "callback") {
+        queueOptions?.onQueueAccepted?.(true);
+        await expect(attempt.acceptance).resolves.toBe(true);
+        expect(callerOnQueueAccepted).toHaveBeenCalledWith(true);
+        expect(outcomeSettled).toBe(false);
+      }
+      const accepted = source !== "queue-rejected";
+      if (accepted) {
+        delivery.resolve();
+      } else {
+        delivery.reject(new Error("rejected"));
+      }
+      await expect(attempt.acceptance).resolves.toBe(accepted);
+      expect(callerOnQueueAccepted).toHaveBeenCalledExactlyOnceWith(accepted);
+      await expect(attempt.outcome).resolves.toMatchObject({
+        status: accepted ? "accepted" : "rejected",
+      });
+    },
+  );
 
   it.each(
     (["direct", "wrapped", "unconfirmed"] as const).flatMap((failure) =>
@@ -1401,35 +1414,6 @@ describe("reply run registry", () => {
       expect(operation.result).toBeNull();
     },
   );
-
-  it("falls back to queue settlement when the backend ignores acceptance callbacks", async () => {
-    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "run-a",
-      cancel: vi.fn(),
-      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
-    });
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const accepted = await beginReplyMessageInjectionTarget(target, "accepted");
-    await expect(accepted.acceptance).resolves.toBe(true);
-
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "run-a",
-      cancel: vi.fn(),
-      messageInjection: {
-        isAvailable: () => true,
-        queueMessage: vi.fn(async () => {
-          throw new Error("rejected");
-        }),
-      },
-    });
-    const replacementTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const rejected = await beginReplyMessageInjectionTarget(replacementTarget, "rejected");
-    await expect(rejected.acceptance).resolves.toBe(false);
-  });
 
   it("rejects an ABA successor even when key and leaf are reused", async () => {
     const first = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });

@@ -85,6 +85,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     read: Result<SessionEntry | undefined, unknown>,
     owner: SessionEntryReadWorkerOwner,
   ) => Promise<T>,
+  prepareSource?: SessionEntryReadSourcePreparation,
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
@@ -149,6 +150,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
       lane: projectionLane,
       dataOnly: true,
       logical: { assertCurrent: assertCallerCurrent, onReadError },
+      prepareSource,
     },
   );
 }

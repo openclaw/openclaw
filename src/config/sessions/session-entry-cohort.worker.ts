@@ -1,3 +1,4 @@
+import { hasAgentAuthProfileSourceInDatabase } from "../../agents/auth-profiles/sqlite-json.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -62,7 +63,7 @@ export function readSessionEntryCohort(
   input: SessionEntryCohortRequest,
   readEntries: (request: SessionExactEntriesWorkerInput) => SessionExactEntriesWorkerResult,
 ): SessionEntryCohortResult {
-  const { expected, transcript, runtimeTarget, ...selection } = input;
+  const { expected, transcript, runtimeTarget, includeAuthProfileSource, ...selection } = input;
   const count =
     input.sessionKeys.length +
     (input.replyInitializationSessionKey ? 1 : 0) +
@@ -148,6 +149,9 @@ export function readSessionEntryCohort(
               }) ?? [],
           )
         : [];
+    const authProfileSource = includeAuthProfileSource
+      ? hasAgentAuthProfileSourceInDatabase(database.db)
+      : undefined;
     const preparedRuntimeTarget = runtimeTarget && {
       ...runtimeTarget,
       sessionKey:
@@ -179,6 +183,7 @@ export function readSessionEntryCohort(
       ...(transcript
         ? { transcript: { anchors, ...(transcript.includeHeader ? { header } : {}) } }
         : {}),
+      ...(includeAuthProfileSource ? { authProfileSource } : {}),
     };
   };
   // The transaction owner performs the one fresh probe after BEGIN; nested kernels share it.

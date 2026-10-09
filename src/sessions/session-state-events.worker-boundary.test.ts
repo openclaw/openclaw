@@ -63,6 +63,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
+import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 import * as notices from "./session-state-notices.js";
 import { readSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
 
@@ -696,6 +697,55 @@ it("reads session state and commits watch registration and acknowledgment withou
   } finally {
     sql.restore();
   }
+});
+
+it("reconstructs a committed followup when acknowledgment publication is lost", async () => {
+  const database = createDatabaseOptions();
+  await upsertSessionEntryCore(
+    { sessionKey: nestedWatcher, env: database.env },
+    { sessionId: "retained-watcher", updatedAt: Date.now() },
+  );
+  expect(
+    await registerSessionStateWatch(
+      { watcherSessionKey: nestedWatcher, targetSessionKey: child },
+      database,
+    ),
+  ).toBe(true);
+  const frozen = expectDefined(
+    await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
+    "frozen notice",
+  );
+  const newer = expectDefined(
+    await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database),
+    "newer notice",
+  );
+  const originalNotice = expectDefined(peekSystemEventEntries(nestedWatcher)[0], "original notice");
+  resetSystemEventsForTest();
+  const publish = vi.fn(() => {
+    throw new Error("Publication lost after commit");
+  });
+  await acknowledgeSessionStateNoticesInWorker(
+    nestedWatcher,
+    [{ targetSessionKey: child, watcherStorePath: originalNotice.sessionStorePath ?? null }],
+    publish,
+    database,
+  );
+  expect(publish).toHaveBeenCalledOnce();
+  expect(peekSystemEventEntries(nestedWatcher)).toEqual([]);
+  expect(readCursor(database, nestedWatcher)).toEqual({
+    last_seen_sequence: frozen.sequence,
+    notified_sequence: newer.sequence,
+    material_sequence: newer.sequence,
+  });
+  await sweepSessionStateWatchNotices(database);
+  expect(peekSystemEventEntries(nestedWatcher).map(({ text }) => text)).toEqual([
+    expect.stringContaining(`changesSince ${frozen.sequence}`),
+  ]);
+  expect(readCursor(database, nestedWatcher)).toEqual({
+    last_seen_sequence: frozen.sequence,
+    notified_sequence: newer.sequence,
+    material_sequence: newer.sequence,
+  });
 });
 
 it("rolls back watch writes when the system-event store changes at transaction or commit admission", async () => {

@@ -740,7 +740,3 @@ export async function admitReplyTurn(
     }
   }
 }
-
-export function resolveReplyTurnKind(opts?: { isHeartbeat?: boolean }): ReplyTurnKind {
-  return opts?.isHeartbeat === true ? "heartbeat" : "visible";
-}
