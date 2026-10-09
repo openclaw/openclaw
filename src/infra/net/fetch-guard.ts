@@ -17,6 +17,7 @@ import {
 } from "./configured-local-origin-bypass.js";
 import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
+import { createHttp1RouteDispatcher } from "./http1-route-dispatcher.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -29,7 +30,6 @@ import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
-  createPolicyDispatcherWithoutPinnedDns,
   matchesHostnameAllowlist,
   resolveSsrFPolicyForUrl,
   resolvePinnedHostnameWithPolicy,
@@ -192,6 +192,13 @@ function assertExplicitProxySupportsPinnedDns(
       "Explicit proxy SSRF pinning requires HTTPS targets; plain HTTP targets are not supported",
     );
   }
+}
+
+function createPolicyDispatcherWithoutPinnedDns(
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+  timeoutMs?: number,
+): Dispatcher | null {
+  return dispatcherPolicy ? createHttp1RouteDispatcher(dispatcherPolicy, timeoutMs) : null;
 }
 
 async function assertExplicitProxyAllowed(
