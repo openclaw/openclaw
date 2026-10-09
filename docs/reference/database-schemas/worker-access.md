@@ -412,6 +412,31 @@ transaction retains its fresh probe after `BEGIN`. Ordinary chat normalization
 remains synchronous; goal-start fingerprint preparation uses the asynchronous
 identity owner before admission.
 
+Reply auth-source and policy preparation reuse the selected session reader.
+Auth preparation returns only source presence, including explicit absence;
+credentials and shared-store routing retain their auth owner. Each new phase
+refreshes current database facts, and policy preparation keeps live caller and
+reader checks through asynchronous work. A fresh phase validates its sandbox
+predicates before returning the prepared result. Local placement preflight carries its
+existing observation through session preparation, then releases it before the
+claim transaction rereads placement predicates. Bootstrap routing consumes fresh
+file absence without another setup-state read, and checks the file again after
+awaiting setup state when the file was present.
+
+Shared-state content-version reads reuse their admitted connection's exact
+schema, data, native-mutation, and snapshot revision. Foreign commits, local
+mutations, rollback, schema changes, and authorizer-controlled reads retain their
+current invalidation and uncached behavior. Schemas and update behavior are
+unchanged.
+
+Accepted Memory sync borrows its existing agent executor before provider and
+maintenance-lock waits, independently of its concrete publication stores.
+Restart drain cannot retire that healthy borrowed generation between fallback
+attempts. Each publication store prepares current connection policy at first use
+and closes before releasing its maintenance lock; the accepted-sync borrow is
+released after all attempts and cleanup settle. Failed native generations still
+retire, and integrity admission remains mandatory when a new generation opens.
+
 Idle maintenance retains its normal cadence while avoiding unrelated work.
 Setup-completion pruning does not read or republish paired-device authority,
 and uses its first expiry read to skip empty write transactions. Due deletions use
@@ -1400,6 +1425,18 @@ row-dependent pricing retains host preparation and CAS. Each commit retains its
 complete postimage publication and current host grants. Arbitrary updater and
 provider callbacks keep their existing preparation boundary.
 
+Pending-final intent creation and completed-intent cleanup use fixed patch
+operations as well. Cleanup checks the current session, intent, delivery states,
+and recovery claim inside the writer transaction. Ordinary delivery settlement
+and restart admission evaluate their current-row predicates in that same command;
+harness completion claims retain host authority validation and callback CAS.
+Every settlement remains at its existing durable event boundary. Live-model-switch callbacks
+prepare only when the freshly selected entry has a pending switch; an absent
+flag ends the operation without a commit request. A pending switch retains host
+plugin normalization and CAS, and arbitrary null-returning callbacks retain
+their existing validation contract. These changes require no schema or update
+migration and preserve delivery durability and settlement.
+
 First-turn diff-baseline claims and settlement, reply skill snapshots, and child
 agent admission and bookkeeping use that same entry writer. Preparation retains
 the selected physical store; the transaction rereads its entry and same-store
@@ -1727,6 +1764,9 @@ Native checkpoint work and file-size diagnostics run in the worker. Linux
 sidecar containment retains its synchronous scan at timer entry, before identity
 admission can refuse dispatch or close can clean up the original handle. Host
 admission and physical-identity checks remain on the host.
+Checkpoint-only PASSIVE ticks preserve the connection's busy timeout without
+reading or changing it: SQLite does not invoke the busy handler for PASSIVE.
+Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.
 

@@ -4,7 +4,7 @@ import type {
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
-import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
+import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -165,46 +165,47 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       assertCurrent();
       return retain(sandbox, assertCurrent);
     },
-    async executeLocalTurn<T>(
-      claim: LocalTurnPlacementClaim,
-      runLocal: () => Promise<T>,
-      assertCurrent?: () => void,
-    ) {
-      return await executeLocalTurn({
+    executeLocalTurn: (claim, runLocal, assertCurrent) =>
+      executeLocalTurn({
         claim,
         placements: options.placements,
         runLocal,
         assertCurrent,
-      });
-    },
+      }),
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
       const restartSignal = getGatewayRestartDrainSignal();
-      const runLocalTurn = () =>
+      const assertCurrent = () => {
+        inputTurn.abortSignal?.throwIfAborted();
+        assertRunCurrent?.();
+      };
+      const runLocalTurn = (
+        preparedPlacement?: Parameters<typeof executeLocalTurn>[0]["preparedPlacement"],
+      ) =>
         executeLocalTurn({
           claim,
           placements: options.placements,
           runLocal,
-          assertCurrent: () => {
-            inputTurn.abortSignal?.throwIfAborted();
-            assertRunCurrent?.();
-          },
+          preparedPlacement,
+          sessionReader: getReplyOperationSessionReader(inputTurn.replyOperation),
+          assertCurrent,
         });
       const prepared = await options.placements.prepareRuntimeRefresh(claim.sessionId);
-      let current: WorkerSessionPlacementRecord | undefined;
       try {
-        inputTurn.abortSignal?.throwIfAborted();
-        assertRunCurrent?.();
+        assertCurrent();
         prepared.assertCurrent();
-        current = prepared.placement;
-      } finally {
+      } catch (error) {
         prepared.release();
+        throw error;
       }
+      const current = prepared.placement;
       if (!current && inputTurn.modelRun === true && !claim.sessionKey?.trim()) {
+        prepared.release();
         return await runLocal();
       }
       if (!current || current.state === "local") {
-        return await runLocalTurn();
+        return await runLocalTurn(prepared);
       }
+      prepared.release();
       let identity = resolvePlacementIdentity(claim, current);
       const reportProvisioning = () =>
         emitAgentRunStatusEvent({

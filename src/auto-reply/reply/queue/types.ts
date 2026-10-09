@@ -31,6 +31,7 @@ import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ThinkLevel, TraceLevel, VerboseLevel } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
+import type { SessionEventExecution } from "../session-event-contract.js";
 
 export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
@@ -98,6 +99,7 @@ type FollowupRunObservers = Pick<
 > & {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  onDeliberateSilentTerminalReply?: () => void;
 };
 
 export type FollowupRun = {
@@ -243,6 +245,7 @@ export type FollowupRun = {
     | "suppressTranscriptOnlyAssistantPersistence"
     | "skillLibraryAuthoring"
   > & {
+    internalEventExecution?: SessionEventExecution;
     agentId: string;
     agentDir: string;
     runtimePolicySessionKey?: string;

@@ -36,6 +36,7 @@ import {
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import { withMemoryPublicationExecution } from "./manager-publication-lifetime.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationConnection,
@@ -637,9 +638,14 @@ export class MemoryIndexDatabase {
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
-    this.publicationGenerationActive = true;
     try {
-      await run();
+      await withMemoryPublicationExecution(
+        { database: this.db, options: this.writeOptions },
+        () => {
+          this.publicationGenerationActive = true;
+          return run();
+        },
+      );
     } finally {
       this.publicationGenerationActive = false;
     }
