@@ -8,13 +8,13 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.entry.js";
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { createReplyTranscriptFixture } from "./chat-send-reply-dispatch.test-support.js";
 import { createChatReplySessionReader } from "./chat-send-reply-session.js";
@@ -142,10 +142,10 @@ it.each(["release", "replacement"] as const)(
 );
 
 it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
-  "uses one entry phase and rechecks %s after terminal payload inspection",
+  "uses one entry phase and rechecks %s before the terminal delivery snapshot",
   async (change) => {
     await withOpenClawTestState({ label: "webchat-retained-terminal" }, async (state) => {
-      const { dispatch, append, scope, release } = await createReplyTranscriptFixture(
+      const { dispatch, append, scope, runId, release } = await createReplyTranscriptFixture(
         "agent:main:retained-terminal",
         true,
       );
@@ -155,14 +155,16 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
           async () => {
             dispatch.captureAgentTranscriptStart();
             await append("answer", { role: "assistant", content: "Committed answer." });
-            const readMessage = sessionTranscriptReaders.readSessionMessageByIdAsync;
-            let inspected = false;
-            const payloadRead = vi
-              .spyOn(sessionTranscriptReaders, "readSessionMessageByIdAsync")
+            const readAnchors = transcriptAnchors.readSessionTranscriptAnchorsAsync;
+            let snapshotRequested = false;
+            const snapshotRead = vi
+              .spyOn(transcriptAnchors, "readSessionTranscriptAnchorsAsync")
               .mockImplementationOnce(async (...args) => {
-                const result = await readMessage(...args);
-                expect(result.found).toBe(true);
-                inspected = true;
+                expect(args[1]).toMatchObject({
+                  includeSession: true,
+                  includeMessagesForRunId: runId,
+                });
+                snapshotRequested = true;
                 const databasePath = resolveSessionTranscriptDatabasePath(scope);
                 if (change === "foreign-lifecycle") {
                   const foreign = new DatabaseSync(databasePath);
@@ -181,7 +183,14 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
                   await copyFile(databasePath, replacement);
                   await rename(replacement, databasePath);
                 }
-                return result;
+                const facts = await readAnchors(...args);
+                expect(facts.tail?.entries).toContainEqual(
+                  expect.objectContaining({
+                    entryId: "answer",
+                    message: expect.objectContaining({ role: "assistant" }),
+                  }),
+                );
+                return facts;
               });
             const run = projectionLane.pool.run.bind(projectionLane.pool);
             let entries = 0;
@@ -207,11 +216,11 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
               } else {
                 expect(await result).toBe(change === "unchanged" ? "delivered" : "missing");
               }
-              expect(inspected).toBe(true);
+              expect(snapshotRequested).toBe(true);
               expect(entries).toBe(1);
             } finally {
               requests.mockRestore();
-              payloadRead.mockRestore();
+              snapshotRead.mockRestore();
             }
           },
         );

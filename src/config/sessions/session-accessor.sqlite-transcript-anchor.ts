@@ -70,32 +70,31 @@ function readActiveTranscriptEntryFacts(
     .where("identity.session_id", "=", params.resolved.sessionId)
     .where("identity.event_id", "=", params.entryId)
     .limit(1);
-  if (projection) {
-    const row = executeSqliteQueryTakeFirstSync(params.database.db, query);
-    return row
-      ? {
-          ...row,
-          generation: projection.generation ?? null,
-          latestSeq: projection.state.indexedSeq,
-        }
-      : undefined;
-  }
-  return executeSqliteQueryTakeFirstSync(
+  const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
-    query
-      .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-        join.onRef("rewrite.session_id", "=", "identity.session_id"),
-      )
-      .leftJoin(
-        selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
-          "status",
-        ),
-        (join) => join.onTrue(),
-      )
-      .select(["rewrite.generation", "status.latestSeq"])
-      // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
-      .where("status.needs_reconcile", "is not", 1),
+    query.$if(!projection, (selected) =>
+      selected
+        .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.onRef("rewrite.session_id", "=", "identity.session_id"),
+        )
+        .leftJoin(
+          selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
+            "status",
+          ),
+          (join) => join.onTrue(),
+        )
+        .select(["rewrite.generation", "status.latestSeq"])
+        // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
+        .where("status.needs_reconcile", "is not", 1),
+    ),
   );
+  return row
+    ? {
+        ...row,
+        generation: (projection ? projection.generation : row.generation) ?? null,
+        latestSeq: projection ? projection.state.indexedSeq : row.latestSeq,
+      }
+    : undefined;
 }
 
 /** Reads one active message identity from the caller's current SQLite transaction. */

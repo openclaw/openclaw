@@ -17,7 +17,6 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
-import * as coldStorage from "./session-cold-storage.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
@@ -263,7 +262,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
   });
 });
 
-it("prepares the admitted run target with its entry and refuses source loss after cold preparation", async () => {
+it("prepares the admitted run target with its entry and refuses source loss after target preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:bootstrap:cohort";
     const scope = { agentId: "bootstrap", env: state.env, sessionKey };
@@ -302,6 +301,7 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       workspaceDir: state.workspaceDir,
       timeoutMs: 30_000,
     };
+    const withRead = reader.withRead.bind(reader);
     const reads = vi.spyOn(reader, "withRead");
     const runRequest = projectionLane.pool.run.bind(projectionLane.pool);
     let runtimeTargets = 0;
@@ -329,19 +329,13 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       expect(reads).toHaveBeenCalledTimes(1);
       expect(runtimeTargets).toBe(0);
 
-      const restore = coldStorage.restoreSessionColdTranscript;
-      const interrupted = new Error("bootstrap source ended after cold preparation");
-      const restoring = vi
-        .spyOn(coldStorage, "restoreSessionColdTranscript")
-        .mockImplementationOnce(async (...args) => {
-          await restore(...args);
-          controller.abort(interrupted);
-        });
-      try {
-        await expect(prepareEmbeddedRunSession(input)).rejects.toBe(interrupted);
-      } finally {
-        restoring.mockRestore();
-      }
+      const interrupted = new Error("bootstrap source ended after target preparation");
+      reads.mockImplementationOnce(async (...args) => {
+        const value = await withRead(...args);
+        controller.abort(interrupted);
+        return value;
+      });
+      await expect(prepareEmbeddedRunSession(input)).rejects.toBe(interrupted);
     } finally {
       reads.mockRestore();
       requests.mockRestore();

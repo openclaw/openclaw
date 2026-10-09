@@ -105,11 +105,11 @@ describe("transcript replay cohorts", () => {
             return {
               ...readers,
               readTranscript: async (input, signal) => {
-                const prepared = await readers.readTranscript(input, signal);
-                if (prepared.kind === "bounded") {
+                const transcript = await readers.readTranscript(input, signal);
+                if (transcript.kind === "bounded") {
                   hydrationReads++;
                 }
-                return prepared;
+                return transcript;
               },
               readMessagePresence: async (input, signal) => {
                 const present = await readers.readMessagePresence(input, signal);
@@ -242,15 +242,15 @@ describe("transcript replay cohorts", () => {
                     return {
                       ...readers,
                       readTranscript: async (input, signal) => {
-                        const prepared = await readers.readTranscript(input, signal);
+                        const transcript = await readers.readTranscript(input, signal);
                         if (
-                          prepared.kind === "bounded" &&
-                          prepared.transcript?.replayValidated === "current"
+                          transcript.kind === "bounded" &&
+                          transcript.transcript?.replayValidated === "current"
                         ) {
                           validated.resolve();
                           await release.promise;
                         }
-                        return prepared;
+                        return transcript;
                       },
                     };
                   });
