@@ -20,8 +20,8 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
-  getSessionWorkAdmissionOwnerRelease,
   getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,

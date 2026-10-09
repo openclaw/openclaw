@@ -158,6 +158,7 @@ export async function finalizeChatSendDispatchedReplies(
       },
     });
     broadcastChatFinal({
+      terminalEntry: params.terminalEntry,
       context,
       runId: clientRunId,
       sessionKey,
@@ -187,7 +188,14 @@ export async function finalizeChatSendDispatchedReplies(
   const { authorizeDelivery, captureMediaScope } = createChatSendReplyFinalizationAuthority(
     params,
     rawFinalPayloads,
-    () => broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId }),
+    () =>
+      broadcastChatFinal({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        terminalEntry: params.terminalEntry,
+      }),
   );
   if (!authorizeDelivery("finalization")) {
     return;
@@ -387,6 +395,7 @@ export async function finalizeChatSendDispatchedReplies(
     emitFirstAssistantServerTiming();
   }
   broadcastChatTerminal({
+    terminalEntry: params.terminalEntry,
     context,
     runId: clientRunId,
     sessionKey,

@@ -65,10 +65,16 @@ export function publishRetainedSessionEntryPredicate(
   if (predicate.state === "changed") {
     return;
   }
-  if (!known) {
+  let matches: boolean | undefined;
+  try {
+    matches = known ? predicate.matches(entry) : undefined;
+  } catch {
+    // A failed comparison fences this claim without stranding the committed batch.
+  }
+  if (matches === undefined) {
     predicate.revision += 1;
     predicate.state = "unknown";
-  } else if (!predicate.matches(entry)) {
+  } else if (!matches) {
     predicate.revision += 1;
     predicate.state = "changed";
   } else {

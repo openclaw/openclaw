@@ -143,22 +143,18 @@ export function resolveToolCardOutcome(
     return isToolCardError(card) ? "failed" : "unknown";
   }
   if (card.activity) {
-    switch (card.activity.status) {
-      case "failed":
-      case "blocked":
-        return card.activity.status;
-      case "completed":
-        return "succeeded";
-      case "running":
-        return runActive === true && card.live === true ? "running" : "unknown";
-      default:
-        return card.activity.phase !== "end" &&
-          runActive === true &&
-          card.live === true &&
-          card.completed !== true
-          ? "running"
-          : "unknown";
+    const { status, phase } = card.activity;
+    if (status === "failed" || status === "blocked") {
+      return status;
     }
+    if (status === "completed") {
+      return "succeeded";
+    }
+    return runActive === true &&
+      card.live === true &&
+      (status === "running" || (phase !== "end" && card.completed !== true))
+      ? "running"
+      : "unknown";
   }
   if (isToolCardError(card)) {
     return "failed";

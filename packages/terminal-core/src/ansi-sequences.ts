@@ -75,8 +75,7 @@ function isCompatFinalCode(code: number): boolean {
 export class AnsiSequenceStripper {
   private state: AnsiStripState = "text";
   private csiCompatPrefixOnly = false;
-  private compatInParameters = false;
-  private compatParameterDigits = 0;
+  private compatParameterDigits: number | undefined;
   private csi: string | undefined;
 
   constructor(private readonly onCsi?: (sequence: string) => void) {}
@@ -119,21 +118,11 @@ export class AnsiSequenceStripper {
         continue;
       }
 
-      if (this.state === "osc") {
-        if (code === 0x07 || code === 0x9c) {
+      if (this.state === "osc" || this.state === "osc-escape") {
+        if (code === 0x07 || code === 0x9c || (this.state === "osc-escape" && code === 0x5c)) {
           this.state = "text";
-        } else if (code === 0x1b) {
-          this.state = "osc-escape";
-        }
-        index += 1;
-        continue;
-      }
-
-      if (this.state === "osc-escape") {
-        if (code === 0x5c || code === 0x07 || code === 0x9c) {
-          this.state = "text";
-        } else if (code !== 0x1b) {
-          this.state = "osc";
+        } else {
+          this.state = code === 0x1b ? "osc-escape" : "osc";
         }
         index += 1;
         continue;
@@ -168,8 +157,7 @@ export class AnsiSequenceStripper {
           // The compatibility grammar accepts bracket runs before parameters.
           // Keep them pending so a chunk split cannot expose the final byte.
           this.state = "compat";
-          this.compatInParameters = false;
-          this.compatParameterDigits = 0;
+          this.compatParameterDigits = undefined;
         } else if (code >= 0x40 && code <= 0x7e) {
           if (this.csi !== undefined) {
             this.onCsi?.(this.csi + input.charAt(index));
@@ -190,11 +178,9 @@ export class AnsiSequenceStripper {
           this.startCsi();
         } else if (isCompatPrefixCode(code)) {
           this.state = "compat";
-          this.compatInParameters = false;
-          this.compatParameterDigits = 0;
+          this.compatParameterDigits = undefined;
         } else if (isDigitCode(code)) {
           this.state = "compat";
-          this.compatInParameters = true;
           this.compatParameterDigits = 1;
         } else if (isCompatFinalCode(code)) {
           this.state = "text";
@@ -208,13 +194,12 @@ export class AnsiSequenceStripper {
 
       if (code === 0x18 || code === 0x1a) {
         this.state = "text";
-      } else if (!this.compatInParameters && isCompatPrefixCode(code)) {
+      } else if (this.compatParameterDigits === undefined && isCompatPrefixCode(code)) {
         index += 1;
         continue;
-      } else if (!this.compatInParameters && isDigitCode(code)) {
-        this.compatInParameters = true;
+      } else if (this.compatParameterDigits === undefined && isDigitCode(code)) {
         this.compatParameterDigits = 1;
-      } else if (this.compatInParameters && isCompatParameterCode(code)) {
+      } else if (this.compatParameterDigits !== undefined && isCompatParameterCode(code)) {
         if (code === 0x3a || code === 0x3b) {
           this.compatParameterDigits = 0;
         } else if (this.compatParameterDigits < 4) {
@@ -237,8 +222,7 @@ export class AnsiSequenceStripper {
     this.csi = undefined;
     this.state = "text";
     this.csiCompatPrefixOnly = false;
-    this.compatInParameters = false;
-    this.compatParameterDigits = 0;
+    this.compatParameterDigits = undefined;
     return "";
   }
 }

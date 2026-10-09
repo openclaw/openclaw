@@ -273,4 +273,25 @@ describe("workshop library", () => {
     );
     expect(await readLive("deploy")).toContain("step 1");
   });
+
+  it("keeps a longer legacy skill manageable while new names stay within 63 characters", async () => {
+    // Earlier releases wrote learned skills under normalized names with no length cap.
+    const legacy = `deploy-${"staging-".repeat(8)}env`;
+    expect(legacy.length).toBeGreaterThan(63);
+    const skillDir = path.join(resolveWorkshopSkillsDir({}, "main"), legacy);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), skill(legacy, "step 0"));
+
+    expect((await listWorkshopSkills({}, "main")).map((live) => live.name)).toEqual([legacy]);
+    await patchWorkshopSkill(ctx, { name: legacy, oldText: "step 0", newText: "step 1" });
+    expect(await readLive(legacy)).toContain("step 1");
+    await archiveWorkshopSkill(ctx, { name: legacy, reason: "superseded" });
+    expect((await listWorkshopArchive({}, "main")).map((entry) => entry.name)).toEqual([legacy]);
+    await restoreWorkshopSkill(ctx, { name: legacy });
+    expect(await readLive(legacy)).toContain("step 1");
+
+    await expect(
+      createWorkshopSkill(ctx, { name: `${legacy}-copy`, content: skill(`${legacy}-copy`, "x") }),
+    ).rejects.toThrow(/use 1-63 lowercase letters/);
+  });
 });

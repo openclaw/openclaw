@@ -212,10 +212,7 @@ async function pruneOwnerRecords(
   now: number,
 ): Promise<void> {
   const values: unknown[] = await requestResult(store.index(OWNER_INDEX).getAll(currentOwnerKey));
-  const records = values.flatMap((value) => {
-    const record = parseStoredDraft(value);
-    return record ? [record] : [];
-  });
+  const records = values.map(parseStoredDraft).filter((record) => record !== null);
   const active: StoredDurableComposerDraft[] = [];
   for (const record of records) {
     const expired = expiredRecord(record, now);

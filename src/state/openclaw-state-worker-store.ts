@@ -26,6 +26,11 @@ import type { DomainScope } from "./openclaw-state-worker-store.types.js";
 
 export type { OpenClawStateWorkerLease } from "./openclaw-state-worker-lease.js";
 
+/** Prepare only code for a shared-state operation after the next database drain. */
+export function prepareOpenClawStateWorkerRuntime() {
+  return owner().prepareRuntime();
+}
+
 /** Retired cleanup uses the retained owner's backend without renewing read admission. */
 export function openOpenClawStateWorkerCleanupStore(
   databasePath: string,
