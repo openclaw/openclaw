@@ -8,15 +8,21 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveMessageActionTurnAuthorization } from "../gateway/message-action-turn-capability.js";
 import { importFreshModule } from "../plugin-sdk/test-helpers/import-fresh.js";
+import { CommandLane } from "../process/lanes.js";
 import {
   advanceCronActiveJobGeneration,
   bindCronJobAdmittedRun,
   bindCronSelfRemovalCommitGuard,
   captureCronJobMessageActionAuthority,
   clearCronJobActive,
+  countActiveCronJobsForOtherAgents,
   hasActiveCronJobs,
   hasActiveCronJobsExceptMarkers,
+  hasActiveCronJobsForAgent,
+  hasActiveCronJobsForAgentExceptMarkers,
+  listCronHeartbeatWaitOwnersForAgent,
   markCronJobActive,
+  markCronJobWaitingForHeartbeat,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
@@ -418,5 +424,108 @@ describe("active cron schedule ownership", () => {
     for (const [index, marker] of markers.entries()) {
       expect(marker?.scheduleMutated).toBe(index % 2 === 0 ? true : undefined);
     }
+  });
+});
+
+describe("agent-scoped active cron accounting", () => {
+  it("does not let another agent's marker make this agent look busy", () => {
+    markCronJobActive("other-agent-job", { agentId: "agent-b" });
+
+    expect(hasActiveCronJobsForAgent("agent-a")).toBe(false);
+    expect(hasActiveCronJobsForAgent("agent-b")).toBe(true);
+    // Process-wide callers keep the global view.
+    expect(hasActiveCronJobs()).toBe(true);
+  });
+
+  it("still counts runs with no recorded agent for every agent", () => {
+    markCronJobActive("unattributed-job");
+
+    expect(hasActiveCronJobsForAgent("agent-a")).toBe(true);
+    expect(hasActiveCronJobsForAgent("agent-b")).toBe(true);
+    // Unattributed work is never discounted as another agent's work.
+    expect(countActiveCronJobsForOtherAgents("agent-a")).toBe(0);
+  });
+
+  it("exempts the owning agent's own marker but not a bystander's", () => {
+    const own = expectDefined(markCronJobActive("own-job", { agentId: "agent-a" }));
+    const other = expectDefined(markCronJobActive("other-job", { agentId: "agent-b" }));
+
+    // Each agent discounts only its own coalesced wake.
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-a", [own])).toBe(false);
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-b", [other])).toBe(false);
+    // Agent A's marker is no exemption for agent B, whose own run still competes.
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-b", [own])).toBe(true);
+  });
+
+  it("discounts every marker of one coalesced wake for its own agent", () => {
+    const first = expectDefined(markCronJobActive("wake-1", { agentId: "agent-a" }));
+    const second = expectDefined(markCronJobActive("wake-2", { agentId: "agent-a" }));
+
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-a", [first, second])).toBe(false);
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-a", [first])).toBe(true);
+  });
+
+  it("counts only other agents' runs toward the foreign-run discount", () => {
+    markCronJobActive("a-1", { agentId: "agent-a" });
+    markCronJobActive("b-1", { agentId: "agent-b" });
+    markCronJobActive("b-2", { agentId: "agent-b" });
+    markCronJobActive("unattributed");
+
+    expect(countActiveCronJobsForOtherAgents("agent-a")).toBe(2);
+    expect(countActiveCronJobsForOtherAgents("agent-b")).toBe(1);
+    // Unattributed runs are excluded from every agent's foreign discount.
+    expect(countActiveCronJobsForOtherAgents("agent-c")).toBe(3);
+  });
+});
+
+describe("listCronHeartbeatWaitOwnersForAgent", () => {
+  const laneTask = (taskId: number) => ({ lane: CommandLane.Cron, taskId, generation: 1 });
+
+  it("returns only the named agent's settled-wake owners", () => {
+    const ownMarker = expectDefined(markCronJobActive("own-wait", { agentId: "agent-a" }));
+    const otherMarker = expectDefined(markCronJobActive("other-wait", { agentId: "agent-b" }));
+    const ownLane = laneTask(11);
+    const otherLane = laneTask(22);
+    const clearOwn = markCronJobWaitingForHeartbeat(ownMarker, ownLane);
+    const clearOther = markCronJobWaitingForHeartbeat(otherMarker, otherLane);
+
+    try {
+      const own = listCronHeartbeatWaitOwnersForAgent("agent-a");
+      expect(own.activeJobMarkers).toEqual([ownMarker]);
+      expect(own.owningCronLaneTaskMarkers).toEqual([ownLane]);
+
+      const other = listCronHeartbeatWaitOwnersForAgent("agent-b");
+      expect(other.activeJobMarkers).toEqual([otherMarker]);
+      expect(other.owningCronLaneTaskMarkers).toEqual([otherLane]);
+
+      expect(listCronHeartbeatWaitOwnersForAgent("agent-c").activeJobMarkers).toEqual([]);
+    } finally {
+      clearOwn();
+      clearOther();
+    }
+  });
+
+  it("keeps unattributed owners visible to every agent", () => {
+    const marker = expectDefined(markCronJobActive("unattributed-wait"));
+    const lane = laneTask(33);
+    const clear = markCronJobWaitingForHeartbeat(marker, lane);
+
+    try {
+      for (const agentId of ["agent-a", "agent-b"]) {
+        const owners = listCronHeartbeatWaitOwnersForAgent(agentId);
+        expect(owners.activeJobMarkers).toEqual([marker]);
+        expect(owners.owningCronLaneTaskMarkers).toEqual([lane]);
+      }
+    } finally {
+      clear();
+    }
+  });
+
+  it("omits owners whose heartbeat wait already settled", () => {
+    const marker = expectDefined(markCronJobActive("settled-wait", { agentId: "agent-a" }));
+    const clear = markCronJobWaitingForHeartbeat(marker, laneTask(44));
+    clear();
+
+    expect(listCronHeartbeatWaitOwnersForAgent("agent-a").activeJobMarkers).toEqual([]);
   });
 });

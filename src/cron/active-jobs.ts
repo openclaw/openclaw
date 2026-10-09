@@ -478,6 +478,32 @@ export function hasActiveCronJobsForAgent(agentId: string): boolean {
   return false;
 }
 
+/**
+ * Agent-scoped sibling of `hasActiveCronJobsExceptMarkers`.
+ *
+ * Ignores only the exact cron executions represented by one coalesced heartbeat wake,
+ * and only counts runs attributed to `agentId`. Markers with no recorded agent stay
+ * counted for every agent: unattributed work must keep suppressing rather than let a
+ * heartbeat fire into a cron run whose owner this process cannot name.
+ */
+export function hasActiveCronJobsForAgentExceptMarkers(
+  agentId: string,
+  markersToIgnore: readonly CronActiveJobMarker[],
+): boolean {
+  const state = getCronActiveJobState();
+  const ignoredMarkers = new Set(markersToIgnore);
+  for (const marker of state.activeJobs.values()) {
+    if (
+      !ignoredMarkers.has(marker) &&
+      isMarkerActiveInGeneration(marker, state.generation) &&
+      (!marker.agentId || marker.agentId === agentId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Runs a callback when the exact cron job no longer has an active in-process run. */
 export function onCronJobInactive(
   marker: CronActiveJobMarker | undefined,
@@ -551,6 +577,56 @@ export function listCronHeartbeatWaitOwners(): {
     activeJobMarkers.push(marker);
     if (marker.heartbeatWait.owningCronLaneTaskMarker) {
       owningCronLaneTaskMarkers.push(marker.heartbeatWait.owningCronLaneTaskMarker);
+    }
+  }
+  return { activeJobMarkers, owningCronLaneTaskMarkers };
+}
+
+/**
+ * Counts active cron runs that belong to *other* agents.
+ *
+ * Callers that hold a process-wide lane depth can subtract this to recover the part of
+ * the lane that is not attributable to a named agent. Markers without a recorded agent
+ * are never counted here: unattributed work stays in the global count on purpose.
+ */
+export function countActiveCronJobsForOtherAgents(agentId: string): number {
+  const state = getCronActiveJobState();
+  let active = 0;
+  for (const marker of state.activeJobs.values()) {
+    if (
+      marker.agentId &&
+      marker.agentId !== agentId &&
+      isMarkerActiveInGeneration(marker, state.generation)
+    ) {
+      active += 1;
+    }
+  }
+  return active;
+}
+
+/**
+ * Agent-scoped view of the live cron and lane owners awaiting heartbeat settlement.
+ *
+ * `listCronHeartbeatWaitOwners` reports process-wide owners; a heartbeat for agent A
+ * must only discount the coalesced wake it is itself servicing, so the entries are
+ * filtered to that agent. Markers without a recorded agent are kept for every agent,
+ * matching the conservative fallback the busy queries use.
+ */
+export function listCronHeartbeatWaitOwnersForAgent(agentId: string): {
+  activeJobMarkers: CronActiveJobMarker[];
+  owningCronLaneTaskMarkers: CommandLaneTaskMarker[];
+} {
+  const owners = listCronHeartbeatWaitOwners();
+  const activeJobMarkers: CronActiveJobMarker[] = [];
+  const owningCronLaneTaskMarkers: CommandLaneTaskMarker[] = [];
+  for (const marker of owners.activeJobMarkers) {
+    if (marker.agentId && marker.agentId !== agentId) {
+      continue;
+    }
+    activeJobMarkers.push(marker);
+    const owningLaneTaskMarker = marker.heartbeatWait?.owningCronLaneTaskMarker;
+    if (owningLaneTaskMarker) {
+      owningCronLaneTaskMarkers.push(owningLaneTaskMarker);
     }
   }
   return { activeJobMarkers, owningCronLaneTaskMarkers };
