@@ -89,11 +89,12 @@ mismatched observations leave support unknown. This metadata does not authorize
 execution or guarantee upstream fulfillment.
 
 A `ready` outcome from an account-scoped subscription listing may include
-`listedModelIds: string[]`: every model id the response returned, including
-hidden rows. When present, the picker treats a model's subscription route as
-not entitled for that account if the id is absent, unless another usable
-credential class serves the model. An empty array is authoritative. Omit the
-field when the listing fails or does not describe account entitlement.
+private `listedModelIds: string[]` provenance: every model id the response
+returned, including hidden rows. It never appears in public `providerOutcomes`.
+When present, the picker treats a model's subscription route as not entitled
+for that account if the id is absent, unless another usable credential class
+serves the model. An empty array is authoritative. Omit the field when the
+listing fails or does not describe account entitlement.
 
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;

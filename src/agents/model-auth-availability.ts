@@ -10,7 +10,6 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
@@ -18,7 +17,6 @@ import type {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import {
   listExternalCliSyncProviderIds,
   resolveExternalCliAuthProfiles,
@@ -51,6 +49,7 @@ import {
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
+import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
   ModelAuthAvailabilityEvidence,
@@ -204,59 +203,11 @@ export function createModelAuthAvailabilityResolver(
     : params.authStore;
   const runtimeStore =
     params.preparedRuntimeAuthStore ?? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
-  const hydratedProfileIds = new Set<string>();
-  const sameSecretRef = (
-    left: ReturnType<typeof parseSecretRef>,
-    right: ReturnType<typeof parseSecretRef>,
-  ) =>
-    left !== null &&
-    right !== null &&
-    left.source === right.source &&
-    left.provider === right.provider &&
-    left.id === right.id;
-  const runtimeCredentialOverlay = (
-    profileId: string,
-    credential: AuthProfileCredential,
-  ): AuthProfileCredential => {
-    const runtime = runtimeStore?.profiles[profileId];
-    if (!runtime || credential.type !== runtime.type || credential.provider !== runtime.provider) {
-      return credential;
-    }
-    // The snapshot key plus profile id and provider/type establish runtime ownership.
-    // Only ref-only stubs bootstrap; inline persisted OAuth remains authoritative.
-    if (
-      credential.type === "oauth" &&
-      runtime.type === "oauth" &&
-      credential.oauthRef &&
-      !hasSecret(credential.access) &&
-      !hasSecret(credential.refresh) &&
-      hasUsableOAuthCredential(runtime, { now })
-    ) {
-      return runtime;
-    }
-    if (credential.type === "oauth" || runtime.type === "oauth") {
-      return credential;
-    }
-    const configuredRef =
-      credential.type === "api_key"
-        ? (credential.keyRef ?? credential.key)
-        : (credential.tokenRef ?? credential.token);
-    const runtimeRef = runtime.type === "api_key" ? runtime.keyRef : runtime.tokenRef;
-    const value = runtime.type === "api_key" ? runtime.key : runtime.token;
-    if (
-      !sameSecretRef(
-        parseSecretRef(configuredRef, params.cfg.secrets?.defaults),
-        parseSecretRef(runtimeRef, params.cfg.secrets?.defaults),
-      ) ||
-      !hasSecret(value)
-    ) {
-      return credential;
-    }
-    hydratedProfileIds.add(profileId);
-    return credential.type === "api_key"
-      ? { ...credential, key: value }
-      : { ...credential, token: value };
-  };
+  const { overlay: runtimeCredentialOverlay, hydratedProfileIds } = createRuntimeCredentialOverlay({
+    cfg: params.cfg,
+    runtimeStore,
+    now,
+  });
   const orderProfiles = runtimeStore
     ? Object.fromEntries(
         Object.entries(store.profiles).map(([profileId, credential]) => [
